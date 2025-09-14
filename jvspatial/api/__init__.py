@@ -1,1 +1,1 @@
-# API package initializer
+"""API package for the jvspatial framework."""

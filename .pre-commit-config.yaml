@@ -32,7 +32,7 @@ repos:
             flake8_annotations,
             flake8_simplify,
           ]
-        exclude: "^venv/"
+        exclude: "^(venv|examples|tests)/"
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.10.1
     hooks:
@@ -45,6 +45,16 @@ repos:
         additional_dependencies:
           - types-PyYAML
           - types-requests
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: pytest
+        language: system
+        pass_filenames: false
+        always_run: true
+        args: [tests/, -v, --tb=short]
+        stages: [manual]
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
     hooks:

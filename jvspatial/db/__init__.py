@@ -1,1 +1,1 @@
-# DB package initializer
+"""DB package initializer."""

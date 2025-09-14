@@ -2,6 +2,8 @@
 
 import asyncio
 
+# Import spatial utilities to enable find_nearby and find_in_bounds methods
+import jvspatial.spatial.utils  # noqa: F401
 from jvspatial.core.entities import (
     Edge,
     Node,
@@ -45,32 +47,35 @@ class Tourist(Walker):
     """Walker that visits cities via highways."""
 
     @on_visit(City)
-    async def visit_city(self: "Tourist", visitor: City) -> None:
+    async def visit_city(self: "Tourist", here: City) -> None:
         """Visit a city and traverse connected cities via highways."""
-        if "visited" not in self.response:
-            self.response["visited"] = []
-        self.response["visited"].append(visitor.name)
-        print(f"Tourist visiting {visitor.name} (pop: {visitor.population})")
+        self.response.setdefault("visited", [])
+        self.response["visited"].append(here.name)
+        print(f"Tourist visiting {here.name} (pop: {here.population})")
 
         # Visit connected cities
-        neighbors = await (await visitor.nodes(direction="out")).filter(edge=Highway)
-        await self.visit(
-            [n for n in neighbors if n.name not in self.response["visited"]]
-        )
+        neighbors_query = await here.nodes(direction="out")
+        neighbors = await neighbors_query.filter(edge="Highway")
+        print(f"Found {len(neighbors)} highway neighbors from {here.name}")
+        for i, node in enumerate(neighbors):
+            print(f"  {i+1}. {node.name} (id: {node.id})")
+
+        to_visit = [n for n in neighbors if n.name not in self.response["visited"]]
+        print(f"Visiting {len(to_visit)} new cities: {[n.name for n in to_visit]}")
+        await self.visit(to_visit)
 
 
 class FreightTrain(Walker):
     """Walker that loads cargo at specific cities."""
 
     @on_visit(City)
-    async def load_cargo(self: "FreightTrain", visitor: City) -> None:
+    async def load_cargo(self: "FreightTrain", here: City) -> None:
         """Load cargo based on the visited city."""
-        if "cargo" not in self.response:
-            self.response["cargo"] = []
-        if visitor.name == "Chicago":
+        self.response.setdefault("cargo", [])
+        if here.name == "Chicago":
             self.response["cargo"].append("Manufactured goods")
             print("Loaded manufactured goods in Chicago")
-        elif visitor.name == "Kansas City":
+        elif here.name == "Kansas City":
             self.response["cargo"].append("Agricultural products")
             print("Loaded agricultural products in Kansas City")
 
@@ -89,27 +94,30 @@ async def main() -> None:
     # Create root node
     root = await RootNode.get()  # type: ignore[call-arg]
 
-    # Create city nodes with spatial data
-    chicago = City(
+    # Create and save city nodes with spatial data using new async pattern
+    chicago = await City.create(
         name="Chicago", population=2697000, latitude=41.8781, longitude=-87.6298
     )
-    st_louis = City(
+
+    st_louis = await City.create(
         name="St. Louis", population=300576, latitude=38.6270, longitude=-90.1994
     )
-    kansas_city = City(
+
+    kansas_city = await City.create(
         name="Kansas City", population=508090, latitude=39.0997, longitude=-94.5786
     )
 
     # Create edges with custom properties
-    await chicago.connect(st_louis, Highway, length=297, lanes=4, bidirectional=False)
+    await chicago.connect(st_louis, edge=Highway, length=297, lanes=4, direction="out")
     await st_louis.connect(
-        kansas_city, Highway, length=248, lanes=4, bidirectional=False
+        kansas_city, edge=Highway, length=248, lanes=4, direction="out"
     )
-    await chicago.connect(kansas_city, Railroad, electrified=True, bidirectional=False)
+    await chicago.connect(kansas_city, edge=Railroad, electrified=True, direction="out")
 
     # Connect all cities to root node with generic edges
-    for city in [chicago, st_louis, kansas_city]:
-        await root.connect(city)
+    if root:
+        for city in [chicago, st_louis, kansas_city]:
+            await root.connect(city)
 
     print("Created cities: Chicago, St. Louis, Kansas City")
     print(
@@ -119,22 +127,38 @@ async def main() -> None:
 
     print("\n=== DEMONSTRATING SPATIAL QUERIES ===")
     # Query cities using new schema
-    midwest_cities = await RootNode.get_db().find(
-        "node",
-        {
-            "name": "City",
-            "context.latitude": {"$gte": 35, "$lte": 45},
-            "context.longitude": {"$gte": -95, "$lte": -85},
-        },
-    )
-    midwest_names = [city["context"]["name"] for city in midwest_cities]
+    # Query cities using entity methods
+    all_cities = await Node.all()
+    midwest_cities = [
+        city
+        for city in all_cities
+        if isinstance(city, City)
+        and 35 <= city.latitude <= 45
+        and -95 <= city.longitude <= -85
+    ]
+    midwest_names = [city.name for city in midwest_cities]
     print(f"Cities in Midwest region: {', '.join(midwest_names)}")
 
-    # Query highways using new schema
-    highways = await RootNode.get_db().find(
-        "edge", {"name": "Highway", "context.length": {"$gt": 250}}
-    )
+    # Query highways using entity methods
+    all_edges = await Edge.all()
+    highways = [
+        edge for edge in all_edges if isinstance(edge, Highway) and edge.length > 250
+    ]
     print(f"Highways longer than 250 miles: {len(highways)}")
+
+    # Demonstrate new spatial query capabilities
+    print("\n=== ENHANCED SPATIAL QUERIES ===")
+
+    # Find cities within 500km of Chicago
+    chicago_coords = (41.8781, -87.6298)
+    nearby_cities = await City.find_nearby(chicago_coords[0], chicago_coords[1], 500)
+    nearby_names = [city.name for city in nearby_cities if isinstance(city, City)]
+    print(f"Cities within 500km of Chicago: {', '.join(nearby_names)}")
+
+    # Find cities in a specific bounding box (Great Lakes region)
+    great_lakes_cities = await City.find_in_bounds(40.0, 50.0, -95.0, -75.0)
+    gl_names = [city.name for city in great_lakes_cities if isinstance(city, City)]
+    print(f"Cities in Great Lakes region: {', '.join(gl_names)}")
 
     print("\n=== DEMONSTRATING ASYNC TRAVERSAL WITH CONCURRENT WALKERS ===")
 
@@ -163,8 +187,11 @@ async def main() -> None:
             # Simulate an error during traversal
             raise ValueError("Simulated traversal error")
 
-    error_walker = ErrorWalker()
-    await error_walker.spawn(start=chicago)
+    try:
+        error_walker = ErrorWalker()
+        await error_walker.spawn(start=chicago)
+    except Exception as e:
+        print(f"Error during traversal: {str(e)}")
     print("Error handling demonstration complete")
 
 
