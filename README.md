@@ -1,5 +1,11 @@
 # jvspatial: An Asynchronous Object-Spatial Python Library
 
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/TrueSelph/jvspatial)
+![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/TrueSelph/jvspatial/test-jvspatial.yaml)
+![GitHub issues](https://img.shields.io/github/issues/TrueSelph/jvspatial)
+![GitHub pull requests](https://img.shields.io/github/issues-pr/TrueSelph/jvspatial)
+![GitHub](https://img.shields.io/github/license/TrueSelph/jvspatial)
+
 ## Introduction
 jvspatial is an object-spatial Python library that combines graph-based data modeling with spatial awareness and asynchronous operations. Inspired by Jaseci's Object-Spatial paradigm, it enables developers to build complex AI applications with:
 
@@ -24,7 +30,7 @@ Walkers traverse the graph, visiting nodes and executing logic at each stop. The
 - `@on_exit` defines cleanup logic after traversal
 
 #### Spatial Queries
-Nodes can be queried based on their spatial properties (latitude/longitude) using MongoDB's geospatial queries or JSONDB's coordinate filtering.
+Nodes can be queried based on their spatial properties.
 
 #### Root Node
 The singleton RootNode serves as the global entry point for all graph traversals. All nodes connect to the root node for discoverability.
@@ -205,15 +211,15 @@ from jvspatial.walker import Tourist
 
 class Tourist(Walker):
     @on_visit(City)
-    async def visit_city(self, visitor: City):
+    async def visit_city(self, here: City):
         """Track visited cities and explore connections"""
         if 'visited' not in self.response:
             self.response['visited'] = []
-        self.response['visited'].append(visitor.name)
-        print(f"Tourist visiting {visitor.name} (pop: {visitor.population})")
+        self.response['visited'].append(here.name)
+        print(f"Tourist visiting {here.name} (pop: {here.population})")
 
         # Get connected cities via highways
-        neighbors = await (await visitor.nodes(direction="out")).filter(edge=Highway)
+        neighbors = await (await here.nodes(direction="out")).filter(edge=Highway)
         await self.visit([n for n in neighbors if n.name not in self.response["visited"]])
 
 tourist = Tourist()
@@ -247,8 +253,39 @@ Global entry point for traversals (stored in 'node' collection):
 root = await RootNode.get()
 ```
 
-## Contributing
-Contributions are welcome! Please fork the repository and submit pull requests.
+<summary>Contributing Guidelines</summary>
+
+1. **Fork the Repository**: Start by forking the project repository to your GitHub account.
+2. **Clone Locally**: Clone the forked repository to your local machine using a git client.
+   ```sh
+   git clone https://github.com/TrueSelph/jvspatial
+   ```
+3. **Create a New Branch**: Always work on a new branch, giving it a descriptive name.
+   ```sh
+   git checkout -b new-feature-x
+   ```
+4. **Make Your Changes**: Develop and test your changes locally.
+5. **Commit Your Changes**: Commit with a clear message describing your updates.
+   ```sh
+   git commit -m 'Implemented new feature x.'
+   ```
+6. **Push to GitHub**: Push the changes to your forked repository.
+   ```sh
+   git push origin new-feature-x
+   ```
+7. **Submit a Pull Request**: Create a PR against the original project repository. Clearly describe the changes and their motivations.
+8. **Review**: Once your PR is reviewed and approved, it will be merged into the main branch. Congratulations on your contribution!
+</details>
+
+<details open>
+<summary>Contributor Graph</summary>
+<br>
+<p align="left">
+    <a href="https://github.com/TrueSelph/jvspatial/graphs/contributors">
+        <img src="https://contrib.rocks/image?repo=TrueSelph/jvspatial" />
+   </a>
+</p>
+</details>
 
 ## License
 MIT License
