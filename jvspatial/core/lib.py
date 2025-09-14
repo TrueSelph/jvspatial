@@ -1,6 +1,5 @@
 import uuid
 
-
 def generate_id(type_: str, class_name: str) -> str:
     """
     Generate an ID string based on the specified type and class name.

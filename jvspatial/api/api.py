@@ -1,8 +1,7 @@
 from typing import List, Type
 from fastapi import APIRouter, HTTPException
 from pydantic import ValidationError
-from jvspatial.entities import Walker
-
+from jvspatial.core.entities import Walker
 
 class GraphAPI:
     def __init__(self):
@@ -11,7 +10,6 @@ class GraphAPI:
     def endpoint(self, path: str, methods: List[str] = ["POST"], **kwargs):
         def decorator(cls: Type[Walker]):
             async def handler(request: dict):
-                # Add support for start_node, max_nodes parameters
                 start_node = request.pop("start_node", None)
                 max_nodes = request.pop("max_nodes", None)
 
@@ -22,7 +20,6 @@ class GraphAPI:
 
                 result = await walker.spawn(start=start_node)
 
-                # Handle response based on Walker state
                 if result.response:
                     if "status" in result.response and result.response["status"] >= 400:
                         raise HTTPException(

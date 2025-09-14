@@ -17,7 +17,9 @@ class MongoDB(Database):
         if self._client is None:
             async with self._lock:
                 if self._client is None:  # Double-check locking
-                    uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+                    uri = os.getenv("JVSPATIAL_MONGODB_URI", "mongodb://localhost:27017")
+                    db_name = os.getenv("JVSPATIAL_MONGODB_DB_NAME", "jvspatial_db")
+                    
                     self._client = AsyncIOMotorClient(
                         uri,
                         maxPoolSize=10,
@@ -25,7 +27,6 @@ class MongoDB(Database):
                         connectTimeoutMS=30000,
                         socketTimeoutMS=30000,
                     )
-                    db_name = os.getenv("MONGODB_DATABASE_NAME", "jvspatial_db")
                     self._db = self._client.get_database(db_name)
         return self._db
 
