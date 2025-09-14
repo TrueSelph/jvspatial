@@ -1,7 +1,8 @@
 """Spatial utility functions for coordinate calculations and queries."""
 
 import math
-from typing import List, Type, Optional
+from typing import List, Type
+
 from ..core.entities import Node
 
 
@@ -36,7 +37,7 @@ async def find_nearby_nodes(
         List of nodes within the radius
     """
     from ..core.entities import find_subclass_by_name
-    
+
     # Get all nodes from the database
     collection = node_class.get_collection_name_for_class()
     nodes_data = await node_class.get_db().find(collection, {})
@@ -91,7 +92,7 @@ async def find_nodes_in_bounds(
         List of nodes within the bounding box
     """
     from ..core.entities import find_subclass_by_name
-    
+
     # Get all nodes from the database
     collection = node_class.get_collection_name_for_class()
     nodes_data = await node_class.get_db().find(collection, {})
@@ -105,9 +106,7 @@ async def find_nodes_in_bounds(
                 # Check if this node has spatial data
                 context = data.get("context", {})
                 if "latitude" in context and "longitude" in context:
-                    lat, lon = float(context["latitude"]), float(
-                        context["longitude"]
-                    )
+                    lat, lon = float(context["latitude"]), float(context["longitude"])
                     if min_lat <= lat <= max_lat and min_lon <= lon <= max_lon:
                         # Create the node with proper subclass
                         target_class = (
@@ -124,24 +123,32 @@ async def find_nodes_in_bounds(
 
 
 # Add convenience methods to Node classes via monkey patching
-def _add_spatial_methods_to_node():
+def _add_spatial_methods_to_node() -> None:
     """Add spatial methods as class methods to Node classes."""
     try:
         # Import here to avoid circular imports
         from ..core.entities import Node
-        
-        async def find_nearby(cls, latitude: float, longitude: float, radius_km: float = 10.0):
+
+        async def find_nearby(
+            cls: Type[Node], latitude: float, longitude: float, radius_km: float = 10.0
+        ) -> List[Node]:
             return await find_nearby_nodes(cls, latitude, longitude, radius_km)
-        
-        async def find_in_bounds(cls, min_lat: float, max_lat: float, min_lon: float, max_lon: float):
+
+        async def find_in_bounds(
+            cls: Type[Node],
+            min_lat: float,
+            max_lat: float,
+            min_lon: float,
+            max_lon: float,
+        ) -> List[Node]:
             return await find_nodes_in_bounds(cls, min_lat, max_lat, min_lon, max_lon)
-        
+
         # Only add if not already present
-        if not hasattr(Node, 'find_nearby'):
+        if not hasattr(Node, "find_nearby"):
             Node.find_nearby = classmethod(find_nearby)
-        if not hasattr(Node, 'find_in_bounds'):
+        if not hasattr(Node, "find_in_bounds"):
             Node.find_in_bounds = classmethod(find_in_bounds)
-            
+
     except ImportError:
         # Ignore import errors during module initialization
         pass

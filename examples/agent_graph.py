@@ -1,48 +1,63 @@
 import asyncio
+
 from jvspatial.api.api import GraphAPI
-from jvspatial.core.entities import on_exit, on_visit, Node, Walker, Edge, RootNode
+from jvspatial.core.entities import Edge, Node, RootNode, Walker, on_exit, on_visit
+
 
 class App(Node):
     """Application node representing the main app"""
 
+
 class CustomEdge(Edge):
     """Custom edge type for connecting nodes"""
+
     pass
+
 
 class Agents(Node):
     """Agents node representing a collection of agents"""
 
+
 class MyAgent(Node):
     """Individual agent node with spatial properties"""
+
     published: bool = True
     latitude: float = 0.0
     longitude: float = 0.0
 
+
 class Actions(Node):
     """Actions node representing a collection of actions"""
 
+
 class Action(Node):
     """Base action node"""
+
     enabled: bool = True
+
 
 class FirstAction(Action):
     pass
 
+
 class SecondAction(Action):
     pass
+
 
 class ThirdAction(Action):
     pass
 
+
 # API Endpoint example
 api = GraphAPI()
+
 
 @api.endpoint("/interact", methods=["POST"])
 class Interact(Walker):
     @on_visit(RootNode)
     async def on_root(self, here):
         print("on_root called")
-        app_nodes = await (await here.nodes()).filter(node='App')
+        app_nodes = await (await here.nodes()).filter(node="App")
         if not app_nodes:
             print("No App nodes found, creating new App node")
             app_node = App()
@@ -56,7 +71,7 @@ class Interact(Walker):
     async def on_app(self, here):
         print(f"On app node: {here.id}")
         print("Looking for Agents nodes...")
-        agents_nodes = await (await here.nodes()).filter(node='Agents')
+        agents_nodes = await (await here.nodes()).filter(node="Agents")
         if not agents_nodes:
             print("No Agents nodes found, creating new Agents node")
             agents_node = Agents()
@@ -70,7 +85,7 @@ class Interact(Walker):
     async def on_agents(self, here):
         print(f"On agents node: {here.id}")
         print("Looking for MyAgent nodes...")
-        my_agents = await (await here.nodes()).filter(node='MyAgent', published=True)
+        my_agents = await (await here.nodes()).filter(node="MyAgent", published=True)
         if not my_agents:
             print("No MyAgent nodes found, creating new MyAgent node")
             my_agent = MyAgent(latitude=0.0, longitude=0.0)
@@ -85,7 +100,7 @@ class Interact(Walker):
     async def on_agent(self, here):
         print(f"On MyAgent node: {here.id}")
         print("Looking for Actions nodes...")
-        actions_nodes = await (await here.nodes()).filter(node='Actions')
+        actions_nodes = await (await here.nodes()).filter(node="Actions")
         if not actions_nodes:
             print("No Actions nodes found, creating new Actions node")
             actions_node = Actions()
@@ -100,7 +115,9 @@ class Interact(Walker):
     async def on_actions(self, here):
         print(f"On Actions node: {here.id}")
         print("Looking for Action nodes...")
-        action_nodes = await (await here.nodes()).filter(node=['FirstAction', 'SecondAction', 'ThirdAction'])
+        action_nodes = await (await here.nodes()).filter(
+            node=["FirstAction", "SecondAction", "ThirdAction"]
+        )
         if not action_nodes:
             print("No Action nodes found, creating new Action nodes")
             first_action = FirstAction()
@@ -120,15 +137,15 @@ class Interact(Walker):
     @on_visit(Action)
     async def on_action(self, here):
         print(f"On action node: {here.id} (type: {here.__class__.__name__})")
-        
+
     @on_visit(FirstAction)
     async def on_first_action(self, here):
         print(f"On FirstAction node: {here.id}")
-        
+
     @on_visit(SecondAction)
     async def on_second_action(self, here):
         print(f"On SecondAction node: {here.id}")
-        
+
     @on_visit(ThirdAction)
     async def on_third_action(self, here):
         print(f"On ThirdAction node: {here.id}")
@@ -136,6 +153,7 @@ class Interact(Walker):
     @on_exit
     async def respond(self):
         print("Traversal completed")
+
 
 async def main():
     # Get root node
@@ -146,6 +164,7 @@ async def main():
     print("\n=== RUNNING INTERACT WALKER ===")
     walker = Interact()
     await walker.spawn(root)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

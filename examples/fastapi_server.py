@@ -21,10 +21,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from jvspatial.api.api import GraphAPI
-from jvspatial.core.entities import Node, Walker, RootNode, on_visit, on_exit
 # Import spatial utilities to enable find_nearby and find_in_bounds methods
 import jvspatial.spatial.utils
+from jvspatial.api.api import GraphAPI
+from jvspatial.core.entities import Node, RootNode, Walker, on_exit, on_visit
 
 # Set up JSON database for this example
 os.environ["JVSPATIAL_DB_TYPE"] = "json"
@@ -36,31 +36,36 @@ app = FastAPI(
     description="A spatial-aware agent management system built with jvspatial",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
 )
 
 # GraphAPI for jvspatial endpoints
 graph_api = GraphAPI()
 
+
 # Custom exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     return JSONResponse(
-        status_code=500,
-        content={"error": "Internal server error", "detail": str(exc)}
+        status_code=500, content={"error": "Internal server error", "detail": str(exc)}
     )
+
 
 # ====================== NODE DEFINITIONS ======================
 
+
 class Organization(Node):
     """Organization node for grouping agents"""
+
     name: str
     type: str = "company"  # company, government, ngo
     headquarters_lat: float = 0.0
     headquarters_lon: float = 0.0
 
+
 class Agent(Node):
     """Individual agent with spatial and status properties"""
+
     name: str
     agent_type: str = "field"  # field, analyst, manager
     status: str = "active"  # active, inactive, mission
@@ -69,8 +74,10 @@ class Agent(Node):
     last_contact: Optional[str] = None
     skills: List[str] = Field(default_factory=list)
 
+
 class Mission(Node):
     """Mission node representing tasks or objectives"""
+
     title: str
     description: str
     status: str = "planned"  # planned, active, completed, failed
@@ -80,8 +87,10 @@ class Mission(Node):
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     deadline: Optional[str] = None
 
+
 class Location(Node):
     """Points of interest or strategic locations"""
+
     name: str
     location_type: str = "poi"  # poi, safe_house, checkpoint, target
     latitude: float
@@ -89,7 +98,9 @@ class Location(Node):
     description: str = ""
     security_level: str = "low"  # low, medium, high, classified
 
+
 # ====================== REQUEST/RESPONSE MODELS ======================
+
 
 class AgentCreateRequest(BaseModel):
     name: str
@@ -98,6 +109,7 @@ class AgentCreateRequest(BaseModel):
     longitude: float = 0.0
     skills: List[str] = Field(default_factory=list)
     organization_id: Optional[str] = None
+
 
 class MissionCreateRequest(BaseModel):
     title: str
@@ -108,17 +120,21 @@ class MissionCreateRequest(BaseModel):
     deadline: Optional[str] = None
     assigned_agent_ids: List[str] = Field(default_factory=list)
 
+
 class LocationSearchRequest(BaseModel):
     latitude: float
     longitude: float
     radius_km: float = 10.0
     location_type: Optional[str] = None
 
+
 # ====================== WALKER ENDPOINTS ======================
+
 
 @graph_api.endpoint("/agents", methods=["POST"])
 class CreateAgent(Walker):
     """Create a new agent in the system"""
+
     name: str
     agent_type: str = "field"
     latitude: float = 0.0
@@ -136,37 +152,44 @@ class CreateAgent(Walker):
                 latitude=self.latitude,
                 longitude=self.longitude,
                 skills=self.skills,
-                last_contact=datetime.now().isoformat()
+                last_contact=datetime.now().isoformat(),
             )
-            
+
             # Connect to root
             await here.connect(agent)
-            
+
             # Connect to organization if provided
             if self.organization_id:
                 org = await Organization.get(self.organization_id)
                 if org:
                     await org.connect(agent)
                     self.response["organization"] = org.name
-            
-            self.response.update({
-                "agent_id": agent.id,
-                "name": agent.name,
-                "status": "created",
-                "coordinates": [agent.latitude, agent.longitude]
-            })
-            
+
+            self.response.update(
+                {
+                    "agent_id": agent.id,
+                    "name": agent.name,
+                    "status": "created",
+                    "coordinates": [agent.latitude, agent.longitude],
+                }
+            )
+
         except Exception as e:
-            self.response = {"error": f"Failed to create agent: {str(e)}", "status": "error"}
+            self.response = {
+                "error": f"Failed to create agent: {str(e)}",
+                "status": "error",
+            }
 
     @on_exit
     async def finalize(self):
         if "error" not in self.response:
             self.response["timestamp"] = datetime.now().isoformat()
 
+
 @graph_api.endpoint("/agents/nearby", methods=["POST"])
 class FindNearbyAgents(Walker):
     """Find agents within a specified radius"""
+
     latitude: float
     longitude: float
     radius_km: float = 10.0
@@ -180,34 +203,42 @@ class FindNearbyAgents(Walker):
             nearby_agents = await Agent.find_nearby(
                 self.latitude, self.longitude, self.radius_km
             )
-            
+
             # Apply filters
             filtered_agents = nearby_agents
             if self.agent_type:
-                filtered_agents = [a for a in filtered_agents if a.agent_type == self.agent_type]
+                filtered_agents = [
+                    a for a in filtered_agents if a.agent_type == self.agent_type
+                ]
             if self.status:
-                filtered_agents = [a for a in filtered_agents if a.status == self.status]
-            
+                filtered_agents = [
+                    a for a in filtered_agents if a.status == self.status
+                ]
+
             # Format response
             agents_data = []
             for agent in filtered_agents:
-                agents_data.append({
-                    "id": agent.id,
-                    "name": agent.name,
-                    "type": agent.agent_type,
-                    "status": agent.status,
-                    "coordinates": [agent.latitude, agent.longitude],
-                    "skills": agent.skills,
-                    "last_contact": agent.last_contact
-                })
-            
-            self.response.update({
-                "agents": agents_data,
-                "count": len(agents_data),
-                "search_center": [self.latitude, self.longitude],
-                "radius_km": self.radius_km
-            })
-            
+                agents_data.append(
+                    {
+                        "id": agent.id,
+                        "name": agent.name,
+                        "type": agent.agent_type,
+                        "status": agent.status,
+                        "coordinates": [agent.latitude, agent.longitude],
+                        "skills": agent.skills,
+                        "last_contact": agent.last_contact,
+                    }
+                )
+
+            self.response.update(
+                {
+                    "agents": agents_data,
+                    "count": len(agents_data),
+                    "search_center": [self.latitude, self.longitude],
+                    "radius_km": self.radius_km,
+                }
+            )
+
         except Exception as e:
             self.response = {"error": f"Search failed: {str(e)}", "status": "error"}
 
@@ -216,9 +247,11 @@ class FindNearbyAgents(Walker):
         if "error" not in self.response:
             self.response["status"] = "success"
 
+
 @graph_api.endpoint("/missions", methods=["POST"])
 class CreateMission(Walker):
     """Create a new mission and optionally assign agents"""
+
     title: str
     description: str
     priority: str = "medium"
@@ -238,14 +271,14 @@ class CreateMission(Walker):
                 priority=self.priority,
                 target_lat=self.target_lat,
                 target_lon=self.target_lon,
-                deadline=self.deadline
+                deadline=self.deadline,
             )
-            
+
             # Connect to root
             await here.connect(mission)
-            
+
             assigned_agents = []
-            
+
             # Assign specific agents
             for agent_id in self.assigned_agent_ids:
                 agent = await Agent.get(agent_id)
@@ -253,53 +286,63 @@ class CreateMission(Walker):
                     await mission.connect(agent)
                     agent.status = "mission"
                     await agent.save()
-                    assigned_agents.append({
-                        "id": agent.id,
-                        "name": agent.name,
-                        "type": "explicit"
-                    })
-            
+                    assigned_agents.append(
+                        {"id": agent.id, "name": agent.name, "type": "explicit"}
+                    )
+
             # Auto-assign nearby agents if requested
             if self.auto_assign_radius:
                 nearby_agents = await Agent.find_nearby(
                     self.target_lat, self.target_lon, self.auto_assign_radius
                 )
                 for agent in nearby_agents:
-                    if agent.status == "active" and agent.id not in self.assigned_agent_ids:
+                    if (
+                        agent.status == "active"
+                        and agent.id not in self.assigned_agent_ids
+                    ):
                         await mission.connect(agent)
                         agent.status = "mission"
                         await agent.save()
-                        assigned_agents.append({
-                            "id": agent.id,
-                            "name": agent.name,
-                            "type": "auto_assigned"
-                        })
-            
-            self.response.update({
-                "mission_id": mission.id,
-                "title": mission.title,
-                "status": "created",
-                "target_coordinates": [mission.target_lat, mission.target_lon],
-                "assigned_agents": assigned_agents,
-                "priority": mission.priority
-            })
-            
+                        assigned_agents.append(
+                            {
+                                "id": agent.id,
+                                "name": agent.name,
+                                "type": "auto_assigned",
+                            }
+                        )
+
+            self.response.update(
+                {
+                    "mission_id": mission.id,
+                    "title": mission.title,
+                    "status": "created",
+                    "target_coordinates": [mission.target_lat, mission.target_lon],
+                    "assigned_agents": assigned_agents,
+                    "priority": mission.priority,
+                }
+            )
+
         except Exception as e:
-            self.response = {"error": f"Failed to create mission: {str(e)}", "status": "error"}
+            self.response = {
+                "error": f"Failed to create mission: {str(e)}",
+                "status": "error",
+            }
 
     @on_exit
     async def finalize(self):
         if "error" not in self.response:
             self.response["timestamp"] = datetime.now().isoformat()
 
+
 @graph_api.endpoint("/agents/{agent_id}/status", methods=["POST"])
 class UpdateAgentStatus(Walker):
     """Update an agent's status and location"""
+
     agent_id: str
     status: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
-    
+
     @on_visit(RootNode)
     async def update_agent(self, here):
         try:
@@ -307,7 +350,7 @@ class UpdateAgentStatus(Walker):
             if not agent:
                 self.response = {"error": "Agent not found", "status": "error"}
                 return
-            
+
             # Update fields
             if self.status:
                 agent.status = self.status
@@ -315,18 +358,20 @@ class UpdateAgentStatus(Walker):
                 agent.latitude = self.latitude
             if self.longitude is not None:
                 agent.longitude = self.longitude
-            
+
             agent.last_contact = datetime.now().isoformat()
             await agent.save()
-            
-            self.response.update({
-                "agent_id": agent.id,
-                "name": agent.name,
-                "status": agent.status,
-                "coordinates": [agent.latitude, agent.longitude],
-                "last_contact": agent.last_contact
-            })
-            
+
+            self.response.update(
+                {
+                    "agent_id": agent.id,
+                    "name": agent.name,
+                    "status": agent.status,
+                    "coordinates": [agent.latitude, agent.longitude],
+                    "last_contact": agent.last_contact,
+                }
+            )
+
         except Exception as e:
             self.response = {"error": f"Update failed: {str(e)}", "status": "error"}
 
@@ -336,10 +381,11 @@ class UpdateAgentStatus(Walker):
             self.response["status"] = "updated"
             self.response["timestamp"] = datetime.now().isoformat()
 
+
 @graph_api.endpoint("/analytics/overview", methods=["POST"])
 class SystemOverview(Walker):
     """Get system overview and analytics"""
-    
+
     @on_visit(RootNode)
     async def analyze_system(self, here):
         try:
@@ -347,56 +393,70 @@ class SystemOverview(Walker):
             all_agents = await Agent.all()
             all_missions = await Mission.all()
             all_organizations = await Organization.all()
-            
+
             # Agent analytics
             agent_stats = {
                 "total": len(all_agents),
                 "by_status": {},
                 "by_type": {},
-                "active_locations": []
+                "active_locations": [],
             }
-            
+
             for agent in all_agents:
                 # Status breakdown
                 status = agent.status
-                agent_stats["by_status"][status] = agent_stats["by_status"].get(status, 0) + 1
-                
+                agent_stats["by_status"][status] = (
+                    agent_stats["by_status"].get(status, 0) + 1
+                )
+
                 # Type breakdown
                 agent_type = agent.agent_type
-                agent_stats["by_type"][agent_type] = agent_stats["by_type"].get(agent_type, 0) + 1
-                
+                agent_stats["by_type"][agent_type] = (
+                    agent_stats["by_type"].get(agent_type, 0) + 1
+                )
+
                 # Active locations
-                if agent.status in ["active", "mission"] and (agent.latitude != 0 or agent.longitude != 0):
-                    agent_stats["active_locations"].append({
-                        "id": agent.id,
-                        "name": agent.name,
-                        "coordinates": [agent.latitude, agent.longitude]
-                    })
-            
+                if agent.status in ["active", "mission"] and (
+                    agent.latitude != 0 or agent.longitude != 0
+                ):
+                    agent_stats["active_locations"].append(
+                        {
+                            "id": agent.id,
+                            "name": agent.name,
+                            "coordinates": [agent.latitude, agent.longitude],
+                        }
+                    )
+
             # Mission analytics
             mission_stats = {
                 "total": len(all_missions),
                 "by_status": {},
-                "by_priority": {}
+                "by_priority": {},
             }
-            
+
             for mission in all_missions:
                 # Status breakdown
                 status = mission.status
-                mission_stats["by_status"][status] = mission_stats["by_status"].get(status, 0) + 1
-                
+                mission_stats["by_status"][status] = (
+                    mission_stats["by_status"].get(status, 0) + 1
+                )
+
                 # Priority breakdown
                 priority = mission.priority
-                mission_stats["by_priority"][priority] = mission_stats["by_priority"].get(priority, 0) + 1
-            
-            self.response.update({
-                "system_status": "operational",
-                "agents": agent_stats,
-                "missions": mission_stats,
-                "organizations": {"total": len(all_organizations)},
-                "last_updated": datetime.now().isoformat()
-            })
-            
+                mission_stats["by_priority"][priority] = (
+                    mission_stats["by_priority"].get(priority, 0) + 1
+                )
+
+            self.response.update(
+                {
+                    "system_status": "operational",
+                    "agents": agent_stats,
+                    "missions": mission_stats,
+                    "organizations": {"total": len(all_organizations)},
+                    "last_updated": datetime.now().isoformat(),
+                }
+            )
+
         except Exception as e:
             self.response = {"error": f"Analytics failed: {str(e)}", "status": "error"}
 
@@ -405,7 +465,9 @@ class SystemOverview(Walker):
         if "error" not in self.response:
             self.response["status"] = "success"
 
+
 # ====================== STANDARD REST ENDPOINTS ======================
+
 
 @app.get("/")
 async def root():
@@ -416,12 +478,13 @@ async def root():
         "docs": "/docs",
         "endpoints": {
             "create_agent": "POST /agents",
-            "find_nearby": "POST /agents/nearby", 
+            "find_nearby": "POST /agents/nearby",
             "create_mission": "POST /missions",
             "update_agent": "POST /agents/{agent_id}/status",
-            "analytics": "POST /analytics/overview"
-        }
+            "analytics": "POST /analytics/overview",
+        },
     }
+
 
 @app.get("/health")
 async def health_check():
@@ -433,7 +496,7 @@ async def health_check():
             "status": "healthy",
             "database": "connected",
             "root_node": root.id,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
     except Exception as e:
         return JSONResponse(
@@ -441,21 +504,22 @@ async def health_check():
             content={
                 "status": "unhealthy",
                 "error": str(e),
-                "timestamp": datetime.now().isoformat()
-            }
+                "timestamp": datetime.now().isoformat(),
+            },
         )
+
 
 @app.get("/agents")
 async def list_agents(limit: int = 100, agent_type: Optional[str] = None):
     """List all agents with optional filtering"""
     try:
         agents = await Agent.all()
-        
+
         if agent_type:
             agents = [a for a in agents if a.agent_type == agent_type]
-        
+
         agents = agents[:limit]
-        
+
         return {
             "agents": [
                 {
@@ -464,27 +528,28 @@ async def list_agents(limit: int = 100, agent_type: Optional[str] = None):
                     "type": agent.agent_type,
                     "status": agent.status,
                     "coordinates": [agent.latitude, agent.longitude],
-                    "last_contact": agent.last_contact
+                    "last_contact": agent.last_contact,
                 }
                 for agent in agents
             ],
             "count": len(agents),
-            "total_available": len(await Agent.all())
+            "total_available": len(await Agent.all()),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/missions")
 async def list_missions(limit: int = 100, status: Optional[str] = None):
     """List all missions with optional filtering"""
     try:
         missions = await Mission.all()
-        
+
         if status:
             missions = [m for m in missions if m.status == status]
-        
+
         missions = missions[:limit]
-        
+
         return {
             "missions": [
                 {
@@ -493,30 +558,32 @@ async def list_missions(limit: int = 100, status: Optional[str] = None):
                     "status": mission.status,
                     "priority": mission.priority,
                     "target_coordinates": [mission.target_lat, mission.target_lon],
-                    "created_at": mission.created_at
+                    "created_at": mission.created_at,
                 }
                 for mission in missions
             ],
-            "count": len(missions)
+            "count": len(missions),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # Include the graph API router
 app.include_router(graph_api.router, prefix="/api/v1")
 
 # ====================== STARTUP/SHUTDOWN EVENTS ======================
 
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize the system on startup"""
     print("🚀 Starting jvspatial Agent Management API...")
-    
+
     # Ensure root node exists
     try:
         root = await RootNode.get()
         print(f"✅ Root node initialized: {root.id}")
-        
+
         # Create sample organization if none exist
         orgs = await Organization.all()
         if not orgs:
@@ -524,30 +591,28 @@ async def startup_event():
                 name="Acme Corp",
                 type="company",
                 headquarters_lat=40.7128,
-                headquarters_lon=-74.0060
+                headquarters_lon=-74.0060,
             )
             await root.connect(sample_org)
             print(f"✅ Sample organization created: {sample_org.name}")
-            
+
     except Exception as e:
         print(f"❌ Startup error: {e}")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
     print("🛑 Shutting down jvspatial Agent Management API...")
 
+
 if __name__ == "__main__":
     import uvicorn
-    
+
     print("🔧 Development server starting...")
     print("📖 API docs available at: http://localhost:8000/docs")
     print("🔄 ReDoc available at: http://localhost:8000/redoc")
-    
+
     uvicorn.run(
-        "fastapi_server:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
+        "fastapi_server:app", host="0.0.0.0", port=8000, reload=True, log_level="info"
     )
