@@ -2,7 +2,7 @@
 
 import asyncio
 import math
-from typing import List
+from typing import List, Optional
 
 from jvspatial.core.entities import (
     Edge,
@@ -73,8 +73,8 @@ class City(Node):
 class Highway(Edge):
     """Represents a highway connection between cities."""
 
-    length: float
-    lanes: int
+    length: Optional[float] = None
+    lanes: Optional[int] = None
 
 
 class Railroad(Edge):
@@ -183,7 +183,7 @@ async def main() -> None:
     # Query highways using entity methods
     all_edges = await Edge.all()
     highways = [
-        edge for edge in all_edges if isinstance(edge, Highway) and edge.length > 250
+        edge for edge in all_edges if isinstance(edge, Highway) and edge.length is not None and edge.length > 250
     ]
     print(f"Highways longer than 250 miles: {len(highways)}")
 

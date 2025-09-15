@@ -153,12 +153,12 @@ class TestJsonDBConfiguration:
     def test_custom_jsondb_path_relative(self):
         """Test JsonDB with custom relative path"""
         os.environ["JVSPATIAL_DB_TYPE"] = "json"
-        os.environ["JVSPATIAL_JSONDB_PATH"] = "custom/jvdb/path"
+        os.environ["JVSPATIAL_JSONDB_PATH"] = "jvdb"
 
         db = get_database()
 
         assert isinstance(db, JsonDB)
-        assert str(db.base_path).endswith("custom/jvdb/path")
+        assert str(db.base_path).endswith("jvdb")
 
 
 class TestMongoDBConfiguration:

@@ -21,7 +21,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from jvspatial.api.api import GraphAPI
+from jvspatial.api.endpoint_router import EndpointRouter
 from jvspatial.core.entities import Node, Root, Walker, on_exit, on_visit
 
 
@@ -55,7 +55,7 @@ async def find_nearby_agents(latitude: float, longitude: float, radius_km: float
 
 # Set up JSON database for this example
 os.environ["JVSPATIAL_DB_TYPE"] = "json"
-os.environ["JVSPATIAL_JSONDB_PATH"] = "examples/data/json"
+os.environ["JVSPATIAL_JSONDB_PATH"] = "jvdb/examples"
 
 # FastAPI app setup
 app = FastAPI(
@@ -66,8 +66,8 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# GraphAPI for jvspatial endpoints
-graph_api = GraphAPI()
+# EndpointRouter for jvspatial endpoints
+api = EndpointRouter()
 
 
 # Custom exception handler
@@ -130,22 +130,40 @@ class Location(Node):
 
 
 class AgentCreateRequest(BaseModel):
-    name: str
-    agent_type: str = "field"
-    latitude: float = 0.0
-    longitude: float = 0.0
-    skills: List[str] = Field(default_factory=list)
-    organization_id: Optional[str] = None
+    """Request model for creating new agents"""
+    name: str = Field(..., example="Aria Blake",
+                     description="Full name of the agent")
+    agent_type: str = Field("field", example="field",
+                          description="Agent role: field, analyst, manager")
+    latitude: float = Field(0.0, example=40.7128,
+                           description="Initial latitude coordinate")
+    longitude: float = Field(0.0, example=-74.0060,
+                            description="Initial longitude coordinate")
+    skills: List[str] = Field(default_factory=list,
+                             example=["surveillance", "combat"],
+                             description="List of agent skills")
+    organization_id: Optional[str] = Field(None,
+                                          example="org_12345",
+                                          description="Optional organization ID")
 
 
 class MissionCreateRequest(BaseModel):
-    title: str
-    description: str
-    priority: str = "medium"
-    target_lat: float
-    target_lon: float
-    deadline: Optional[str] = None
-    assigned_agent_ids: List[str] = Field(default_factory=list)
+    """Request model for creating new missions"""
+    title: str = Field(..., example="Operation Shadow",
+                      description="Mission codename")
+    description: str = Field(..., example="Covert surveillance operation",
+                            description="Detailed mission objectives")
+    priority: str = Field("medium", example="high",
+                         description="Urgency level: low, medium, high")
+    target_lat: float = Field(..., example=40.7128,
+                             description="Target latitude coordinate")
+    target_lon: float = Field(..., example=-74.0060,
+                             description="Target longitude coordinate")
+    deadline: Optional[str] = Field(None, example="2025-12-31T23:59:59Z",
+                                   description="ISO 8601 deadline timestamp")
+    assigned_agent_ids: List[str] = Field(default_factory=list,
+                                         example=["agent_1", "agent_2"],
+                                         description="List of agent IDs to assign")
 
 
 class LocationSearchRequest(BaseModel):
@@ -158,9 +176,26 @@ class LocationSearchRequest(BaseModel):
 # ====================== WALKER ENDPOINTS ======================
 
 
-@graph_api.endpoint("/agents", methods=["POST"])
+@api.endpoint("/agents", methods=["POST"])
 class CreateAgent(Walker):
-    """Create a new agent in the system"""
+    """
+    Create a new agent in the system
+    
+    Example request body:
+    {
+        "name": "James Bond",
+        "agent_type": "field",
+        "latitude": 40.7128,
+        "longitude": -74.0060,
+        "skills": ["combat", "surveillance"],
+        "organization_id": "org_12345"
+    }
+    
+    Responses:
+    201: Returns created agent details
+    400: Invalid input data format
+    500: Internal server error
+    """
 
     name: str
     agent_type: str = "field"
@@ -213,7 +248,7 @@ class CreateAgent(Walker):
             self.response["timestamp"] = datetime.now().isoformat()
 
 
-@graph_api.endpoint("/agents/nearby", methods=["POST"])
+@api.endpoint("/agents/nearby", methods=["POST"])
 class FindNearbyAgents(Walker):
     """Find agents within a specified radius"""
 
@@ -275,9 +310,27 @@ class FindNearbyAgents(Walker):
             self.response["status"] = "success"
 
 
-@graph_api.endpoint("/missions", methods=["POST"])
+@api.endpoint("/missions", methods=["POST"])
 class CreateMission(Walker):
-    """Create a new mission and optionally assign agents"""
+    """
+    Create a new mission and optionally assign agents
+    
+    Example request body:
+    {
+        "title": "Operation Phoenix",
+        "description": "High-priority extraction mission",
+        "priority": "high",
+        "target_lat": 40.7128,
+        "target_lon": -74.0060,
+        "deadline": "2025-12-31T23:59:59Z",
+        "assigned_agent_ids": ["agent_1", "agent_2"]
+    }
+    
+    Responses:
+    201: Returns mission details with assigned agents
+    400: Invalid coordinates or agent IDs
+    500: Internal server error
+    """
 
     title: str
     description: str
@@ -361,7 +414,7 @@ class CreateMission(Walker):
             self.response["timestamp"] = datetime.now().isoformat()
 
 
-@graph_api.endpoint("/agents/{agent_id}/status", methods=["POST"])
+@api.endpoint("/agents/{agent_id}/status", methods=["POST"])
 class UpdateAgentStatus(Walker):
     """Update an agent's status and location"""
 
@@ -409,7 +462,7 @@ class UpdateAgentStatus(Walker):
             self.response["timestamp"] = datetime.now().isoformat()
 
 
-@graph_api.endpoint("/analytics/overview", methods=["POST"])
+@api.endpoint("/analytics/overview", methods=["POST"])
 class SystemOverview(Walker):
     """Get system overview and analytics"""
 
@@ -596,7 +649,7 @@ async def list_missions(limit: int = 100, status: Optional[str] = None):
 
 
 # Include the graph API router
-app.include_router(graph_api.router, prefix="/api/v1")
+app.include_router(api.router, prefix="/api/v1")
 
 # ====================== STARTUP/SHUTDOWN EVENTS ======================
 
@@ -622,6 +675,45 @@ async def startup_event():
             )
             await root.connect(sample_org)
             print(f"✅ Sample organization created: {sample_org.name}")
+
+            # Create 3 sample agents
+            agents = []
+            for i in range(1, 4):
+                agent = await Agent.create(
+                    name=f"Agent {i}",
+                    agent_type=["field", "analyst", "manager"][i-1],
+                    latitude=40.7128 + (i * 0.01),
+                    longitude=-74.0060 + (i * 0.01),
+                    skills=["surveillance", "analysis", "logistics"][:i],
+                    status="active"
+                )
+                await sample_org.connect(agent)
+                agents.append(agent)
+                print(f"🕵️  Sample agent created: {agent.name}")
+
+            # Create 3 sample missions
+            for i in range(1, 4):
+                mission = await Mission.create(
+                    title=f"Mission {i}",
+                    description=f"Critical mission #{i}",
+                    target_lat=40.7128 + (i * 0.1),
+                    target_lon=-74.0060 + (i * 0.1),
+                    priority=["low", "medium", "high"][i-1],
+                    status="active"
+                )
+                await root.connect(mission)
+                await mission.connect(agents[i-1])
+                print(f"🎯 Sample mission created: {mission.title}")
+                
+            # Verify connections
+            print("\n🔗 Relationship Verification:")
+            org_agents = await sample_org.connected_nodes(Agent)
+            print(f"Organization '{sample_org.name}' has {len(org_agents)} agents")
+            
+            all_missions = await Mission.all()
+            for mission in all_missions:
+                mission_agents = await mission.connected_nodes(Agent)
+                print(f"Mission '{mission.title}' has {len(mission_agents)} assigned agents")
 
     except Exception as e:
         print(f"❌ Startup error: {e}")

@@ -8,15 +8,15 @@ from pydantic import ValidationError
 from jvspatial.core.entities import Walker
 
 
-class GraphAPI:
+class EndpointRouter:
     """API router for graph-based walkers."""
 
-    def __init__(self: "GraphAPI") -> None:
-        """Initialize the GraphAPI with an APIRouter."""
+    def __init__(self: "EndpointRouter") -> None:
+        """Initialize the EndpointRouter with an APIRouter."""
         self.router = APIRouter()
 
     def endpoint(
-        self: "GraphAPI", path: str, methods: Optional[List[str]] = None, **kwargs: Any
+        self: "EndpointRouter", path: str, methods: Optional[List[str]] = None, **kwargs: Any
     ) -> Callable[[Type[Walker]], Type[Walker]]:
         """Register a walker as an API endpoint."""
         """

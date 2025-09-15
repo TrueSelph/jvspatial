@@ -12,7 +12,7 @@ import math
 
 import pytest
 
-from jvspatial.api.api import GraphAPI
+from jvspatial.api.endpoint_router import EndpointRouter
 from jvspatial.core.entities import Edge, Node, Root, Walker, on_exit, on_visit
 from jvspatial.db.factory import get_database
 from jvspatial.db.jsondb import JsonDB
@@ -487,7 +487,7 @@ class TestAPIIntegrationWorkflows:
         """Test complete API endpoint workflow"""
 
         # Create API with endpoints
-        api = GraphAPI()
+        api = EndpointRouter()
 
         @api.endpoint("/create-city", methods=["POST"])
         class CreateCity(Walker):
@@ -591,7 +591,7 @@ class TestAPIIntegrationWorkflows:
     async def test_complex_api_workflow_with_traversal(self):
         """Test complex API workflow with graph traversal"""
 
-        api = GraphAPI()
+        api = EndpointRouter()
 
         @api.endpoint("/deploy-agents", methods=["POST"])
         class DeployAgents(Walker):

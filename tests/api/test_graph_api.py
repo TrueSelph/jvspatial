@@ -1,5 +1,5 @@
 """
-Tests for GraphAPI endpoint registration and execution.
+Tests for EndpointRouter endpoint registration and execution.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from jvspatial.api.api import GraphAPI
+from jvspatial.api.endpoint_router import EndpointRouter
 from jvspatial.core.entities import Node, Root, Walker, on_exit, on_visit
 
 
@@ -18,19 +18,19 @@ class TestNode(Node):
     name: str = "TestNode"
 
 
-class TestGraphAPIBasics:
-    """Test basic GraphAPI functionality"""
+class TestEndpointRouterBasics:
+    """Test basic EndpointRouter functionality"""
 
     def test_graph_api_initialization(self):
-        """Test GraphAPI initialization"""
-        api = GraphAPI()
+        """Test EndpointRouter initialization"""
+        api = EndpointRouter()
 
         assert hasattr(api, "router")
         assert api.router is not None
 
     def test_endpoint_decorator_registration(self):
         """Test endpoint decorator registration"""
-        api = GraphAPI()
+        api = EndpointRouter()
 
         @api.endpoint("/test", methods=["POST"])
         class TestWalker(Walker):
@@ -59,7 +59,7 @@ class TestWalkerExecution:
     @pytest.mark.asyncio
     async def test_simple_walker_execution(self):
         """Test simple walker execution"""
-        api = GraphAPI()
+        api = EndpointRouter()
 
         @api.endpoint("/simple", methods=["POST"])
         class SimpleWalker(Walker):
@@ -89,7 +89,7 @@ class TestWalkerExecution:
     @pytest.mark.asyncio
     async def test_walker_with_parameters(self):
         """Test walker execution with parameters"""
-        api = GraphAPI()
+        api = EndpointRouter()
 
         @api.endpoint("/parameterized", methods=["POST"])
         class ParameterizedWalker(Walker):
@@ -125,7 +125,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_validation_error_handling(self):
         """Test handling of Pydantic validation errors"""
-        api = GraphAPI()
+        api = EndpointRouter()
 
         @api.endpoint("/validation", methods=["POST"])
         class ValidationWalker(Walker):
@@ -151,7 +151,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_walker_execution_error(self):
         """Test handling of errors during walker execution"""
-        api = GraphAPI()
+        api = EndpointRouter()
 
         @api.endpoint("/error", methods=["POST"])
         class ErrorWalker(Walker):
@@ -185,7 +185,7 @@ class TestComplexWalkers:
     @pytest.mark.asyncio
     async def test_multi_node_traversal(self):
         """Test walker that traverses multiple nodes"""
-        api = GraphAPI()
+        api = EndpointRouter()
 
         @api.endpoint("/traversal", methods=["POST"])
         class TraversalWalker(Walker):

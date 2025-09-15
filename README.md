@@ -6,7 +6,7 @@
 ![GitHub pull requests](https://img.shields.io/github/issues-pr/TrueSelph/jvspatial)
 ![GitHub](https://img.shields.io/github/license/TrueSelph/jvspatial)
 
-## 🚀 Quick Start
+## Quick Start
 
 ```python
 import asyncio
@@ -44,7 +44,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Introduction](#introduction)
 - [Installation](#installation)
@@ -59,22 +59,22 @@ if __name__ == "__main__":
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 
-## 🌟 Introduction
+## Introduction
 
-jvspatial is a powerful object-spatial Python library that combines graph-based data modeling with spatial awareness and asynchronous operations. Inspired by Jaseci's Object-Spatial paradigm, it enables developers to build complex AI applications, agent systems, and spatial data processing workflows.
+jvspatial is an asynchronous object-spatial Python library for building persistence and business logic layers. Combining graph-based data modeling with spatial awareness, it enables developers to create robust backend systems, agent-based architectures, and location-aware applications.
 
-### ✨ Key Features
+### Key Features
 
-- **🔄 Asynchronous Architecture**: Built from the ground up with async/await for high-performance applications
-- **📍 Spatial Awareness**: Built-in support for geographic coordinates and spatial queries
-- **🎯 Type Safety**: Pydantic-based models with automatic validation
-- **🗄️ Flexible Persistence**: Multiple database backends (JSON, MongoDB)
-- **🚶 Walker Pattern**: Elegant graph traversal with decorator-based hooks
-- **🌐 REST API**: Automatic FastAPI endpoint generation
-- **🔗 Graph Operations**: Rich node/edge relationship management
-- **📦 Auto-Persistence**: Automatic object lifecycle management
+- **Async-First Design**: Built with native async/await support throughout
+- **Spatial Graph Model**: Nodes with latitude/longitude attributes and spatial helpers
+- **Type-Driven Entities**: Pydantic models for node/edge definitions
+- **Flexible Persistence**: Multiple database backends (JSON, MongoDB)
+- **Imperative Walkers**: Explicit traversal control with visit/exit hooks
+- **REST Endpoint Mixins**: Combine walkers with FastAPI routes
+- **Explicit Connections**: Manual relationship management between nodes
+- **Object Lifecycle**: Manual save/load operations for granular control
 
-## 🛠️ Installation
+## Installation
 
 ### Basic Installation
 ```bash
@@ -85,21 +85,24 @@ pip install jvspatial
 ```bash
 git clone https://github.com/TrueSelph/jvspatial
 cd jvspatial
-pip install -e .
+pip install -e .[dev]
 ```
 
 ### Dependencies
 ```bash
-# Core dependencies (automatically installed)
-pip install pydantic>=2.0 fastapi uvicorn python-multipart
+# Core dependencies
+pip install pydantic>=2.0 asyncio
 
-# Optional: MongoDB support
+# For REST API examples:
+pip install fastapi uvicorn
+
+# Optional MongoDB support:
 pip install motor pymongo
 ```
 
-## 🧠 Core Concepts
+## Core Concepts
 
-### 🏗️ Nodes
+### Nodes
 Nodes represent entities in your spatial graph. They can store any data and have spatial coordinates.
 
 ```python
@@ -120,7 +123,7 @@ chicago = await City.create(
 )
 ```
 
-### 🔗 Edges
+### Edges
 Edges represent relationships between nodes with optional properties.
 
 ```python
@@ -134,7 +137,7 @@ class Highway(Edge):
 highway = await chicago.connect(detroit, Highway, lanes=6, speed_limit=70)
 ```
 
-### 🚶 Walkers
+### Walkers
 Walkers traverse the graph and execute logic at each node they visit.
 
 ```python
@@ -154,7 +157,7 @@ class Tourist(Walker):
         self.response["message"] = "Trip completed!"
 ```
 
-### 🌱 Root Node
+### Root Node
 The singleton Root serves as the entry point for all graph operations.
 
 ```python
@@ -164,7 +167,7 @@ from jvspatial.core.entities import Root
 root = await Root.get()
 ```
 
-## 🎯 Getting Started
+## Getting Started
 
 ### 1. Basic Node Creation and Connection
 
@@ -237,38 +240,8 @@ async def traversal_example():
 asyncio.run(traversal_example())
 ```
 
-### 3. Spatial Queries
 
-```python
-import asyncio
-from jvspatial.core.entities import Node
-
-class Location(Node):
-    name: str
-    latitude: float
-    longitude: float
-
-async def spatial_example():
-    # Create locations
-    locations = [
-        await Location.create(name="Central Park", latitude=40.785091, longitude=-73.968285),
-        await Location.create(name="Times Square", latitude=40.758896, longitude=-73.985130),
-        await Location.create(name="Brooklyn Bridge", latitude=40.706086, longitude=-73.996864),
-    ]
-
-    # Find locations near Times Square (within 5km)
-    nearby = await Location.find_nearby(
-        latitude=40.758896,
-        longitude=-73.985130,
-        radius_km=5.0
-    )
-
-    print(f"Locations near Times Square: {[loc.name for loc in nearby]}")
-
-asyncio.run(spatial_example())
-```
-
-## 📚 Examples
+## Examples
 
 The `examples/` directory contains complete working examples:
 
@@ -294,7 +267,7 @@ cd jvspatial
 python examples/travel_graph.py
 ```
 
-## 📖 API Reference
+## API Reference
 
 ### Core Classes
 
@@ -326,12 +299,9 @@ class Node(Object):
     async def edges(direction: str = "") -> List["Edge"]
     async def nodes(direction: str = "both") -> "NodeQuery"
 
-    @classmethod
-    async def find_nearby(latitude: float, longitude: float,
-                         radius_km: float = 10.0) -> List["Node"]
-    @classmethod
-    async def find_in_bounds(min_lat: float, max_lat: float,
-                           min_lon: float, max_lon: float) -> List["Node"]
+    async def filter_nodes(self, *,
+                          node_type: Optional[str] = None,
+                          direction: str = "out") -> List["Node"]
 ```
 
 #### `Edge(Object)`
@@ -353,7 +323,7 @@ class Walker(BaseModel):
 
     async def spawn(start: Optional[Node] = None) -> "Walker"
     async def visit(nodes: Union[Node, List[Node]]) -> list
-    async def resume() -> "Walker"  # Resume paused traversal
+    async def traverse(self, start: Node) -> None
 ```
 
 #### `NodeQuery`
@@ -394,7 +364,7 @@ async def cleanup(self):
     self.response["completed_at"] = datetime.now()
 ```
 
-## 🗄️ Database Configuration
+## Database Configuration
 
 jvspatial supports multiple database backends configured via environment variables.
 
@@ -442,7 +412,7 @@ class MyDatabase(Database):
     async def find(self, collection: str, query: dict) -> List[dict]: ...
 ```
 
-## 🌐 REST API Integration
+## REST API Integration
 
 jvspatial provides seamless FastAPI integration for exposing walkers as REST endpoints.
 
@@ -450,11 +420,11 @@ jvspatial provides seamless FastAPI integration for exposing walkers as REST end
 
 ```python
 from fastapi import FastAPI
-from jvspatial.api.api import GraphAPI
+from jvspatial.api.api import EndpointRouter
 from jvspatial.core.entities import Walker, Root, on_visit, on_exit
 
 app = FastAPI(title="My Spatial API")
-api = GraphAPI()
+api = EndpointRouter()
 
 @api.endpoint("/greet", methods=["POST"])
 class GreetingWalker(Walker):
@@ -518,22 +488,7 @@ class LocationFinder(Walker):
         self.response["status"] = "success"
 ```
 
-## 🔧 Advanced Features
-
-### Spatial Queries
-
-```python
-# Find nodes within radius
-nearby_nodes = await MyNode.find_nearby(
-    latitude=40.7128, longitude=-74.0060, radius_km=5.0
-)
-
-# Find nodes within bounding box
-bounded_nodes = await MyNode.find_in_bounds(
-    min_lat=40.0, max_lat=41.0,
-    min_lon=-75.0, max_lon=-73.0
-)
-```
+## Advanced Features
 
 ### Complex Node Filtering
 
@@ -546,26 +501,51 @@ connected = await (await node.nodes(direction="out")).filter(
 )
 ```
 
-### Walker State Management
+### Walker Execution Flow
 
 ```python
-class StatefulWalker(Walker):
-    visited_count: int = 0
+class InventoryWalker(Walker):
+    def __init__(self):
+        self.found_items = []
+        
+    @on_visit(Root)
+    async def start_inventory(self, here):
+        print("Starting inventory check")
+        # Find all storage rooms connected to root
+        storage_rooms = await (await here.nodes()).filter(node="StorageRoom")
+        if storage_rooms:
+            await self.visit(storage_rooms[0])
+        else:
+            print("No storage rooms found")
+            self.response["error"] = "No storage facilities available"
 
-    @on_visit(Node)
-    async def track_visits(self, here):
-        self.visited_count += 1
+    @on_visit("StorageRoom")
+    async def check_storage(self, here):
+        print(f"Checking storage room: {here.id}")
+        # Find all inventory items in this storage
+        items = await (await here.nodes()).filter(node="InventoryItem")
+        self.found_items.extend(items)
+        
+        # Visit each item to scan details
+        await self.visit(items)
 
-        # Pause traversal conditionally
-        if self.visited_count >= 10:
-            self.paused = True
+    @on_visit("InventoryItem")
+    async def record_item(self, here):
+        print(f"Scanning item: {here.name} ({here.serial_number})")
+        self.response.setdefault("items", []).append({
+            "id": here.id,
+            "name": here.name,
+            "location": here.storage_location
+        })
 
-    async def continue_later(self):
-        # Resume paused traversal
-        await self.resume()
+    @on_exit
+    async def final_report(self):
+        self.response["total_items"] = len(self.found_items)
+        self.response["unique_categories"] = len({item.category for item in self.found_items})
+        print(f"Inventory check complete. Found {self.response['total_items']} items.")
 ```
 
-### Custom Edge Types with Validation
+### Database Configuration
 
 ```python
 from pydantic import validator
@@ -588,7 +568,7 @@ class Highway(Edge):
         return v
 ```
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 jvspatial/
@@ -596,7 +576,7 @@ jvspatial/
 │   ├── __init__.py
 │   ├── api/             # REST API components
 │   │   ├── __init__.py
-│   │   └── api.py       # GraphAPI class
+│   │   └── api.py       # EndpointRouter class
 │   ├── core/            # Core entities and logic
 │   │   ├── __init__.py
 │   │   ├── entities.py  # Node, Edge, Walker classes
@@ -620,7 +600,7 @@ jvspatial/
 └── .env.example         # Environment configuration template
 ```
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
@@ -637,8 +617,17 @@ class MyAgent(Node):
     longitude: float = 0.0
 ```
 
-#### "No App nodes found" in every run
-This is expected behavior! Each walker traversal represents a new session/interaction. If you want to find existing nodes:
+#### "Node has no attribute 'latitude'"
+```python
+# ❌ Assuming spatial attributes exist
+async def get_coordinates(node):
+    return (node.latitude, node.longitude)
+
+# ✅ Check attributes first
+async def get_coordinates(node):
+    if hasattr(node, 'latitude') and hasattr(node, 'longitude'):
+        return (node.latitude, node.longitude)
+    return None
 
 ```python
 @on_visit(Root)
@@ -664,17 +653,6 @@ echo $JVSPATIAL_JSONDB_PATH
 ls -la jvdb/
 ```
 
-#### Import errors
-```python
-# ✅ Correct imports
-from jvspatial.core.entities import Node, Walker, Edge, Root
-from jvspatial.api.api import GraphAPI
-
-# ❌ These don't exist
-from jvspatial.models import City  # Wrong!
-from jvspatial.walker import Tourist  # Wrong!
-```
-
 ### Performance Tips
 
 1. **Use batch operations** when creating many nodes
@@ -691,11 +669,12 @@ logging.basicConfig(level=logging.DEBUG)
 # Enable detailed walker logging
 class DebugWalker(Walker):
     @on_visit(Node)
-    async def debug_visit(self, here):
-        print(f"Visiting {here.__class__.__name__}: {here.id}")
+    async def log_visit(self, here):
+        print(f"Visiting {here.__class__.__name__} {here.id}")
+        print(f"Connections: {await here.nodes()}")
 ```
 
-## 🤝 Contributing
+## Contributing
 
 We welcome contributions! Here's how to get started:
 
@@ -757,11 +736,11 @@ flake8 jvspatial/
 mypy jvspatial/
 ```
 
-## 📜 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Inspired by [Jaseci](https://github.com/Jaseci-Labs/jaseci) and its Object-Spatial paradigm
 - Built with [Pydantic](https://pydantic-docs.helpmanual.io/) for data validation
@@ -769,16 +748,16 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-## 📞 Support
+## Support
 
 - **Documentation**: [Full Documentation](https://github.com/TrueSelph/jvspatial/wiki)
 - **Issues**: [GitHub Issues](https://github.com/TrueSelph/jvspatial/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/TrueSelph/jvspatial/discussions)
 
 ---
+## Contributors
 
 <p align="center">
     <a href="https://github.com/TrueSelph/jvspatial/graphs/contributors">
-        <img src="https://contrib.rocks/image?repo=TrueSelph/jvspatial" />
     </a>
 </p>

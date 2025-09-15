@@ -1,6 +1,6 @@
 import asyncio
 
-from jvspatial.api.api import GraphAPI
+from jvspatial.api.api import EndpointRouter
 from jvspatial.core.entities import Edge, Node, Root, Walker, on_exit, on_visit
 
 
@@ -49,7 +49,7 @@ class ThirdAction(Action):
 
 
 # API Endpoint example
-api = GraphAPI()
+api = EndpointRouter()
 
 
 @api.endpoint("/interact", methods=["POST"])
