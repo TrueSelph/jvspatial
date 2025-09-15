@@ -4,11 +4,11 @@ Tests end-to-end functionality including persistence, traversal, and API integra
 """
 
 import asyncio
+import math
 import os
 import shutil
 import tempfile
 from typing import List
-import math
 
 import pytest
 
@@ -30,9 +30,9 @@ class City(Node):
     def __init__(self, **kwargs):
         if kwargs.get("name", "").strip() == "":
             raise ValueError("City name cannot be empty")
-        
+
         super().__init__(**kwargs)
-    
+
     @staticmethod
     def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         """Calculate distance between two coordinates in kilometers using Haversine formula."""
@@ -51,14 +51,18 @@ class City(Node):
         return earth_radius * c
 
     @staticmethod
-    async def find_nearby(latitude: float, longitude: float, radius_km: float = 10.0) -> List["City"]:
+    async def find_nearby(
+        latitude: float, longitude: float, radius_km: float = 10.0
+    ) -> List["City"]:
         """Find within a specified radius of coordinates."""
         all_cities = await City.all()
         nearby = []
-        
+
         for city in all_cities:
-            if hasattr(city, 'latitude') and hasattr(city, 'longitude'):
-                distance = City.calculate_distance(latitude, longitude, city.latitude, city.longitude)
+            if hasattr(city, "latitude") and hasattr(city, "longitude"):
+                distance = City.calculate_distance(
+                    latitude, longitude, city.latitude, city.longitude
+                )
                 if distance <= radius_km:
                     nearby.append(city)
         return nearby
@@ -627,12 +631,17 @@ class TestAPIIntegrationWorkflows:
                     )
 
                     # Assign agent to mission
-                    await mission.connect(agent, Assignment, assigned_at="2024-01-01T00:00:00Z", role="field_operative")
+                    await mission.connect(
+                        agent,
+                        Assignment,
+                        assigned_at="2024-01-01T00:00:00Z",
+                        role="field_operative",
+                    )
                     deployed_agents.append(agent)
 
                 # Connect mission to root for discoverability
                 await here.connect(mission)
-                
+
                 # Explicitly save mission with its connections
                 await mission.save()
 
@@ -684,7 +693,9 @@ class TestAPIIntegrationWorkflows:
         for edge in connections:
             if isinstance(edge, Assignment):
                 # Get the agent ID from the edge and fetch the full Agent object
-                agent_id = edge.source if edge.target == retrieved_mission.id else edge.target
+                agent_id = (
+                    edge.source if edge.target == retrieved_mission.id else edge.target
+                )
                 agent = await Agent.get(agent_id)
                 if agent and isinstance(agent, Agent):
                     assigned_agents.append(agent)

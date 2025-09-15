@@ -14,6 +14,7 @@ Access docs at: http://localhost:8000/docs
 
 import math
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import List, Optional
 
@@ -21,7 +22,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from jvspatial.api.endpoint_router import EndpointRouter
+from jvspatial.api.endpoint_router import EndpointField, EndpointRouter
 from jvspatial.core.entities import Node, Root, Walker, on_exit, on_visit
 
 
@@ -41,21 +42,103 @@ def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     return earth_radius * c
 
 
-async def find_nearby_agents(latitude: float, longitude: float, radius_km: float = 10.0) -> List["Agent"]:
+async def find_nearby_agents(
+    latitude: float, longitude: float, radius_km: float = 10.0
+) -> List["Agent"]:
     """Find agents within a specified radius of coordinates."""
     all_agents = await Agent.all()
     nearby = []
-    
+
     for agent in all_agents:
-        if hasattr(agent, 'latitude') and hasattr(agent, 'longitude'):
-            distance = calculate_distance(latitude, longitude, agent.latitude, agent.longitude)
+        if hasattr(agent, "latitude") and hasattr(agent, "longitude"):
+            distance = calculate_distance(
+                latitude, longitude, agent.latitude, agent.longitude
+            )
             if distance <= radius_km:
                 nearby.append(agent)
     return nearby
 
+
 # Set up JSON database for this example
 os.environ["JVSPATIAL_DB_TYPE"] = "json"
 os.environ["JVSPATIAL_JSONDB_PATH"] = "jvdb/examples"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan manager for startup and shutdown events"""
+    # Startup
+    print("🚀 Starting jvspatial Agent Management API...")
+
+    # Ensure root node exists
+    try:
+        # Root.get() has an optional id parameter that is ignored - Root is a singleton
+        root = await Root.get()  # type: ignore[call-arg]
+        if not root:
+            raise RuntimeError("Failed to initialize root node")
+        print(f"✅ Root node initialized: {root.id}")
+
+        # Create sample organization if none exist
+        orgs = await Organization.all()
+        if not orgs:
+            sample_org = await Organization.create(
+                name="Acme Corp",
+                type="company",
+                headquarters_lat=40.7128,
+                headquarters_lon=-74.0060,
+            )
+            await root.connect(sample_org)
+            print(f"✅ Sample organization created: {sample_org.name}")
+
+            # Create 3 sample agents
+            agents = []
+            for i in range(1, 4):
+                agent = await Agent.create(
+                    name=f"Agent {i}",
+                    agent_type=["field", "analyst", "manager"][i - 1],
+                    latitude=40.7128 + (i * 0.01),
+                    longitude=-74.0060 + (i * 0.01),
+                    skills=["surveillance", "analysis", "logistics"][:i],
+                    status="active",
+                )
+                await sample_org.connect(agent)
+                agents.append(agent)
+                print(f"🕵️  Sample agent created: {agent.name}")
+
+            # Create 3 sample missions
+            for i in range(1, 4):
+                mission = await Mission.create(
+                    title=f"Mission {i}",
+                    description=f"Critical mission #{i}",
+                    target_lat=40.7128 + (i * 0.1),
+                    target_lon=-74.0060 + (i * 0.1),
+                    priority=["low", "medium", "high"][i - 1],
+                    status="active",
+                )
+                await root.connect(mission)
+                await mission.connect(agents[i - 1])
+                print(f"🎯 Sample mission created: {mission.title}")
+
+            # Verify connections
+            print("\n🔗 Relationship Verification:")
+            org_agents = await sample_org.connected_nodes(Agent)
+            print(f"Organization '{sample_org.name}' has {len(org_agents)} agents")
+
+            all_missions = await Mission.all()
+            for mission in all_missions:
+                mission_agents = await mission.connected_nodes(Agent)
+                print(
+                    f"Mission '{mission.title}' has {len(mission_agents)} assigned agents"
+                )
+
+    except Exception as e:
+        print(f"❌ Startup error: {e}")
+
+    yield  # Application is running
+
+    # Shutdown
+    print("🛑 Shutting down jvspatial Agent Management API...")
+
 
 # FastAPI app setup
 app = FastAPI(
@@ -64,6 +147,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # EndpointRouter for jvspatial endpoints
@@ -131,39 +215,53 @@ class Location(Node):
 
 class AgentCreateRequest(BaseModel):
     """Request model for creating new agents"""
-    name: str = Field(..., example="Aria Blake",
-                     description="Full name of the agent")
-    agent_type: str = Field("field", example="field",
-                          description="Agent role: field, analyst, manager")
-    latitude: float = Field(0.0, example=40.7128,
-                           description="Initial latitude coordinate")
-    longitude: float = Field(0.0, example=-74.0060,
-                            description="Initial longitude coordinate")
-    skills: List[str] = Field(default_factory=list,
-                             example=["surveillance", "combat"],
-                             description="List of agent skills")
-    organization_id: Optional[str] = Field(None,
-                                          example="org_12345",
-                                          description="Optional organization ID")
+
+    name: str = Field(..., example="Aria Blake", description="Full name of the agent")
+    agent_type: str = Field(
+        "field", example="field", description="Agent role: field, analyst, manager"
+    )
+    latitude: float = Field(
+        0.0, example=40.7128, description="Initial latitude coordinate"
+    )
+    longitude: float = Field(
+        0.0, example=-74.0060, description="Initial longitude coordinate"
+    )
+    skills: List[str] = Field(
+        default_factory=list,
+        example=["surveillance", "combat"],
+        description="List of agent skills",
+    )
+    organization_id: Optional[str] = Field(
+        None, example="org_12345", description="Optional organization ID"
+    )
 
 
 class MissionCreateRequest(BaseModel):
     """Request model for creating new missions"""
-    title: str = Field(..., example="Operation Shadow",
-                      description="Mission codename")
-    description: str = Field(..., example="Covert surveillance operation",
-                            description="Detailed mission objectives")
-    priority: str = Field("medium", example="high",
-                         description="Urgency level: low, medium, high")
-    target_lat: float = Field(..., example=40.7128,
-                             description="Target latitude coordinate")
-    target_lon: float = Field(..., example=-74.0060,
-                             description="Target longitude coordinate")
-    deadline: Optional[str] = Field(None, example="2025-12-31T23:59:59Z",
-                                   description="ISO 8601 deadline timestamp")
-    assigned_agent_ids: List[str] = Field(default_factory=list,
-                                         example=["agent_1", "agent_2"],
-                                         description="List of agent IDs to assign")
+
+    title: str = Field(..., example="Operation Shadow", description="Mission codename")
+    description: str = Field(
+        ...,
+        example="Covert surveillance operation",
+        description="Detailed mission objectives",
+    )
+    priority: str = Field(
+        "medium", example="high", description="Urgency level: low, medium, high"
+    )
+    target_lat: float = Field(
+        ..., example=40.7128, description="Target latitude coordinate"
+    )
+    target_lon: float = Field(
+        ..., example=-74.0060, description="Target longitude coordinate"
+    )
+    deadline: Optional[str] = Field(
+        None, example="2025-12-31T23:59:59Z", description="ISO 8601 deadline timestamp"
+    )
+    assigned_agent_ids: List[str] = Field(
+        default_factory=list,
+        example=["agent_1", "agent_2"],
+        description="List of agent IDs to assign",
+    )
 
 
 class LocationSearchRequest(BaseModel):
@@ -180,7 +278,7 @@ class LocationSearchRequest(BaseModel):
 class CreateAgent(Walker):
     """
     Create a new agent in the system
-    
+
     Example request body:
     {
         "name": "James Bond",
@@ -190,19 +288,62 @@ class CreateAgent(Walker):
         "skills": ["combat", "surveillance"],
         "organization_id": "org_12345"
     }
-    
+
     Responses:
     201: Returns created agent details
     400: Invalid input data format
     500: Internal server error
     """
 
-    name: str
-    agent_type: str = "field"
-    latitude: float = 0.0
-    longitude: float = 0.0
-    skills: List[str] = Field(default_factory=list)
-    organization_id: Optional[str] = None
+    name: str = EndpointField(
+        description="Full name of the agent",
+        examples=["James Bond", "Aria Blake", "Marcus Cole"],
+        min_length=2,
+        max_length=100,
+    )
+
+    agent_type: str = EndpointField(
+        default="field",
+        description="Agent role type",
+        examples=["field", "analyst", "manager"],
+        pattern=r"^(field|analyst|manager)$",
+    )
+
+    # Grouped location parameters
+    latitude: float = EndpointField(
+        default=0.0,
+        endpoint_group="location",
+        description="Agent's initial latitude coordinate",
+        examples=[40.7128, 51.5074, -33.8688],
+        ge=-90.0,
+        le=90.0,
+    )
+
+    longitude: float = EndpointField(
+        default=0.0,
+        endpoint_group="location",
+        description="Agent's initial longitude coordinate",
+        examples=[-74.0060, -0.1278, 151.2093],
+        ge=-180.0,
+        le=180.0,
+    )
+
+    skills: List[str] = EndpointField(
+        default_factory=list,
+        description="List of agent skills and specializations",
+        examples=[
+            ["surveillance", "combat"],
+            ["analysis", "linguistics"],
+            ["logistics", "medical"],
+        ],
+    )
+
+    organization_id: Optional[str] = EndpointField(
+        default=None,
+        description="Optional organization ID to assign agent to",
+        examples=["org_12345", "acme_corp"],
+        pattern=r"^[a-zA-Z0-9_-]+$",
+    )
 
     @on_visit(Root)
     async def create_agent(self, here):
@@ -252,11 +393,46 @@ class CreateAgent(Walker):
 class FindNearbyAgents(Walker):
     """Find agents within a specified radius"""
 
-    latitude: float
-    longitude: float
-    radius_km: float = 10.0
-    agent_type: Optional[str] = None
-    status: Optional[str] = None
+    # Grouped search parameters
+    latitude: float = EndpointField(
+        endpoint_group="search_center",
+        description="Latitude of search center point",
+        examples=[40.7128, 51.5074, -33.8688],
+        ge=-90.0,
+        le=90.0,
+    )
+
+    longitude: float = EndpointField(
+        endpoint_group="search_center",
+        description="Longitude of search center point",
+        examples=[-74.0060, -0.1278, 151.2093],
+        ge=-180.0,
+        le=180.0,
+    )
+
+    radius_km: float = EndpointField(
+        default=10.0,
+        endpoint_group="search_center",
+        description="Search radius in kilometers",
+        examples=[5.0, 10.0, 25.0],
+        gt=0.0,
+        le=1000.0,
+    )
+
+    # Grouped filter parameters
+    agent_type: Optional[str] = EndpointField(
+        default=None,
+        endpoint_group="filters",
+        description="Filter by agent type",
+        examples=["field", "analyst", "manager"],
+    )
+
+    status: Optional[str] = EndpointField(
+        default=None,
+        endpoint_group="filters",
+        description="Filter by agent status",
+        examples=["active", "inactive", "mission"],
+    )
 
     @on_visit(Root)
     async def find_agents(self, here):
@@ -314,32 +490,90 @@ class FindNearbyAgents(Walker):
 class CreateMission(Walker):
     """
     Create a new mission and optionally assign agents
-    
+
     Example request body:
     {
         "title": "Operation Phoenix",
         "description": "High-priority extraction mission",
         "priority": "high",
-        "target_lat": 40.7128,
-        "target_lon": -74.0060,
+        "target_location": {
+            "target_lat": 40.7128,
+            "target_lon": -74.0060
+        },
         "deadline": "2025-12-31T23:59:59Z",
-        "assigned_agent_ids": ["agent_1", "agent_2"]
+        "assignment": {
+            "assigned_agent_ids": ["agent_1", "agent_2"],
+            "auto_assign_radius": 25.0
+        }
     }
-    
+
     Responses:
     201: Returns mission details with assigned agents
     400: Invalid coordinates or agent IDs
     500: Internal server error
     """
 
-    title: str
-    description: str
-    priority: str = "medium"
-    target_lat: float
-    target_lon: float
-    deadline: Optional[str] = None
-    assigned_agent_ids: List[str] = Field(default_factory=list)
-    auto_assign_radius: Optional[float] = None
+    title: str = EndpointField(
+        description="Mission title or codename",
+        examples=["Operation Phoenix", "Shadow Protocol", "Blue Moon"],
+        min_length=3,
+        max_length=100,
+    )
+
+    description: str = EndpointField(
+        description="Detailed mission description and objectives",
+        examples=["High-priority extraction mission", "Covert surveillance operation"],
+        min_length=10,
+        max_length=1000,
+    )
+
+    priority: str = EndpointField(
+        default="medium",
+        description="Mission priority level",
+        examples=["low", "medium", "high", "critical"],
+        pattern=r"^(low|medium|high|critical)$",
+    )
+
+    # Grouped target location
+    target_lat: float = EndpointField(
+        endpoint_group="target_location",
+        description="Target latitude coordinate",
+        examples=[40.7128, 51.5074, -33.8688],
+        ge=-90.0,
+        le=90.0,
+    )
+
+    target_lon: float = EndpointField(
+        endpoint_group="target_location",
+        description="Target longitude coordinate",
+        examples=[-74.0060, -0.1278, 151.2093],
+        ge=-180.0,
+        le=180.0,
+    )
+
+    deadline: Optional[str] = EndpointField(
+        default=None,
+        description="Mission deadline in ISO 8601 format",
+        examples=["2025-12-31T23:59:59Z", "2025-06-15T12:00:00Z"],
+        pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$",
+    )
+
+    # Grouped assignment parameters
+    assigned_agent_ids: List[str] = EndpointField(
+        default_factory=list,
+        endpoint_group="assignment",
+        description="List of specific agent IDs to assign to mission",
+        examples=[["agent_1", "agent_2"], ["field_agent_007"]],
+    )
+
+    auto_assign_radius: Optional[float] = EndpointField(
+        default=None,
+        endpoint_group="assignment",
+        description="Radius in km to auto-assign nearby available agents",
+        examples=[25.0, 50.0, 100.0],
+        gt=0.0,
+        le=1000.0,
+    )
 
     @on_visit(Root)
     async def create_mission(self, here):
@@ -418,10 +652,37 @@ class CreateMission(Walker):
 class UpdateAgentStatus(Walker):
     """Update an agent's status and location"""
 
-    agent_id: str
-    status: Optional[str] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
+    agent_id: str = EndpointField(
+        description="Unique identifier of the agent to update",
+        examples=["agent_007", "field_agent_1", "analyst_alpha"],
+        pattern=r"^[a-zA-Z0-9_-]+$",
+    )
+
+    status: Optional[str] = EndpointField(
+        default=None,
+        description="New status for the agent",
+        examples=["active", "inactive", "mission", "offline"],
+        pattern=r"^(active|inactive|mission|offline)$",
+    )
+
+    # Grouped location update
+    latitude: Optional[float] = EndpointField(
+        default=None,
+        endpoint_group="location_update",
+        description="Updated latitude coordinate",
+        examples=[40.7128, 51.5074],
+        ge=-90.0,
+        le=90.0,
+    )
+
+    longitude: Optional[float] = EndpointField(
+        default=None,
+        endpoint_group="location_update",
+        description="Updated longitude coordinate",
+        examples=[-74.0060, -0.1278],
+        ge=-180.0,
+        le=180.0,
+    )
 
     @on_visit(Root)
     async def update_agent(self, here):
@@ -466,6 +727,26 @@ class UpdateAgentStatus(Walker):
 class SystemOverview(Walker):
     """Get system overview and analytics"""
 
+    # Optional parameters for filtering and customization
+    include_locations: bool = EndpointField(
+        default=True,
+        description="Include agent location data in the response",
+        examples=[True, False],
+    )
+
+    include_inactive: bool = EndpointField(
+        default=False,
+        description="Include inactive agents in the statistics",
+        examples=[True, False],
+    )
+
+    agent_type_filter: Optional[str] = EndpointField(
+        default=None,
+        description="Filter statistics to specific agent type",
+        examples=["field", "analyst", "manager"],
+        pattern=r"^(field|analyst|manager)$",
+    )
+
     @on_visit(Root)
     async def analyze_system(self, here):
         try:
@@ -474,13 +755,26 @@ class SystemOverview(Walker):
             all_missions = await Mission.all()
             all_organizations = await Organization.all()
 
+            # Apply agent type filter if specified
+            if self.agent_type_filter:
+                all_agents = [
+                    a for a in all_agents if a.agent_type == self.agent_type_filter
+                ]
+
+            # Apply inactive filter if specified
+            if not self.include_inactive:
+                all_agents = [a for a in all_agents if a.status != "inactive"]
+
             # Agent analytics
             agent_stats = {
                 "total": len(all_agents),
                 "by_status": {},
                 "by_type": {},
-                "active_locations": [],
             }
+
+            # Include locations only if requested
+            if self.include_locations:
+                agent_stats["active_locations"] = []
 
             for agent in all_agents:
                 # Status breakdown
@@ -495,9 +789,11 @@ class SystemOverview(Walker):
                     agent_stats["by_type"].get(agent_type, 0) + 1
                 )
 
-                # Active locations
-                if agent.status in ["active", "mission"] and (
-                    agent.latitude != 0 or agent.longitude != 0
+                # Active locations (only if requested)
+                if (
+                    self.include_locations
+                    and agent.status in ["active", "mission"]
+                    and (agent.latitude != 0 or agent.longitude != 0)
                 ):
                     agent_stats["active_locations"].append(
                         {
@@ -571,7 +867,9 @@ async def health_check():
     """Health check endpoint"""
     try:
         # Test database connectivity
-        root = await Root.get()
+        root = await Root.get()  # type: ignore[call-arg]
+        if not root:
+            raise RuntimeError("Root node not available")
         return {
             "status": "healthy",
             "database": "connected",
@@ -650,79 +948,6 @@ async def list_missions(limit: int = 100, status: Optional[str] = None):
 
 # Include the graph API router
 app.include_router(api.router, prefix="/api/v1")
-
-# ====================== STARTUP/SHUTDOWN EVENTS ======================
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize the system on startup"""
-    print("🚀 Starting jvspatial Agent Management API...")
-
-    # Ensure root node exists
-    try:
-        root = await Root.get()
-        print(f"✅ Root node initialized: {root.id}")
-
-        # Create sample organization if none exist
-        orgs = await Organization.all()
-        if not orgs:
-            sample_org = await Organization.create(
-                name="Acme Corp",
-                type="company",
-                headquarters_lat=40.7128,
-                headquarters_lon=-74.0060,
-            )
-            await root.connect(sample_org)
-            print(f"✅ Sample organization created: {sample_org.name}")
-
-            # Create 3 sample agents
-            agents = []
-            for i in range(1, 4):
-                agent = await Agent.create(
-                    name=f"Agent {i}",
-                    agent_type=["field", "analyst", "manager"][i-1],
-                    latitude=40.7128 + (i * 0.01),
-                    longitude=-74.0060 + (i * 0.01),
-                    skills=["surveillance", "analysis", "logistics"][:i],
-                    status="active"
-                )
-                await sample_org.connect(agent)
-                agents.append(agent)
-                print(f"🕵️  Sample agent created: {agent.name}")
-
-            # Create 3 sample missions
-            for i in range(1, 4):
-                mission = await Mission.create(
-                    title=f"Mission {i}",
-                    description=f"Critical mission #{i}",
-                    target_lat=40.7128 + (i * 0.1),
-                    target_lon=-74.0060 + (i * 0.1),
-                    priority=["low", "medium", "high"][i-1],
-                    status="active"
-                )
-                await root.connect(mission)
-                await mission.connect(agents[i-1])
-                print(f"🎯 Sample mission created: {mission.title}")
-                
-            # Verify connections
-            print("\n🔗 Relationship Verification:")
-            org_agents = await sample_org.connected_nodes(Agent)
-            print(f"Organization '{sample_org.name}' has {len(org_agents)} agents")
-            
-            all_missions = await Mission.all()
-            for mission in all_missions:
-                mission_agents = await mission.connected_nodes(Agent)
-                print(f"Mission '{mission.title}' has {len(mission_agents)} assigned agents")
-
-    except Exception as e:
-        print(f"❌ Startup error: {e}")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    print("🛑 Shutting down jvspatial Agent Management API...")
 
 
 if __name__ == "__main__":

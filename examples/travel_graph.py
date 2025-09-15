@@ -30,27 +30,36 @@ def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     return earth_radius * c
 
 
-async def find_nearby_cities(latitude: float, longitude: float, radius_km: float = 10.0) -> List["City"]:
+async def find_nearby_cities(
+    latitude: float, longitude: float, radius_km: float = 10.0
+) -> List["City"]:
     """Find cities within a specified radius of coordinates."""
     all_cities = await City.all()
     nearby = []
-    
+
     for city in all_cities:
-        if hasattr(city, 'latitude') and hasattr(city, 'longitude'):
-            distance = calculate_distance(latitude, longitude, city.latitude, city.longitude)
+        if hasattr(city, "latitude") and hasattr(city, "longitude"):
+            distance = calculate_distance(
+                latitude, longitude, city.latitude, city.longitude
+            )
             if distance <= radius_km:
                 nearby.append(city)
     return nearby
 
 
-async def find_cities_in_bounds(min_lat: float, max_lat: float, min_lon: float, max_lon: float) -> List["City"]:
+async def find_cities_in_bounds(
+    min_lat: float, max_lat: float, min_lon: float, max_lon: float
+) -> List["City"]:
     """Find cities within a bounding box."""
     all_cities = await City.all()
     bounded = []
-    
+
     for city in all_cities:
-        if hasattr(city, 'latitude') and hasattr(city, 'longitude'):
-            if min_lat <= city.latitude <= max_lat and min_lon <= city.longitude <= max_lon:
+        if hasattr(city, "latitude") and hasattr(city, "longitude"):
+            if (
+                min_lat <= city.latitude <= max_lat
+                and min_lon <= city.longitude <= max_lon
+            ):
                 bounded.append(city)
     return bounded
 
@@ -183,7 +192,9 @@ async def main() -> None:
     # Query highways using entity methods
     all_edges = await Edge.all()
     highways = [
-        edge for edge in all_edges if isinstance(edge, Highway) and edge.length is not None and edge.length > 250
+        edge
+        for edge in all_edges
+        if isinstance(edge, Highway) and edge.length is not None and edge.length > 250
     ]
     print(f"Highways longer than 250 miles: {len(highways)}")
 

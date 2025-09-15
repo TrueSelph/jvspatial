@@ -26,7 +26,8 @@ class Highway(Edge):
     lanes: int = 4
     speed_limit: int = 65
     toll_road: bool = False
-        
+
+
 class TestNodeConnections:
     """Test node connection and edge management"""
 

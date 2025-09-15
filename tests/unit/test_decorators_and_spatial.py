@@ -17,6 +17,7 @@ from jvspatial.core.entities import (
     on_visit,
 )
 
+
 class TestNode(Node):
     """Test node for decorator testing"""
 
