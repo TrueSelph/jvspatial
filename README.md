@@ -66,12 +66,11 @@ jvspatial is an asynchronous object-spatial Python library for building persiste
 ### Key Features
 
 - **Async-First Design**: Built with native async/await support throughout
-- **Spatial Graph Model**: Nodes with latitude/longitude attributes and spatial helpers
 - **Type-Driven Entities**: Pydantic models for node/edge definitions
 - **Flexible Persistence**: Multiple database backends (JSON, MongoDB)
 - **Imperative Walkers**: Explicit traversal control with visit/exit hooks
 - **REST Endpoint Mixins**: Combine walkers with FastAPI routes
-- **Explicit Connections**: Manual relationship management between nodes
+- **Explicit Connections via Edges**: Manual relationship management between nodes
 - **Object Lifecycle**: Manual save/load operations for granular control
 
 ## Installation
@@ -103,7 +102,7 @@ pip install motor pymongo
 ## Core Concepts
 
 ### Nodes
-Nodes represent entities in your spatial graph. They can store any data and have spatial coordinates.
+Nodes represent entities in your object-spatial graph. They can store any data and have operations which may be triggered by visiting Walkers.
 
 ```python
 from jvspatial.core.entities import Node
@@ -138,7 +137,7 @@ highway = await chicago.connect(detroit, Highway, lanes=6, speed_limit=70)
 ```
 
 ### Walkers
-Walkers traverse the graph and execute logic at each node they visit.
+Walkers traverse the object-spatial graph and execute logic at each node they visit.
 
 ```python
 from jvspatial.core.entities import Walker, on_visit, on_exit
