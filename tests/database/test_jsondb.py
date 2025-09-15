@@ -495,8 +495,7 @@ class TestJsonDBConfiguration:
         db = JsonDB()
 
         # Should use default path
-        assert db.base_path.name == "json"
-        assert db.base_path.parent.name == "db"
+        assert db.base_path.name == "jvdb"
 
     @pytest.mark.asyncio
     async def test_relative_path_resolution(self):

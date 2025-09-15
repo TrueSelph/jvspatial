@@ -14,7 +14,7 @@ def get_database() -> Database:
     if db_type == "mongodb":
         return MongoDB()
     elif db_type == "json":
-        db_path = os.getenv("JVSPATIAL_JSONDB_PATH", "db/json")
+        db_path = os.getenv("JVSPATIAL_JSONDB_PATH", "jvdb")
         return JsonDB(db_path)
     else:
         raise ValueError(f"Unsupported database type: {db_type}")

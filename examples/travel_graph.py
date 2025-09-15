@@ -1,17 +1,58 @@
 """Example graph traversal using jvspatial library."""
 
 import asyncio
+import math
+from typing import List
 
-# Import spatial utilities to enable find_nearby and find_in_bounds methods
-import jvspatial.spatial.utils  # noqa: F401
 from jvspatial.core.entities import (
     Edge,
     Node,
-    RootNode,
+    Root,
     Walker,
     on_exit,
     on_visit,
 )
+
+
+def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate distance between two coordinates in kilometers using Haversine formula."""
+    earth_radius = 6371  # Earth's radius in kilometers
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    delta_lat = math.radians(lat2 - lat1)
+    delta_lon = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return earth_radius * c
+
+
+async def find_nearby_cities(latitude: float, longitude: float, radius_km: float = 10.0) -> List["City"]:
+    """Find cities within a specified radius of coordinates."""
+    all_cities = await City.all()
+    nearby = []
+    
+    for city in all_cities:
+        if hasattr(city, 'latitude') and hasattr(city, 'longitude'):
+            distance = calculate_distance(latitude, longitude, city.latitude, city.longitude)
+            if distance <= radius_km:
+                nearby.append(city)
+    return nearby
+
+
+async def find_cities_in_bounds(min_lat: float, max_lat: float, min_lon: float, max_lon: float) -> List["City"]:
+    """Find cities within a bounding box."""
+    all_cities = await City.all()
+    bounded = []
+    
+    for city in all_cities:
+        if hasattr(city, 'latitude') and hasattr(city, 'longitude'):
+            if min_lat <= city.latitude <= max_lat and min_lon <= city.longitude <= max_lon:
+                bounded.append(city)
+    return bounded
 
 
 # Custom node types for demo
@@ -92,7 +133,7 @@ async def main() -> None:
     # Database auto-configured on first use
     print("\n=== DEMONSTRATING GRAPH CREATION ===")
     # Create root node
-    root = await RootNode.get()  # type: ignore[call-arg]
+    root = await Root.get()  # type: ignore[call-arg]
 
     # Create and save city nodes with spatial data using new async pattern
     chicago = await City.create(
@@ -149,14 +190,14 @@ async def main() -> None:
     # Demonstrate new spatial query capabilities
     print("\n=== ENHANCED SPATIAL QUERIES ===")
 
-    # Find cities within 500km of Chicago
+    # Find cities within 500km of Chicago using local utility function
     chicago_coords = (41.8781, -87.6298)
-    nearby_cities = await City.find_nearby(chicago_coords[0], chicago_coords[1], 500)
+    nearby_cities = await find_nearby_cities(chicago_coords[0], chicago_coords[1], 500)
     nearby_names = [city.name for city in nearby_cities if isinstance(city, City)]
     print(f"Cities within 500km of Chicago: {', '.join(nearby_names)}")
 
-    # Find cities in a specific bounding box (Great Lakes region)
-    great_lakes_cities = await City.find_in_bounds(40.0, 50.0, -95.0, -75.0)
+    # Find cities in a specific bounding box (Great Lakes region) using local utility function
+    great_lakes_cities = await find_cities_in_bounds(40.0, 50.0, -95.0, -75.0)
     gl_names = [city.name for city in great_lakes_cities if isinstance(city, City)]
     print(f"Cities in Great Lakes region: {', '.join(gl_names)}")
 

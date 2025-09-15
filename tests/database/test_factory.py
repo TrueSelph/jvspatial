@@ -47,8 +47,7 @@ class TestDatabaseFactory:
         db = get_database()
 
         assert isinstance(db, JsonDB)
-        assert db.base_path.name == "json"
-        assert db.base_path.parent.name == "db"
+        assert db.base_path.name == "jvdb"
 
     def test_explicit_json_database(self):
         """Test factory returns JsonDB when explicitly configured"""
@@ -135,8 +134,7 @@ class TestJsonDBConfiguration:
         db = get_database()
 
         assert isinstance(db, JsonDB)
-        assert db.base_path.name == "json"
-        assert db.base_path.parent.name == "db"
+        assert db.base_path.name == "jvdb"
 
     def test_custom_jsondb_path_absolute(self):
         """Test JsonDB with custom absolute path"""

@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from jvspatial.api.api import GraphAPI
-from jvspatial.core.entities import Node, RootNode, Walker, on_exit, on_visit
+from jvspatial.core.entities import Node, Root, Walker, on_exit, on_visit
 
 
 class TestNode(Node):
@@ -34,7 +34,7 @@ class TestGraphAPIBasics:
 
         @api.endpoint("/test", methods=["POST"])
         class TestWalker(Walker):
-            @on_visit(RootNode)
+            @on_visit(Root)
             async def on_root(self, here):
                 self.response["test"] = "success"
 
@@ -63,7 +63,7 @@ class TestWalkerExecution:
 
         @api.endpoint("/simple", methods=["POST"])
         class SimpleWalker(Walker):
-            @on_visit(RootNode)
+            @on_visit(Root)
             async def on_root(self, here):
                 self.response["status"] = "visited_root"
                 self.response["node_id"] = here.id
@@ -96,7 +96,7 @@ class TestWalkerExecution:
             name: str = "default"
             count: int = 1
 
-            @on_visit(RootNode)
+            @on_visit(Root)
             async def on_root(self, here):
                 self.response["name"] = self.name
                 self.response["count"] = self.count
@@ -155,7 +155,7 @@ class TestErrorHandling:
 
         @api.endpoint("/error", methods=["POST"])
         class ErrorWalker(Walker):
-            @on_visit(RootNode)
+            @on_visit(Root)
             async def on_root(self, here):
                 raise RuntimeError("Test error")
 
@@ -189,7 +189,7 @@ class TestComplexWalkers:
 
         @api.endpoint("/traversal", methods=["POST"])
         class TraversalWalker(Walker):
-            @on_visit(RootNode)
+            @on_visit(Root)
             async def on_root(self, here):
                 if "visited_nodes" not in self.response:
                     self.response["visited_nodes"] = []

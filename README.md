@@ -10,7 +10,7 @@
 
 ```python
 import asyncio
-from jvspatial.core.entities import Node, Walker, RootNode, on_visit, on_exit
+from jvspatial.core.entities import Node, Walker, Root, on_visit, on_exit
 
 class MyAgent(Node):
     """Agent with spatial properties"""
@@ -19,7 +19,7 @@ class MyAgent(Node):
     longitude: float = 0.0
 
 class AgentWalker(Walker):
-    @on_visit(RootNode)
+    @on_visit(Root)
     async def on_root(self, here):
         # Create and connect an agent
         agent = MyAgent(latitude=40.7128, longitude=-74.0060)
@@ -35,7 +35,7 @@ class AgentWalker(Walker):
         self.response["status"] = "completed"
 
 async def main():
-    root = await RootNode.get()
+    root = await Root.get()
     walker = AgentWalker()
     result = await walker.spawn(root)
     print(f"Result: {result.response}")
@@ -155,13 +155,13 @@ class Tourist(Walker):
 ```
 
 ### 🌱 Root Node
-The singleton RootNode serves as the entry point for all graph operations.
+The singleton Root serves as the entry point for all graph operations.
 
 ```python
-from jvspatial.core.entities import RootNode
+from jvspatial.core.entities import Root
 
 # Get the root node (creates it if it doesn't exist)
-root = await RootNode.get()
+root = await Root.get()
 ```
 
 ## 🎯 Getting Started
@@ -170,7 +170,7 @@ root = await RootNode.get()
 
 ```python
 import asyncio
-from jvspatial.core.entities import Node, RootNode
+from jvspatial.core.entities import Node, Root
 
 class Person(Node):
     name: str
@@ -178,7 +178,7 @@ class Person(Node):
 
 async def basic_example():
     # Get root node
-    root = await RootNode.get()
+    root = await Root.get()
 
     # Create nodes
     alice = await Person.create(name="Alice", age=30)
@@ -200,7 +200,7 @@ asyncio.run(basic_example())
 
 ```python
 import asyncio
-from jvspatial.core.entities import Node, Walker, RootNode, on_visit
+from jvspatial.core.entities import Node, Walker, Root, on_visit
 
 class Person(Node):
     name: str
@@ -219,7 +219,7 @@ class NetworkExplorer(Walker):
         await self.visit(unvisited)
 
 async def traversal_example():
-    root = await RootNode.get()
+    root = await Root.get()
 
     # Create a network
     alice = await Person.create(name="Alice")
@@ -404,14 +404,14 @@ Perfect for development and small applications.
 ```bash
 # .env file
 JVSPATIAL_DB_TYPE=json
-JVSPATIAL_JSONDB_PATH=db/json
+JVSPATIAL_JSONDB_PATH=jvdb
 ```
 
-Data is stored in `db/json/` with separate directories for nodes and edges:
+Data is stored in `jvdb/` with separate directories for nodes and edges:
 ```
-db/json/
+jvdb/
 ├── node/
-│   ├── n:RootNode:root.json
+│   ├── n:Root:root.json
 │   ├── n:City:123abc.json
 │   └── ...
 └── edge/
@@ -451,7 +451,7 @@ jvspatial provides seamless FastAPI integration for exposing walkers as REST end
 ```python
 from fastapi import FastAPI
 from jvspatial.api.api import GraphAPI
-from jvspatial.core.entities import Walker, RootNode, on_visit, on_exit
+from jvspatial.core.entities import Walker, Root, on_visit, on_exit
 
 app = FastAPI(title="My Spatial API")
 api = GraphAPI()
@@ -460,7 +460,7 @@ api = GraphAPI()
 class GreetingWalker(Walker):
     name: str = "World"
 
-    @on_visit(RootNode)
+    @on_visit(Root)
     async def greet(self, here):
         self.response["message"] = f"Hello, {self.name}!"
 
@@ -499,7 +499,7 @@ class LocationFinder(Walker):
     longitude: float
     radius_km: float = 10.0
 
-    @on_visit(RootNode)
+    @on_visit(Root)
     async def find_locations(self, here):
         from myapp.models import Location
 
@@ -641,7 +641,7 @@ class MyAgent(Node):
 This is expected behavior! Each walker traversal represents a new session/interaction. If you want to find existing nodes:
 
 ```python
-@on_visit(RootNode)
+@on_visit(Root)
 async def on_root(self, here):
     # Check for existing App nodes first
     existing_apps = await (await here.nodes()).filter(node='App')
@@ -661,13 +661,13 @@ echo $JVSPATIAL_DB_TYPE
 echo $JVSPATIAL_JSONDB_PATH
 
 # Verify database directory exists and is writable
-ls -la db/json/
+ls -la jvdb/
 ```
 
 #### Import errors
 ```python
 # ✅ Correct imports
-from jvspatial.core.entities import Node, Walker, Edge, RootNode
+from jvspatial.core.entities import Node, Walker, Edge, Root
 from jvspatial.api.api import GraphAPI
 
 # ❌ These don't exist

@@ -8,10 +8,7 @@ from typing import List
 
 import pytest
 
-# Import spatial utilities to enable find_nearby and find_in_bounds methods
-import jvspatial.spatial.utils
-from jvspatial.core.entities import Edge, Node, RootNode
-from jvspatial.spatial import calculate_distance
+from jvspatial.core.entities import Edge, Node, Root
 
 
 class City(Node):
@@ -29,76 +26,7 @@ class Highway(Edge):
     lanes: int = 4
     speed_limit: int = 65
     toll_road: bool = False
-
-
-class TestNodeSpatialQueries:
-    """Test spatial query functionality"""
-
-    @pytest.mark.asyncio
-    async def test_find_nearby_nodes(self):
-        """Test finding nodes within radius"""
-        # Create cities at known distances
-        chicago = await City.create(
-            name="Chicago", latitude=41.8781, longitude=-87.6298, population=2697000
-        )
-        milwaukee = await City.create(
-            name="Milwaukee", latitude=43.0389, longitude=-87.9065, population=594833
-        )
-        # New York is much farther
-        new_york = await City.create(
-            name="New York", latitude=40.7128, longitude=-74.0060, population=8336817
-        )
-
-        # Find cities within 200km of Chicago
-        nearby = await City.find_nearby(41.8781, -87.6298, 200.0)
-        nearby_names = [city.name for city in nearby]
-
-        assert "Chicago" in nearby_names
-        assert "Milwaukee" in nearby_names
-        assert "New York" not in nearby_names
-
-        # Test smaller radius
-        close_cities = await City.find_nearby(41.8781, -87.6298, 50.0)
-        close_names = [city.name for city in close_cities]
-
-        assert "Chicago" in close_names
-        assert "Milwaukee" not in close_names
-
-    @pytest.mark.asyncio
-    async def test_find_in_bounds(self):
-        """Test finding nodes within bounding box"""
-        # Create cities in different regions
-        chicago = await City.create(
-            name="Chicago", latitude=41.8781, longitude=-87.6298
-        )
-        la = await City.create(
-            name="Los Angeles", latitude=34.0522, longitude=-118.2437
-        )
-
-        # Midwest bounding box
-        midwest_cities = await City.find_in_bounds(
-            min_lat=40.0, max_lat=45.0, min_lon=-90.0, max_lon=-85.0
-        )
-        midwest_names = [city.name for city in midwest_cities]
-
-        assert "Chicago" in midwest_names
-        assert "Los Angeles" not in midwest_names
-
-    @pytest.mark.asyncio
-    async def test_spatial_distance_calculation(self):
-        """Test the distance calculation function"""
-        # Chicago to Milwaukee
-        chicago_lat, chicago_lon = 41.8781, -87.6298
-        milwaukee_lat, milwaukee_lon = 43.0389, -87.9065
-
-        distance = calculate_distance(
-            chicago_lat, chicago_lon, milwaukee_lat, milwaukee_lon
-        )
-
-        # Should be approximately 131 km (actual distance)
-        assert 130 <= distance <= 135
-
-
+        
 class TestNodeConnections:
     """Test node connection and edge management"""
 
@@ -170,7 +98,7 @@ class TestNodeConnections:
         milwaukee = await City.create(name="Milwaukee", population=594833)
         small_town = await Node.create()  # Not a city
 
-        root = await RootNode.get()
+        root = await Root.get()
         await root.connect(chicago)
         await root.connect(milwaukee)
         await root.connect(small_town)

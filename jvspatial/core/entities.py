@@ -283,7 +283,9 @@ class Edge(Object):
         Returns:
             Dictionary representation of the edge
         """
-        context = self.model_dump(exclude={"id"}, exclude_none=False)
+        context = self.model_dump(
+            exclude={"id", "source", "target", "direction"}, exclude_none=False
+        )
 
         return {
             "id": self.id,
@@ -651,7 +653,7 @@ class NodeQuery:
         return filtered_nodes
 
 
-class RootNode(Node):
+class Root(Node):
     """Singleton root node for the graph.
 
     Attributes:
@@ -659,20 +661,20 @@ class RootNode(Node):
         is_root: Flag indicating this is the root node
     """
 
-    id: str = "n:RootNode:root"
+    id: str = "n:Root:root"
     is_root: bool = True
     _lock: ClassVar[asyncio.Lock] = asyncio.Lock()
 
     @override
     @classmethod
-    async def get(cls: Type["RootNode"], id: Optional[str] = None) -> "RootNode":  # type: ignore[override]
+    async def get(cls: Type["Root"], id: Optional[str] = None) -> "Root":  # type: ignore[override]
         """Retrieve the root node, creating it if it doesn't exist.
 
         Returns:
-            RootNode instance
+            Root instance
         """
         async with cls._lock:
-            id = "n:RootNode:root"
+            id = "n:Root:root"
             node_data = await cls.get_db().get("node", id)
             if node_data:
                 return cls(id=node_data["id"], **node_data["context"])
@@ -794,7 +796,7 @@ class Walker(BaseModel):
         """
         from collections import deque
 
-        root = start or await RootNode.get()  # type: ignore[call-arg]
+        root = start or await Root.get()  # type: ignore[call-arg]
         self.queue = deque([root])
         self.paused = False
         try:

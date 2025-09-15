@@ -11,7 +11,7 @@ from jvspatial.db.database import Database
 class JsonDB(Database):
     """JSON file-based database implementation."""
 
-    def __init__(self: "JsonDB", base_path: str = "db/json") -> None:
+    def __init__(self: "JsonDB", base_path: str = "jvdb") -> None:
         """Initialize JSON database.
 
         Args:

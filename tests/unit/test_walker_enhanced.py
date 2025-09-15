@@ -11,7 +11,7 @@ import pytest
 from jvspatial.core.entities import (
     Edge,
     Node,
-    RootNode,
+    Root,
     TraversalPaused,
     Walker,
     find_subclass_by_name,
@@ -74,7 +74,7 @@ class TestWalkerBasics:
         """Test walker spawning with default root node"""
 
         class SimpleWalker(Walker):
-            @on_visit(RootNode)
+            @on_visit(Root)
             async def on_root(self, here):
                 self.response["visited_root"] = True
 

@@ -1,7 +1,7 @@
 import asyncio
 
 from jvspatial.api.api import GraphAPI
-from jvspatial.core.entities import Edge, Node, RootNode, Walker, on_exit, on_visit
+from jvspatial.core.entities import Edge, Node, Root, Walker, on_exit, on_visit
 
 
 class App(Node):
@@ -54,7 +54,7 @@ api = GraphAPI()
 
 @api.endpoint("/interact", methods=["POST"])
 class Interact(Walker):
-    @on_visit(RootNode)
+    @on_visit(Root)
     async def on_root(self, here):
         print("on_root called")
         app_nodes = await (await here.nodes()).filter(node="App")
@@ -157,7 +157,7 @@ class Interact(Walker):
 
 async def main():
     # Get root node
-    root = await RootNode.get()
+    root = await Root.get()
     print(f"Root node retrieved: {root.id}")
 
     # Run the Interact walker

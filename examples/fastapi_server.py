@@ -12,7 +12,7 @@ Run with: uvicorn fastapi_server:app --reload
 Access docs at: http://localhost:8000/docs
 """
 
-import asyncio
+import math
 import os
 from datetime import datetime
 from typing import List, Optional
@@ -21,10 +21,37 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-# Import spatial utilities to enable find_nearby and find_in_bounds methods
-import jvspatial.spatial.utils
 from jvspatial.api.api import GraphAPI
-from jvspatial.core.entities import Node, RootNode, Walker, on_exit, on_visit
+from jvspatial.core.entities import Node, Root, Walker, on_exit, on_visit
+
+
+def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate distance between two coordinates in kilometers using Haversine formula."""
+    earth_radius = 6371  # Earth's radius in kilometers
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    delta_lat = math.radians(lat2 - lat1)
+    delta_lon = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return earth_radius * c
+
+
+async def find_nearby_agents(latitude: float, longitude: float, radius_km: float = 10.0) -> List["Agent"]:
+    """Find agents within a specified radius of coordinates."""
+    all_agents = await Agent.all()
+    nearby = []
+    
+    for agent in all_agents:
+        if hasattr(agent, 'latitude') and hasattr(agent, 'longitude'):
+            distance = calculate_distance(latitude, longitude, agent.latitude, agent.longitude)
+            if distance <= radius_km:
+                nearby.append(agent)
+    return nearby
 
 # Set up JSON database for this example
 os.environ["JVSPATIAL_DB_TYPE"] = "json"
@@ -142,7 +169,7 @@ class CreateAgent(Walker):
     skills: List[str] = Field(default_factory=list)
     organization_id: Optional[str] = None
 
-    @on_visit(RootNode)
+    @on_visit(Root)
     async def create_agent(self, here):
         try:
             # Create the agent
@@ -196,7 +223,7 @@ class FindNearbyAgents(Walker):
     agent_type: Optional[str] = None
     status: Optional[str] = None
 
-    @on_visit(RootNode)
+    @on_visit(Root)
     async def find_agents(self, here):
         try:
             # Find nearby agents using spatial query
@@ -261,7 +288,7 @@ class CreateMission(Walker):
     assigned_agent_ids: List[str] = Field(default_factory=list)
     auto_assign_radius: Optional[float] = None
 
-    @on_visit(RootNode)
+    @on_visit(Root)
     async def create_mission(self, here):
         try:
             # Create the mission
@@ -343,7 +370,7 @@ class UpdateAgentStatus(Walker):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
-    @on_visit(RootNode)
+    @on_visit(Root)
     async def update_agent(self, here):
         try:
             agent = await Agent.get(self.agent_id)
@@ -386,7 +413,7 @@ class UpdateAgentStatus(Walker):
 class SystemOverview(Walker):
     """Get system overview and analytics"""
 
-    @on_visit(RootNode)
+    @on_visit(Root)
     async def analyze_system(self, here):
         try:
             # Get all nodes
@@ -491,7 +518,7 @@ async def health_check():
     """Health check endpoint"""
     try:
         # Test database connectivity
-        root = await RootNode.get()
+        root = await Root.get()
         return {
             "status": "healthy",
             "database": "connected",
@@ -581,7 +608,7 @@ async def startup_event():
 
     # Ensure root node exists
     try:
-        root = await RootNode.get()
+        root = await Root.get()
         print(f"✅ Root node initialized: {root.id}")
 
         # Create sample organization if none exist

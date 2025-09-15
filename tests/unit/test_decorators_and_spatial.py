@@ -16,8 +16,6 @@ from jvspatial.core.entities import (
     on_exit,
     on_visit,
 )
-from jvspatial.spatial import calculate_distance
-
 
 class TestNode(Node):
     """Test node for decorator testing"""
@@ -282,103 +280,6 @@ class TestRegisterHook:
         assert node_hook._context_var == "visitor"
 
 
-class TestSpatialFunctions:
-    """Test spatial calculation functions"""
-
-    def test_calculate_distance_same_point(self):
-        """Test distance calculation for same point"""
-        lat, lon = 40.7128, -74.0060  # New York
-        distance = calculate_distance(lat, lon, lat, lon)
-
-        assert distance == 0.0
-
-    def test_calculate_distance_known_cities(self):
-        """Test distance calculation between known cities"""
-        # New York to Los Angeles
-        ny_lat, ny_lon = 40.7128, -74.0060
-        la_lat, la_lon = 34.0522, -118.2437
-
-        distance = calculate_distance(ny_lat, ny_lon, la_lat, la_lon)
-
-        # Should be approximately 3944 km
-        assert 3900 <= distance <= 4000
-
-    def test_calculate_distance_chicago_milwaukee(self):
-        """Test distance between Chicago and Milwaukee"""
-        chicago_lat, chicago_lon = 41.8781, -87.6298
-        milwaukee_lat, milwaukee_lon = 43.0389, -87.9065
-
-        distance = calculate_distance(
-            chicago_lat, chicago_lon, milwaukee_lat, milwaukee_lon
-        )
-
-        # Should be approximately 131 km (actual distance)
-        assert 130 <= distance <= 135
-
-    def test_calculate_distance_equator_points(self):
-        """Test distance calculation along equator"""
-        # Two points on equator, 1 degree apart
-        lat1, lon1 = 0.0, 0.0
-        lat2, lon2 = 0.0, 1.0
-
-        distance = calculate_distance(lat1, lon1, lat2, lon2)
-
-        # 1 degree longitude at equator ≈ 111.32 km
-        assert 110 <= distance <= 112
-
-    def test_calculate_distance_poles(self):
-        """Test distance between poles"""
-        north_pole_lat, north_pole_lon = 90.0, 0.0
-        south_pole_lat, south_pole_lon = -90.0, 0.0
-
-        distance = calculate_distance(
-            north_pole_lat, north_pole_lon, south_pole_lat, south_pole_lon
-        )
-
-        # Should be approximately half Earth's circumference (≈ 20,015 km)
-        assert 19500 <= distance <= 20500
-
-    def test_calculate_distance_negative_coordinates(self):
-        """Test distance calculation with negative coordinates"""
-        # Sydney, Australia
-        sydney_lat, sydney_lon = -33.8688, 151.2093
-        # London, UK
-        london_lat, london_lon = 51.5074, -0.1278
-
-        distance = calculate_distance(sydney_lat, sydney_lon, london_lat, london_lon)
-
-        # Should be approximately 17,000 km
-        assert 16500 <= distance <= 17500
-
-    def test_calculate_distance_edge_cases(self):
-        """Test distance calculation edge cases"""
-        # Test with extreme latitude values
-        extreme_lat1, extreme_lon1 = 89.9, 0.0
-        extreme_lat2, extreme_lon2 = -89.9, 180.0
-
-        distance = calculate_distance(
-            extreme_lat1, extreme_lon1, extreme_lat2, extreme_lon2
-        )
-
-        # Should be a valid distance (close to pole-to-pole)
-        assert 19000 <= distance <= 21000
-
-    def test_haversine_formula_accuracy(self):
-        """Test accuracy of Haversine formula implementation"""
-        # Test case where we know the exact distance
-        # Two points 1 degree apart on same latitude
-        lat = 45.0  # 45 degrees north
-        lon1, lon2 = 0.0, 1.0
-
-        distance = calculate_distance(lat, lon1, lat, lon2)
-
-        # At 45°N, 1° longitude ≈ 78.71 km
-        expected = 111.32 * math.cos(math.radians(45))  # Approximate formula
-
-        # Should be within 1% of expected
-        assert abs(distance - expected) / expected < 0.01
-
-
 class TestFindSubclassByName:
     """Test find_subclass_by_name utility function"""
 
@@ -454,50 +355,3 @@ class TestMathUtilities:
         assert math.sqrt(1) == 1
         assert math.sqrt(4) == 2
         assert abs(math.sqrt(2) - 1.4142135623730951) < 1e-10
-
-
-class TestCoordinateValidation:
-    """Test coordinate validation and edge cases"""
-
-    def test_valid_latitude_range(self):
-        """Test valid latitude coordinates"""
-        # Valid latitudes: -90 to +90
-        valid_lats = [-90, -45, 0, 45, 90]
-
-        for lat in valid_lats:
-            # Should not raise errors
-            distance = calculate_distance(lat, 0, lat, 0)
-            assert distance == 0
-
-    def test_valid_longitude_range(self):
-        """Test valid longitude coordinates"""
-        # Valid longitudes: -180 to +180
-        valid_lons = [-180, -90, 0, 90, 180]
-
-        for lon in valid_lons:
-            # Should not raise errors
-            distance = calculate_distance(0, lon, 0, lon)
-            assert distance == 0
-
-    def test_extreme_coordinate_values(self):
-        """Test extreme but valid coordinate values"""
-        # Test extreme latitudes
-        distance1 = calculate_distance(90, 0, -90, 0)  # Pole to pole
-        assert distance1 > 0
-
-        # Test extreme longitudes
-        distance2 = calculate_distance(0, -180, 0, 180)  # Should be 0 (same meridian)
-        assert (
-            abs(distance2) < 1e-10
-        )  # -180 and 180 are the same meridian (allow for floating point precision)
-
-    def test_coordinate_precision(self):
-        """Test high precision coordinates"""
-        # Test with high precision decimal coordinates
-        lat1, lon1 = 40.748817, -73.985428  # Empire State Building
-        lat2, lon2 = 40.689247, -74.044502  # Statue of Liberty
-
-        distance = calculate_distance(lat1, lon1, lat2, lon2)
-
-        # Should be approximately 8.8 km
-        assert 8 <= distance <= 10
