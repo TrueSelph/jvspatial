@@ -1,0 +1,10 @@
+# Test dependencies for jvspatial
+pytest>=7.0
+pytest-asyncio>=0.21.0
+httpx>=0.24.0
+
+# Required for FastAPI TestClient
+starlette[testing]
+
+# Development tools
+pre-commit>=3.0.0

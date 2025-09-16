@@ -1,0 +1,325 @@
+"""
+Unit tests for decorator functions (@on_visit, @on_exit).
+"""
+
+import inspect
+import math
+
+import pytest
+
+from jvspatial.core.entities import (
+    Edge,
+    Node,
+    Walker,
+    _register_hook,
+    find_subclass_by_name,
+    on_exit,
+    on_visit,
+)
+
+
+class TestNode(Node):
+    """Test node for decorator testing"""
+
+    name: str = "TestNode"
+
+
+class TestWalker(Walker):
+    """Test walker for decorator testing"""
+
+    name: str = "TestWalker"
+
+
+class TestEdge(Edge):
+    """Test edge for decorator testing"""
+
+    name: str = "TestEdge"
+
+
+class TestOnVisitDecorator:
+    """Test @on_visit decorator functionality"""
+
+    def test_on_visit_with_node_type(self):
+        """Test @on_visit decorator with specific node type"""
+
+        @on_visit(TestNode)
+        def visit_test_node(walker, here):
+            pass
+
+        # Check that decorator sets proper attributes
+        assert hasattr(visit_test_node, "_on_visit_target")
+        assert visit_test_node._on_visit_target == TestNode
+        assert hasattr(visit_test_node, "__visit_target__")
+        assert visit_test_node.__visit_target__ == TestNode
+
+    def test_on_visit_without_target(self):
+        """Test @on_visit decorator without specific target"""
+
+        @on_visit()
+        def visit_any(walker, here):
+            pass
+
+        # Should work without target type
+        assert hasattr(visit_any, "_on_visit_target")
+        assert visit_any._on_visit_target is None
+
+    def test_on_visit_as_function_decorator(self):
+        """Test @on_visit used as function decorator directly"""
+
+        @on_visit
+        def visit_func(walker, here):
+            pass
+
+        # Should work when used directly on function
+        assert hasattr(visit_func, "_on_visit_target")
+        assert visit_func._on_visit_target is None
+
+    def test_on_visit_preserves_function_attributes(self):
+        """Test that @on_visit preserves original function attributes"""
+
+        def original_func(walker, here):
+            """Original docstring"""
+            return "test_value"
+
+        decorated = on_visit(TestNode)(original_func)
+
+        # Check function name and docstring preserved
+        assert decorated.__name__ == original_func.__name__
+        assert decorated.__doc__ == original_func.__doc__
+
+        # Check annotations preserved
+        if hasattr(original_func, "__annotations__"):
+            assert decorated.__annotations__ == original_func.__annotations__
+
+    def test_on_visit_async_function(self):
+        """Test @on_visit with async functions"""
+
+        @on_visit(TestNode)
+        async def async_visit(walker, here):
+            return "async_result"
+
+        # Should preserve async nature
+        assert inspect.iscoroutinefunction(async_visit)
+        assert hasattr(async_visit, "_on_visit_target")
+        assert async_visit._on_visit_target == TestNode
+
+    def test_on_visit_sync_function(self):
+        """Test @on_visit with sync functions"""
+
+        @on_visit(TestNode)
+        def sync_visit(walker, here):
+            return "sync_result"
+
+        # Should preserve sync nature
+        assert not inspect.iscoroutinefunction(sync_visit)
+        assert hasattr(sync_visit, "_on_visit_target")
+        assert sync_visit._on_visit_target == TestNode
+
+    def test_on_visit_invalid_target_type(self):
+        """Test @on_visit with invalid target type"""
+        with pytest.raises(ValueError):
+
+            @on_visit("invalid_type")
+            def visit_invalid(walker, here):
+                pass
+
+    def test_on_visit_with_edge_type(self):
+        """Test @on_visit with edge type"""
+
+        @on_visit(TestEdge)
+        def visit_edge(walker, here):
+            pass
+
+        assert visit_edge._on_visit_target == TestEdge
+
+    def test_on_visit_with_walker_type(self):
+        """Test @on_visit with walker type"""
+
+        @on_visit(TestWalker)
+        def visit_walker(node, visitor):
+            pass
+
+        assert visit_walker._on_visit_target == TestWalker
+
+
+class TestOnExitDecorator:
+    """Test @on_exit decorator functionality"""
+
+    def test_on_exit_basic(self):
+        """Test basic @on_exit decorator"""
+
+        @on_exit
+        def exit_handler():
+            pass
+
+        # Check that decorator sets proper attributes
+        assert hasattr(exit_handler, "_on_exit")
+        assert exit_handler._on_exit == True
+
+    def test_on_exit_async_function(self):
+        """Test @on_exit with async function"""
+
+        @on_exit
+        async def async_exit():
+            return "async_exit"
+
+        # Should preserve async nature and set exit flag
+        assert inspect.iscoroutinefunction(async_exit)
+        assert hasattr(async_exit, "_on_exit")
+        assert async_exit._on_exit == True
+
+    def test_on_exit_sync_function(self):
+        """Test @on_exit with sync function"""
+
+        @on_exit
+        def sync_exit():
+            return "sync_exit"
+
+        # Should preserve sync nature and set exit flag
+        assert not inspect.iscoroutinefunction(sync_exit)
+        assert hasattr(sync_exit, "_on_exit")
+        assert sync_exit._on_exit == True
+
+    def test_on_exit_preserves_function_attributes(self):
+        """Test that @on_exit preserves original function attributes"""
+
+        def original_exit():
+            """Exit docstring"""
+            return "exit_value"
+
+        decorated = on_exit(original_exit)
+
+        # Check function attributes preserved
+        assert decorated.__name__ == original_exit.__name__
+        assert decorated.__doc__ == original_exit.__doc__
+
+
+class TestRegisterHook:
+    """Test _register_hook function"""
+
+    def test_register_walker_hook_for_node(self):
+        """Test registering walker hook for node target"""
+
+        def visit_node(walker, here):
+            pass
+
+        # Set target manually
+        visit_node.__visit_target__ = TestNode
+        visit_node._context_var = None  # Pre-existing attribute
+
+        # Register hook
+        registered = _register_hook(TestWalker, visit_node)
+
+        # Should set context variable
+        assert hasattr(registered, "_context_var")
+        assert registered._context_var == "here"
+
+    def test_register_node_hook_for_walker(self):
+        """Test registering node hook for walker target"""
+
+        def handle_walker(node, visitor):
+            pass
+
+        # Set target manually
+        handle_walker.__visit_target__ = TestWalker
+        handle_walker._context_var = None  # Pre-existing attribute
+
+        # Register hook
+        registered = _register_hook(TestNode, handle_walker)
+
+        # Should set context variable
+        assert hasattr(registered, "_context_var")
+        assert registered._context_var == "visitor"
+
+    def test_register_hook_invalid_walker_target(self):
+        """Test registering walker hook with invalid target"""
+
+        def invalid_hook(walker, here):
+            pass
+
+        # Set invalid target
+        invalid_hook.__visit_target__ = str  # Invalid type
+
+        # Should raise TypeError
+        with pytest.raises(TypeError):
+            _register_hook(TestWalker, invalid_hook)
+
+    def test_register_hook_invalid_node_target(self):
+        """Test registering node hook with invalid target"""
+
+        def invalid_hook(node, visitor):
+            pass
+
+        # Set invalid target
+        invalid_hook.__visit_target__ = str  # Invalid type
+
+        # Should raise TypeError
+        with pytest.raises(TypeError):
+            _register_hook(TestNode, invalid_hook)
+
+    def test_register_hook_none_target(self):
+        """Test registering hook with None target"""
+
+        def generic_hook(obj, context):
+            pass
+
+        # Set None target
+        generic_hook.__visit_target__ = None
+
+        # Add context var for testing
+        generic_hook._context_var = None
+
+        # Should work for walker
+        walker_hook = _register_hook(TestWalker, generic_hook)
+        assert walker_hook._context_var == "here"
+
+        # Reset for node test
+        generic_hook._context_var = None
+
+        # Should work for node
+        node_hook = _register_hook(TestNode, generic_hook)
+        assert node_hook._context_var == "visitor"
+
+
+class TestFindSubclassByName:
+    """Test find_subclass_by_name utility function"""
+
+    def test_find_exact_class(self):
+        """Test finding exact class match"""
+        result = find_subclass_by_name(Node, "Node")
+        assert result == Node
+
+    def test_find_nonexistent_class(self):
+        """Test finding non-existent class"""
+        result = find_subclass_by_name(Node, "NonExistentNode")
+        assert result is None
+
+    def test_find_with_multiple_inheritance(self):
+        """Test finding class with multiple inheritance paths"""
+
+        class Mixin:
+            pass
+
+        class ComplexNode(Node, Mixin):
+            pass
+
+        result = find_subclass_by_name(Node, "ComplexNode")
+        assert result == ComplexNode
+
+    def test_find_in_different_base_classes(self):
+        """Test finding subclasses in different base classes"""
+        # Test with Edge base class
+        result = find_subclass_by_name(Edge, "TestEdge")
+        assert result == TestEdge
+
+        # Test with Walker base class
+        result = find_subclass_by_name(Walker, "TestWalker")
+        assert result == TestWalker
+
+    def test_find_partial_name_match(self):
+        """Test that partial name matches don't work"""
+        result = find_subclass_by_name(Node, "Test")  # partial match
+        assert result is None
+
+        result = find_subclass_by_name(Node, "Node")  # exact match
+        assert result == Node
