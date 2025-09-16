@@ -25,3 +25,22 @@ class TestWalker:
         await tourist.spawn(start=city)
 
         assert tourist.response.get("visited") is True
+
+    @pytest.mark.asyncio
+    async def test_walker_disengage(self: "TestWalker") -> None:
+        """Test that disengage halts the walker and removes it from the graph."""
+        # Create a node and walker
+        node = Node()
+        walker = Walker()
+
+        # Set walker to visit the node
+        walker.current_node = node
+        node.visitor = walker
+
+        # Disengage the walker
+        await walker.disengage()
+
+        # Verify walker is paused and removed from node
+        assert walker.paused is True
+        assert walker.current_node is None
+        assert node.visitor is None

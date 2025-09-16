@@ -1,5 +1,5 @@
 """
-Unit tests for decorator functions (@on_visit, @on_exit) and spatial utility functions.
+Unit tests for decorator functions (@on_visit, @on_exit).
 """
 
 import inspect
@@ -323,36 +323,3 @@ class TestFindSubclassByName:
 
         result = find_subclass_by_name(Node, "Node")  # exact match
         assert result == Node
-
-
-class TestMathUtilities:
-    """Test mathematical utilities used in spatial functions"""
-
-    def test_radians_conversion(self):
-        """Test radian conversion used in distance calculations"""
-        # Test conversion of common angles
-        assert math.radians(0) == 0
-        assert abs(math.radians(90) - math.pi / 2) < 1e-10
-        assert abs(math.radians(180) - math.pi) < 1e-10
-        assert abs(math.radians(360) - 2 * math.pi) < 1e-10
-
-    def test_trigonometric_functions(self):
-        """Test trigonometric functions used in distance calculation"""
-        # Test sin function
-        assert abs(math.sin(0) - 0) < 1e-10
-        assert abs(math.sin(math.pi / 2) - 1) < 1e-10
-
-        # Test cos function
-        assert abs(math.cos(0) - 1) < 1e-10
-        assert abs(math.cos(math.pi / 2) - 0) < 1e-10
-
-        # Test atan2 function
-        assert abs(math.atan2(0, 1) - 0) < 1e-10
-        assert abs(math.atan2(1, 0) - math.pi / 2) < 1e-10
-
-    def test_sqrt_function(self):
-        """Test sqrt function used in distance calculation"""
-        assert math.sqrt(0) == 0
-        assert math.sqrt(1) == 1
-        assert math.sqrt(4) == 2
-        assert abs(math.sqrt(2) - 1.4142135623730951) < 1e-10

@@ -2,7 +2,6 @@
 
 import ast
 import inspect
-import warnings
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union
 
@@ -175,14 +174,7 @@ class ParameterModelFactory:
         if uses_endpoint_fields:
             return cls._create_model_from_fields(walker_cls)
         else:
-            # Fallback to legacy AST parsing with deprecation warning
-            warnings.warn(
-                f"Walker '{walker_cls.__name__}' uses deprecated comment-based field exclusion. "
-                f"Please migrate to EndpointField for better functionality and performance.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            return cls._create_model_legacy(walker_cls)
+            return cls._create_model_from_coment(walker_cls)
 
     @classmethod
     def _uses_endpoint_fields(
@@ -422,16 +414,16 @@ class ParameterModelFactory:
         return create_model(model_name, __config__=ConfigDict(extra="forbid"), **fields)
 
     @classmethod
-    def _create_model_legacy(
+    def _create_model_from_coment(
         cls: Type["ParameterModelFactory"], walker_cls: Type[Walker]
     ) -> Type[BaseModel]:
-        """Legacy method using AST parsing for backward compatibility.
+        """Comment method using AST parsing for backward compatibility.
 
         Args:
             walker_cls: Walker class to process
 
         Returns:
-            Parameter model using legacy approach (original behavior)
+            Parameter model using comment approach
         """
         # Use original AST-based implementation exactly as before
         ignored_fields = cls._get_ignored_fields(walker_cls)
@@ -444,7 +436,7 @@ class ParameterModelFactory:
             if name in ignored_fields:
                 continue
             # Skip Walker base fields unless they have comment-based endpoint configuration
-            if name in walker_base_fields:
+            if name in walker_base_fields and name not in ignored_fields:
                 continue
             annotation = field.annotation
             default = field.default if field.default is not None else ...
@@ -480,6 +472,7 @@ class ParameterModelFactory:
         import textwrap
 
         source = textwrap.dedent(source)
+        lines = source.split("\n")  # Split source into lines for analysis
 
         tree = ast.parse(source)
         ignored_fields = set()
@@ -499,19 +492,10 @@ class ParameterModelFactory:
                                 if isinstance(t, ast.Name)
                             ]
 
-                        lines = source.split("\n")
-                        line_no = body_node.lineno
-                        if line_no > len(lines):
-                            continue
-
-                        current_line = lines[line_no - 1]
+                        # Only check for same-line comments
+                        current_line = lines[body_node.lineno - 1]
                         if "# endpoint: ignore" in current_line:
                             ignored_fields.update(field_names)
-
-                        if line_no > 1:
-                            prev_line = lines[line_no - 2]
-                            if "# endpoint: ignore" in prev_line:
-                                ignored_fields.update(field_names)
         return ignored_fields
 
 
@@ -572,31 +556,46 @@ class EndpointRouter:
                     if field_name == "start_node":
                         continue
 
-                    if isinstance(field_value, BaseModel):
-                        # Handle grouped fields - flatten them
-                        walker_data.update(field_value.__dict__)
+                    if isinstance(field_value, dict):
+                        # Handle grouped fields passed as dictionaries
+                        walker_data.update(field_value)
+                    elif isinstance(field_value, BaseModel):
+                        # Handle grouped fields passed as Pydantic models
+                        walker_data.update(field_value.model_dump())
                     else:
                         walker_data[field_name] = field_value
+
+                # Collect excluded field names
+                excluded_fields = set()
+                for field_name, field_info in cls.model_fields.items():
+                    endpoint_config = ParameterModelFactory._extract_endpoint_config(
+                        field_info
+                    )
+                    if endpoint_config.get("exclude_endpoint", False):
+                        excluded_fields.add(field_name)
+
+                # Check for excluded fields in request
+                for field_name in excluded_fields:
+                    if field_name in walker_data:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"Field '{field_name}' is excluded from endpoint and should not be provided",
+                        )
 
                 # Remove None values unless explicitly set
                 walker_data = {k: v for k, v in walker_data.items() if v is not None}
 
-                # Handle excluded fields by providing defaults from original Walker class
-                for field_name, field_info in cls.model_fields.items():
+                # Provide defaults for excluded fields that weren't in the request
+                for field_name in excluded_fields:
                     if field_name not in walker_data:
-                        # Check if field was excluded from endpoint
-                        endpoint_config = (
-                            ParameterModelFactory._extract_endpoint_config(field_info)
-                        )
-                        if endpoint_config.get("exclude_endpoint", False):
-                            # Provide default value for excluded fields
-                            if field_info.default is not PydanticUndefined:
-                                walker_data[field_name] = field_info.default
-                            elif (
-                                hasattr(field_info, "default_factory")
-                                and field_info.default_factory
-                            ):
-                                walker_data[field_name] = field_info.default_factory()
+                        field_info = cls.model_fields[field_name]
+                        if field_info.default is not PydanticUndefined:
+                            walker_data[field_name] = field_info.default
+                        elif (
+                            hasattr(field_info, "default_factory")
+                            and field_info.default_factory
+                        ):
+                            walker_data[field_name] = field_info.default_factory()
 
                 try:
                     walker = cls(**walker_data)

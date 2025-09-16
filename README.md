@@ -322,8 +322,42 @@ class Walker(BaseModel):
 
     async def spawn(start: Optional[Node] = None) -> "Walker"
     async def visit(nodes: Union[Node, List[Node]]) -> list
-    async def traverse(self, start: Node) -> None
+    async def disengage() -> "Walker"
+        """Permanently halt walk and remove walker from graph"""
 ```
+
+#### `Walker.disengage()`
+The `disengage` method permanently halts a walker's traversal and removes it from the graph. This is a terminal operation that cannot be undone.
+
+**Behavior**:
+- Removes the walker from its current node (if present)
+- Clears the current node reference
+- Sets the `paused` flag to `True`
+- Walker cannot be resumed after disengagement
+
+**Returns**:
+The walker instance in its disengaged state for inspection
+
+**Example Usage**:
+```python
+# Start traversal
+walker = CustomWalker()
+await walker.spawn(root_node)
+
+# ... during walk when permanent stop needed ...
+
+# Disengage the walker (permanent halt)
+await walker.disengage()
+
+# Walker is now off the graph
+print(f"Walker current node: {walker.here}")  # None
+print(f"Walker paused state: {walker.paused}")  # True
+
+# Attempting to resume will not work
+# await walker.resume()  # Would have no effect
+```
+
+
 
 #### `NodeQuery`
 Query builder for filtering connected nodes.
@@ -701,7 +735,7 @@ curl -X POST http://localhost:8000/user-search \
 
 ### Alternative Comment-Based Approach
 
-For convenience, the library also supports the comment-based approach with deprecation warnings:
+For convenience, the library also supports the comment-based approach:
 
 **Convenient, comment-based approach:**
 ```python

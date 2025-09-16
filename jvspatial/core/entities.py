@@ -746,6 +746,24 @@ class Walker(BaseModel):
                 await self._process_exit_hooks()
         return self
 
+    async def disengage(self: "Walker") -> "Walker":
+        """Halt the walk and return the walker in its current state.
+
+        This method removes the walker from its current node (if any),
+        clears the current node reference, and sets the paused flag to True.
+
+        Returns:
+            The walker instance in its disengaged state
+        """
+        # Remove walker from current node if present
+        if self.current_node:
+            self.current_node.visitor = None
+            self.current_node = None
+
+        # Pause the walker
+        self.paused = True
+        return self
+
     def __init__(self: "Walker", **kwargs: Any) -> None:
         """Initialize a walker with auto-generated ID if not provided."""
         if "id" not in kwargs:
@@ -992,7 +1010,7 @@ def on_visit(
         for attr, value in orig_attrs.items():
             setattr(wrapper, attr, value)
         wrapper.__annotations__ = func.__annotations__
-        # Avoid setting __signature__ if not present in original
+
         # Avoid setting __signature__ if not present in original
         if hasattr(func, "__signature__"):
             wrapper.__signature__ = inspect.signature(func)  # type: ignore[attr-defined]
