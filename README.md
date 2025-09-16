@@ -61,7 +61,7 @@ if __name__ == "__main__":
 
 ## Introduction
 
-**jvspatial** is an asynchronous, object-spatial Python library designed for building robust persistence and business logic layers. Inspired by Jaseci's graph-based paradigm and leveraging Python's async capabilities, jvspatial empowers developers to model complex relationships, traverse object graphs, and implement agent-based architectures that scale with modern cloud-native concurrency requirements.
+**jvspatial** is an asynchronous, object-spatial Python library designed for building robust persistence and business logic layers. Inspired by Jaseci's object-spatial paradigm and leveraging Python's async capabilities, jvspatial empowers developers to model complex relationships, traverse object graphs, and implement agent-based architectures that scale with modern cloud-native concurrency requirements.
 
 ### Key Features
 

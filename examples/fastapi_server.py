@@ -143,7 +143,7 @@ async def lifespan(app: FastAPI):
 # FastAPI app setup
 app = FastAPI(
     title="jvspatial Agent Management API",
-    description="A spatial-aware agent management system built with jvspatial",
+    description="An agent management system built with jvspatial",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
@@ -208,67 +208,6 @@ class Location(Node):
     longitude: float
     description: str = ""
     security_level: str = "low"  # low, medium, high, classified
-
-
-# ====================== REQUEST/RESPONSE MODELS ======================
-
-
-class AgentCreateRequest(BaseModel):
-    """Request model for creating new agents"""
-
-    name: str = Field(..., example="Aria Blake", description="Full name of the agent")
-    agent_type: str = Field(
-        "field", example="field", description="Agent role: field, analyst, manager"
-    )
-    latitude: float = Field(
-        0.0, example=40.7128, description="Initial latitude coordinate"
-    )
-    longitude: float = Field(
-        0.0, example=-74.0060, description="Initial longitude coordinate"
-    )
-    skills: List[str] = Field(
-        default_factory=list,
-        example=["surveillance", "combat"],
-        description="List of agent skills",
-    )
-    organization_id: Optional[str] = Field(
-        None, example="org_12345", description="Optional organization ID"
-    )
-
-
-class MissionCreateRequest(BaseModel):
-    """Request model for creating new missions"""
-
-    title: str = Field(..., example="Operation Shadow", description="Mission codename")
-    description: str = Field(
-        ...,
-        example="Covert surveillance operation",
-        description="Detailed mission objectives",
-    )
-    priority: str = Field(
-        "medium", example="high", description="Urgency level: low, medium, high"
-    )
-    target_lat: float = Field(
-        ..., example=40.7128, description="Target latitude coordinate"
-    )
-    target_lon: float = Field(
-        ..., example=-74.0060, description="Target longitude coordinate"
-    )
-    deadline: Optional[str] = Field(
-        None, example="2025-12-31T23:59:59Z", description="ISO 8601 deadline timestamp"
-    )
-    assigned_agent_ids: List[str] = Field(
-        default_factory=list,
-        example=["agent_1", "agent_2"],
-        description="List of agent IDs to assign",
-    )
-
-
-class LocationSearchRequest(BaseModel):
-    latitude: float
-    longitude: float
-    radius_km: float = 10.0
-    location_type: Optional[str] = None
 
 
 # ====================== WALKER ENDPOINTS ======================
@@ -341,8 +280,8 @@ class CreateAgent(Walker):
     organization_id: Optional[str] = EndpointField(
         default=None,
         description="Optional organization ID to assign agent to",
-        examples=["org_12345", "acme_corp"],
-        pattern=r"^[a-zA-Z0-9_-]+$",
+        examples=["n:Organization:org12345", "org_12345", "acme_corp"],
+        pattern=r"^[a-zA-Z0-9_:-]+$",  # Allow colons for jvspatial IDs
     )
 
     @on_visit(Root)
@@ -437,10 +376,17 @@ class FindNearbyAgents(Walker):
     @on_visit(Root)
     async def find_agents(self, here):
         try:
-            # Find nearby agents using spatial query
-            nearby_agents = await Agent.find_nearby(
-                self.latitude, self.longitude, self.radius_km
-            )
+            # Find nearby agents using custom spatial logic
+            all_agents = await Agent.all()
+            nearby_agents = []
+
+            for agent in all_agents:
+                if hasattr(agent, "latitude") and hasattr(agent, "longitude"):
+                    distance = calculate_distance(
+                        self.latitude, self.longitude, agent.latitude, agent.longitude
+                    )
+                    if distance <= self.radius_km:
+                        nearby_agents.append(agent)
 
             # Apply filters
             filtered_agents = nearby_agents
@@ -606,9 +552,21 @@ class CreateMission(Walker):
 
             # Auto-assign nearby agents if requested
             if self.auto_assign_radius:
-                nearby_agents = await Agent.find_nearby(
-                    self.target_lat, self.target_lon, self.auto_assign_radius
-                )
+                # Find nearby agents using custom spatial logic
+                all_agents = await Agent.all()
+                nearby_agents = []
+
+                for agent in all_agents:
+                    if hasattr(agent, "latitude") and hasattr(agent, "longitude"):
+                        distance = calculate_distance(
+                            self.target_lat,
+                            self.target_lon,
+                            agent.latitude,
+                            agent.longitude,
+                        )
+                        if distance <= self.auto_assign_radius:
+                            nearby_agents.append(agent)
+
                 for agent in nearby_agents:
                     if (
                         agent.status == "active"
@@ -654,8 +612,8 @@ class UpdateAgentStatus(Walker):
 
     agent_id: str = EndpointField(
         description="Unique identifier of the agent to update",
-        examples=["agent_007", "field_agent_1", "analyst_alpha"],
-        pattern=r"^[a-zA-Z0-9_-]+$",
+        examples=["n:Agent:e928b2fd8478401c85e3ebdd", "agent_007", "field_agent_1"],
+        pattern=r"^[a-zA-Z0-9_:-]+$",  # Allow colons for jvspatial IDs
     )
 
     status: Optional[str] = EndpointField(

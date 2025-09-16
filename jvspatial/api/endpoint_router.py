@@ -17,7 +17,7 @@ from pydantic import (
 )
 from pydantic.fields import FieldInfo, PydanticUndefined
 
-from jvspatial.core.entities import Walker
+from jvspatial.core.entities import Node, Walker
 
 # Module-level Body instance to avoid B008 flake8 warning
 DEFAULT_BODY = Body()
@@ -174,7 +174,7 @@ class ParameterModelFactory:
         if uses_endpoint_fields:
             return cls._create_model_from_fields(walker_cls)
         else:
-            return cls._create_model_from_coment(walker_cls)
+            return cls._create_model_legacy(walker_cls)
 
     @classmethod
     def _uses_endpoint_fields(
@@ -193,6 +193,45 @@ class ParameterModelFactory:
             if endpoint_config:  # If any field has endpoint config, use new system
                 return True
         return False
+
+    @classmethod
+    def _create_model_legacy(
+        cls: Type["ParameterModelFactory"], walker_cls: Type[Walker]
+    ) -> Type[BaseModel]:
+        """Legacy model creation using AST parsing and without endpoint field metadata.
+
+        Args:
+            walker_cls: Walker class to create parameter model for
+
+        Returns:
+            Pydantic model class for endpoint parameters
+        """
+        # Get fields to ignore from comment-based configuration
+        ignored_fields = cls._get_ignored_fields(walker_cls)
+
+        # Prepare fields dictionary for model creation
+        fields = {}
+
+        # Walker base fields that should be excluded by default
+        walker_base_fields = {"id", "queue", "response", "current_node", "paused"}
+
+        for name, field in walker_cls.model_fields.items():
+            if name in ignored_fields:
+                continue
+            # Skip Walker base fields unless they have comment-based endpoint configuration
+            if name in walker_base_fields and name not in ignored_fields:
+                continue
+            annotation = field.annotation
+            default = field.default if field.default is not None else ...
+            fields[name] = (annotation, default)
+
+        fields["start_node"] = (Optional[str], None)
+
+        return create_model(
+            f"{walker_cls.__name__}ParameterModel",
+            __config__=ConfigDict(extra="forbid"),
+            **fields,
+        )
 
     @classmethod
     def _create_model_from_fields(
@@ -414,43 +453,6 @@ class ParameterModelFactory:
         return create_model(model_name, __config__=ConfigDict(extra="forbid"), **fields)
 
     @classmethod
-    def _create_model_from_coment(
-        cls: Type["ParameterModelFactory"], walker_cls: Type[Walker]
-    ) -> Type[BaseModel]:
-        """Comment method using AST parsing for backward compatibility.
-
-        Args:
-            walker_cls: Walker class to process
-
-        Returns:
-            Parameter model using comment approach
-        """
-        # Use original AST-based implementation exactly as before
-        ignored_fields = cls._get_ignored_fields(walker_cls)
-        fields = {}
-
-        # Walker base fields that should be excluded by default
-        walker_base_fields = {"id", "queue", "response", "current_node", "paused"}
-
-        for name, field in walker_cls.model_fields.items():
-            if name in ignored_fields:
-                continue
-            # Skip Walker base fields unless they have comment-based endpoint configuration
-            if name in walker_base_fields and name not in ignored_fields:
-                continue
-            annotation = field.annotation
-            default = field.default if field.default is not None else ...
-            fields[name] = (annotation, default)
-
-        fields["start_node"] = (Optional[str], None)
-
-        return create_model(
-            f"{walker_cls.__name__}ParameterModel",
-            __config__=ConfigDict(extra="forbid"),
-            **fields,
-        )
-
-    @classmethod
     def _get_ignored_fields(
         cls: Type["ParameterModelFactory"], walker_cls: Type[Walker]
     ) -> Set[str]:
@@ -534,14 +536,17 @@ class EndpointRouter:
 
         def decorator(cls: Type[Walker]) -> Type[Walker]:
             # Use enhanced parameter model factory
-            ParameterModelFactory.create_model(cls)
+            param_model = ParameterModelFactory.create_model(cls)
 
-            async def handler(params: Any = DEFAULT_BODY) -> Dict[str, Any]:
+            # Use typing.Any for the parameter type to avoid mypy issues
+            # FastAPI will use the param_model for request body validation
+            async def handler(params: Any = DEFAULT_BODY) -> Dict[str, Any]:  # type: ignore[misc]
                 # Extract start_node - handle both dict and Pydantic model
+                start_node = None
                 if isinstance(params, dict):
                     start_node = params.get("start_node")
-                else:
-                    start_node = getattr(params, "start_node", None)
+                elif hasattr(params, "start_node"):
+                    start_node = params.start_node
 
                 # Handle grouped parameters
                 walker_data = {}
@@ -549,8 +554,15 @@ class EndpointRouter:
                 # Handle both dict (for direct testing) and Pydantic model parameters
                 if isinstance(params, dict):
                     params_dict = params
-                else:
+                elif hasattr(params, "model_dump"):
                     params_dict = params.model_dump()
+                else:
+                    # Fallback for other object types
+                    params_dict = {
+                        k: getattr(params, k)
+                        for k in dir(params)
+                        if not k.startswith("_")
+                    }
 
                 for field_name, field_value in params_dict.items():
                     if field_name == "start_node":
@@ -602,8 +614,17 @@ class EndpointRouter:
                 except ValidationError as e:
                     raise HTTPException(status_code=422, detail=e.errors())
 
-                # Execute walker
-                result = await walker.spawn(start=start_node)
+                # Execute walker with proper start node resolution
+                start_node_obj = None
+                if start_node:
+                    # Try to retrieve the node by ID
+                    start_node_obj = await Node.get(start_node)
+                    if not start_node_obj:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"Start node with ID '{start_node}' not found",
+                        )
+                result = await walker.spawn(start=start_node_obj)
 
                 if result.response:
                     if (
@@ -617,6 +638,10 @@ class EndpointRouter:
                         )
                     return result.response
                 return {}
+
+            # Dynamically update the handler's signature to use the parameter model
+            # Update handler annotation to use the actual param_model
+            handler.__annotations__["params"] = param_model
 
             self.router.add_api_route(
                 path, handler, methods=methods, response_model=dict, **kwargs
