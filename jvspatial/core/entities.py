@@ -8,7 +8,7 @@ import weakref
 from collections import deque
 from contextlib import contextmanager, suppress
 from functools import wraps
-from typing import Any, Callable, ClassVar, Generator, List, Optional, Type, Union
+from typing import Any, Callable, ClassVar, Dict, Generator, List, Optional, Type, Union
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from typing_extensions import override
@@ -18,7 +18,7 @@ from jvspatial.db.database import Database
 from .lib import generate_id
 
 # Global registry to prefer most recently used subclasses by name
-CLASS_NAME_REGISTRY: dict[str, type] = {}
+CLASS_NAME_REGISTRY: Dict[str, type] = {}
 
 # ----------------- HELPER FUNCTIONS -----------------
 

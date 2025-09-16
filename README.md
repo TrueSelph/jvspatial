@@ -111,13 +111,25 @@ cd jvspatial
 pip install -e .[dev]
 ```
 
+### Testing Installation
+```bash
+# Install with test dependencies (includes httpx for FastAPI TestClient)
+pip install -e .[test]
+
+# Or install from requirements file
+pip install -r requirements-test.txt
+```
+
 ### Dependencies
 ```bash
 # Core dependencies
-pip install pydantic>=2.0 asyncio
+pip install pydantic>=2.0
 
 # For REST API examples:
 pip install fastapi uvicorn
+
+# For testing (required for FastAPI TestClient):
+pip install httpx
 
 # Optional MongoDB support:
 pip install motor pymongo

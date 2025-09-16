@@ -5,8 +5,8 @@
 git clone https://github.com/TrueSelph/jvspatial
 cd jvspatial
 python -m venv venv
-source venv/bin/activate
-pip install -e .[dev]
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -e '.[dev]'  # Note: quotes needed for zsh
 ```
 
 ## Code Style

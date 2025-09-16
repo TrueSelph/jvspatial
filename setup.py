@@ -24,6 +24,19 @@ setup(
         "motor",
         "pymongo",
     ],
+    extras_require={
+        "dev": [
+            "pytest",
+            "pytest-asyncio",
+            "httpx",
+            "pre-commit",
+        ],
+        "test": [
+            "pytest",
+            "pytest-asyncio",
+            "httpx",
+        ],
+    },
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",

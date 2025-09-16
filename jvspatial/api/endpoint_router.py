@@ -227,11 +227,12 @@ class ParameterModelFactory:
 
         fields["start_node"] = (Optional[str], None)
 
-        return create_model(
+        model = create_model(
             f"{walker_cls.__name__}ParameterModel",
             __config__=ConfigDict(extra="forbid"),
             **fields,
         )
+        return model  # type: ignore[no-any-return]
 
     @classmethod
     def _create_model_from_fields(
@@ -294,7 +295,10 @@ class ParameterModelFactory:
 
         # Create the parameter model with strict validation
         model_name = f"{walker_cls.__name__}ParameterModel"
-        return create_model(model_name, __config__=ConfigDict(extra="forbid"), **fields)
+        model = create_model(
+            model_name, __config__=ConfigDict(extra="forbid"), **fields
+        )
+        return model  # type: ignore[no-any-return]
 
     @classmethod
     def _extract_endpoint_config(
@@ -315,11 +319,13 @@ class ParameterModelFactory:
             try:
                 schema: Dict[str, Any] = {}
                 json_schema_extra(schema, type(None))
-                return schema.get("endpoint_config", {})
+                config = schema.get("endpoint_config", {})
+                return config  # type: ignore[no-any-return]
             except Exception:
                 return {}
         elif isinstance(json_schema_extra, dict):
-            return json_schema_extra.get("endpoint_config", {})
+            config = json_schema_extra.get("endpoint_config", {})
+            return config  # type: ignore[no-any-return]
 
         return {}
 
@@ -450,7 +456,10 @@ class ParameterModelFactory:
         """
         fields: Dict[str, Any] = dict(group_fields)
         model_name = f"{group_name.title()}Group"
-        return create_model(model_name, __config__=ConfigDict(extra="forbid"), **fields)
+        model = create_model(
+            model_name, __config__=ConfigDict(extra="forbid"), **fields
+        )
+        return model  # type: ignore[no-any-return]
 
     @classmethod
     def _get_ignored_fields(

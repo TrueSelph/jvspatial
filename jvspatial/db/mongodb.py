@@ -67,12 +67,13 @@ class MongoDB(Database):
         """
         coll = await self._get_collection(collection)
         if "id" in data:
-            return await coll.find_one_and_update(
+            result = await coll.find_one_and_update(
                 {"id": data["id"]},
                 {"$set": data},
                 return_document=ReturnDocument.AFTER,
                 upsert=True,
             )
+            return dict(result or {})
         else:
             result = await coll.insert_one(data)
             data["id"] = str(result.inserted_id)
@@ -89,7 +90,8 @@ class MongoDB(Database):
             Document data or None if not found
         """
         coll = await self._get_collection(collection)
-        return await coll.find_one({"id": id})
+        result = await coll.find_one({"id": id})
+        return dict(result) if result is not None else None
 
     async def delete(self: "MongoDB", collection: str, id: str) -> None:
         """Delete document by ID.

@@ -78,7 +78,8 @@ class JsonDB(Database):
 
         async with self._lock:
             with open(file_path, "r") as f:
-                return json.load(f)
+                result = json.load(f)
+                return dict(result) if isinstance(result, dict) else None
 
     async def delete(self: "JsonDB", collection: str, id: str) -> None:
         """Delete document by ID.
