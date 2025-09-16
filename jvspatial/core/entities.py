@@ -17,13 +17,28 @@ from jvspatial.db.database import Database
 
 from .lib import generate_id
 
+# Global registry to prefer most recently used subclasses by name
+CLASS_NAME_REGISTRY: dict[str, type] = {}
+
 # ----------------- HELPER FUNCTIONS -----------------
 
 
 def find_subclass_by_name(base_class: Type, name: str) -> Optional[Type]:
-    """Find a subclass by name recursively."""
+    """Find a subclass by name recursively, with deterministic preference.
+
+    Preference order:
+    1) Exact base_class if it matches the name
+    2) A subclass registered in CLASS_NAME_REGISTRY for this name (most recently used)
+    3) A subclass defined in the same module as the caller (best-effort)
+    4) First discovered match (stable but import-order dependent)
+    """
     if base_class.__name__ == name:
         return base_class
+
+    # 1) Prefer a recently used class if registered
+    registered = CLASS_NAME_REGISTRY.get(name)
+    if registered and issubclass(registered, base_class):
+        return registered
 
     # Collect all matches first
     matches = []
@@ -39,7 +54,7 @@ def find_subclass_by_name(base_class: Type, name: str) -> Optional[Type]:
     if not matches:
         return None
 
-    # Prefer classes defined in the same module as the caller
+    # 2) Prefer classes defined in the same module as the caller (best-effort)
     import inspect
 
     caller_frame = inspect.currentframe()
@@ -50,7 +65,7 @@ def find_subclass_by_name(base_class: Type, name: str) -> Optional[Type]:
                 if match.__module__ == caller_module:
                     return match
 
-    # Return the first match if no module preference
+    # 3) Return the first match if no better preference applies
     return matches[0]
 
 
@@ -102,6 +117,9 @@ class Object(BaseModel):
             kwargs["id"] = generate_id(self.type_code, self.__class__.__name__)
         super().__init__(**kwargs)
         self._initializing = False
+        # Register the most recently used class name mapping for deterministic retrieval
+        with suppress(Exception):
+            CLASS_NAME_REGISTRY[self.__class__.__name__] = self.__class__
 
     def __setattr__(self: "Object", name: str, value: Any) -> None:
         """Set attribute without automatic save operations."""
@@ -706,6 +724,12 @@ class Walker(BaseModel):
     _visit_hooks: ClassVar[dict] = {}
     paused: bool = Field(default=False, exclude=True)
 
+    def __init__(self: "Walker", **kwargs: Any) -> None:
+        """Initialize a walker with auto-generated ID if not provided."""
+        if "id" not in kwargs:
+            kwargs["id"] = generate_id(self.type_code, self.__class__.__name__)
+        super().__init__(**kwargs)
+
     def __init_subclass__(cls: Type["Walker"]) -> None:
         """Handle subclass initialization."""
         cls._visit_hooks = {}
@@ -721,54 +745,6 @@ class Walker(BaseModel):
                     registered_method = _register_hook(cls, method)
                     target_type = getattr(registered_method, "_on_visit_target", None)
                     cls._visit_hooks[target_type] = registered_method
-
-    async def resume(self: "Walker") -> "Walker":
-        """Resume a paused traversal.
-
-        Returns:
-            The walker instance
-        """
-        if not self.paused:
-            return self
-        self.paused = False
-        try:
-            while self.queue and not self.paused:
-                current = self.queue.popleft()
-                with self.visiting(current):
-                    await self._process_hooks(current)
-            if not self.paused:
-                await self._process_exit_hooks()
-        except TraversalPaused:
-            pass
-        except Exception as e:
-            self.response = {"status": 500, "messages": [f"Traversal error: {str(e)}"]}
-            with suppress(Exception):
-                await self._process_exit_hooks()
-        return self
-
-    async def disengage(self: "Walker") -> "Walker":
-        """Halt the walk and return the walker in its current state.
-
-        This method removes the walker from its current node (if any),
-        clears the current node reference, and sets the paused flag to True.
-
-        Returns:
-            The walker instance in its disengaged state
-        """
-        # Remove walker from current node if present
-        if self.current_node:
-            self.current_node.visitor = None
-            self.current_node = None
-
-        # Pause the walker
-        self.paused = True
-        return self
-
-    def __init__(self: "Walker", **kwargs: Any) -> None:
-        """Initialize a walker with auto-generated ID if not provided."""
-        if "id" not in kwargs:
-            kwargs["id"] = generate_id(self.type_code, self.__class__.__name__)
-        super().__init__(**kwargs)
 
     @property
     def here(self: "Walker") -> Optional[Node]:
@@ -787,6 +763,214 @@ class Walker(BaseModel):
             The walker instance
         """
         return self
+
+    async def visit(self: "Walker", nodes: Union[Node, List[Node]]) -> list:
+        """Add nodes to the traversal queue for later processing.
+
+        Args:
+            nodes: Node or list of nodes to visit
+
+        Returns:
+            List of nodes added to the queue
+        """
+        nodes_list = nodes if isinstance(nodes, list) else [nodes]
+        self.queue.extend(nodes_list)
+        return nodes_list
+
+    def dequeue(self: "Walker", nodes: Union[Node, List[Node]]) -> List[Node]:
+        """Remove specified node(s) from the walker's queue.
+
+        Args:
+            nodes: Node or list of nodes to remove from queue
+
+        Returns:
+            List of nodes that were successfully removed from the queue
+        """
+        nodes_list = nodes if isinstance(nodes, list) else [nodes]
+        removed_nodes = []
+
+        # Convert deque to list for easier manipulation
+        queue_list = list(self.queue)
+
+        for node in nodes_list:
+            # Remove all occurrences of the node from the queue
+            while node in queue_list:
+                queue_list.remove(node)
+                removed_nodes.append(node)
+
+        # Rebuild the queue with remaining nodes
+        self.queue = deque(queue_list)
+        return removed_nodes
+
+    def prepend(self: "Walker", nodes: Union[Node, List[Node]]) -> List[Node]:
+        """Add node(s) to the head of the queue.
+
+        Args:
+            nodes: Node or list of nodes to add to the beginning of the queue
+
+        Returns:
+            List of nodes added to the queue
+        """
+        nodes_list = nodes if isinstance(nodes, list) else [nodes]
+
+        # Add nodes in reverse order to maintain their relative order
+        for node in reversed(nodes_list):
+            self.queue.appendleft(node)
+
+        return nodes_list
+
+    def append(self: "Walker", nodes: Union[Node, List[Node]]) -> List[Node]:
+        """Add node(s) to the end of the queue.
+
+        Args:
+            nodes: Node or list of nodes to add to the end of the queue
+
+        Returns:
+            List of nodes added to the queue
+        """
+        nodes_list = nodes if isinstance(nodes, list) else [nodes]
+        self.queue.extend(nodes_list)
+        return nodes_list
+
+    def add_next(self: "Walker", nodes: Union[Node, List[Node]]) -> List[Node]:
+        """Add node(s) next in the queue after the currently visited item.
+
+        If no node is currently being visited, adds to the beginning of the queue.
+
+        Args:
+            nodes: Node or list of nodes to add next in queue
+
+        Returns:
+            List of nodes added to the queue
+        """
+        nodes_list = nodes if isinstance(nodes, list) else [nodes]
+
+        # If queue is empty or no current traversal, add to front
+        if not self.queue:
+            self.queue.extend(nodes_list)
+        else:
+            # Add nodes to the front of the queue (next to be processed)
+            for node in reversed(nodes_list):
+                self.queue.appendleft(node)
+
+        return nodes_list
+
+    def get_queue(self: "Walker") -> List[Node]:
+        """Return the entire queue as a list.
+
+        Returns:
+            List of all nodes currently in the queue
+        """
+        return list(self.queue)
+
+    def clear_queue(self: "Walker") -> None:
+        """Clear the queue of all nodes."""
+        self.queue.clear()
+
+    def insert_after(
+        self: "Walker", target_node: Node, nodes: Union[Node, List[Node]]
+    ) -> List[Node]:
+        """Insert node(s) after the specified target node in the queue.
+
+        Args:
+            target_node: Node after which to insert the new nodes
+            nodes: Node or list of nodes to insert
+
+        Returns:
+            List of nodes that were successfully inserted
+
+        Raises:
+            ValueError: If target_node is not found in the queue
+        """
+        nodes_list = nodes if isinstance(nodes, list) else [nodes]
+
+        # Convert deque to list for easier manipulation
+        queue_list = list(self.queue)
+
+        try:
+            # Find the index of the target node
+            target_index = queue_list.index(target_node)
+
+            # Insert nodes after the target node
+            for i, node in enumerate(nodes_list):
+                queue_list.insert(target_index + 1 + i, node)
+
+            # Rebuild the queue
+            self.queue = deque(queue_list)
+            return nodes_list
+
+        except ValueError:
+            raise ValueError(f"Target node {target_node} not found in queue")
+
+    def insert_before(
+        self: "Walker", target_node: Node, nodes: Union[Node, List[Node]]
+    ) -> List[Node]:
+        """Insert node(s) before the specified target node in the queue.
+
+        Args:
+            target_node: Node before which to insert the new nodes
+            nodes: Node or list of nodes to insert
+
+        Returns:
+            List of nodes that were successfully inserted
+
+        Raises:
+            ValueError: If target_node is not found in the queue
+        """
+        nodes_list = nodes if isinstance(nodes, list) else [nodes]
+
+        # Convert deque to list for easier manipulation
+        queue_list = list(self.queue)
+
+        try:
+            # Find the index of the target node
+            target_index = queue_list.index(target_node)
+
+            # Insert nodes before the target node
+            for i, node in enumerate(nodes_list):
+                queue_list.insert(target_index + i, node)
+
+            # Rebuild the queue
+            self.queue = deque(queue_list)
+            return nodes_list
+
+        except ValueError:
+            raise ValueError(f"Target node {target_node} not found in queue")
+
+    def is_queued(self: "Walker", node: Node) -> bool:
+        """Check if the specified node is in the walker's queue.
+
+        Args:
+            node: Node to check for in the queue
+
+        Returns:
+            True if the node is in the queue, False otherwise
+        """
+        return node in self.queue
+
+    def skip(self: "Walker") -> None:
+        """Skip processing of the current node and proceed to the next node in the queue.
+
+        This function works similar to 'continue' in typical loops. When called during
+        node traversal (within a visit hook), it immediately halts execution of the
+        current node's hooks and proceeds to the next node in the queue.
+
+        Can only be called from within visit hooks during active traversal.
+
+        Raises:
+            TraversalSkipped: Internal exception used to control traversal flow
+
+        Example:
+            @on_visit(Node)
+            async def process_node(self, here):
+                if here.should_be_skipped:
+                    self.skip()  # Skip to next node
+                    return  # This line won't be reached
+
+                # Process the node normally
+                await self.do_heavy_processing(here)
+        """
+        raise TraversalSkipped()
 
     @contextmanager
     def visiting(self: "Walker", node: Node) -> Generator[None, None, None]:
@@ -821,7 +1005,11 @@ class Walker(BaseModel):
             while self.queue and not self.paused:
                 current = self.queue.popleft()
                 with self.visiting(current):
-                    await self._process_hooks(current)
+                    try:
+                        await self._process_hooks(current)
+                    except TraversalSkipped:
+                        # Skip was called - continue to next node in queue
+                        continue
             if not self.paused:
                 await self._process_exit_hooks()
         except TraversalPaused:
@@ -833,31 +1021,51 @@ class Walker(BaseModel):
                 await self._process_exit_hooks()
         return self
 
-    async def nodes(self: "Walker", direction: str = "both") -> "NodeQuery":
-        """Get nodes connected to this node.
-
-        Args:
-            direction: Filter connections by direction ('in', 'out', 'both')
+    async def resume(self: "Walker") -> "Walker":
+        """Resume a paused traversal.
 
         Returns:
-            NodeQuery instance for further filtering
+            The walker instance
         """
-        if self.here is None:
-            return NodeQuery([], source=None)
+        if not self.paused:
+            return self
+        self.paused = False
+        try:
+            while self.queue and not self.paused:
+                current = self.queue.popleft()
+                with self.visiting(current):
+                    try:
+                        await self._process_hooks(current)
+                    except TraversalSkipped:
+                        # Skip was called - continue to next node in queue
+                        continue
+            if not self.paused:
+                await self._process_exit_hooks()
+        except TraversalPaused:
+            pass
+        except Exception as e:
+            self.response = {"status": 500, "messages": [f"Traversal error: {str(e)}"]}
+            with suppress(Exception):
+                await self._process_exit_hooks()
+        return self
 
-        edges = await self.here.edges(direction=direction)
-        nodes = []
-        for edge_obj in edges:
-            if edge_obj.source == self.here.id:
-                node = await Node.get(edge_obj.target)
-            else:
-                node = await Node.get(edge_obj.source)
-            if node:
-                nodes.append(node)
-        unique_nodes = {}
-        for node in nodes:
-            unique_nodes[node.id] = node
-        return NodeQuery(list(unique_nodes.values()), source=self.here)
+    async def disengage(self: "Walker") -> "Walker":
+        """Halt the walk and return the walker in its current state.
+
+        This method removes the walker from its current node (if any),
+        clears the current node reference, and sets the paused flag to True.
+
+        Returns:
+            The walker instance in its disengaged state
+        """
+        # Remove walker from current node if present
+        if self.current_node:
+            self.current_node.visitor = None
+            self.current_node = None
+
+        # Pause the walker
+        self.paused = True
+        return self
 
     async def _process_hooks(self: "Walker", node: Node) -> None:
         """Process all visit hooks for a node.
@@ -865,9 +1073,14 @@ class Walker(BaseModel):
         Args:
             node: Node to process hooks for
         """
-        hooks = await self._get_hooks_for_node(node)
-        for hook in hooks:
-            await self._execute_hook(hook)
+        try:
+            hooks = await self._get_hooks_for_node(node)
+            for hook in hooks:
+                await self._execute_hook(hook)
+        except TraversalSkipped:
+            # Skip was called - immediately stop processing hooks for this node
+            # and continue to the next node in the traversal
+            pass
 
     async def _get_hooks_for_node(self: "Walker", node: Node) -> list:
         """Get all applicable visit hooks for a node.
@@ -926,6 +1139,9 @@ class Walker(BaseModel):
                     await hook(self)
                 else:
                     hook(self)
+        except TraversalSkipped:
+            # Re-raise TraversalSkipped to allow proper skip handling
+            raise
         except Exception as e:
             print(f"Error executing hook {hook.__name__}: {e}")
             # Set error response if not already set, but preserve existing response data
@@ -950,22 +1166,13 @@ class Walker(BaseModel):
             except (AttributeError, TypeError):
                 continue
 
-    async def visit(self: "Walker", nodes: Union[Node, List[Node]]) -> list:
-        """Add nodes to the traversal queue for later processing.
-
-        Args:
-            nodes: Node or list of nodes to visit
-
-        Returns:
-            List of nodes added to the queue
-        """
-        nodes_list = nodes if isinstance(nodes, list) else [nodes]
-        self.queue.extend(nodes_list)
-        return nodes_list
-
 
 class TraversalPaused(Exception):
     """Exception raised to pause a traversal."""
+
+
+class TraversalSkipped(BaseException):
+    """Exception raised to skip processing of the current node and continue to the next node."""
 
 
 # ----------------- DECORATOR FUNCTIONS -----------------

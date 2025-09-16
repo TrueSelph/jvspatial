@@ -1,6 +1,6 @@
 import asyncio
 
-from jvspatial.api.api import EndpointRouter
+from jvspatial.api.endpoint_router import EndpointRouter
 from jvspatial.core.entities import Edge, Node, Root, Walker, on_exit, on_visit
 
 

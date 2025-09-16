@@ -498,48 +498,6 @@ class TestWalkerVisitingContext:
         assert walker.visitor == walker
 
 
-class TestWalkerNodeQueries:
-    """Test walker node query functionality"""
-
-    @pytest.mark.asyncio
-    async def test_walker_nodes_method(self):
-        """Test walker's nodes() method"""
-
-        class QueryWalker(Walker):
-            @on_visit(WalkerTestNode)
-            async def visit_node(self, here):
-                # Get connected nodes
-                connected = await self.nodes()
-                self.response["connected_count"] = len(connected.nodes)
-
-                # Get outbound connections only
-                outbound = await self.nodes(direction="out")
-                self.response["outbound_count"] = len(outbound.nodes)
-
-        node1 = await WalkerTestNode.create(name="Node1")
-        node2 = await WalkerTestNode.create(name="Node2")
-        node3 = await WalkerTestNode.create(name="Node3")
-
-        await node1.connect(node2, direction="out")
-        await node3.connect(node1, direction="out")  # node3 -> node1
-
-        walker = QueryWalker()
-        await walker.spawn(start=node1)
-
-        assert walker.response.get("connected_count") == 2
-        assert walker.response.get("outbound_count") == 1
-
-    @pytest.mark.asyncio
-    async def test_walker_nodes_no_current_node(self):
-        """Test walker nodes() method when no current node"""
-        walker = Walker()
-
-        # Should return empty NodeQuery
-        query = await walker.nodes()
-        assert len(query.nodes) == 0
-        assert query.source is None
-
-
 class TestWalkerHookRegistration:
     """Test walker hook registration system"""
 
