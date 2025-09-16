@@ -1032,5 +1032,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 <p align="center">
     <a href="https://github.com/TrueSelph/jvspatial/graphs/contributors">
+        <img src="https://contrib.rocks/image?repo=TrueSelph/jvspatial" />
     </a>
 </p>
