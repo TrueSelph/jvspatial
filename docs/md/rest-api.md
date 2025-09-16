@@ -1,8 +1,62 @@
 # REST API Integration
 
-jvspatial provides seamless FastAPI integration through an enhanced `EndpointField` system for precise API parameter control.
+jvspatial provides seamless FastAPI integration through two approaches:
 
-## Basic Usage
+1. **Server Class (Recommended)** - High-level, object-oriented API server with automatic configuration
+2. **Direct EndpointRouter** - Lower-level integration for custom FastAPI applications
+
+Both approaches use the enhanced `EndpointField` system for precise API parameter control.
+
+## Quick Start with Server Class
+
+The recommended approach uses the `Server` class for simplified setup:
+
+```python
+from jvspatial.api.server import create_server
+from jvspatial.core.entities import Walker, Root, on_visit
+from jvspatial.api.endpoint_router import EndpointField
+
+# Create server with automatic configuration
+server = create_server(
+    title="My Spatial API",
+    description="Spatial data management API",
+    version="1.0.0",
+    db_type="json",
+    db_path="jvdb/my_app"
+)
+
+@server.walker("/greet")
+class GreetingWalker(Walker):
+    name: str = EndpointField(
+        default="World",
+        description="Name to greet",
+        examples=["Alice", "Bob"]
+    )
+
+    @on_visit(Root)
+    async def greet(self, here):
+        self.response["message"] = f"Hello, {self.name}!"
+
+if __name__ == "__main__":
+    server.run()  # Automatic database setup, docs at /docs
+```
+
+**Benefits of Server Class:**
+- Zero-configuration database setup
+- Automatic health checks and monitoring
+- Built-in CORS and security middleware
+- Lifecycle management with startup/shutdown hooks
+- Simplified deployment with `server.run()`
+
+📖 **[See complete Server Class documentation →](server-api.md)**
+
+---
+
+## Direct EndpointRouter Usage
+
+For advanced use cases or custom FastAPI applications, you can use the EndpointRouter directly:
+
+### Basic Usage
 
 ```python
 from fastapi import FastAPI
