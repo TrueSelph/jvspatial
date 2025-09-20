@@ -339,9 +339,6 @@ class TestAPIRoutes:
             assert "processed_message" in data
             assert data["processed_message"] == "HELLO WORLD"
 
-    @pytest.mark.skip(
-        reason="GET requests with query params not properly supported by walker endpoints"
-    )
     @pytest.mark.asyncio
     async def test_walker_endpoint_get_request(self, test_server):
         """Test walker endpoint with GET request."""
@@ -698,11 +695,11 @@ class TestServerConfiguration:
 
     def test_database_configuration(self):
         """Test database configuration."""
-        config = ServerConfig(db_type="json", db_path="./test_data")
+        config = ServerConfig(db_type="json", db_path="jvdb/tests")
         server = Server(config=config)
 
         assert server.config.db_type == "json"
-        assert server.config.db_path == "./test_data"
+        assert server.config.db_path == "jvdb/tests"
 
     def test_api_documentation_configuration(self):
         """Test API documentation configuration."""

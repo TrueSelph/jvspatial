@@ -5,7 +5,7 @@ import inspect
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -547,114 +547,336 @@ class EndpointRouter:
             # Use enhanced parameter model factory
             param_model = ParameterModelFactory.create_model(cls)
 
-            # Use typing.Any for the parameter type to avoid mypy issues
-            # FastAPI will use the param_model for request body validation
-            async def handler(params: Any = DEFAULT_BODY) -> Dict[str, Any]:  # type: ignore[misc]
-                # Extract start_node - handle both dict and Pydantic model
-                start_node = None
-                if isinstance(params, dict):
-                    start_node = params.get("start_node")
-                elif hasattr(params, "start_node"):
-                    start_node = params.start_node
+            # Check if this is a GET request
+            is_get_request = "GET" in methods
 
-                # Handle grouped parameters
-                walker_data = {}
+            if is_get_request:
+                # For GET requests, create individual query parameters
+                # Build function signature dynamically based on model fields
+                import inspect as insp
 
-                # Handle both dict (for direct testing) and Pydantic model parameters
-                if isinstance(params, dict):
-                    params_dict = params
-                elif hasattr(params, "model_dump"):
-                    params_dict = params.model_dump()
-                else:
-                    # Fallback for other object types
-                    params_dict = {
-                        k: getattr(params, k)
-                        for k in dir(params)
-                        if not k.startswith("_")
+                # Create query parameters for each field in param_model
+                query_params = {}
+                for field_name, field_info in param_model.model_fields.items():
+                    # Get the field type and default
+                    field_type = field_info.annotation
+                    if field_info.default is not PydanticUndefined:
+                        default_val = field_info.default
+                    elif (
+                        hasattr(field_info, "default_factory")
+                        and field_info.default_factory
+                    ):
+                        default_val = field_info.default_factory()
+                    else:
+                        default_val = ...
+
+                    query_params[field_name] = insp.Parameter(
+                        field_name,
+                        insp.Parameter.KEYWORD_ONLY,
+                        default=(
+                            Query(default_val, description=field_info.description)
+                            if default_val != ...
+                            else Query(..., description=field_info.description)
+                        ),
+                        annotation=field_type,
+                    )
+
+                # Create the GET handler with query parameters
+                async def get_handler(**kwargs: Any) -> Dict[str, Any]:
+                    # All query parameters are passed as kwargs
+                    params = kwargs
+                    start_node = params.pop("start_node", None)
+
+                    # Process walker with query parameters
+                    walker_data = params
+
+                    # Collect excluded field names
+                    excluded_fields = set()
+                    for field_name, field_info in cls.model_fields.items():
+                        endpoint_config = (
+                            ParameterModelFactory._extract_endpoint_config(field_info)
+                        )
+                        if endpoint_config.get("exclude_endpoint", False):
+                            excluded_fields.add(field_name)
+
+                    # Provide defaults for excluded fields
+                    for field_name in excluded_fields:
+                        if field_name not in walker_data:
+                            field_info = cls.model_fields[field_name]
+                            if field_info.default is not PydanticUndefined:
+                                walker_data[field_name] = field_info.default
+                            elif (
+                                hasattr(field_info, "default_factory")
+                                and field_info.default_factory
+                            ):
+                                walker_data[field_name] = field_info.default_factory()
+
+                    try:
+                        walker = cls(**walker_data)
+                    except ValidationError as e:
+                        raise HTTPException(status_code=422, detail=e.errors())
+
+                    # Execute walker with proper start node resolution
+                    start_node_obj = None
+                    if start_node:
+                        start_node_obj = await Node.get(start_node)
+                        if not start_node_obj:
+                            raise HTTPException(
+                                status_code=404,
+                                detail=f"Start node with ID '{start_node}' not found",
+                            )
+                    result = await walker.spawn(start=start_node_obj)
+
+                    if result.response:
+                        if (
+                            "status" in result.response
+                            and isinstance(result.response["status"], int)
+                            and result.response["status"] >= 400
+                        ):
+                            raise HTTPException(
+                                status_code=result.response["status"],
+                                detail=result.response.get("detail", "Unknown error"),
+                            )
+                        return result.response
+                    return {}
+
+                # Update the function signature with query parameters
+                get_handler.__signature__ = insp.Signature(parameters=list(query_params.values()))  # type: ignore
+
+                # Add the route
+                self.router.add_api_route(
+                    path, get_handler, methods=["GET"], response_model=dict, **kwargs
+                )
+
+                # If there are other methods besides GET, also create POST handler
+                if len(methods) > 1:
+                    # Create POST handler
+                    async def post_handler(params: Any = DEFAULT_BODY) -> Dict[str, Any]:  # type: ignore[misc]
+                        # Extract start_node - handle both dict and Pydantic model
+                        start_node = None
+                        if isinstance(params, dict):
+                            start_node = params.get("start_node")
+                        elif hasattr(params, "start_node"):
+                            start_node = params.start_node
+
+                        # Handle grouped parameters
+                        walker_data = {}
+
+                        # Handle both dict (for direct testing) and Pydantic model parameters
+                        if isinstance(params, dict):
+                            params_dict = params
+                        elif hasattr(params, "model_dump"):
+                            params_dict = params.model_dump()
+                        else:
+                            # Fallback for other object types
+                            params_dict = {
+                                k: getattr(params, k)
+                                for k in dir(params)
+                                if not k.startswith("_")
+                            }
+
+                        for field_name, field_value in params_dict.items():
+                            if field_name == "start_node":
+                                continue
+
+                            if isinstance(field_value, dict):
+                                walker_data.update(field_value)
+                            elif isinstance(field_value, BaseModel):
+                                walker_data.update(field_value.model_dump())
+                            else:
+                                walker_data[field_name] = field_value
+
+                        # Collect excluded field names
+                        excluded_fields = set()
+                        for field_name, field_info in cls.model_fields.items():
+                            endpoint_config = (
+                                ParameterModelFactory._extract_endpoint_config(
+                                    field_info
+                                )
+                            )
+                            if endpoint_config.get("exclude_endpoint", False):
+                                excluded_fields.add(field_name)
+
+                        # Check for excluded fields in request
+                        for field_name in excluded_fields:
+                            if field_name in walker_data:
+                                raise HTTPException(
+                                    status_code=422,
+                                    detail=f"Field '{field_name}' is excluded from endpoint and should not be provided",
+                                )
+
+                        # Remove None values unless explicitly set
+                        walker_data = {
+                            k: v for k, v in walker_data.items() if v is not None
+                        }
+
+                        # Provide defaults for excluded fields
+                        for field_name in excluded_fields:
+                            if field_name not in walker_data:
+                                field_info = cls.model_fields[field_name]
+                                if field_info.default is not PydanticUndefined:
+                                    walker_data[field_name] = field_info.default
+                                elif (
+                                    hasattr(field_info, "default_factory")
+                                    and field_info.default_factory
+                                ):
+                                    walker_data[field_name] = (
+                                        field_info.default_factory()
+                                    )
+
+                        try:
+                            walker = cls(**walker_data)
+                        except ValidationError as e:
+                            raise HTTPException(status_code=422, detail=e.errors())
+
+                        # Execute walker with proper start node resolution
+                        start_node_obj = None
+                        if start_node:
+                            start_node_obj = await Node.get(start_node)
+                            if not start_node_obj:
+                                raise HTTPException(
+                                    status_code=404,
+                                    detail=f"Start node with ID '{start_node}' not found",
+                                )
+                        result = await walker.spawn(start=start_node_obj)
+
+                        if result.response:
+                            if (
+                                "status" in result.response
+                                and isinstance(result.response["status"], int)
+                                and result.response["status"] >= 400
+                            ):
+                                raise HTTPException(
+                                    status_code=result.response["status"],
+                                    detail=result.response.get(
+                                        "detail", "Unknown error"
+                                    ),
+                                )
+                            return result.response
+                        return {}
+
+                    # Update handler annotation
+                    post_handler.__annotations__["params"] = param_model
+
+                    # Add POST route
+                    other_methods = [m for m in methods if m != "GET"]
+                    self.router.add_api_route(
+                        path,
+                        post_handler,
+                        methods=other_methods,
+                        response_model=dict,
+                        **kwargs,
+                    )
+            else:
+                # Only POST/PUT/etc methods - use the standard handler
+                async def handler(params: Any = DEFAULT_BODY) -> Dict[str, Any]:  # type: ignore[misc]
+                    # Extract start_node - handle both dict and Pydantic model
+                    start_node = None
+                    if isinstance(params, dict):
+                        start_node = params.get("start_node")
+                    elif hasattr(params, "start_node"):
+                        start_node = params.start_node
+
+                    # Handle grouped parameters
+                    walker_data = {}
+
+                    # Handle both dict (for direct testing) and Pydantic model parameters
+                    if isinstance(params, dict):
+                        params_dict = params
+                    elif hasattr(params, "model_dump"):
+                        params_dict = params.model_dump()
+                    else:
+                        # Fallback for other object types
+                        params_dict = {
+                            k: getattr(params, k)
+                            for k in dir(params)
+                            if not k.startswith("_")
+                        }
+
+                    for field_name, field_value in params_dict.items():
+                        if field_name == "start_node":
+                            continue
+
+                        if isinstance(field_value, dict):
+                            # Handle grouped fields passed as dictionaries
+                            walker_data.update(field_value)
+                        elif isinstance(field_value, BaseModel):
+                            # Handle grouped fields passed as Pydantic models
+                            walker_data.update(field_value.model_dump())
+                        else:
+                            walker_data[field_name] = field_value
+
+                    # Collect excluded field names
+                    excluded_fields = set()
+                    for field_name, field_info in cls.model_fields.items():
+                        endpoint_config = (
+                            ParameterModelFactory._extract_endpoint_config(field_info)
+                        )
+                        if endpoint_config.get("exclude_endpoint", False):
+                            excluded_fields.add(field_name)
+
+                    # Check for excluded fields in request
+                    for field_name in excluded_fields:
+                        if field_name in walker_data:
+                            raise HTTPException(
+                                status_code=422,
+                                detail=f"Field '{field_name}' is excluded from endpoint and should not be provided",
+                            )
+
+                    # Remove None values unless explicitly set
+                    walker_data = {
+                        k: v for k, v in walker_data.items() if v is not None
                     }
 
-                for field_name, field_value in params_dict.items():
-                    if field_name == "start_node":
-                        continue
+                    # Provide defaults for excluded fields that weren't in the request
+                    for field_name in excluded_fields:
+                        if field_name not in walker_data:
+                            field_info = cls.model_fields[field_name]
+                            if field_info.default is not PydanticUndefined:
+                                walker_data[field_name] = field_info.default
+                            elif (
+                                hasattr(field_info, "default_factory")
+                                and field_info.default_factory
+                            ):
+                                walker_data[field_name] = field_info.default_factory()
 
-                    if isinstance(field_value, dict):
-                        # Handle grouped fields passed as dictionaries
-                        walker_data.update(field_value)
-                    elif isinstance(field_value, BaseModel):
-                        # Handle grouped fields passed as Pydantic models
-                        walker_data.update(field_value.model_dump())
-                    else:
-                        walker_data[field_name] = field_value
+                    try:
+                        walker = cls(**walker_data)
+                    except ValidationError as e:
+                        raise HTTPException(status_code=422, detail=e.errors())
 
-                # Collect excluded field names
-                excluded_fields = set()
-                for field_name, field_info in cls.model_fields.items():
-                    endpoint_config = ParameterModelFactory._extract_endpoint_config(
-                        field_info
-                    )
-                    if endpoint_config.get("exclude_endpoint", False):
-                        excluded_fields.add(field_name)
+                    # Execute walker with proper start node resolution
+                    start_node_obj = None
+                    if start_node:
+                        # Try to retrieve the node by ID
+                        start_node_obj = await Node.get(start_node)
+                        if not start_node_obj:
+                            raise HTTPException(
+                                status_code=404,
+                                detail=f"Start node with ID '{start_node}' not found",
+                            )
+                    result = await walker.spawn(start=start_node_obj)
 
-                # Check for excluded fields in request
-                for field_name in excluded_fields:
-                    if field_name in walker_data:
-                        raise HTTPException(
-                            status_code=422,
-                            detail=f"Field '{field_name}' is excluded from endpoint and should not be provided",
-                        )
-
-                # Remove None values unless explicitly set
-                walker_data = {k: v for k, v in walker_data.items() if v is not None}
-
-                # Provide defaults for excluded fields that weren't in the request
-                for field_name in excluded_fields:
-                    if field_name not in walker_data:
-                        field_info = cls.model_fields[field_name]
-                        if field_info.default is not PydanticUndefined:
-                            walker_data[field_name] = field_info.default
-                        elif (
-                            hasattr(field_info, "default_factory")
-                            and field_info.default_factory
+                    if result.response:
+                        if (
+                            "status" in result.response
+                            and isinstance(result.response["status"], int)
+                            and result.response["status"] >= 400
                         ):
-                            walker_data[field_name] = field_info.default_factory()
+                            raise HTTPException(
+                                status_code=result.response["status"],
+                                detail=result.response.get("detail", "Unknown error"),
+                            )
+                        return result.response
+                    return {}
 
-                try:
-                    walker = cls(**walker_data)
-                except ValidationError as e:
-                    raise HTTPException(status_code=422, detail=e.errors())
+                # Update handler annotation to use the actual param_model
+                handler.__annotations__["params"] = param_model
 
-                # Execute walker with proper start node resolution
-                start_node_obj = None
-                if start_node:
-                    # Try to retrieve the node by ID
-                    start_node_obj = await Node.get(start_node)
-                    if not start_node_obj:
-                        raise HTTPException(
-                            status_code=404,
-                            detail=f"Start node with ID '{start_node}' not found",
-                        )
-                result = await walker.spawn(start=start_node_obj)
+                self.router.add_api_route(
+                    path, handler, methods=methods, response_model=dict, **kwargs
+                )
 
-                if result.response:
-                    if (
-                        "status" in result.response
-                        and isinstance(result.response["status"], int)
-                        and result.response["status"] >= 400
-                    ):
-                        raise HTTPException(
-                            status_code=result.response["status"],
-                            detail=result.response.get("detail", "Unknown error"),
-                        )
-                    return result.response
-                return {}
-
-            # Dynamically update the handler's signature to use the parameter model
-            # Update handler annotation to use the actual param_model
-            handler.__annotations__["params"] = param_model
-
-            self.router.add_api_route(
-                path, handler, methods=methods, response_model=dict, **kwargs
-            )
             return cls
 
         return decorator
