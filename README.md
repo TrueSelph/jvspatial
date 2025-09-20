@@ -8,151 +8,18 @@
 
 ## Overview
 
-**jvspatial** is an asynchronous, object-spatial Python library designed for building robust persistence and business logic application layers. Inspired by Jaseci's object-spatial paradigm and leveraging Python's async capabilities, jvspatial empowers developers to model complex relationships, traverse object graphs, and implement agent-based architectures that scale with modern cloud-native concurrency requirements. Key capabilities:
-
-- **GraphContext Architecture**: Clean dependency injection for database management
-- **Object Pagination**: Efficient database-level pagination for large graphs and datasets
-- Typed node/edge modeling via Pydantic
-- Precise control over graph traversal
-- Multi-backend persistence (JSON/MongoDB)
-- Integrated REST API endpoints
-- Async/await architecture
-
-
-## Installation
-
-## Version Compatibility
-**Supported Environments**:
-- Python 3.9+
-- MongoDB 5.0+ (optional)
-- FastAPI 0.88+ (for REST features)
-
-⚠️ **Breaking Changes in v0.1.0**:
-- Mandatory `_version` field in all documents
-- Required `db_type` parameter for GraphContext
-- Simplified Walker response structure
-
-
-```bash
-# Basic installation
-pip install jvspatial
-
-# Development setup
-git clone https://github.com/TrueSelph/jvspatial
-cd jvspatial
-pip install -e .[dev]
-```
-
-## Quick Start
-
-### Simple Usage (Automatic GraphContext)
-```python
-import asyncio
-from jvspatial.core import Node, Walker, Root, on_visit, on_exit
-
-class MyAgent(Node):
-    """Agent with spatial properties"""
-    published: bool = True
-    latitude: float = 0.0
-    longitude: float = 0.0
-
-class AgentWalker(Walker):
-    @on_visit(Root)
-    async def on_root(self, here):
-        # Create and connect an agent
-        agent = await MyAgent.create(latitude=40.7128, longitude=-74.0060)
-        await here.connect(agent)
-        await self.visit(agent)
-
-    @on_visit(MyAgent)
-    async def on_agent(self, here):
-        print(f"Visiting agent at {here.latitude}, {here.longitude}")
-
-    @on_exit
-    async def respond(self):
-        self.response["status"] = "completed"
-
-async def main():
-    root = await Root.get()
-    walker = AgentWalker()
-    result = await walker.spawn(root)
-    print(f"Result: {result.response}")
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-### Advanced Usage (Explicit GraphContext)
-```python
-import asyncio
-from jvspatial.core import Node, Walker, on_visit, GraphContext
-from jvspatial.db.factory import get_database
-
-class City(Node):
-    name: str
-    population: int = 0
-
-class CityWalker(Walker):
-    @on_visit(City)
-    async def visit_city(self, here):
-        print(f"Visiting {here.name} (pop: {here.population:,})")
-
-async def main():
-    # Create GraphContext with specific database
-    ctx = GraphContext(database=get_database(db_type="json", base_path="my_data"))
-
-    # Create entities through context
-    chicago = await ctx.create_node(City, name="Chicago", population=2700000)
-
-    # Walker traversal works the same
-    walker = CityWalker()
-    await walker.spawn(start=chicago)
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-## Table of Contents
-- [Optimization Insights](#optimization-insights)
-
-- [Introduction](#introduction)
-- [Installation](#installation)
-- [Core Concepts](#core-concepts)
-- [Getting Started](#getting-started)
-- [Object Pagination](#object-pagination)
-- [Enhanced @on_visit Decorator](#enhanced-on_visit-decorator)
-- [GraphContext & Database Management](docs/md/graph-context.md)
-- [Examples](docs/md/examples.md)
-- [Entity Reference](docs/md/entity-reference.md)
-- [Object Pagination Guide](docs/md/pagination.md)
-- [Walker Queue Operations](docs/md/walker-queue-operations.md)
-- [Walker Skip Operation](docs/md/walker-skip.md)
-- [Database Configuration](docs/md/database-config.md)
-- [REST API Integration](docs/md/rest-api.md)
-- [Advanced Features](docs/md/advanced-usage.md)
-- [Project Structure](#project-structure)
-- [Troubleshooting](docs/md/troubleshooting.md)
-- [Contributing](docs/md/contributing.md)
-
-## Introduction
-
-**jvspatial** is an asynchronous, object-spatial Python library designed for building robust persistence and business logic layers. Inspired by Jaseci's object-spatial paradigm and leveraging Python's async capabilities, jvspatial empowers developers to model complex relationships, traverse object graphs, and implement agent-based architectures that scale with modern cloud-native concurrency requirements.
+**jvspatial** is an asynchronous, object-spatial Python library designed for building robust persistence and business logic application layers. Inspired by Jaseci's object-spatial paradigm and leveraging Python's async capabilities, jvspatial empowers developers to model complex relationships, traverse object graphs, and implement agent-based architectures that scale with modern cloud-native concurrency requirements.
 
 ### Key Features
 
-- **GraphContext Architecture**: Clean dependency injection for database management - no scattered database connections
-- **Object Pagination**: Efficient database-level pagination for large graphs and datasets with filtering and ordering
-- **Async-First Design**: Built with native async/await support throughout
-- **Enhanced @on_visit Decorator**: Multi-target hooks, catch-all patterns, and edge traversal
-- **Type-Driven Entities**: Pydantic models for node/edge definitions
-- **Flexible Persistence**: Multiple database backends (JSON, MongoDB)
-- **Imperative Walkers**: Explicit traversal control with visit/exit hooks
-- **Edge Processing**: First-class support for processing connections during traversal
-- **Smart Entity Responses**: Nodes and edges can respond differently to specific walker types
-- **REST Endpoint Mixins**: Combine walkers with FastAPI routes
-- **Explicit Connections via Edges**: Manual relationship management between nodes
-- **Object Lifecycle**: Manual save/load operations for granular control
-- **Testing-Friendly**: Database isolation and dependency injection for robust testing
+- **Entity-Centric Design**: Clean, MongoDB-style query interface that works across different backends
+- **Object Pagination**: Efficient database-level pagination with `ObjectPager` for handling large datasets
+- **FastAPI Server Integration**: Built-in REST API endpoints with automatic OpenAPI documentation
+- **Async/await Architecture**: Native async support throughout the library
+- **Multi-backend Persistence**: JSON and MongoDB backends with extensible database interface
+- **Graph Traversal**: Precise control over walker-based graph traversal with semantic filtering
+- **Type Safety**: Pydantic-based modeling for nodes, edges, and walkers
+
 
 ## Installation
 
@@ -168,269 +35,373 @@ cd jvspatial
 pip install -e .[dev]
 ```
 
-### Testing Installation
-```bash
-# Install with test dependencies (includes httpx for FastAPI TestClient)
-pip install -e .[test]
+### Version Compatibility
+**Supported Environments**:
+- Python 3.9+
+- MongoDB 5.0+ (optional)
+- FastAPI 0.88+ (for REST features)
 
-# Or install from requirements file
-pip install -r requirements-test.txt
+## Quick Start
+
+### Entity-Centric CRUD Operations
+```python
+import asyncio
+from jvspatial.core import Node, Walker, on_visit
+
+class User(Node):
+    name: str = ""
+    email: str = ""
+    active: bool = True
+
+class UserProcessor(Walker):
+    @on_visit(User)
+    async def process_user(self, here: User):
+        print(f"Processing user: {here.name} ({here.email})")
+        # Use MongoDB-style queries for connected users
+        active_users = await User.find({"context.active": True})
+        print(f"Found {len(active_users)} active users")
+
+async def main():
+    # Entity-centric CRUD (automatic database setup)
+    user = await User.create(name="Alice", email="alice@company.com")
+
+    # MongoDB-style queries work across all backends
+    users = await User.find({"context.active": True})
+    senior_users = await User.find({"context.name": {"$regex": "^A", "$options": "i"}})
+
+    # Walker traversal
+    walker = UserProcessor()
+    await walker.spawn(user)
+    print(f"Result: {walker.response}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
-### Dependencies
-```bash
-# Core dependencies
-pip install pydantic>=2.0
+### FastAPI Server Integration
+```python
+from jvspatial.api import Server, walker_endpoint
+from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.core import Walker, Node, on_visit
 
-# For REST API examples:
-pip install fastapi uvicorn
+# Create server with automatic database setup
+server = Server(
+    title="My Spatial API",
+    description="Graph-based data management API",
+    version="1.0.0"
+)
 
-# For testing (required for FastAPI TestClient):
-pip install httpx
+@walker_endpoint("/api/users/process", methods=["POST"])
+class ProcessUser(Walker):
+    user_name: str = EndpointField(
+        description="Name of user to process",
+        examples=["Alice", "Bob"],
+        min_length=2
+    )
 
-# Optional MongoDB support:
-pip install motor pymongo
+    @on_visit(Node)
+    async def process(self, here: Node):
+        users = await User.find({"context.name": self.user_name})
+        self.response["found"] = len(users)
+
+if __name__ == "__main__":
+    server.run()  # API available at http://localhost:8000/docs
 ```
+
+## Table of Contents
+
+### Getting Started
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Core Concepts](#core-concepts)
+
+### Core Features
+- [Entity-Centric CRUD Operations](#entity-centric-crud-operations)
+- [MongoDB-Style Query Interface](#mongodb-style-query-interface)
+- [Object Pagination](#object-pagination)
+- [Walker Traversal Patterns](#walker-traversal-patterns)
+- [FastAPI Server Integration](#fastapi-server-integration)
+
+### Advanced Topics
+- [GraphContext & Database Management](docs/md/graph-context.md)
+- [REST API Integration](docs/md/rest-api.md)
+- [MongoDB-Style Query Interface](docs/md/mongodb-query-interface.md)
+- [Object Pagination Guide](docs/md/pagination.md)
+- [Entity Reference](docs/md/entity-reference.md)
+- [Walker Queue Operations](docs/md/walker-queue-operations.md)
+
+### Resources
+- [Examples](docs/md/examples.md)
+- [Troubleshooting](docs/md/troubleshooting.md)
+- [Contributing](docs/md/contributing.md)
+- [License](docs/md/license.md)
+- [Project Structure](#project-structure)
 
 ## Core Concepts
 
-```mermaid
-graph TD
-    Root[Root Node] -->|manages| GraphContext
-    GraphContext -->|configures| Database[(Database)]
-    Database --> JSONDB[JSONDB]
-    Database --> MongoDB
+### Entity-Centric Architecture
 
-    Node -->|inherits| Entity[City, Person...]
-    Edge -->|specializes| Relationship[Highway, Owns...]
-    Walker -->|interacts| Node & Edge
+jvspatial follows an **entity-centric design** philosophy that emphasizes clean, intuitive APIs for working with graph data:
 
-    style Root fill:#f9f,stroke:#333
-    style GraphContext fill:#bbf,stroke:#333
-    style Database fill:#cff,stroke:#333
+```python
+# Entity creation - simple and direct
+user = await User.create(name="Alice", email="alice@company.com")
+
+# MongoDB-style queries - work across all database backends
+active_users = await User.find({"context.active": True})
+senior_users = await User.find({"context.age": {"$gte": 35}})
+
+# Semantic filtering during traversal
+engineering_colleagues = await user.nodes(
+    node=['User'],
+    department="engineering",
+    active=True
+)
 ```
 
-### Nodes
-Nodes represent entities in your object-spatial graph. They can store any data and have operations which may be triggered by visiting Walkers.
+### Key Entities
+
+1. **Node** - Graph nodes representing entities (users, cities, documents, etc.)
+2. **Edge** - Relationships between nodes with optional properties
+3. **Walker** - Graph traversal agents that implement business logic
+4. **ObjectPager** - Efficient pagination for large datasets
+5. **Server** - FastAPI integration for REST API endpoints
+
+## Entity-Centric CRUD Operations
+
+jvspatial's entity-centric design provides a clean, consistent interface for all database operations:
 
 ```python
 from jvspatial.core import Node
 
-class City(Node):
-    name: str
-    population: int
-    latitude: float
-    longitude: float
+class User(Node):
+    name: str = ""
+    email: str = ""
+    department: str = ""
+    active: bool = True
 
-# Create a city
-chicago = await City.create(
-    name="Chicago",
-    population=2697000,
-    latitude=41.8781,
-    longitude=-87.6298
+# Create entities
+user = await User.create(name="Alice", email="alice@company.com")
+
+# Retrieve by ID
+user = await User.get(user_id)
+
+# Simple filtering
+users = await User.find_by(active=True)
+
+# Update entities
+user.name = "Alice Johnson"
+await user.save()
+
+# Delete entities
+await user.delete()
+
+# Count and aggregation
+count = await User.count({"context.department": "engineering"})
+departments = await User.distinct("department")
+```
+
+## MongoDB-Style Query Interface
+
+jvspatial provides a unified MongoDB-style query interface that works across all database backends:
+
+```python
+# Comparison operators
+senior_users = await User.find({"context.age": {"$gte": 35}})
+young_users = await User.find({"context.age": {"$lt": 30}})
+non_admin_users = await User.find({"context.role": {"$ne": "admin"}})
+
+# Logical operators
+engineers = await User.find({
+    "$and": [
+        {"context.department": "engineering"},
+        {"context.active": True}
+    ]
+})
+
+# Array operations
+tech_users = await User.find({"context.skills": {"$in": ["python", "javascript"]}})
+
+# Regular expressions
+johnson_family = await User.find({
+    "context.name": {"$regex": "Johnson", "$options": "i"}
+})
+
+# Complex nested queries
+active_senior_engineers = await User.find({
+    "$and": [
+        {"context.department": "engineering"},
+        {"context.age": {"$gte": 35}},
+        {"context.active": True},
+        {"context.skills": {"$in": ["python", "go", "rust"]}}
+    ]
+})
+```
+
+## Walker Traversal Patterns
+
+Walkers implement graph traversal logic using the recommended `nodes()` method for semantic filtering:
+
+```python
+from jvspatial.core import Walker, on_visit
+
+class DataCollector(Walker):
+    def __init__(self):
+        super().__init__()
+        self.collected_data = []
+
+    @on_visit(User)
+    async def collect_user_data(self, here: User):
+        """Process user nodes with semantic filtering."""
+        self.collected_data.append(here.name)
+
+        # RECOMMENDED: Use nodes() method for connected nodes
+        engineering_users = await here.nodes(
+            node=['User'],  # Only User nodes
+            department="engineering",  # Simple filtering
+            active=True  # Multiple filters
+        )
+        await self.visit(engineering_users)
+
+    @on_visit(City)
+    async def process_city(self, here: City):
+        """Process city nodes with control flow."""
+        # Skip small cities
+        if here.population < 10000:
+            self.skip()  # Skip to next node
+            return
+
+        # Find large nearby cities
+        large_cities = await here.nodes(
+            node=[{'City': {"context.population": {"$gte": 500_000}}}],
+            direction="out"
+        )
+        await self.visit(large_cities)
+
+# Walker control methods
+# - skip(): Skip current node, continue to next
+# - pause()/resume(): Temporarily pause walker
+# - disengage(): Permanently halt walker
+```
+
+## FastAPI Server Integration
+
+The jvspatial Server class provides seamless FastAPI integration with automatic OpenAPI documentation:
+
+### Server Setup
+
+```python
+from jvspatial.api import Server, walker_endpoint
+from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.core import Walker, Node, on_visit
+
+# Create server with automatic database setup
+server = Server(
+    title="Spatial Data API",
+    description="Graph-based data management",
+    version="1.0.0",
+    debug=True
 )
+
+@walker_endpoint("/api/users/analyze", methods=["POST"])
+class AnalyzeUser(Walker):
+    user_name: str = EndpointField(
+        description="Name of user to analyze",
+        examples=["Alice", "Bob"],
+        min_length=2,
+        max_length=100
+    )
+
+    department: str = EndpointField(
+        default="general",
+        description="User department filter",
+        examples=["engineering", "marketing"]
+    )
+
+    @on_visit(Node)
+    async def analyze_user(self, here: Node):
+        # Find user and analyze connections
+        users = await User.find({"context.name": self.user_name})
+
+        if users:
+            user = users[0]
+            colleagues = await user.nodes(
+                node=['User'],
+                department=self.department,
+                active=True
+            )
+
+            self.response = {
+                "user": {"name": user.name, "email": user.email},
+                "colleagues": len(colleagues),
+                "department": self.department
+            }
+        else:
+            self.response = {"error": "User not found"}
+
+if __name__ == "__main__":
+    server.run()  # Available at http://localhost:8000/docs
 ```
 
-### Edges
-Edges represent relationships between nodes with optional properties.
+### API Usage
 
-```python
-from jvspatial.core import Edge
-
-class Highway(Edge):
-    lanes: int = 4
-    speed_limit: int = 65
-
-# Connect cities with a highway
-highway = await chicago.connect(detroit, edge=Highway, lanes=6, speed_limit=70)
-```
-
-### Walkers
-Walkers traverse the object-spatial graph and execute logic at each node they visit.
-
-```python
-from jvspatial.core import Walker, on_visit, on_exit
-
-class Tourist(Walker):
-    @on_visit(City)  # Single target
-    async def visit_city(self, here):
-        print(f"Visiting {here.name}")
-
-        # Find connected cities and visit them
-        connected_cities = await (await here.nodes()).filter(node='City')
-        await self.visit(connected_cities)
-
-    @on_visit(Highway, Railroad)  # Multi-target - handles BOTH types
-    async def use_transport(self, here):
-        print(f"Traveling via {here.__class__.__name__}: {here.name}")
-
-    @on_visit()  # Catch-all - triggered by ANY node/edge type
-    async def log_visit(self, here):
-        self.response.setdefault("visited", []).append(here.__class__.__name__)
-
-    @on_exit
-    async def trip_complete(self):
-        self.response["message"] = "Trip completed!"
-```
-
-### Root Node
-The singleton Root serves as the entry point for all graph operations.
-
-```python
-from jvspatial.core import Root
-
-# Get the root node (creates it if it doesn't exist)
-root = await Root.get()
-```
-
-## Getting Started
-
-### 1. Basic Node Creation and Connection
-
-```python
-import asyncio
-from jvspatial.core.entities import Node, Root
-
-class Person(Node):
-    name: str
-    age: int
-
-async def basic_example():
-    # Get root node
-    root = await Root.get()
-
-    # Create nodes
-    alice = await Person.create(name="Alice", age=30)
-    bob = await Person.create(name="Bob", age=25)
-
-    # Connect nodes
-    await root.connect(alice)
-    await root.connect(bob)
-    await alice.connect(bob)
-
-    # Query connections
-    alice_connections = await alice.nodes()
-    print(f"Alice is connected to: {[node.name for node in alice_connections]}")
-
-asyncio.run(basic_example())
+```bash
+# Call the endpoint
+curl -X POST "http://localhost:8000/api/users/analyze" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_name": "Alice",
+    "department": "engineering"
+  }'
 ```
 
 ## Object Pagination
 
-Handle large graphs and datasets efficiently with built-in pagination support:
+Handle large datasets efficiently with built-in database-level pagination:
 
 ### Simple Pagination
 
 ```python
-from jvspatial.core import paginate_objects, City
+from jvspatial.core.pager import paginate_objects, City
 
 # Get first page of cities (default: 20 per page)
-cities = await paginate_objects(City)
-
-# Get specific page with custom size
-cities_page_2 = await paginate_objects(City, page=2, page_size=50)
+cities = await paginate_objects(City, page=1, page_size=20)
 
 # Paginate with filters
 large_cities = await paginate_objects(
     City,
-    filters={"population": {"$gt": 1000000}}
+    page=1,
+    page_size=10,
+    filters={"context.population": {"$gt": 1_000_000}}
 )
 ```
 
-### Advanced Pagination
+### Advanced Pagination with ObjectPager
 
 ```python
-from jvspatial.core import ObjectPager, paginate_by_field
+from jvspatial.core.pager import ObjectPager
 
-# Create a pager for complex operations
+# Create pager with filters and ordering
 pager = ObjectPager(
     City,
-    page_size=100,
-    filters={"population": {"$gt": 500000}},
+    page_size=25,
+    filters={"context.population": {"$gte": 100_000}},
     order_by="population",
     order_direction="desc"
 )
 
-# Get pages
+# Navigate through pages
 large_cities = await pager.get_page(1)
-more_cities = await pager.next_page()
+if pager.has_next_page():
+    more_cities = await pager.next_page()
 
-# Field-based pagination
-top_cities = await paginate_by_field(
-    City,
-    field="population",
-    order="desc",
-    page_size=25
-)
-```
-
-### Processing Large Datasets
-
-```python
-import asyncio
-from jvspatial.core import ObjectPager, Customer
-
-async def process_all_customers():
-    """Process large customer base efficiently."""
-    pager = ObjectPager(Customer, page_size=100)
-
-    while True:
-        customers = await pager.next_page()
-        if not customers:
-            break
-
-        # Process batch in parallel
-        tasks = [analyze_customer(customer) for customer in customers]
-        await asyncio.gather(*tasks)
-
-        print(f"Processed page {pager.current_page}")
-
-async def analyze_customer(customer):
-    """Analyze individual customer."""
-    # Perform customer analysis
-    neighbors = await customer.neighbors(limit=5)
-    # ... analysis logic
-```
-
-### 2. Walker Traversal
-
-```python
-import asyncio
-from jvspatial.core.entities import Node, Walker, Root, on_visit
-
-class Person(Node):
-    name: str
-    visited: bool = False
-
-class NetworkExplorer(Walker):
-    @on_visit(Person)
-    async def visit_person(self, here):
-        here.visited = True
-        await here.save()
-        print(f"Visited {here.name}")
-
-        # Visit unvisited neighbors
-        neighbors = await (await here.nodes()).filter(node='Person')
-        unvisited = [n for n in neighbors if not n.visited]
-        await self.visit(unvisited)
-
-async def traversal_example():
-    root = await Root.get()
-
-    # Create a network
-    alice = await Person.create(name="Alice")
-    bob = await Person.create(name="Bob")
-    charlie = await Person.create(name="Charlie")
-
-    await root.connect(alice)
-    await alice.connect(bob)
-    await bob.connect(charlie)
-
-    # Traverse the network
-    explorer = NetworkExplorer()
-    await explorer.spawn(alice)
-
-asyncio.run(traversal_example())
+# Process all pages efficiently
+while True:
+    cities = await pager.next_page()
+    if not cities:
+        break
+    # Process batch
+    await process_cities(cities)
 ```
 
 ## Complex Traversal Example
@@ -465,9 +436,9 @@ Key Features Demonstrated:
 - Context-managed database sessions
 ````
 
-## Enhanced @on_visit Decorator
+## @on_visit Decorator
 
-**NEW**: The `@on_visit` decorator now supports powerful multi-target and edge traversal capabilities:
+**NEW**: The `@on_visit` decorator supports powerful multi-target and edge traversal capabilities:
 
 ### Multi-Target Hooks
 Handle multiple entity types with a single hook function:
@@ -498,7 +469,7 @@ class InspectionWalker(Walker):
 ```
 
 ### Transparent Edge Traversal
-Walkers now automatically traverse edges when moving between connected nodes:
+Walkers automatically traverse edges when moving between connected nodes:
 
 ```python
 class TransportWalker(Walker):
