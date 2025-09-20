@@ -1,7 +1,18 @@
+"""Agent Graph Example
+
+Demonstrates building a hierarchical graph structure with agents and actions.
+Shows both the original API and new GraphContext patterns for database management.
+
+This example builds a graph: Root -> App -> Agents -> MyAgent -> Actions -> Action types
+"""
+
 import asyncio
+import tempfile
 
 from jvspatial.api.endpoint_router import EndpointRouter
+from jvspatial.core.context import GraphContext, get_default_context
 from jvspatial.core.entities import Edge, Node, Root, Walker, on_exit, on_visit
+from jvspatial.db.factory import get_database
 
 
 class App(Node):
@@ -155,15 +166,77 @@ class Interact(Walker):
         print("Traversal completed")
 
 
+async def demonstrate_graphcontext_with_agents():
+    """Show how GraphContext works with complex hierarchical structures."""
+    print("\n=== GRAPHCONTEXT WITH AGENT HIERARCHIES ===")
+
+    # Create isolated context for agent management
+    agent_db = get_database(db_type="json", base_path=tempfile.mkdtemp())
+    agent_ctx = GraphContext(database=agent_db)
+
+    print("📊 Created isolated context for agent management")
+
+    # Build agent hierarchy using GraphContext
+    app = await agent_ctx.create_node(App)
+    agents_collection = await agent_ctx.create_node(Agents)
+
+    # Connect app to agents
+    await agent_ctx.create_edge(Edge, left=app, right=agents_collection)
+
+    # Create multiple agents with different properties
+    agent1 = await agent_ctx.create_node(
+        MyAgent, published=True, latitude=40.7128, longitude=-74.0060
+    )  # NYC
+    agent2 = await agent_ctx.create_node(
+        MyAgent, published=True, latitude=34.0522, longitude=-118.2437
+    )  # LA
+    agent3 = await agent_ctx.create_node(
+        MyAgent, published=False, latitude=41.8781, longitude=-87.6298
+    )  # Chicago
+
+    # Connect agents to collection
+    for agent in [agent1, agent2, agent3]:
+        await agent_ctx.create_edge(Edge, left=agents_collection, right=agent)
+
+    print(f"✅ Created app hierarchy with {len([agent1, agent2, agent3])} agents")
+    print(f"✅ Agents in NYC, LA, and Chicago")
+
+    # Show that we can still use original API with these entities
+    agent1.latitude = 40.7589  # Move to Times Square
+    await agent1.save()  # Original API works!
+
+    print("✅ Updated agent location using original API (agent.save())")
+
+    # Query agents using GraphContext
+    all_nodes = await agent_ctx.database.find("node", {})
+    agent_nodes = [n for n in all_nodes if n.get("name") == "MyAgent"]
+
+    print(f"📍 Found {len(agent_nodes)} agents in isolated database")
+
+    return agent_ctx
+
+
 async def main():
-    # Get root node
+    print("🚀 Agent Graph Example")
+    print("Shows hierarchical graph building with original API + GraphContext")
+
+    print("\n=== ORIGINAL API APPROACH ===")
+    # Get root node - original approach
     root = await Root.get()
     print(f"Root node retrieved: {root.id}")
 
-    # Run the Interact walker
-    print("\n=== RUNNING INTERACT WALKER ===")
+    # Run the Interact walker - original approach
+    print("\n=== RUNNING INTERACT WALKER (Original API) ===")
     walker = Interact()
     await walker.spawn(root)
+
+    # Show advanced GraphContext patterns
+    agent_ctx = await demonstrate_graphcontext_with_agents()
+
+    print("\n=== COMPARISON ===")
+    print("✅ Original API: Simple, works exactly as before")
+    print("✅ GraphContext: Advanced control, isolation, testing")
+    print("✅ Both approaches work together seamlessly")
 
 
 if __name__ == "__main__":

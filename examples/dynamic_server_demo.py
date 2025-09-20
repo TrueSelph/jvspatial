@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Dynamic Runtime Registration Demo
 
@@ -530,7 +529,7 @@ if __name__ == "__main__":
     # Schedule dynamic endpoint registration after startup
     async def schedule_dynamic_registration():
         # Wait a bit after startup
-        await asyncio.sleep(5)
+        await asyncio.sleep(10)
         # Register additional endpoints dynamically
         register_dynamic_endpoints()
 

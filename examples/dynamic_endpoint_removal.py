@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Example demonstrating dynamic endpoint removal with a running FastAPI server.
 This example shows how to:

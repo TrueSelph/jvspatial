@@ -1,9 +1,21 @@
-"""Example graph traversal using jvspatial library."""
+"""Example graph traversal using jvspatial library.
+
+This example shows both the original API (which continues to work unchanged)
+and the new GraphContext pattern for advanced database management.
+
+Use this to learn:
+- Basic node and edge creation
+- Walker traversal patterns
+- Spatial queries
+- Error handling
+- GraphContext for advanced scenarios
+"""
 
 import asyncio
 import math
 from typing import List, Optional
 
+from jvspatial.core.context import GraphContext, get_default_context
 from jvspatial.core.entities import (
     Edge,
     Node,
@@ -12,6 +24,7 @@ from jvspatial.core.entities import (
     on_exit,
     on_visit,
 )
+from jvspatial.db.factory import get_database
 
 
 def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -73,7 +86,7 @@ class City(Node):
     latitude: float
     longitude: float
 
-    @on_visit
+    @on_visit(Walker)
     def on_visited(self: "City", visitor: Walker) -> None:
         """Log when visited by a walker."""
         print(f"Being visited by {visitor.id}")
@@ -104,8 +117,7 @@ class Tourist(Walker):
         print(f"Tourist visiting {here.name} (pop: {here.population})")
 
         # Visit connected cities
-        neighbors_query = await here.nodes(direction="out")
-        neighbors = await neighbors_query.filter(edge="Highway")
+        neighbors = await here.nodes(direction="out", edge="Highway")
         print(f"Found {len(neighbors)} highway neighbors from {here.name}")
         for i, node in enumerate(neighbors):
             print(f"  {i+1}. {node.name} (id: {node.id})")
@@ -137,10 +149,46 @@ class FreightTrain(Walker):
             print(f"Delivered cargo: {', '.join(cargo_list)}")
 
 
+async def demonstrate_graphcontext_patterns():
+    """Show advanced GraphContext usage patterns."""
+    print("\n=== DEMONSTRATING GRAPHCONTEXT PATTERNS ===")
+
+    # Pattern 1: Custom database for this example
+    import tempfile
+
+    custom_db = get_database(db_type="json", base_path=tempfile.mkdtemp())
+    ctx = GraphContext(database=custom_db)
+
+    print("Using GraphContext with custom database for isolated operations")
+
+    # Create cities using GraphContext
+    denver = await ctx.create_node(
+        City, name="Denver", population=715522, latitude=39.7392, longitude=-104.9903
+    )
+    phoenix = await ctx.create_node(
+        City, name="Phoenix", population=1608000, latitude=33.4484, longitude=-112.0740
+    )
+
+    # Create connection
+    highway = await ctx.create_edge(Highway, left=denver, right=phoenix, length=602)
+
+    print(f"Created {denver.name} and {phoenix.name} using GraphContext")
+    print(f"Connected with {highway.length} mile highway")
+
+    # Show that original API works too - entities remember their context
+    denver.population = 720000  # Update population
+    await denver.save()  # Original API - works with GraphContext entities
+
+    print("✅ GraphContext entities work with original API (save(), etc.)")
+
+
 async def main() -> None:
-    """Demonstrate graph operations."""
-    # Database auto-configured on first use
-    print("\n=== DEMONSTRATING GRAPH CREATION ===")
+    """Demonstrate graph operations with both original API and GraphContext."""
+    print("\n=== TRAVEL GRAPH EXAMPLE ===")
+    print("Shows original API (unchanged) + new GraphContext patterns")
+
+    print("\n=== ORIGINAL API (UNCHANGED) ===")
+    # Database auto-configured on first use - this hasn't changed!
     # Create root node
     root = await Root.get()  # type: ignore[call-arg]
 
@@ -245,6 +293,9 @@ async def main() -> None:
     except Exception as e:
         print(f"Error during traversal: {str(e)}")
     print("Error handling demonstration complete")
+
+    # Show advanced GraphContext patterns
+    await demonstrate_graphcontext_patterns()
 
 
 if __name__ == "__main__":

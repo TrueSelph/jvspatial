@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 FastAPI Server Example using jvspatial
 

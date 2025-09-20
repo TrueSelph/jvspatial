@@ -121,6 +121,93 @@ class NodeQuery:
                     direction: str = "both", **kwargs) -> List["Node"]
 ```
 
+#### `ObjectPager`
+Database-level pagination for efficient handling of large object collections.
+
+```python
+class ObjectPager:
+    def __init__(self, object_type: Type[Object], page_size: int = 20,
+                 filters: Optional[dict] = None, order_by: Optional[str] = None,
+                 order_direction: str = "asc")
+
+    async def get_page(self, page: int = 1) -> List[Object]
+    async def next_page() -> List[Object]
+    async def previous_page() -> List[Object]
+
+    # Properties
+    @property
+    def current_page() -> int
+    @property
+    def has_next_page() -> bool
+    @property
+    def has_previous_page() -> bool
+    @property
+    def is_cached() -> bool
+```
+
+**Usage Examples:**
+
+```python
+from jvspatial.core import ObjectPager, paginate_objects, paginate_by_field, City
+
+# Simple pagination helper
+cities = await paginate_objects(City, page=1, page_size=50)
+
+# Field-based pagination helper
+top_cities = await paginate_by_field(
+    City, field="population", order="desc", page_size=25
+)
+
+# Full-featured pager with filtering
+pager = ObjectPager(
+    City,
+    page_size=100,
+    filters={"population": {"$gt": 1000000}},
+    order_by="name",
+    order_direction="asc"
+)
+
+# Navigate through pages
+first_page = await pager.get_page(1)
+second_page = await pager.next_page()
+back_to_first = await pager.previous_page()
+
+# Process all pages efficiently
+while True:
+    nodes = await pager.next_page()
+    if not nodes:
+        break
+    await process_nodes(nodes)
+```
+
+### Pagination Helpers
+
+#### `paginate_objects(object_type, page=1, page_size=20, filters=None)`
+Simple helper for paginating objects with optional filtering.
+
+```python
+async def paginate_objects(
+    object_type: Type[Object],
+    page: int = 1,
+    page_size: int = 20,
+    filters: Optional[dict] = None
+) -> List[Object]
+```
+
+#### `paginate_by_field(object_type, field, page=1, page_size=20, order="asc", filters=None)`
+Field-based pagination with ordering.
+
+```python
+async def paginate_by_field(
+    object_type: Type[Object],
+    field: str,
+    page: int = 1,
+    page_size: int = 20,
+    order: str = "asc",
+    filters: Optional[dict] = None
+) -> List[Object]
+```
+
 ### Decorators
 
 #### `@on_visit(target_type=None)`

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 jvspatial Server Class Demo
 

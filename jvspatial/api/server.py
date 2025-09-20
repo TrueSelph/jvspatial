@@ -9,7 +9,6 @@ import asyncio
 import importlib
 import inspect
 import logging
-import os
 import pkgutil
 import threading
 from contextlib import asynccontextmanager
@@ -22,6 +21,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from jvspatial.api.endpoint_router import EndpointRouter
+from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node, Root, Walker
 from jvspatial.db.factory import get_database
 
@@ -75,6 +75,8 @@ class ServerConfig(BaseModel):
     # Database Configuration
     db_type: Optional[str] = None
     db_path: Optional[str] = None
+    db_connection_string: Optional[str] = None
+    db_database_name: Optional[str] = None
 
     # Logging Configuration
     log_level: str = "info"
@@ -95,6 +97,7 @@ class Server:
         from jvspatial.api.server import Server
         from jvspatial.core.entities import Walker, Node, on_visit
 
+        # Simple server with default GraphContext
         server = Server(
             title="My Spatial API",
             description="A spatial data management API"
@@ -110,6 +113,18 @@ class Server:
 
         if __name__ == "__main__":
             server.run()
+        ```
+
+        Advanced GraphContext configuration:
+        ```python
+        server = Server(
+            title="My API",
+            db_type="json",
+            db_path="./my_data"
+        )
+
+        # Access GraphContext if needed
+        ctx = server.get_graph_context()
         ```
     """
 
@@ -145,6 +160,7 @@ class Server:
         self._middleware: List[Dict[str, Any]] = []
         self._exception_handlers: Dict[Union[int, Type[Exception]], Callable] = {}
         self._logger = logging.getLogger(__name__)
+        self._graph_context: Optional[GraphContext] = None
 
         # Dynamic registration support
         self._is_running = False
@@ -171,11 +187,38 @@ class Server:
             if _default_server is None:
                 _default_server = self
 
-        # Set up database environment if specified
+        # Initialize GraphContext if database configuration is provided
         if self.config.db_type:
-            os.environ["JVSPATIAL_DB_TYPE"] = self.config.db_type
-        if self.config.db_path:
-            os.environ["JVSPATIAL_JSONDB_PATH"] = self.config.db_path
+            self._initialize_graph_context()
+
+    def _initialize_graph_context(self: "Server") -> None:
+        """Initialize GraphContext with current database configuration."""
+        try:
+            # Create database instance based on configuration
+            if self.config.db_type == "json":
+                db = get_database(
+                    db_type="json",
+                    base_path=self.config.db_path or "./jv_data",
+                    auto_create=True,
+                )
+            elif self.config.db_type == "mongodb":
+                db = get_database(
+                    db_type="mongodb",
+                    connection_string=self.config.db_connection_string,
+                    database_name=self.config.db_database_name,
+                )
+            else:
+                raise ValueError(f"Unsupported database type: {self.config.db_type}")
+
+            # Create GraphContext
+            self._graph_context = GraphContext(database=db)
+            self._logger.info(
+                f"🎯 GraphContext initialized with {self.config.db_type} database"
+            )
+
+        except Exception as e:
+            self._logger.error(f"❌ Failed to initialize GraphContext: {e}")
+            raise
 
     def walker(
         self: "Server", path: str, methods: Optional[List[str]] = None, **kwargs: Any
@@ -406,14 +449,21 @@ class Server:
             app.add_api_route(**route_config)
 
         # Add default health check endpoint
-        @app.get("/health")
+        @app.get("/health", response_model=None)
         async def health_check() -> Union[Dict[str, Any], JSONResponse]:
             """Health check endpoint."""
             try:
-                # Test database connectivity
-                root = await Root.get()  # type: ignore[call-arg]
-                if not root:
-                    raise RuntimeError("Root node not available")
+                # Test database connectivity through GraphContext
+                if self._graph_context:
+                    # Use explicit GraphContext
+                    root = await self._graph_context.get_node(Root, "root")
+                    if not root:
+                        root = await self._graph_context.create_node(Root)
+                else:
+                    # Use default GraphContext behavior
+                    root = await Root.get("n:Root:root")
+                    if not root:
+                        root = await Root.create()
                 return {
                     "status": "healthy",
                     "database": "connected",
@@ -993,16 +1043,30 @@ class Server:
         # Set running state
         self._is_running = True
 
-        # Initialize database
+        # Initialize database through GraphContext
         try:
-            db = get_database()
-            self._logger.info(f"📊 Database initialized: {type(db).__name__}")
+            if self._graph_context:
+                # Use explicit GraphContext
+                self._logger.info(
+                    f"📊 Database initialized through GraphContext: {type(self._graph_context.database).__name__}"
+                )
 
-            # Ensure root node exists
-            root = await Root.get()  # type: ignore[call-arg]
-            if not root:
-                root = await Root.create()
-            self._logger.info(f"🌳 Root node ready: {root.id}")
+                # Ensure root node exists
+                root = await self._graph_context.get_node(Root, "root")
+                if not root:
+                    root = await self._graph_context.create_node(Root)
+                self._logger.info(f"🌳 Root node ready: {root.id}")
+            else:
+                # Use default GraphContext behavior
+                self._logger.info(
+                    "📊 Using default GraphContext for database management"
+                )
+
+                # Ensure root node exists
+                root = await Root.get(id="root")
+                if not root:
+                    root = await Root.create()
+                self._logger.info(f"🌳 Root node ready: {root.id}")
 
         except Exception as e:
             self._logger.error(f"❌ Database initialization failed: {e}")
@@ -1153,24 +1217,45 @@ class Server:
         self._logger.info(f"Registered node type: {node_class.__name__}")
 
     def configure_database(self: "Server", db_type: str, **db_config: Any) -> None:
-        """Configure database settings.
+        """Configure database settings using GraphContext.
 
         Args:
             db_type: Database type ("json", "mongodb", etc.)
             **db_config: Database-specific configuration
         """
-        os.environ["JVSPATIAL_DB_TYPE"] = db_type
+        # Update configuration
+        self.config.db_type = db_type
 
         # Handle common database configurations
-        if db_type == "json" and "path" in db_config:
-            os.environ["JVSPATIAL_JSONDB_PATH"] = db_config["path"]
+        if db_type == "json" and "base_path" in db_config:
+            self.config.db_path = db_config["base_path"]
         elif db_type == "mongodb":
-            if "uri" in db_config:
-                os.environ["JVSPATIAL_MONGODB_URI"] = db_config["uri"]
-            if "database" in db_config:
-                os.environ["JVSPATIAL_MONGODB_DATABASE"] = db_config["database"]
+            if "connection_string" in db_config:
+                self.config.db_connection_string = db_config["connection_string"]
+            if "database_name" in db_config:
+                self.config.db_database_name = db_config["database_name"]
 
-        self._logger.info(f"🗄️ Database configured: {db_type}")
+        # Initialize or re-initialize GraphContext
+        self._initialize_graph_context()
+
+        self._logger.info(f"🗄️ Database configured with GraphContext: {db_type}")
+
+    def get_graph_context(self: "Server") -> Optional[GraphContext]:
+        """Get the GraphContext instance used by the server.
+
+        Returns:
+            GraphContext instance if configured, otherwise None (uses default GraphContext)
+        """
+        return self._graph_context
+
+    def set_graph_context(self: "Server", context: GraphContext) -> None:
+        """Set a custom GraphContext for the server.
+
+        Args:
+            context: GraphContext instance to use
+        """
+        self._graph_context = context
+        self._logger.info("🎯 Custom GraphContext set for server")
 
 
 def get_default_server() -> Optional[Server]:
