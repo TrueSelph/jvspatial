@@ -1,21 +1,23 @@
-"""Example graph traversal using jvspatial library.
+"""Travel Graph Example - Modern jvspatial Patterns
 
-This example shows both the original API (which continues to work unchanged)
-and the new GraphContext pattern for advanced database management.
+Demonstrates modern jvspatial conventions and spatial graph operations.
+Shows entity-centric CRUD, MongoDB-style queries, walker patterns,
+and spatial analysis capabilities.
 
-Use this to learn:
-- Basic node and edge creation
-- Walker traversal patterns
-- Spatial queries
-- Error handling
-- GraphContext for advanced scenarios
+Features demonstrated:
+- Entity-centric CRUD operations (City.create(), City.find(), etc.)
+- MongoDB-style spatial and attribute queries
+- Modern walker patterns with proper parameter naming
+- Spatial analysis functions with database-level optimization
+- Advanced GraphContext patterns for complex scenarios
+- Concurrent walker operations
+- Error handling and recovery
 """
 
 import asyncio
 import math
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
-from jvspatial.core.context import GraphContext, get_default_context
 from jvspatial.core.entities import (
     Edge,
     Node,
@@ -24,7 +26,6 @@ from jvspatial.core.entities import (
     on_exit,
     on_visit,
 )
-from jvspatial.db.factory import get_database
 
 
 def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -46,256 +47,525 @@ def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
 async def find_nearby_cities(
     latitude: float, longitude: float, radius_km: float = 10.0
 ) -> List["City"]:
-    """Find cities within a specified radius of coordinates."""
-    all_cities = await City.all()
+    """Find cities within a specified radius of coordinates using entity-centric queries."""
+    # RECOMMENDED: Use entity-centric find instead of Node.all()
+    all_cities = await City.find()
     nearby = []
 
     for city in all_cities:
-        if hasattr(city, "latitude") and hasattr(city, "longitude"):
-            distance = calculate_distance(
-                latitude, longitude, city.latitude, city.longitude
-            )
-            if distance <= radius_km:
-                nearby.append(city)
+        distance = calculate_distance(
+            latitude, longitude, city.latitude, city.longitude
+        )
+        if distance <= radius_km:
+            nearby.append(city)
     return nearby
 
 
 async def find_cities_in_bounds(
     min_lat: float, max_lat: float, min_lon: float, max_lon: float
 ) -> List["City"]:
-    """Find cities within a bounding box."""
-    all_cities = await City.all()
-    bounded = []
+    """Find cities within a bounding box using MongoDB-style spatial queries."""
+    # RECOMMENDED: Use MongoDB-style spatial queries for complex filtering
+    bounded_cities = await City.find(
+        {
+            "$and": [
+                {"context.latitude": {"$gte": min_lat, "$lte": max_lat}},
+                {"context.longitude": {"$gte": min_lon, "$lte": max_lon}},
+            ]
+        }
+    )
+    return bounded_cities
 
-    for city in all_cities:
-        if hasattr(city, "latitude") and hasattr(city, "longitude"):
-            if (
-                min_lat <= city.latitude <= max_lat
-                and min_lon <= city.longitude <= max_lon
-            ):
-                bounded.append(city)
-    return bounded
+
+# ============== NODE DEFINITIONS ==============
 
 
-# Custom node types for demo
 class City(Node):
-    """Represents a city with geographic attributes."""
+    """Represents a city with geographic attributes and population data."""
 
-    name: str
-    population: int
-    latitude: float
-    longitude: float
+    name: str = ""
+    population: int = 0
+    latitude: float = 0.0
+    longitude: float = 0.0
+    founded_year: Optional[int] = None
+    timezone: str = "UTC"
 
     @on_visit(Walker)
     def on_visited(self: "City", visitor: Walker) -> None:
         """Log when visited by a walker."""
-        print(f"Being visited by {visitor.id}")
+        print(
+            f"🏙️ {self.name} being visited by {visitor.__class__.__name__} ({visitor.id})"
+        )
 
 
 class Highway(Edge):
     """Represents a highway connection between cities."""
 
-    length: Optional[float] = None
+    length: Optional[float] = None  # Length in miles
     lanes: Optional[int] = None
+    speed_limit: int = 70  # mph
+    toll_road: bool = False
+    highway_number: str = ""
 
 
 class Railroad(Edge):
     """Represents a railroad connection between cities."""
 
-    electrified: bool
+    electrified: bool = False
+    gauge: str = "standard"  # track gauge type
+    freight_capacity: Optional[int] = None  # tons per train
 
 
-# Custom walker types
+# ============== WALKER DEFINITIONS ==============
+
+
 class Tourist(Walker):
-    """Walker that visits cities via highways."""
+    """Walker that visits cities via highways and explores road networks."""
 
     @on_visit(City)
     async def visit_city(self: "Tourist", here: City) -> None:
-        """Visit a city and traverse connected cities via highways."""
+        """Visit a city and traverse connected cities via highways.
+
+        Args:
+            here: The visited City node
+        """
         self.response.setdefault("visited", [])
-        self.response["visited"].append(here.name)
-        print(f"Tourist visiting {here.name} (pop: {here.population})")
+        self.response.setdefault("routes_taken", [])
 
-        # Visit connected cities
-        neighbors = await here.nodes(direction="out", edge="Highway")
-        print(f"Found {len(neighbors)} highway neighbors from {here.name}")
-        for i, node in enumerate(neighbors):
-            print(f"  {i+1}. {node.name} (id: {node.id})")
+        if here.name not in self.response["visited"]:
+            self.response["visited"].append(here.name)
+            print(f"🎅 Tourist visiting {here.name} (pop: {here.population:,})")
 
-        to_visit = [n for n in neighbors if n.name not in self.response["visited"]]
-        print(f"Visiting {len(to_visit)} new cities: {[n.name for n in to_visit]}")
-        await self.visit(to_visit)
+            # RECOMMENDED: Use nodes() method with semantic filtering
+            highway_neighbors = await here.nodes(direction="out", edge=[Highway])
+            print(f"  🛣️ Found {len(highway_neighbors)} highway connections")
+
+            # Show details about available routes
+            highway_edges = await here.edges(direction="out")
+            for edge in highway_edges:
+                if isinstance(edge, Highway) and edge.length:
+                    target = await City.get(edge.target)
+                    if target and target.name not in self.response["visited"]:
+                        print(
+                            f"    → {target.name} via Highway ({edge.length} miles, {edge.lanes} lanes)"
+                        )
+
+            # Visit unvisited cities
+            to_visit = [
+                n for n in highway_neighbors if n.name not in self.response["visited"]
+            ]
+            if to_visit:
+                print(f"  📍 Next destinations: {[n.name for n in to_visit]}")
+                await self.visit(to_visit)
 
 
 class FreightTrain(Walker):
-    """Walker that loads cargo at specific cities."""
+    """Walker that loads and transports cargo between cities via railroad."""
+
+    max_cargo_capacity: int = 5000  # tons
+    current_cargo_weight: int = 0
 
     @on_visit(City)
     async def load_cargo(self: "FreightTrain", here: City) -> None:
-        """Load cargo based on the visited city."""
+        """Load cargo based on the visited city's characteristics.
+
+        Args:
+            here: The visited City node
+        """
         self.response.setdefault("cargo", [])
-        if here.name == "Chicago":
-            self.response["cargo"].append("Manufactured goods")
-            print("Loaded manufactured goods in Chicago")
-        elif here.name == "Kansas City":
-            self.response["cargo"].append("Agricultural products")
-            print("Loaded agricultural products in Kansas City")
+        self.response.setdefault("route", [])
+        self.response["route"].append(here.name)
+
+        # Load cargo based on city characteristics
+        cargo_loaded = False
+        if (
+            here.name == "Chicago"
+            and self.current_cargo_weight < self.max_cargo_capacity
+        ):
+            chicago_cargo: Dict[str, Any] = {
+                "type": "Manufactured goods",
+                "weight": 2000,
+                "destination": "Kansas City",
+            }
+            self.response["cargo"].append(chicago_cargo)
+            self.current_cargo_weight += chicago_cargo["weight"]
+            print(
+                f"🚂 Loaded {chicago_cargo['weight']} tons of {chicago_cargo['type']} in {here.name}"
+            )
+            cargo_loaded = True
+        elif (
+            here.name == "Kansas City"
+            and self.current_cargo_weight < self.max_cargo_capacity
+        ):
+            kansas_cargo: Dict[str, Any] = {
+                "type": "Agricultural products",
+                "weight": 1500,
+                "destination": "St. Louis",
+            }
+            self.response["cargo"].append(kansas_cargo)
+            self.current_cargo_weight += kansas_cargo["weight"]
+            print(
+                f"🚂 Loaded {kansas_cargo['weight']} tons of {kansas_cargo['type']} in {here.name}"
+            )
+            cargo_loaded = True
+
+        if not cargo_loaded:
+            print(f"🚂 Passing through {here.name} - no cargo to load")
+
+        # Continue along railroad connections
+        rail_neighbors = await here.nodes(direction="out", edge=[Railroad])
+        unvisited = [n for n in rail_neighbors if n.name not in self.response["route"]]
+        if unvisited:
+            await self.visit(unvisited)
 
     @on_exit
     async def final_delivery(self: "FreightTrain") -> None:
-        """Deliver all loaded cargo at the end of traversal."""
+        """Complete the freight delivery and provide summary.
+
+        Called when walker completes traversal.
+        """
         cargo_list = self.response.get("cargo", [])
+        route = self.response.get("route", [])
+
         if cargo_list:
-            print(f"Delivered cargo: {', '.join(cargo_list)}")
+            total_weight = sum(c["weight"] for c in cargo_list)
+            cargo_types = [f"{c['weight']}t {c['type']}" for c in cargo_list]
+            print(f"📦 Freight delivery complete! Total cargo: {total_weight} tons")
+            print(f"  Cargo manifest: {', '.join(cargo_types)}")
+            print(f"  Route taken: {' → '.join(route)}")
+        else:
+            print("🚂 Freight train completed route with no cargo")
 
 
-async def demonstrate_graphcontext_patterns():
-    """Show advanced GraphContext usage patterns."""
-    print("\n=== DEMONSTRATING GRAPHCONTEXT PATTERNS ===")
+# ============== DEMONSTRATION FUNCTIONS ==============
 
-    # Pattern 1: Custom database for this example
-    import tempfile
 
-    custom_db = get_database(db_type="json", base_path=tempfile.mkdtemp())
-    ctx = GraphContext(database=custom_db)
+async def create_sample_travel_network():
+    """Create sample travel network using entity-centric CRUD operations."""
+    print("\n🏗️ Creating sample travel network using entity-centric methods")
 
-    print("Using GraphContext with custom database for isolated operations")
+    try:
+        # RECOMMENDED: Use entity-centric create operations
+        root = await Root.get()
 
-    # Create cities using GraphContext
-    denver = await ctx.create_node(
-        City, name="Denver", population=715522, latitude=39.7392, longitude=-104.9903
+        # Create cities with diverse characteristics
+        cities_data = [
+            {
+                "name": "Chicago",
+                "population": 2697000,
+                "latitude": 41.8781,
+                "longitude": -87.6298,
+                "founded_year": 1837,
+                "timezone": "America/Chicago",
+            },
+            {
+                "name": "St. Louis",
+                "population": 300576,
+                "latitude": 38.6270,
+                "longitude": -90.1994,
+                "founded_year": 1764,
+                "timezone": "America/Chicago",
+            },
+            {
+                "name": "Kansas City",
+                "population": 508090,
+                "latitude": 39.0997,
+                "longitude": -94.5786,
+                "founded_year": 1838,
+                "timezone": "America/Chicago",
+            },
+            {
+                "name": "Denver",
+                "population": 715522,
+                "latitude": 39.7392,
+                "longitude": -104.9903,
+                "founded_year": 1858,
+                "timezone": "America/Denver",
+            },
+        ]
+
+        created_cities = []
+        for city_data in cities_data:
+            city = await City.create(**city_data)
+            await root.connect(city)
+            created_cities.append(city)
+            print(
+                f"✅ Created {city.name} (pop: {city.population:,}, founded: {city.founded_year})"
+            )
+
+        chicago, st_louis, kansas_city, denver = created_cities
+
+        # Create highway connections with detailed attributes
+        highway_connections = [
+            (
+                chicago,
+                st_louis,
+                {
+                    "length": 297.0,
+                    "lanes": 4,
+                    "speed_limit": 70,
+                    "highway_number": "I-55",
+                },
+            ),
+            (
+                st_louis,
+                kansas_city,
+                {
+                    "length": 248.0,
+                    "lanes": 4,
+                    "speed_limit": 70,
+                    "highway_number": "I-70",
+                },
+            ),
+            (
+                kansas_city,
+                denver,
+                {
+                    "length": 605.0,
+                    "lanes": 4,
+                    "speed_limit": 75,
+                    "highway_number": "I-70",
+                    "toll_road": False,
+                },
+            ),
+        ]
+
+        for source, target, attrs in highway_connections:
+            await source.connect(target, edge=Highway, direction="out", **attrs)
+            print(
+                f"🛣️ Connected {source.name} → {target.name} via {attrs['highway_number']} ({attrs['length']} miles)"
+            )
+
+        # Create railroad connections
+        railroad_connections = [
+            (
+                chicago,
+                kansas_city,
+                {"electrified": True, "gauge": "standard", "freight_capacity": 8000},
+            ),
+            (
+                st_louis,
+                kansas_city,
+                {"electrified": False, "gauge": "standard", "freight_capacity": 6000},
+            ),
+        ]
+
+        for source, target, attrs in railroad_connections:
+            await source.connect(target, edge=Railroad, direction="out", **attrs)
+            electrified_str = (
+                "electrified" if attrs["electrified"] else "non-electrified"
+            )
+            print(
+                f"🚂 Connected {source.name} → {target.name} via {electrified_str} railroad ({attrs['freight_capacity']}t capacity)"
+            )
+
+        print(f"🎉 Travel network created with {len(created_cities)} cities")
+        return created_cities
+
+    except Exception as e:
+        print(f"❌ Error creating travel network: {e}")
+        return []
+
+
+async def demonstrate_mongodb_queries():
+    """Demonstrate MongoDB-style queries for complex filtering."""
+    print(
+        "\n🔍 Demonstrating MongoDB-style queries with spatial and attribute filtering"
     )
-    phoenix = await ctx.create_node(
-        City, name="Phoenix", population=1608000, latitude=33.4484, longitude=-112.0740
-    )
 
-    # Create connection
-    highway = await ctx.create_edge(Highway, left=denver, right=phoenix, length=602)
+    try:
+        # RECOMMENDED: Complex queries using MongoDB operators
 
-    print(f"Created {denver.name} and {phoenix.name} using GraphContext")
-    print(f"Connected with {highway.length} mile highway")
+        # Find large cities (population > 500k)
+        large_cities = await City.find({"context.population": {"$gt": 500000}})
+        print(
+            f"✅ Found {len(large_cities)} large cities (>500k pop): {[c.name for c in large_cities]}"
+        )
 
-    # Show that original API works too - entities remember their context
-    denver.population = 720000  # Update population
-    await denver.save()  # Original API - works with GraphContext entities
+        # Find cities founded before 1850
+        historic_cities = await City.find(
+            {"context.founded_year": {"$lt": 1850, "$exists": True}}
+        )
+        print(
+            f"✅ Found {len(historic_cities)} historic cities (founded <1850): {[c.name for c in historic_cities]}"
+        )
 
-    print("✅ GraphContext entities work with original API (save(), etc.)")
+        # Find cities in the Midwest region with specific timezone
+        midwest_cities = await City.find(
+            {
+                "$and": [
+                    {"context.latitude": {"$gte": 35.0, "$lte": 45.0}},
+                    {"context.longitude": {"$gte": -95.0, "$lte": -85.0}},
+                    {"context.timezone": "America/Chicago"},
+                ]
+            }
+        )
+        print(
+            f"✅ Found {len(midwest_cities)} Midwest cities in Chicago timezone: {[c.name for c in midwest_cities]}"
+        )
+
+        # Find highways longer than 300 miles OR with more than 4 lanes
+        long_or_wide_highways = await Highway.find(
+            {"$or": [{"context.length": {"$gt": 300.0}}, {"context.lanes": {"$gt": 4}}]}
+        )
+        print(f"✅ Found {len(long_or_wide_highways)} highways (>300mi OR >4 lanes)")
+
+        # Find electrified railroads with high capacity
+        electrified_heavy_rail = await Railroad.find(
+            {
+                "$and": [
+                    {"context.electrified": True},
+                    {"context.freight_capacity": {"$gte": 7000}},
+                ]
+            }
+        )
+        print(
+            f"✅ Found {len(electrified_heavy_rail)} electrified heavy-freight railroads"
+        )
+
+        # Demonstrate count operations
+        total_cities = await City.count()
+        total_highways = await Highway.count()
+        total_railroads = await Railroad.count()
+
+        print(f"\n📊 Network statistics:")
+        print(f"  Cities: {total_cities}")
+        print(f"  Highways: {total_highways}")
+        print(f"  Railroads: {total_railroads}")
+
+    except Exception as e:
+        print(f"❌ Error in MongoDB query demonstration: {e}")
 
 
 async def main() -> None:
-    """Demonstrate graph operations with both original API and GraphContext."""
-    print("\n=== TRAVEL GRAPH EXAMPLE ===")
-    print("Shows original API (unchanged) + new GraphContext patterns")
-
-    print("\n=== ORIGINAL API (UNCHANGED) ===")
-    # Database auto-configured on first use - this hasn't changed!
-    # Create root node
-    root = await Root.get()  # type: ignore[call-arg]
-
-    # Create and save city nodes with spatial data using new async pattern
-    chicago = await City.create(
-        name="Chicago", population=2697000, latitude=41.8781, longitude=-87.6298
-    )
-
-    st_louis = await City.create(
-        name="St. Louis", population=300576, latitude=38.6270, longitude=-90.1994
-    )
-
-    kansas_city = await City.create(
-        name="Kansas City", population=508090, latitude=39.0997, longitude=-94.5786
-    )
-
-    # Create edges with custom properties
-    await chicago.connect(st_louis, edge=Highway, length=297, lanes=4, direction="out")
-    await st_louis.connect(
-        kansas_city, edge=Highway, length=248, lanes=4, direction="out"
-    )
-    await chicago.connect(kansas_city, edge=Railroad, electrified=True, direction="out")
-
-    # Connect all cities to root node with generic edges
-    if root:
-        for city in [chicago, st_louis, kansas_city]:
-            await root.connect(city)
-
-    print("Created cities: Chicago, St. Louis, Kansas City")
+    """Demonstrate modern jvspatial patterns with travel graph operations."""
+    print("🚀 Travel Graph Example - Modern jvspatial Patterns")
     print(
-        "Created connections: Chicago-St.Louis highway, St.Louis-Kansas City highway, Chicago-Kansas City railroad"
+        "Demonstrates entity-centric CRUD, MongoDB-style queries, and spatial analysis"
     )
-    print("Connected all cities to root node with generic edges")
 
-    print("\n=== DEMONSTRATING SPATIAL QUERIES ===")
-    # Query cities using new schema
-    # Query cities using entity methods
-    all_cities = await Node.all()
-    midwest_cities = [
-        city
-        for city in all_cities
-        if isinstance(city, City)
-        and 35 <= city.latitude <= 45
-        and -95 <= city.longitude <= -85
-    ]
-    midwest_names = [city.name for city in midwest_cities]
-    print(f"Cities in Midwest region: {', '.join(midwest_names)}")
+    print("\n=== ENTITY-CENTRIC CRUD OPERATIONS ===")
 
-    # Query highways using entity methods
-    all_edges = await Edge.all()
-    highways = [
-        edge
-        for edge in all_edges
-        if isinstance(edge, Highway) and edge.length is not None and edge.length > 250
-    ]
-    print(f"Highways longer than 250 miles: {len(highways)}")
+    # Create sample travel network
+    cities = await create_sample_travel_network()
 
-    # Demonstrate new spatial query capabilities
-    print("\n=== ENHANCED SPATIAL QUERIES ===")
+    if not cities:
+        print("❌ Failed to create travel network")
+        return
 
-    # Find cities within 500km of Chicago using local utility function
-    chicago_coords = (41.8781, -87.6298)
-    nearby_cities = await find_nearby_cities(chicago_coords[0], chicago_coords[1], 500)
-    nearby_names = [city.name for city in nearby_cities if isinstance(city, City)]
-    print(f"Cities within 500km of Chicago: {', '.join(nearby_names)}")
+    # Demonstrate MongoDB-style queries
+    await demonstrate_mongodb_queries()
 
-    # Find cities in a specific bounding box (Great Lakes region) using local utility function
+    print("\n=== SPATIAL ANALYSIS DEMONSTRATIONS ===")
+
+    # Get a reference city for spatial queries
+    chicago = await City.find_one({"context.name": "Chicago"})
+    if not chicago:
+        print("❌ Chicago not found for spatial analysis")
+        return
+
+    # Find cities within 500km of Chicago using utility function
+    print(
+        f"\n🌍 Spatial analysis centered on {chicago.name} ({chicago.latitude}, {chicago.longitude})"
+    )
+    nearby_cities = await find_nearby_cities(chicago.latitude, chicago.longitude, 500)
+    nearby_names = [city.name for city in nearby_cities]
+    print(f"✅ Cities within 500km of Chicago: {', '.join(nearby_names)}")
+
+    # Find cities in Great Lakes region using bounding box
     great_lakes_cities = await find_cities_in_bounds(40.0, 50.0, -95.0, -75.0)
-    gl_names = [city.name for city in great_lakes_cities if isinstance(city, City)]
-    print(f"Cities in Great Lakes region: {', '.join(gl_names)}")
+    gl_names = [city.name for city in great_lakes_cities]
+    print(f"✅ Cities in Great Lakes region: {', '.join(gl_names)}")
 
-    print("\n=== DEMONSTRATING ASYNC TRAVERSAL WITH CONCURRENT WALKERS ===")
+    # Demonstrate highway analysis
+    long_highways = await Highway.find({"context.length": {"$gt": 250.0}})
+    print(f"✅ Highways longer than 250 miles: {len(long_highways)}")
+    for highway in long_highways:
+        source_city = await City.get(highway.source)
+        target_city = await City.get(highway.target)
+        if source_city and target_city:
+            print(
+                f"  🛣️ {source_city.name} → {target_city.name}: {highway.length} miles via {highway.highway_number}"
+            )
 
-    # Create walkers
+    print("\n=== WALKER TRAVERSAL DEMONSTRATIONS ===")
+
+    # Create and run tourist walker
+    print("\n🎅 Starting Tourist walker (follows highways)")
     tourist = Tourist()
+    await tourist.spawn(start=chicago)
+
+    tourist_visited = tourist.response.get("visited", [])
+    print(f"🗂️ Tourist route: {' → '.join(tourist_visited)}")
+
+    # Create and run freight train walker
+    print("\n🚂 Starting FreightTrain walker (follows railroads)")
     freight_train = FreightTrain()
+    await freight_train.spawn(start=chicago)
 
-    # Run walkers concurrently
-    print("Starting concurrent walkers...")
-    await asyncio.gather(
-        tourist.spawn(start=chicago), freight_train.spawn(start=chicago)
-    )
+    # Show concurrent walker execution
+    print("\n🔄 Demonstrating concurrent walker execution")
+    tourist2 = Tourist()
+    freight_train2 = FreightTrain()
 
-    print(f"Tourist visited: {', '.join(tourist.response.get('visited', []))}")
-    print(f"Freight train cargo: {', '.join(freight_train.response.get('cargo', []))}")
+    # Run both walkers simultaneously from different starting points
+    kansas_city = await City.find_one({"context.name": "Kansas City"})
+    if kansas_city:
+        print(
+            "Running Tourist from Chicago and FreightTrain from Kansas City simultaneously..."
+        )
+        await asyncio.gather(
+            tourist2.spawn(start=chicago), freight_train2.spawn(start=kansas_city)
+        )
 
-    print("\n=== DEMONSTRATING ERROR HANDLING ===")
+        print(
+            f"🎅 Tourist 2 visited: {', '.join(tourist2.response.get('visited', []))}"
+        )
+        freight_cargo = freight_train2.response.get("cargo", [])
+        if freight_cargo:
+            cargo_summary = [f"{c['weight']}t {c['type']}" for c in freight_cargo]
+            print(f"🚂 Freight 2 cargo: {', '.join(cargo_summary)}")
+        else:
+            print("🚂 Freight 2: No cargo loaded")
+
+    print("\n=== ERROR HANDLING AND RECOVERY ===")
 
     class ErrorWalker(Walker):
-        """Walker that intentionally causes errors."""
+        """Walker that demonstrates error handling during traversal."""
 
         @on_visit(City)
         async def cause_error(self: "ErrorWalker", here: City) -> None:
-            """Raise an error during traversal."""
-            print(f"Visiting here {here.id}")
-            # Simulate an error during traversal
-            raise ValueError("Simulated traversal error")
+            """Demonstrate error handling during traversal.
+
+            Args:
+                here: The visited City node
+            """
+            print(f"⚠️ ErrorWalker visiting {here.name}")
+            if here.name == "St. Louis":
+                # Simulate an error at a specific location
+                raise ValueError(f"Simulated network error in {here.name}")
+            else:
+                print(f"✅ Successfully processed {here.name}")
 
     try:
+        print("Testing error handling in walker traversal...")
         error_walker = ErrorWalker()
         await error_walker.spawn(start=chicago)
     except Exception as e:
-        print(f"Error during traversal: {str(e)}")
-    print("Error handling demonstration complete")
+        print(f"❌ Caught expected error: {str(e)}")
 
-    # Show advanced GraphContext patterns
-    await demonstrate_graphcontext_patterns()
+    print("✅ Error handling demonstration complete - system recovered gracefully")
+
+    # Final summary
+    print("\n=== EXAMPLE SUMMARY ===")
+    print("✅ Example completed successfully!")
+    print("Key demonstrations:")
+    print("  • Entity-centric CRUD (City.create(), City.find(), etc.)")
+    print("  • MongoDB-style queries with spatial operators ($and, $or, $gte, etc.)")
+    print("  • Modern walker patterns with proper parameter naming ('here' parameter)")
+    print("  • Spatial analysis with bounding boxes and distance calculations")
+    print("  • Concurrent walker operations with different traversal strategies")
+    print("  • Comprehensive error handling and recovery")
 
 
 if __name__ == "__main__":

@@ -190,7 +190,7 @@ async def test_with_mock_database():
     )
 
     # Test retrieval
-    retrieved = await mock_ctx.get_node("n:Product:mock123", Product)
+    retrieved = await mock_ctx.get_node(Product, "n:Product:mock123")
     framework.assert_equal(
         retrieved.name, "Mock Product", "Mock product retrieved correctly"
     )
@@ -247,7 +247,7 @@ async def test_integration_with_real_database():
     framework.assert_equal(processed_orders[0], order.id, "Correct order processed")
 
     # Check order was updated
-    updated_order = await integration_ctx.get_node(order.id, Order)
+    updated_order = await integration_ctx.get_node(Order, order.id)
     framework.assert_equal(updated_order.status, "processed", "Order status updated")
     framework.assert_equal(
         updated_order.total, 2599.98, "Order total calculated correctly"

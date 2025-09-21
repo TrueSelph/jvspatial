@@ -13,6 +13,7 @@ Use cases demonstrated:
 Run with: python simple_dynamic_example.py
 """
 
+import asyncio
 from datetime import datetime
 from typing import Optional
 
@@ -110,25 +111,25 @@ class SearchUsers(Walker):
     @on_visit(Root)
     async def search_users(self, here):
         try:
-            all_users = await User.all()
-            filtered_users = []
+            # RECOMMENDED: Use entity-centric find with MongoDB-style queries
+            query = {}
+            if self.role:
+                query["context.role"] = self.role
+            if self.active_only:
+                query["context.active"] = True
 
-            for user in all_users:
-                # Apply filters
-                if self.role and user.role != self.role:
-                    continue
-                if self.active_only and not user.active:
-                    continue
+            filtered_users_entities = await User.find(query)
 
-                filtered_users.append(
-                    {
-                        "id": user.id,
-                        "name": user.name,
-                        "email": user.email,
-                        "role": user.role,
-                        "active": user.active,
-                    }
-                )
+            filtered_users = [
+                {
+                    "id": user.id,
+                    "name": user.name,
+                    "email": user.email,
+                    "role": user.role,
+                    "active": user.active,
+                }
+                for user in filtered_users_entities
+            ]
 
             self.response = {
                 "status": "success",
@@ -219,28 +220,32 @@ def register_additional_endpoints():
         @on_visit(Root)
         async def get_stats(self, here):
             try:
-                all_users = await User.all()
-
+                # RECOMMENDED: Use entity-centric find and count operations
                 if self.group_by == "role":
-                    stats = {}
-                    for user in all_users:
-                        role = user.role
-                        stats[role] = stats.get(role, 0) + 1
+                    # Use count operations for better performance
+                    admin_count = await User.count({"context.role": "admin"})
+                    user_count = await User.count({"context.role": "user"})
+                    moderator_count = await User.count({"context.role": "moderator"})
+
+                    stats = {
+                        "admin": admin_count,
+                        "user": user_count,
+                        "moderator": moderator_count,
+                    }
 
                 elif self.group_by == "active":
-                    stats = {"active": 0, "inactive": 0}
-                    for user in all_users:
-                        if user.active:
-                            stats["active"] += 1
-                        else:
-                            stats["inactive"] += 1
+                    active_count = await User.count({"context.active": True})
+                    inactive_count = await User.count({"context.active": False})
+                    stats = {"active": active_count, "inactive": inactive_count}
                 else:
                     stats = {"error": "Invalid group_by parameter"}
+
+                total_users = await User.count()
 
                 self.response = {
                     "status": "success",
                     "group_by": self.group_by,
-                    "total_users": len(all_users),
+                    "total_users": total_users,
                     "statistics": stats,
                     "generated_at": datetime.now().isoformat(),
                 }
@@ -309,8 +314,6 @@ async def initialize_data():
     print(f"✅ Created {len(sample_users)} sample users")
 
     # Register additional endpoints after a short delay
-    import asyncio
-
     asyncio.create_task(delayed_registration())
 
 

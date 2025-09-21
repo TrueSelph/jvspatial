@@ -617,5 +617,5 @@ if __name__ == "__main__":
 
     # Run the server
     server.run(
-        host="127.0.0.1", port=8000, reload=True  # Enable hot reload for development
+        host="127.0.0.1", port=8000, reload=False  # Disable reload for stable examples
     )

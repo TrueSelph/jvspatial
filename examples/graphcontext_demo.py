@@ -201,7 +201,7 @@ async def demonstrate_testing_pattern():
     test_city = await test_ctx.create_node(City, name="Test City", population=100000)
 
     # Verify test isolation
-    retrieved = await test_ctx.get_node(test_city.id, City)
+    retrieved = await test_ctx.get_node(City, test_city.id)
     assert retrieved is not None
     assert retrieved.name == "Test City"
 

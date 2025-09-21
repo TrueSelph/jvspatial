@@ -911,9 +911,9 @@ if __name__ == "__main__":
     import uvicorn
 
     print("🔧 Development server starting...")
-    print("📖 API docs available at: http://localhost:8000/docs")
-    print("🔄 ReDoc available at: http://localhost:8000/redoc")
+    print("📖 API docs available at: http://localhost:8003/docs")
+    print("🔄 ReDoc available at: http://localhost:8003/redoc")
 
     uvicorn.run(
-        "fastapi_server:app", host="0.0.0.0", port=8000, reload=True, log_level="info"
+        "fastapi_server:app", host="0.0.0.0", port=8003, reload=False, log_level="info"
     )

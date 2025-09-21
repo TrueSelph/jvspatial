@@ -1,491 +1,352 @@
-# Examples
+# jvspatial Examples
 
-This document showcases practical examples demonstrating jvspatial's entity-centric design and core features.
+This document showcases key examples that demonstrate the range of capabilities and features of the jvspatial library - a powerful object-spatial ORM for building connected graph applications with spatial awareness.
 
-## Quick Start Examples
+## Table of Contents
 
-### Entity-Centric CRUD Operations
-
-**Simple entity creation and MongoDB-style queries**
-
-```python
-import asyncio
-from jvspatial.core import Node
-
-class User(Node):
-    name: str = ""
-    email: str = ""
-    department: str = ""
-    active: bool = True
-
-async def main():
-    # Entity creation
-    user = await User.create(name="Alice", email="alice@company.com", department="engineering")
-
-    # MongoDB-style queries
-    active_users = await User.find({"context.active": True})
-    engineers = await User.find({"context.department": "engineering"})
-    senior_engineers = await User.find({
-        "$and": [
-            {"context.department": "engineering"},
-            {"context.active": True}
-        ]
-    })
-
-    print(f"Found {len(active_users)} active users")
-    print(f"Found {len(engineers)} engineers")
-    print(f"Found {len(senior_engineers)} active engineers")
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-### Walker Traversal Example
-
-**Graph traversal with semantic filtering**
-
-```python
-import asyncio
-from jvspatial.core import Node, Walker, on_visit
-
-class User(Node):
-    name: str = ""
-    department: str = ""
-    active: bool = True
-
-class NetworkAnalyzer(Walker):
-    def __init__(self):
-        super().__init__()
-        self.processed_users = []
-
-    @on_visit(User)
-    async def analyze_user(self, here: User):
-        """Analyze user and traverse to colleagues."""
-        self.processed_users.append(here.name)
-
-        # Use recommended nodes() method with semantic filtering
-        colleagues = await here.nodes(
-            node=['User'],
-            department=here.department,  # Same department
-            active=True  # Only active users
-        )
-
-        # Continue traversal
-        await self.visit(colleagues)
-
-        self.response[here.id] = {
-            "name": here.name,
-            "department": here.department,
-            "colleagues_found": len(colleagues)
-        }
-
-async def main():
-    # Create test users
-    alice = await User.create(name="Alice", department="engineering", active=True)
-    bob = await User.create(name="Bob", department="engineering", active=True)
-    charlie = await User.create(name="Charlie", department="marketing", active=True)
-
-    # Create connections
-    await alice.connect(bob)
-    await alice.connect(charlie)
-
-    # Traverse network
-    analyzer = NetworkAnalyzer()
-    await analyzer.spawn(alice)
-
-    print(f"Processed users: {analyzer.processed_users}")
-    print(f"Analysis results: {analyzer.response}")
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-### FastAPI Server Integration Example
-
-**Complete REST API with automatic documentation**
-
-```python
-import asyncio
-from jvspatial.api import Server, walker_endpoint
-from jvspatial.api.endpoint_router import EndpointField
-from jvspatial.core import Node, Walker, on_visit
-
-class Product(Node):
-    name: str = ""
-    price: float = 0.0
-    category: str = ""
-    in_stock: bool = True
-
-# Create server
-server = Server(
-    title="Product Management API",
-    description="Manage products with graph-based relationships",
-    version="1.0.0"
-)
-
-@walker_endpoint("/api/products/search", methods=["POST"])
-class SearchProducts(Walker):
-    """Search products with advanced filtering."""
-
-    category: str = EndpointField(
-        description="Product category to search",
-        examples=["electronics", "books", "clothing"]
-    )
-
-    min_price: float = EndpointField(
-        default=0.0,
-        description="Minimum price filter",
-        ge=0.0
-    )
-
-    max_price: float = EndpointField(
-        default=10000.0,
-        description="Maximum price filter",
-        ge=0.0
-    )
-
-    @on_visit(Node)
-    async def search_products(self, here: Node):
-        # MongoDB-style query with filters
-        products = await Product.find({
-            "$and": [
-                {"context.category": self.category},
-                {"context.price": {"$gte": self.min_price, "$lte": self.max_price}},
-                {"context.in_stock": True}
-            ]
-        })
-
-        self.response = {
-            "products": [
-                {
-                    "id": p.id,
-                    "name": p.name,
-                    "price": p.price,
-                    "category": p.category
-                } for p in products
-            ],
-            "total_found": len(products),
-            "filters_applied": {
-                "category": self.category,
-                "price_range": [self.min_price, self.max_price]
-            }
-        }
-
-async def setup_sample_data():
-    """Create sample product data."""
-    products = [
-        {"name": "Laptop Pro", "price": 1299.99, "category": "electronics"},
-        {"name": "Python Book", "price": 39.99, "category": "books"},
-        {"name": "Gaming Mouse", "price": 79.99, "category": "electronics"},
-        {"name": "T-Shirt", "price": 19.99, "category": "clothing"}
-    ]
-
-    for product_data in products:
-        await Product.create(**product_data)
-
-    print(f"Created {len(products)} sample products")
-
-@server.on_startup
-async def initialize_data():
-    """Initialize sample data on server startup."""
-    await setup_sample_data()
-
-if __name__ == "__main__":
-    server.run()  # API available at http://localhost:8000/docs
-```
-
-**API Usage:**
-```bash
-# Search for electronics under $100
-curl -X POST "http://localhost:8000/api/products/search" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "category": "electronics",
-    "min_price": 0,
-    "max_price": 100
-  }'
-```
-
-## Object Pagination Example
-
-**Efficient handling of large datasets**
-
-```python
-import asyncio
-from jvspatial.core import Node
-from jvspatial.core.pager import ObjectPager, paginate_objects
-
-class Customer(Node):
-    name: str = ""
-    email: str = ""
-    signup_date: str = ""
-    plan: str = "free"
-    active: bool = True
-
-async def pagination_example():
-    # Create sample customers
-    customer_data = [
-        {"name": f"Customer {i}", "email": f"user{i}@company.com",
-         "plan": "premium" if i % 3 == 0 else "free"}
-        for i in range(100)
-    ]
-
-    for data in customer_data:
-        await Customer.create(**data)
-
-    # Simple pagination
-    first_page = await paginate_objects(Customer, page=1, page_size=20)
-    print(f"First page: {len(first_page)} customers")
-
-    # Advanced pagination with filtering
-    pager = ObjectPager(
-        Customer,
-        page_size=25,
-        filters={"context.plan": "premium"},
-        order_by="name",
-        order_direction="asc"
-    )
-
-    premium_customers = await pager.get_page(1)
-    print(f"Premium customers: {len(premium_customers)}")
-
-    # Process all pages efficiently
-    page_count = 0
-    total_processed = 0
-
-    while True:
-        customers = await pager.next_page()
-        if not customers:
-            break
-
-        page_count += 1
-        total_processed += len(customers)
-
-        print(f"Processed page {page_count}: {len(customers)} customers")
-
-        # Process customers in batch
-        for customer in customers:
-            # Simulate processing
-            pass
-
-    print(f"Total processed: {total_processed} customers")
-
-if __name__ == "__main__":
-    asyncio.run(pagination_example())
-```
-
-## Advanced MongoDB-Style Query Examples
-
-**Complex queries with multiple operators**
-
-```python
-import asyncio
-from jvspatial.core import Node
-
-class Employee(Node):
-    name: str = ""
-    department: str = ""
-    salary: float = 0.0
-    skills: list[str] = []
-    hire_date: str = ""
-    active: bool = True
-
-async def query_examples():
-    # Create sample employees
-    employees = [
-        {"name": "Alice", "department": "engineering", "salary": 95000, "skills": ["python", "javascript"], "active": True},
-        {"name": "Bob", "department": "engineering", "salary": 87000, "skills": ["java", "python"], "active": True},
-        {"name": "Charlie", "department": "marketing", "salary": 65000, "skills": ["analytics"], "active": True},
-        {"name": "Diana", "department": "engineering", "salary": 102000, "skills": ["go", "rust"], "active": False}
-    ]
-
-    for emp_data in employees:
-        await Employee.create(**emp_data)
-
-    # Complex query: Active high-paid engineers with Python skills
-    senior_python_devs = await Employee.find({
-        "$and": [
-            {"context.department": "engineering"},
-            {"context.salary": {"$gte": 90000}},
-            {"context.skills": {"$in": ["python"]}},
-            {"context.active": True}
-        ]
-    })
-
-    print(f"Senior Python developers: {len(senior_python_devs)}")
-
-    # Text search with regex
-    name_search = await Employee.find({
-        "context.name": {"$regex": "^A", "$options": "i"}
-    })
-
-    print(f"Names starting with 'A': {len(name_search)}")
-
-    # Range queries
-    mid_salary_range = await Employee.find({
-        "context.salary": {
-            "$gte": 70000,
-            "$lte": 100000
-        }
-    })
-
-    print(f"Mid-salary range employees: {len(mid_salary_range)}")
-
-    # Count and distinct operations
-    eng_count = await Employee.count({"context.department": "engineering"})
-    all_departments = await Employee.distinct("department")
-
-    print(f"Engineers: {eng_count}")
-    print(f"Departments: {all_departments}")
-
-if __name__ == "__main__":
-    asyncio.run(query_examples())
-```
-
-## Testing Patterns
-
-**Isolated testing with entity-centric operations**
-
-```python
-import pytest
-import asyncio
-from jvspatial.core import Node
-
-class TestUser(Node):
-    name: str = ""
-    email: str = ""
-    role: str = "user"
-
-# Test entity CRUD operations
-@pytest.mark.asyncio
-async def test_user_crud():
-    """Test basic CRUD operations."""
-    # Create
-    user = await TestUser.create(
-        name="Test User",
-        email="test@example.com",
-        role="admin"
-    )
-    assert user.name == "Test User"
-    assert user.role == "admin"
-
-    # Read
-    retrieved = await TestUser.get(user.id)
-    assert retrieved.email == "test@example.com"
-
-    # Update
-    user.role = "moderator"
-    await user.save()
-
-    updated = await TestUser.get(user.id)
-    assert updated.role == "moderator"
-
-    # Delete
-    await user.delete()
-    deleted = await TestUser.get(user.id)
-    assert deleted is None
-
-@pytest.mark.asyncio
-async def test_mongodb_queries():
-    """Test MongoDB-style query operations."""
-    # Setup test data
-    users = [
-        {"name": "Alice", "email": "alice@test.com", "role": "admin"},
-        {"name": "Bob", "email": "bob@test.com", "role": "user"},
-        {"name": "Charlie", "email": "charlie@test.com", "role": "user"}
-    ]
-
-    created_users = []
-    for user_data in users:
-        user = await TestUser.create(**user_data)
-        created_users.append(user)
-
-    # Query tests
-    admins = await TestUser.find({"context.role": "admin"})
-    assert len(admins) == 1
-    assert admins[0].name == "Alice"
-
-    # Regex query
-    a_names = await TestUser.find({
-        "context.name": {"$regex": "^A", "$options": "i"}
-    })
-    assert len(a_names) == 1
-
-    # Count operation
-    user_count = await TestUser.count({"context.role": "user"})
-    assert user_count == 2
-
-    # Cleanup
-    for user in created_users:
-        await user.delete()
-
-if __name__ == "__main__":
-    # Run tests
-    asyncio.run(test_user_crud())
-    asyncio.run(test_mongodb_queries())
-    print("All tests passed!")
-```
-
-## Running Examples
-
-Save any of the above examples as Python files and run them:
-
-```bash
-# Basic entity operations
-python entity_crud_example.py
-
-# Walker traversal
-python walker_example.py
-
-# FastAPI server
-python server_example.py
-# Then visit http://localhost:8000/docs
-
-# Object pagination
-python pagination_example.py
-
-# MongoDB-style queries
-python query_example.py
-
-# Testing
-python test_example.py
-```
-
-## Key Features Demonstrated
-
-These examples showcase jvspatial's core capabilities:
-
-- **Entity-Centric Design**: Clean, intuitive APIs for working with graph data
-- **MongoDB-Style Queries**: Familiar query syntax across all database backends
-- **Object Pagination**: Efficient handling of large datasets
-- **Walker Traversal**: Powerful graph traversal with semantic filtering
-- **FastAPI Integration**: Automatic REST API endpoints with OpenAPI docs
-- **Async Architecture**: Native async/await support throughout
-- **Testing-Friendly**: Simple patterns for isolated testing
-
-For more detailed documentation, see:
-- [MongoDB-Style Query Interface](mongodb-query-interface.md)
-- [Object Pagination Guide](pagination.md)
-- [REST API Integration](rest-api.md)
-- [GraphContext & Database Management](graph-context.md)
-
-1. **Clean Dependency Injection**: No scattered database connections across classes
-2. **Testing Isolation**: Easy to create isolated test environments
-3. **Configuration Flexibility**: Switch databases without changing entity code
-4. **Backward Compatibility**: Existing API (`Node.create()`, `Edge.create()`) works unchanged
-5. **Explicit Control**: When needed, full control over database operations
-
-For more details, see [GraphContext Documentation](./graph-context.md).
-
-## See Also
-
-- [Entity Reference](entity-reference.md) - Complete API reference
-- [MongoDB-Style Query Interface](mongodb-query-interface.md) - Advanced querying capabilities
-- [Object Pagination Guide](pagination.md) - Efficient data handling
-- [Walker Queue Operations](walker-queue-operations.md) - Walker control methods
-- [REST API Integration](rest-api.md) - Building APIs with jvspatial
-- [Troubleshooting](troubleshooting.md) - Common issues and solutions
+1. [Core ORM Demo](#core-orm-demo) - Basic object-spatial ORM concepts
+2. [Travel Graph](#travel-graph) - Spatial operations and walker patterns
+3. [Agent Graph](#agent-graph) - Hierarchical systems with API endpoints
+4. [Dynamic Server](#dynamic-server) - Runtime endpoint registration
+5. [GraphContext Demo](#graphcontext-demo) - Database dependency injection
+6. [Semantic Filtering](#semantic-filtering) - Advanced query capabilities
 
 ---
 
-**[← Back to README](../../README.md)** | **[MongoDB Query Interface →](mongodb-query-interface.md)**
+## Core ORM Demo
+
+**File**: [`examples/orm_demo.py`](examples/orm_demo.py)
+
+**What it demonstrates**:
+- Basic Node and Edge creation
+- Semantic connection syntax
+- Walker-based traversal
+- Database-optimized queries
+
+### Key Features Shown
+
+```python path=examples/orm_demo.py start=15
+class City(Node):
+    """Example city node."""
+    name: str = Field(default="")
+    population: int = Field(default=0)
+
+class Highway(Edge):
+    """Example highway edge."""
+    distance: float = Field(default=0.0)
+    lanes: int = Field(default=2)
+```
+
+**Elegant Connection Interface**:
+```python path=examples/orm_demo.py start=71
+highway1 = await new_york.connect(chicago, Highway, distance=790.0, lanes=4)
+```
+
+**Database-Optimized Queries**:
+```python path=examples/orm_demo.py start=119
+# MongoDB-style queries with context prefix
+large_cities = await City.find({"context.population": {"$gt": 5000000}})
+```
+
+**Walker Traversal**:
+```python path=examples/orm_demo.py start=29
+class TravelWalker(Walker):
+    @on_visit(City)
+    async def visit_city(self, here: City):
+        print(f"🚶 Visiting {here.name} (pop: {here.population:,})")
+        self.cities_visited.append(here.name)
+```
+
+---
+
+## Travel Graph
+
+**File**: [`examples/travel_graph.py`](examples/travel_graph.py)
+
+**What it demonstrates**:
+- Spatial calculations and geographic data
+- Complex walker patterns with state management
+- MongoDB-style spatial queries
+- Edge-typed graph traversal
+
+### Key Features Shown
+
+**Spatial Queries**:
+```python path=examples/travel_graph.py start=69
+bounded_cities = await City.find({
+    "$and": [
+        {"context.latitude": {"$gte": min_lat, "$lte": max_lat}},
+        {"context.longitude": {"$gte": min_lon, "$lte": max_lon}},
+    ]
+})
+```
+
+**Haversine Distance Calculation**:
+```python path=examples/travel_graph.py start=31
+def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate distance between two coordinates using Haversine formula."""
+    earth_radius = 6371  # Earth's radius in kilometers
+    # ... mathematical calculation
+```
+
+**Edge-Type Filtering**:
+```python path=examples/travel_graph.py start=140
+highway_neighbors = await here.nodes(direction="out", edge=[Highway])
+```
+
+**Stateful Walker with Cargo Management**:
+```python path=examples/travel_graph.py start=162
+class FreightTrain(Walker):
+    max_cargo_capacity: int = 5000  # tons
+    current_cargo_weight: int = 0
+
+    @on_visit(City)
+    async def load_cargo(self, here: City):
+        # Complex cargo loading logic based on city characteristics
+```
+
+---
+
+## Agent Graph
+
+**File**: [`examples/agent_graph.py`](examples/agent_graph.py)
+
+**What it demonstrates**:
+- Hierarchical agent systems
+- API endpoint integration with walker patterns
+- Entity-centric CRUD operations
+- Type annotations and validation
+
+### Key Features Shown
+
+**Hierarchical Structure**: Root → App → Agents → MyAgent → Actions
+
+**API Endpoint Integration**:
+```python path=examples/agent_graph.py start=116
+@walker_endpoint("/api/agents/interact", methods=["POST"])
+class InteractWalker(Walker):
+    target_agent_name: str = EndpointField(
+        default="",
+        description="Name of specific agent to target (optional)",
+        examples=["ProductionAgent", "TestAgent"],
+    )
+```
+
+**Entity-Centric CRUD**:
+```python path=examples/agent_graph.py start=147
+app_nodes = await App.find({"context.status": "active"})
+```
+
+**Complex Query Building**:
+```python path=examples/agent_graph.py start=193
+query_filters: Dict[str, Any] = {"context.published": True}
+if not self.include_inactive:
+    query_filters["context.status"] = "active"
+```
+
+**Spatial Properties in Agents**:
+```python path=examples/agent_graph.py start=53
+class MyAgent(Node):
+    name: str = ""
+    published: bool = True
+    latitude: float = 0.0
+    longitude: float = 0.0
+    capabilities: List[str] = Field(default_factory=list)
+```
+
+---
+
+## Dynamic Server
+
+**File**: [`examples/dynamic_server_demo.py`](examples/dynamic_server_demo.py)
+
+**What it demonstrates**:
+- Runtime endpoint registration
+- Package discovery patterns
+- Shared server instances
+- Startup hooks and initialization
+
+### Key Features Shown
+
+**Server Creation with Enhanced Config**:
+```python path=examples/dynamic_server_demo.py start=59
+server = create_server(
+    title="Dynamic Task Management API",
+    description="Advanced task management with dynamic endpoint registration",
+    version="2.0.0",
+    debug=True,
+    db_type="json",
+    db_path="jvdb/dynamic_demo",
+)
+```
+
+**Package Discovery**:
+```python path=examples/dynamic_server_demo.py start=75
+server.enable_package_discovery(
+    enabled=True, patterns=["*_tasks", "*_workflows", "task_*", "demo_*"]
+)
+```
+
+**Startup Hooks**:
+```python path=examples/dynamic_server_demo.py start=83
+@server.on_startup
+async def initialize_sample_tasks():
+    """Create sample data on startup."""
+    tasks = [
+        await Task.create(
+            title="System Analysis",
+            description="Analyze current system architecture",
+            priority="high",
+        ),
+        # ... more tasks
+    ]
+```
+
+**Dynamic Walker Registration**:
+```python path=examples/dynamic_server_demo.py start=140
+@server.walker("/tasks/create")
+class CreateTask(Walker):
+    title: str = EndpointField(
+        description="Task title",
+        examples=["Fix login bug", "Update documentation"],
+        min_length=3,
+        max_length=200,
+    )
+```
+
+---
+
+## GraphContext Demo
+
+**File**: [`examples/graphcontext_demo.py`](examples/graphcontext_demo.py)
+
+**What it demonstrates**:
+- Database dependency injection
+- Multiple database contexts
+- Testing patterns with isolation
+- Backward compatibility with original API
+
+### Key Features Shown
+
+**Original API (No Changes Needed)**:
+```python path=examples/graphcontext_demo.py start=65
+# All original syntax works exactly the same!
+chicago = await City.create(
+    name="Chicago", population=2700000, latitude=41.88, longitude=-87.63
+)
+```
+
+**Explicit GraphContext**:
+```python path=examples/graphcontext_demo.py start=102
+ctx = GraphContext(database=custom_db)
+
+seattle = await ctx.create_node(
+    City, name="Seattle", population=750000, latitude=47.61, longitude=-122.33
+)
+```
+
+**Multiple Database Contexts**:
+```python path=examples/graphcontext_demo.py start=141
+# Main database for application data
+main_ctx = GraphContext(database=main_db)
+
+# Analytics database for logging/metrics
+analytics_ctx = GraphContext(database=analytics_db)
+```
+
+**Testing Pattern**:
+```python path=examples/graphcontext_demo.py start=194
+# Create isolated test database
+test_db = get_database(db_type="json", base_path=test_db_path)
+test_ctx = GraphContext(database=test_db)
+```
+
+---
+
+## Semantic Filtering
+
+**File**: [`examples/semantic_filtering.py`](examples/semantic_filtering.py)
+
+**What it demonstrates**:
+- Advanced query capabilities with MongoDB-style operators
+- Database-level optimization
+- Complex filtering combining nodes and edges
+- Performance-oriented query patterns
+
+### Key Features Shown
+
+**Simple Type Filtering**:
+```python path=examples/semantic_filtering.py start=155
+cities = await new_york.nodes(node="City")
+```
+
+**Property Filtering via kwargs**:
+```python path=examples/semantic_filtering.py start=160
+ma_connections = await new_york.nodes(state="MA")
+```
+
+**Complex Node Filtering with MongoDB Operators**:
+```python path=examples/semantic_filtering.py start=169
+large_cities = await new_york.nodes(
+    node=[{"City": {"context.population": {"$gte": 1_000_000}}}]
+)
+```
+
+**Complex Edge Filtering**:
+```python path=examples/semantic_filtering.py start=189
+fast_highways = await new_york.nodes(
+    edge=[{"Highway": {"context.speed_limit": {"$gte": 65}}}]
+)
+```
+
+**Combined Filters**:
+```python path=examples/semantic_filtering.py start=195
+good_free_roads = await new_york.nodes(
+    edge=[{
+        "Highway": {
+            "context.condition": {"$ne": "poor"},
+            "context.toll_road": False,
+        }
+    }]
+)
+```
+
+---
+
+## Additional Examples
+
+The `examples/` directory contains many more specialized examples:
+
+- **`crud_demo.py`** - Basic CRUD operations
+- **`database_switching_example.py`** - Multiple database backends
+- **`endpoint_decorator_demo.py`** - API endpoint patterns
+- **`multi_target_hooks_demo.py`** - Advanced walker hooks
+- **`object_pagination_demo.py`** - Pagination and performance
+- **`testing_with_graphcontext.py`** - Testing strategies
+- **`traversal_demo.py`** - Graph traversal patterns
+- **`unified_query_interface_example.py`** - Advanced query interfaces
+
+## Running the Examples
+
+Each example can be run independently:
+
+```bash
+cd examples/
+python orm_demo.py
+python travel_graph.py
+python agent_graph.py
+# ... etc
+```
+
+Some examples (like `dynamic_server_demo.py`) start web servers and should be accessed via HTTP endpoints.
+
+## Key Architectural Concepts
+
+1. **Objects**: Simple data storage units
+2. **Nodes**: Connected objects that can be visited by walkers
+3. **Edges**: Typed connections between nodes with their own properties
+4. **Walkers**: Traverse nodes along edges, implementing business logic
+5. **GraphContext**: Dependency injection for database connections
+6. **Spatial Awareness**: Built-in support for geographic data and calculations
+
+The examples demonstrate how these concepts work together to create powerful, maintainable graph applications with spatial capabilities.

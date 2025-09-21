@@ -29,7 +29,7 @@ class MemoryDatabase(Database):
         """Initialize memory database."""
         self._collections: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
-    async def cleanup_orphans(self) -> None:
+    async def clean(self) -> None:
         """Clean up orphaned edges with invalid node references."""
         if "node" not in self._collections or "edge" not in self._collections:
             return
@@ -106,10 +106,8 @@ class MemoryDatabase(Database):
 class City(Node):
     """Example city node."""
 
-    def __init__(self, name: str = "", population: int = 0, **kwargs):
-        super().__init__(**kwargs)
-        self.name = name
-        self.population = population
+    name: str = ""
+    population: int = 0
 
 
 async def main():

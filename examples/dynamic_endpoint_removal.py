@@ -169,7 +169,7 @@ def main():
         return {"message": "Server shutting down..."}
 
     try:
-        server.run(host="0.0.0.0", port=8002)
+        server.run(host="0.0.0.0", port=8002, reload=False)
     except KeyboardInterrupt:
         logger.info("🛑 Server stopped by user")
 

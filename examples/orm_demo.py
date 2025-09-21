@@ -115,8 +115,13 @@ async def demonstrate_orm():
 
     # 8. Database query optimization (find nodes by properties)
     print("\n8️⃣ Database-optimized queries:")
-    large_cities = await City.find_by(population={"$gt": 5000000})
+    # RECOMMENDED: Use MongoDB-style queries with context prefix
+    large_cities = await City.find({"context.population": {"$gt": 5000000}})
     print(f"   🏙️  Large cities (>5M pop): {[city.name for city in large_cities]}")
+
+    # Also demonstrate find_by convenience method
+    all_cities = await City.find_by()
+    print(f"   📊 Total cities created: {len(all_cities)}")
 
     # 9. Creating connected nodes in one operation
     print("\n9️⃣ Create and connect in one operation:")

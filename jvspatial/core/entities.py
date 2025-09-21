@@ -8,6 +8,7 @@ import uuid
 import weakref
 from collections import deque
 from contextlib import contextmanager, suppress
+from datetime import datetime
 from functools import wraps
 from typing import (
     Any,
@@ -28,6 +29,27 @@ from typing_extensions import override
 from jvspatial.core.context import GraphContext
 
 # ----------------- HELPER FUNCTIONS -----------------
+
+
+def serialize_datetime(obj: Any) -> Any:
+    """Recursively serialize datetime objects to ISO format strings.
+
+    Args:
+        obj: Any object that might contain datetime objects
+
+    Returns:
+        Object with datetime objects converted to ISO format strings
+    """
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {key: serialize_datetime(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [serialize_datetime(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(serialize_datetime(item) for item in obj)
+    else:
+        return obj
 
 
 def generate_id(type_: str, class_name: str) -> str:
@@ -142,6 +164,9 @@ class Object(BaseModel):
         # Include _data if it exists
         if hasattr(self, "_data"):
             context["_data"] = self._data
+
+        # Serialize datetime objects to ensure JSON compatibility
+        context = serialize_datetime(context)
 
         return {
             "id": self.id,
@@ -518,6 +543,9 @@ class Edge(Object):
         # Include _data if it exists
         if hasattr(self, "_data"):
             context["_data"] = self._data
+
+        # Serialize datetime objects to ensure JSON compatibility
+        context = serialize_datetime(context)
 
         return {
             "id": self.id,
@@ -1408,6 +1436,9 @@ class Node(Object):
         # Include _data if it exists
         if hasattr(self, "_data"):
             context_data["_data"] = self._data
+
+        # Serialize datetime objects to ensure JSON compatibility
+        context_data = serialize_datetime(context_data)
 
         return {
             "id": self.id,
