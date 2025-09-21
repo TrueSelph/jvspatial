@@ -218,6 +218,9 @@ class TestAuthIntegration:
             assert isinstance(result, JSONResponse)
             assert result.status_code == 403
 
+        # Clear user from request state for next test
+        protected_request.state.current_user = None
+
         # Admin user with permission
         with patch.object(
             middleware, "_authenticate_jwt", return_value=self.admin_user

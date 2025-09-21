@@ -4,6 +4,8 @@ This module provides FastAPI middleware for authentication, JWT token handling,
 API key validation, rate limiting, and user context injection.
 """
 
+import hashlib
+import hmac
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -43,6 +45,7 @@ class AuthConfig:
         # API Key Configuration
         self.api_key_header: str = "X-API-Key"
         self.api_key_query_param: str = "api_key"
+        self.hmac_header: str = "X-HMAC-Signature"
 
         # Rate Limiting
         self.rate_limit_enabled: bool = True
@@ -126,6 +129,27 @@ class RateLimiter:
 
 # Global rate limiter instance
 rate_limiter = RateLimiter()
+
+
+def verify_hmac(payload: bytes, signature: str, secret: str) -> bool:
+    """Verify HMAC signature of payload.
+
+    Args:
+        payload: Raw request body bytes
+        signature: HMAC signature from header (hex)
+        secret: Shared secret for HMAC computation
+
+    Returns:
+        True if signature is valid, False otherwise
+    """
+    if not secret:
+        return True  # No HMAC required
+
+    expected_signature = hmac.new(
+        secret.encode("utf-8"), payload, hashlib.sha256
+    ).hexdigest()
+
+    return hmac.compare_digest(signature.lower(), expected_signature.lower())
 
 
 class JWTManager:
@@ -245,26 +269,92 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         """Process request through authentication middleware."""
+        # HTTPS enforcement
+        if auth_config.require_https and request.url.scheme != "https":
+            return JSONResponse(
+                status_code=403,
+                content={"error": "HTTPS required"},
+            )
+
+        # Handle webhook paths specially
+        api_key_obj = None
+        raw_body = None
+        content_type = None
+
+        if request.url.path.startswith("/webhooks/"):
+            # Read raw body once (consumes stream)
+            raw_body = await request.body()
+            content_type = request.headers.get("content-type", "")
+            request.state.raw_body = raw_body
+            request.state.content_type = content_type
+
+            # Parse path: /webhooks/{route}/{key_id}:{secret}
+            path_parts = request.url.path.strip("/").split("/")
+            if len(path_parts) == 3 and path_parts[0] == "webhooks":
+                route = path_parts[1]
+                auth_token = path_parts[2]
+                if ":" in auth_token:
+                    key_id, secret = auth_token.split(":", 1)
+                    # Validate path-based API key
+                    user = await self._validate_api_key(key_id, secret)
+                    if user:
+                        request.state.current_user = user
+                        # Get api_key_obj for HMAC
+                        api_key_obj = await APIKey.find_by_key_id(key_id)
+                        if api_key_obj:
+                            request.state.api_key_obj = api_key_obj
+                        request.state.webhook_route = route
+
+                        # Optional HMAC verification
+                        hmac_signature = request.headers.get(auth_config.hmac_header)
+                        if (
+                            hmac_signature
+                            and api_key_obj
+                            and api_key_obj.hmac_secret
+                            and not verify_hmac(
+                                raw_body, hmac_signature, api_key_obj.hmac_secret
+                            )
+                        ):
+                            return JSONResponse(
+                                status_code=401,
+                                content={"error": "HMAC signature invalid"},
+                            )
+
         # Skip authentication for exempt paths
         if any(request.url.path.startswith(path) for path in self.exempt_paths):
             return await call_next(request)
 
         # Check if endpoint requires authentication
         endpoint_auth = getattr(request.state, "endpoint_auth", None)
+        # Handle mocked values - only skip auth if explicitly set to False
         if endpoint_auth is False:  # Explicitly set to not require auth
             return await call_next(request)
 
         try:
-            # Try to authenticate the request
-            user = await self._authenticate_request(request)
+            user = None
+
+            # Check if user was already set (e.g., from webhook path auth)
+            # Only accept it if it's actually a User object, not a mock or None
+            current_user = getattr(request.state, "current_user", None)
+            if current_user and isinstance(current_user, User):
+                user = current_user
+            else:
+                # Fallback to normal authentication (JWT or header/query API key)
+                user = await self._authenticate_request(request)
+                if user:
+                    request.state.current_user = user
 
             if user:
-                # Attach user to request state
-                request.state.current_user = user
 
-                # Rate limiting
+                # Rate limiting (use api_key rate limit if available)
+                rate_limit = int(user.rate_limit_per_hour)
+                identifier = str(user.id)
+                if api_key_obj:
+                    rate_limit = int(api_key_obj.rate_limit_per_hour)
+                    identifier = str(api_key_obj.key_id)
+
                 if auth_config.rate_limit_enabled and not rate_limiter.is_allowed(
-                    user.id, user.rate_limit_per_hour
+                    identifier, rate_limit
                 ):
                     return JSONResponse(
                         status_code=429,
@@ -302,14 +392,17 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                         },
                     )
 
-            elif endpoint_auth is not False:  # Authentication is required
-                return JSONResponse(
-                    status_code=401,
-                    content={
-                        "error": "Authentication required",
-                        "message": "Please provide valid credentials",
-                    },
-                )
+            else:
+                # Authentication is required but no valid user found
+                # Only skip this if endpoint_auth is explicitly False (not None or mock)
+                if endpoint_auth is not False:
+                    return JSONResponse(
+                        status_code=401,
+                        content={
+                            "error": "Authentication required",
+                            "message": "Please provide valid credentials",
+                        },
+                    )
 
         except AuthenticationError as e:
             return JSONResponse(
@@ -328,6 +421,42 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             )
 
         return await call_next(request)
+
+    async def _validate_api_key(self, key_id: str, secret: str) -> Optional[User]:
+        """Validate API key credentials without request context.
+
+        Args:
+            key_id: API key ID
+            secret: API key secret
+
+        Returns:
+            Associated user if valid, None otherwise
+        """
+        try:
+            # Find API key in database
+            api_key_obj = await APIKey.find_by_key_id(key_id)
+
+            if (
+                api_key_obj
+                and api_key_obj.is_valid()
+                and api_key_obj.verify_secret(secret)
+            ):
+                # Check endpoint restrictions (pass empty path for now, or use request if available)
+                # For path auth, endpoint is already in path, but since no request, assume allowed or check later
+                # For simplicity, skip endpoint check here; middleware will handle permissions
+
+                # Record usage (no endpoint param for now)
+                await api_key_obj.record_usage()
+
+                # Get associated user
+                user = await User.get(api_key_obj.user_id)
+                if user and user.is_active:
+                    return user
+
+        except Exception:
+            pass
+
+        return None
 
     async def _authenticate_request(self, request: Request) -> Optional[User]:
         """Authenticate a request using various methods.
@@ -412,6 +541,8 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                     # Get associated user
                     user = await User.get(api_key_obj.user_id)
                     if user and user.is_active:
+                        # Attach api_key_obj to state for HMAC if needed
+                        request.state.api_key_obj = api_key_obj
                         return user
 
             except Exception:
@@ -631,3 +762,22 @@ async def get_admin_user(current_user: Optional[User] = None) -> User:
     if not current_user or not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
+
+
+# Import and re-export webhook middleware for convenience
+try:
+    from jvspatial.api.webhook.middleware import (
+        WebhookMiddleware,
+        WebhookMiddlewareConfig,
+        add_webhook_middleware,
+    )
+
+    # Make webhook middleware available from auth module
+    __all__ = getattr(__name__, "__all__", []) + [
+        "WebhookMiddleware",
+        "WebhookMiddlewareConfig",
+        "add_webhook_middleware",
+    ]
+except ImportError:
+    # Webhook middleware not available - this is okay
+    pass

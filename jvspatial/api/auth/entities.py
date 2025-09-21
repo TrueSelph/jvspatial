@@ -247,6 +247,11 @@ class APIKey(Object):
         default_factory=list, description="List of allowed IP addresses/ranges"
     )
 
+    # HMAC verification
+    hmac_secret: Optional[str] = Field(
+        default=None, description="Shared secret for HMAC payload verification"
+    )
+
     def get_collection_name(self, cls=None) -> str:
         """Override to use 'apikey' collection."""
         return "apikey"

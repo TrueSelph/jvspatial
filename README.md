@@ -16,6 +16,7 @@
 - **Object Pagination**: Efficient database-level pagination with `ObjectPager` for handling large datasets
 - **FastAPI Server Integration**: Built-in REST API endpoints with automatic OpenAPI documentation
 - **Enterprise Authentication**: JWT tokens, API keys, RBAC, and spatial permissions system
+- **Advanced Webhook System**: Secure webhook endpoints with HMAC verification, idempotency handling, path-based authentication, asynchronous processing, and automatic payload injection
 - **Async/await Architecture**: Native async support throughout the library
 - **Multi-backend Persistence**: JSON and MongoDB backends with extensible database interface
 - **Graph Traversal**: Precise control over walker-based graph traversal with semantic filtering
@@ -204,12 +205,14 @@ if __name__ == "__main__":
 - [Walker Traversal Patterns](#walker-traversal-patterns)
 - [Walker Trail Tracking](#walker-trail-tracking)
 - [FastAPI Server Integration](#fastapi-server-integration)
+- [Webhook Integration](#webhook-integration)
 
 ### Advanced Topics
 - [GraphContext & Database Management](docs/md/graph-context.md)
 - [Environment Configuration](docs/md/environment-configuration.md)
 - [Infinite Walk Protection](docs/md/infinite-walk-protection.md)
 - [REST API Integration](docs/md/rest-api.md)
+- [Webhook Architecture](docs/md/webhook-architecture.md)
 - [MongoDB-Style Query Interface](docs/md/mongodb-query-interface.md)
 - [Object Pagination Guide](docs/md/pagination.md)
 - [Entity Reference](docs/md/entity-reference.md)
@@ -564,6 +567,157 @@ curl -X POST "http://localhost:8000/api/users/analyze" \
     "department": "engineering"
   }'
 ```
+
+## Advanced Webhook System
+
+JVspatial provides a powerful, production-ready webhook system with enterprise-grade security, reliability, and developer experience features:
+
+### Modern Webhook Decorators
+
+```python
+from jvspatial.api.auth.decorators import webhook_endpoint, webhook_walker_endpoint
+from jvspatial.core.entities import Walker, Node, on_visit
+
+# Simple webhook with automatic payload injection
+@webhook_endpoint("/webhooks/payment")
+async def payment_webhook(payload: dict, endpoint):
+    """Process payment webhooks with automatic JSON parsing."""
+    payment_id = payload.get("payment_id")
+    amount = payload.get("amount")
+
+    # Process payment...
+
+    return endpoint.webhook_response(
+        status="processed",
+        message=f"Payment {payment_id} processed: ${amount}"
+    )
+
+# Advanced webhook with security features
+@webhook_endpoint(
+    "/webhooks/stripe/{key}",
+    path_key_auth=True,                    # API key in URL path
+    hmac_secret="stripe-webhook-secret",   # HMAC signature verification
+    idempotency_ttl_hours=48,              # Duplicate handling for 48h
+    permissions=["process_payments"]
+)
+async def stripe_webhook(raw_body: bytes, content_type: str, endpoint):
+    """Stripe webhook with path-based auth and HMAC verification."""
+    import json
+
+    if content_type == "application/json":
+        payload = json.loads(raw_body.decode('utf-8'))
+        event_type = payload.get("type", "unknown")
+
+        # Process different Stripe events
+        if event_type == "payment_intent.succeeded":
+            return endpoint.webhook_response(
+                status="processed",
+                event_type=event_type,
+                message="Payment successful"
+            )
+
+    return endpoint.webhook_response(status="received")
+
+# Walker-based webhook for graph operations
+@webhook_walker_endpoint("/webhooks/location-update")
+class LocationUpdateWalker(Walker):
+    """Update spatial data based on webhook events."""
+
+    def __init__(self, payload: dict):
+        super().__init__()
+        self.payload = payload
+        self.response = {"updated_locations": []}
+
+    @on_visit(Node)
+    async def update_location_data(self, here: Node):
+        # Access webhook payload data
+        locations = self.payload.get("locations", [])
+
+        for location_data in locations:
+            # Update graph nodes with webhook data
+            location_id = location_data.get("id")
+            coordinates = location_data.get("coordinates")
+
+            if location_id and coordinates:
+                here.coordinates = coordinates
+                await here.save()
+
+                self.response["updated_locations"].append({
+                    "id": location_id,
+                    "coordinates": coordinates
+                })
+```
+
+### Enterprise Security Features
+
+- **🔐 Path-Based Authentication**: API keys embedded in URLs for services that support it
+- **🔏 HMAC Signature Verification**: Per-endpoint secrets with automatic verification
+- **🚫 Idempotency Protection**: Database-backed duplicate request handling with configurable TTL
+- **⚡ Asynchronous Processing**: Queue webhooks for background processing
+- **🛡️ HTTPS Enforcement**: Configurable HTTPS-only webhook processing
+- **📏 Payload Limits**: Configurable size limits with support for raw/JSON/XML payloads
+- **🎯 Permission-Based Access**: Full RBAC integration
+- **📊 Event Tracking**: Complete audit trail with GraphContext database entities
+
+### Automatic Server Integration
+
+```python
+from jvspatial.api import Server
+
+# Webhook middleware is automatically added when webhook endpoints are detected
+server = Server(
+    title="My Webhook API",
+    description="API with advanced webhook processing"
+)
+
+# Webhook endpoints registered via decorators are automatically discovered
+# Security middleware is automatically configured
+# Database entities for tracking are automatically created
+
+server.run()  # Webhooks ready at /webhooks/* paths
+```
+
+### Environment Configuration
+
+```bash
+# Global webhook settings
+WEBHOOK_HMAC_SECRET=your-global-hmac-secret
+WEBHOOK_MAX_PAYLOAD_SIZE=5242880  # 5MB
+WEBHOOK_IDEMPOTENCY_TTL=3600      # 1 hour
+WEBHOOK_HTTPS_REQUIRED=true
+```
+
+### Testing & Development
+
+```bash
+# Simple webhook test
+curl -X POST "http://localhost:8000/webhooks/payment" \
+  -H "Content-Type: application/json" \
+  -d '{"payment_id": "pay_123", "amount": 99.99}'
+
+# Webhook with path-based auth
+curl -X POST "http://localhost:8000/webhooks/stripe/key123:secret456" \
+  -H "Content-Type: application/json" \
+  -H "X-Signature: sha256=abc123..." \
+  -d '{"type": "payment_intent.succeeded"}'
+
+# With idempotency key
+curl -X POST "http://localhost:8000/webhooks/payment" \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: unique-123" \
+  -d '{"payment_id": "pay_124"}'
+```
+
+### Key Benefits
+
+1. **🚀 Developer Experience**: Automatic payload injection, standardized responses, comprehensive error handling
+2. **🏢 Enterprise Ready**: Database persistence, retry mechanisms, audit trails
+3. **🔒 Security First**: Multiple authentication methods, signature verification, HTTPS enforcement
+4. **⚡ High Performance**: Asynchronous processing, efficient idempotency checking
+5. **🔧 Flexible**: Support for JSON, XML, binary payloads and custom processing
+6. **📈 Scalable**: Database-backed state management, configurable limits
+
+> **📖 Complete webhook documentation:** [Webhook Architecture Guide](docs/md/webhook-architecture.md) | [Webhook Quickstart](docs/md/webhooks-quickstart.md)
 
 ## Object Pagination
 

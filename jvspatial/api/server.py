@@ -435,6 +435,9 @@ class Server:
                 allow_credentials=True,
             )
 
+        # Add webhook middleware before other middleware
+        self._add_webhook_middleware(app)
+
         # Add custom middleware
         for middleware_config in self._middleware:
             app.middleware(middleware_config["middleware_type"])(
@@ -459,8 +462,18 @@ class Server:
                 },
             )
 
-        # Add custom routes
+        # Add custom routes with webhook support
         for route_config in self._custom_routes:
+            # Check if this is a webhook endpoint
+            endpoint_func = route_config.get("endpoint")
+            if endpoint_func and getattr(endpoint_func, "_webhook_required", False):
+                # Wrap webhook endpoint with payload injection
+                from jvspatial.api.webhook.endpoint import create_webhook_wrapper
+
+                wrapped_endpoint = create_webhook_wrapper(endpoint_func)
+                route_config = route_config.copy()
+                route_config["endpoint"] = wrapped_endpoint
+
             app.add_api_route(**route_config)
 
         # Add default health check endpoint
@@ -509,7 +522,8 @@ class Server:
                 "health": "/health",
             }
 
-        # Include the jvspatial endpoint router
+        # Include the jvspatial endpoint router with webhook walker support
+        self._setup_webhook_walker_endpoints()
         app.include_router(self.endpoint_router.router, prefix="/api")
 
         # Include any dynamic routers
@@ -612,6 +626,79 @@ class Server:
             self._logger.info(f"✅ Total walkers discovered: {discovered_count}")
 
         return discovered_count
+
+    def _add_webhook_middleware(self: "Server", app: FastAPI) -> None:
+        """Add webhook middleware to the FastAPI app if webhook endpoints are present.
+
+        Args:
+            app: FastAPI application instance
+        """
+        # Check if any endpoints are webhook endpoints
+        has_webhook_endpoints = False
+
+        # Check function endpoints
+        for func in self._function_endpoint_mapping.keys():
+            if getattr(func, "_webhook_required", False):
+                has_webhook_endpoints = True
+                break
+
+        # Check walker endpoints
+        if not has_webhook_endpoints:
+            for walker_class in self._walker_endpoint_mapping.keys():
+                if getattr(walker_class, "_webhook_required", False):
+                    has_webhook_endpoints = True
+                    break
+
+        if has_webhook_endpoints:
+            try:
+                from jvspatial.api.webhook.middleware import add_webhook_middleware
+
+                add_webhook_middleware(app, server=self)
+                self._logger.info("🔗 Webhook middleware added to server")
+            except ImportError as e:
+                self._logger.warning(f"⚠️ Could not add webhook middleware: {e}")
+        else:
+            self._logger.debug(
+                "No webhook endpoints found, skipping webhook middleware"
+            )
+
+    def _setup_webhook_walker_endpoints(self: "Server") -> None:
+        """Set up webhook wrapper for walker endpoints."""
+        for walker_class, endpoint_info in self._walker_endpoint_mapping.items():
+            if getattr(walker_class, "_webhook_required", False):
+                try:
+                    from jvspatial.api.webhook.endpoint import (
+                        create_webhook_walker_wrapper,
+                    )
+
+                    # Create webhook wrapper for the walker
+                    wrapper_func = create_webhook_walker_wrapper(walker_class)
+
+                    # Register the wrapper as a custom route instead of walker route
+                    path = endpoint_info.get("path", "")
+                    methods = endpoint_info.get("methods", ["POST"])
+                    kwargs = endpoint_info.get("kwargs", {})
+
+                    # Add as custom route
+                    route_config = {
+                        "path": path,
+                        "endpoint": wrapper_func,
+                        "methods": methods,
+                        **kwargs,
+                    }
+
+                    # Add to custom routes if not already there
+                    if route_config not in self._custom_routes:
+                        self._custom_routes.append(route_config)
+
+                    self._logger.debug(
+                        f"🔗 Set up webhook wrapper for walker: {walker_class.__name__} at {path}"
+                    )
+
+                except Exception as e:
+                    self._logger.warning(
+                        f"⚠️ Failed to setup webhook walker {walker_class.__name__}: {e}"
+                    )
 
     def _matches_pattern(self: "Server", name: str, pattern: str) -> bool:
         """Check if a name matches a glob-style pattern."""

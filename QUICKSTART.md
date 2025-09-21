@@ -659,6 +659,645 @@ if page_num <= pager.to_dict()['total_pages']:
 
 ---
 
+## 🔗 Webhook Integration and Handlers
+
+The **jvspatial webhook system** provides secure, flexible webhook endpoints with built-in authentication, HMAC verification, idempotency keys, and automatic payload processing. Webhooks integrate seamlessly with the FastAPI server and support both function-based handlers and graph traversal processing.
+
+### Webhook Architecture Overview
+
+Webhooks in jvspatial are designed for:
+- **Security**: Path-based authentication tokens, optional HMAC signature verification
+- **Reliability**: Idempotency key support to handle duplicate deliveries
+- **Flexibility**: JSON/XML/binary payload support with automatic parsing
+- **Integration**: Full compatibility with existing authentication and permission systems
+- **Processing**: Always return HTTP 200 for proper webhook etiquette
+
+### Basic Webhook Endpoint Setup
+
+```python path=null start=null
+from fastapi import Request
+from jvspatial.api.auth.decorators import webhook_endpoint
+from jvspatial.api.auth.middleware import get_current_user
+from typing import Dict, Any
+import json
+
+# Basic webhook handler function
+@webhook_endpoint("/webhooks/{route}/{auth_token}", methods=["POST"])
+async def generic_webhook_handler(request: Request) -> Dict[str, Any]:
+    """Generic webhook handler for multiple services.
+
+    Processes webhooks from various sources using route-based dispatch.
+    Middleware handles authentication, HMAC verification, and payload parsing.
+    """
+    # Access processed data from middleware
+    raw_body = request.state.raw_body  # Original bytes
+    content_type = request.state.content_type  # Content-Type header
+    route = getattr(request.state, "webhook_route", "unknown")  # Route parameter
+    current_user = get_current_user(request)  # Authenticated user
+
+    # Parse payload based on content type
+    processed_data = None
+    if content_type == "application/json":
+        try:
+            processed_data = json.loads(raw_body)
+        except json.JSONDecodeError:
+            return {"status": "error", "message": "Invalid JSON payload"}
+    else:
+        # Handle other content types (XML, form data, binary)
+        processed_data = {"raw_length": len(raw_body), "type": content_type}
+
+    # Route-based processing
+    if route == "stripe":
+        return await process_stripe_webhook(processed_data, current_user)
+    elif route == "github":
+        return await process_github_webhook(processed_data, current_user)
+    elif route == "slack":
+        return await process_slack_webhook(processed_data, current_user)
+    else:
+        # Generic processing for unknown routes
+        return {
+            "status": "received",
+            "route": route,
+            "payload_type": content_type,
+            "user_id": current_user.id if current_user else None
+        }
+
+# Service-specific webhook handlers
+@webhook_endpoint("/webhooks/stripe/{auth_token}", methods=["POST"])
+async def stripe_webhook_handler(request: Request) -> Dict[str, Any]:
+    """Dedicated Stripe webhook handler with event processing."""
+    raw_body = request.state.raw_body
+    current_user = get_current_user(request)
+
+    try:
+        event = json.loads(raw_body)
+        event_type = event.get("type", "unknown")
+
+        # Process different Stripe event types
+        if event_type == "payment_intent.succeeded":
+            await handle_successful_payment(event["data"]["object"], current_user)
+        elif event_type == "customer.subscription.updated":
+            await handle_subscription_update(event["data"]["object"], current_user)
+        elif event_type == "invoice.payment_failed":
+            await handle_payment_failure(event["data"]["object"], current_user)
+
+        return {
+            "status": "success",
+            "event_type": event_type,
+            "processed_at": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        # Always return 200 for webhooks, log errors internally
+        print(f"Stripe webhook processing error: {e}")
+        return {"status": "received", "error": "Processing error logged"}
+
+# Helper functions for webhook processing
+async def process_stripe_webhook(data: Dict[str, Any], user) -> Dict[str, Any]:
+    """Process Stripe webhook events."""
+    event_type = data.get("type", "unknown")
+    return {
+        "status": "success",
+        "message": f"Processed Stripe {event_type}",
+        "user_id": user.id if user else None
+    }
+
+async def process_github_webhook(data: Dict[str, Any], user) -> Dict[str, Any]:
+    """Process GitHub webhook events."""
+    action = data.get("action", "unknown")
+    repo_name = data.get("repository", {}).get("name", "unknown")
+    return {
+        "status": "success",
+        "message": f"GitHub {action} on {repo_name}",
+        "user_id": user.id if user else None
+    }
+
+async def process_slack_webhook(data: Dict[str, Any], user) -> Dict[str, Any]:
+    """Process Slack webhook events."""
+    event_type = data.get("type", "unknown")
+    return {
+        "status": "success",
+        "message": f"Slack {event_type} processed",
+        "user_id": user.id if user else None
+    }
+```
+
+### Webhook Security and Authentication
+
+Webhook endpoints require authentication tokens in the URL path and support additional security measures:
+
+```python path=null start=null
+# Webhook with permission requirements
+@webhook_endpoint(
+    "/webhooks/admin/{route}/{auth_token}",
+    methods=["POST"],
+    permissions=["process_webhooks", "admin_access"],
+    roles=["admin", "webhook_manager"]
+)
+async def admin_webhook_handler(request: Request) -> Dict[str, Any]:
+    """Administrative webhook handler with strict permissions."""
+    current_user = get_current_user(request)
+
+    # User is guaranteed to have required permissions due to middleware
+    return {
+        "status": "success",
+        "message": "Admin webhook processed",
+        "admin_user": current_user.username,
+        "permissions": current_user.permissions
+    }
+
+# HMAC signature verification (handled by middleware)
+@webhook_endpoint("/webhooks/secure/{service}/{auth_token}", methods=["POST"])
+async def secure_webhook_handler(request: Request) -> Dict[str, Any]:
+    """Webhook with HMAC signature verification.
+
+    Middleware automatically verifies HMAC signatures when present.
+    Configure HMAC secrets via environment variables or user settings.
+    """
+    # If this handler executes, HMAC verification passed (if configured)
+    raw_body = request.state.raw_body
+    hmac_verified = getattr(request.state, "hmac_verified", False)
+
+    return {
+        "status": "success",
+        "message": "Secure webhook processed",
+        "hmac_verified": hmac_verified,
+        "payload_size": len(raw_body)
+    }
+```
+
+### Graph Traversal Webhook Processing (Future Enhancement)
+
+The architecture supports webhook processing through graph traversal using Walker classes:
+
+```python path=null start=null
+# NOTE: This functionality is planned for future release
+# from jvspatial.api.auth.decorators import webhook_walker_endpoint
+# from jvspatial.core import Walker, Node
+# from jvspatial.decorators import on_visit
+
+# @webhook_walker_endpoint("/webhooks/process/{route}/{auth_token}", methods=["POST"])
+# class WebhookProcessingWalker(Walker):
+#     """Walker-based webhook processing with graph traversal."""
+#
+#     def __init__(self):
+#         super().__init__()
+#         self.webhook_data = None
+#         self.processing_results = []
+#
+#     @on_visit("WebhookEvent")
+#     async def process_webhook_event(self, here: Node):
+#         """Process webhook events stored as graph nodes."""
+#         # Access webhook data from request.state
+#         payload = self.webhook_data
+#
+#         # Process event based on node data and webhook payload
+#         result = await self.analyze_event(here, payload)
+#         self.processing_results.append(result)
+#
+#         # Continue traversal to related events
+#         related_events = await here.nodes(node=['WebhookEvent'])
+#         await self.visit(related_events)
+#
+#     async def analyze_event(self, event_node: Node, payload: dict) -> dict:
+#         """Analyze webhook event against stored data."""
+#         return {
+#             "event_id": event_node.id,
+#             "payload_type": payload.get("type"),
+#             "correlation_score": 0.95  # Example analysis result
+#         }
+```
+
+### Idempotency and Duplicate Handling
+
+Webhooks support idempotency keys to handle duplicate deliveries:
+
+```python path=null start=null
+@webhook_endpoint("/webhooks/idempotent/{auth_token}", methods=["POST"])
+async def idempotent_webhook_handler(request: Request) -> Dict[str, Any]:
+    """Webhook handler with built-in idempotency support.
+
+    Middleware automatically handles idempotency keys in headers:
+    - Idempotency-Key header
+    - X-Idempotency-Key header
+    - Custom idempotency headers
+    """
+    # Access idempotency information from middleware
+    idempotency_key = getattr(request.state, "idempotency_key", None)
+    is_duplicate = getattr(request.state, "is_duplicate_request", False)
+
+    if is_duplicate:
+        # Return cached response for duplicate requests
+        cached_response = getattr(request.state, "cached_response", {})
+        return {
+            "status": "success",
+            "message": "Duplicate request, returning cached response",
+            "idempotency_key": idempotency_key,
+            "cached_result": cached_response
+        }
+
+    # Process new request
+    raw_body = request.state.raw_body
+    processed_result = await process_unique_webhook(json.loads(raw_body))
+
+    return {
+        "status": "success",
+        "message": "New webhook processed",
+        "idempotency_key": idempotency_key,
+        "result": processed_result
+    }
+
+async def process_unique_webhook(payload: dict) -> dict:
+    """Process a unique webhook payload."""
+    # Simulate processing logic
+    import time
+    processing_start = time.time()
+
+    # Your actual webhook processing logic here
+    await asyncio.sleep(0.1)  # Simulate work
+
+    return {
+        "processed_at": processing_start,
+        "data_processed": True,
+        "payload_keys": list(payload.keys())
+    }
+```
+
+### Server Integration and Middleware Setup
+
+Webhook endpoints automatically integrate with the jvspatial server middleware stack:
+
+```python path=null start=null
+from jvspatial.api import Server
+from jvspatial.api.auth.middleware import (
+    AuthenticationMiddleware,
+    WebhookMiddleware,
+    HTTPSRedirectMiddleware
+)
+
+# Server setup with webhook middleware
+server = Server(
+    title="Webhook-Enabled Spatial API",
+    description="API with secure webhook processing",
+    version="1.0.0",
+    host="0.0.0.0",
+    port=8000
+)
+
+# Middleware stack (order matters)
+server.add_middleware(HTTPSRedirectMiddleware)  # Force HTTPS
+server.add_middleware(WebhookMiddleware)        # Webhook processing
+server.add_middleware(AuthenticationMiddleware) # Authentication
+
+# Webhook endpoints are automatically registered
+# Access at: POST https://your-domain.com/webhooks/{route}/{auth_token}
+
+# Environment configuration for webhook security
+# Set in .env file:
+# WEBHOOK_HMAC_SECRET=your-secret-key
+# WEBHOOK_HTTPS_REQUIRED=true
+# WEBHOOK_IDEMPOTENCY_TTL=3600  # 1 hour cache
+# WEBHOOK_MAX_PAYLOAD_SIZE=1048576  # 1MB limit
+
+if __name__ == "__main__":
+    server.run(port=8000)
+```
+
+### Webhook Testing and Development
+
+```python path=null start=null
+# Testing webhook handlers
+import pytest
+from fastapi.testclient import TestClient
+from unittest.mock import MagicMock
+
+@pytest.fixture
+def test_webhook_request():
+    """Create mock webhook request for testing."""
+    request = MagicMock()
+    request.state.raw_body = b'{"type": "test", "data": {"id": 123}}'
+    request.state.content_type = "application/json"
+    request.state.webhook_route = "test"
+    request.state.current_user = MagicMock(id="user_123")
+    request.state.hmac_verified = True
+    request.state.idempotency_key = "test-key-123"
+    return request
+
+@pytest.mark.asyncio
+async def test_webhook_processing(test_webhook_request):
+    """Test webhook handler processing."""
+    result = await generic_webhook_handler(test_webhook_request)
+
+    assert result["status"] == "received"
+    assert result["route"] == "test"
+    assert result["user_id"] == "user_123"
+
+# Development webhook testing with ngrok or similar
+# 1. Start your jvspatial server locally
+# 2. Use ngrok to expose: ngrok http 8000
+# 3. Configure webhook URLs: https://abc123.ngrok.io/webhooks/test/your-auth-token
+# 4. Test with curl:
+#    curl -X POST https://abc123.ngrok.io/webhooks/test/your-token \
+#         -H "Content-Type: application/json" \
+#         -d '{"test": "data"}'
+```
+
+### Best Practices for Webhook Implementation
+
+**✅ Recommended Patterns:**
+
+```python path=null start=null
+# Good: Always return 200 status for webhooks
+@webhook_endpoint("/webhooks/service/{auth_token}")
+async def proper_webhook_handler(request: Request) -> Dict[str, Any]:
+    try:
+        # Process webhook
+        result = await process_webhook_data(request.state.raw_body)
+        return {"status": "success", "result": result}
+    except Exception as e:
+        # Log error but still return 200
+        logger.error(f"Webhook processing failed: {e}")
+        return {"status": "received", "error": "logged"}
+
+# Good: Use route-based dispatch for multiple services
+@webhook_endpoint("/webhooks/{route}/{auth_token}")
+async def multi_service_webhook(request: Request) -> Dict[str, Any]:
+    route = getattr(request.state, "webhook_route", "unknown")
+
+    handlers = {
+        "stripe": process_stripe_webhook,
+        "github": process_github_webhook,
+        "slack": process_slack_webhook
+    }
+
+    handler = handlers.get(route, process_generic_webhook)
+    return await handler(request)
+
+# Good: Validate authentication token format
+@webhook_endpoint("/webhooks/{service}/{auth_token}")
+async def secure_webhook_handler(request: Request) -> Dict[str, Any]:
+    # Token validation is handled by middleware
+    current_user = get_current_user(request)
+    if not current_user:
+        return {"status": "error", "message": "Invalid authentication"}
+
+    return {"status": "success", "user_verified": True}
+```
+
+**❌ Avoided Patterns:**
+
+```python path=null start=null
+# Bad: Returning non-200 status codes
+@webhook_endpoint("/webhooks/bad/{auth_token}")
+async def bad_webhook_handler(request: Request) -> Dict[str, Any]:
+    try:
+        process_webhook(request.state.raw_body)
+    except Exception:
+        # Don't do this - breaks webhook retry logic
+        raise HTTPException(status_code=500, detail="Processing failed")
+
+# Bad: Not handling authentication properly
+@webhook_endpoint("/webhooks/unsecure/{auth_token}")
+async def unsecure_webhook_handler(request: Request) -> Dict[str, Any]:
+    # Don't bypass authentication checks
+    # Always use get_current_user() or require auth in decorator
+    return {"status": "processed"}
+
+# Bad: Not using middleware-processed data
+@webhook_endpoint("/webhooks/manual/{auth_token}")
+async def manual_webhook_handler(request: Request) -> Dict[str, Any]:
+    # Don't manually read request body - use request.state.raw_body
+    # raw_body = await request.body()  # Wrong - middleware already processed
+
+    # Use middleware-processed data instead
+    raw_body = request.state.raw_body  # Correct
+    return {"status": "processed"}
+```
+
+---
+
+## 🔗 Webhook System Integration
+
+JVspatial provides an advanced webhook system for handling external service integrations with enterprise-grade security, reliability, and developer experience. The webhook system supports modern decorators, automatic payload processing, HMAC verification, idempotency handling, and seamless authentication integration.
+
+### Quick Webhook Setup
+
+```python path=null start=null
+from jvspatial.api.auth.decorators import webhook_endpoint
+from jvspatial.api import Server
+
+# Simple webhook handler
+@webhook_endpoint("/webhooks/payment")
+async def payment_webhook(payload: dict, endpoint):
+    """Process payment webhooks with automatic JSON parsing."""
+    payment_id = payload.get("payment_id")
+    amount = payload.get("amount")
+
+    # Process payment logic here
+    print(f"Processing payment {payment_id}: ${amount}")
+
+    return endpoint.webhook_response(
+        status="processed",
+        message=f"Payment {payment_id} processed successfully"
+    )
+
+# Server automatically detects and configures webhook middleware
+server = Server(title="My Webhook API")
+server.run()  # Webhooks ready at /webhooks/* paths
+```
+
+### Advanced Webhook Features
+
+```python path=null start=null
+# Webhook with full security features
+@webhook_endpoint(
+    "/webhooks/stripe/{key}",
+    path_key_auth=True,                    # API key in URL path
+    hmac_secret="stripe-webhook-secret",   # HMAC signature verification
+    idempotency_ttl_hours=48,              # Duplicate handling for 48h
+    permissions=["process_payments"]       # RBAC permissions
+)
+async def secure_stripe_webhook(raw_body: bytes, content_type: str, endpoint):
+    """Stripe webhook with comprehensive security."""
+    import json
+
+    if content_type == "application/json":
+        payload = json.loads(raw_body.decode('utf-8'))
+        event_type = payload.get("type", "unknown")
+
+        if event_type == "payment_intent.succeeded":
+            return endpoint.webhook_response(
+                status="processed",
+                event_type=event_type,
+                message="Payment successful"
+            )
+
+    return endpoint.webhook_response(status="received")
+
+# Multi-service webhook dispatcher
+@webhook_endpoint("/webhooks/{service}")
+async def multi_service_webhook(payload: dict, service: str, endpoint):
+    """Route webhooks based on service parameter."""
+    handlers = {
+        "stripe": process_stripe_event,
+        "github": process_github_event,
+        "slack": process_slack_event
+    }
+
+    handler = handlers.get(service, process_generic_event)
+    result = await handler(payload)
+
+    return endpoint.webhook_response(
+        status="processed",
+        service=service,
+        result=result
+    )
+
+# Helper functions
+async def process_stripe_event(payload: dict) -> dict:
+    return {"stripe_event": payload.get("type", "unknown")}
+
+async def process_github_event(payload: dict) -> dict:
+    return {"github_action": payload.get("action", "unknown")}
+
+async def process_slack_event(payload: dict) -> dict:
+    return {"slack_event": payload.get("event", {}).get("type", "unknown")}
+
+async def process_generic_event(payload: dict) -> dict:
+    return {"processed": True, "keys": list(payload.keys())}
+```
+
+### Walker-Based Webhook Processing
+
+```python path=null start=null
+# Future feature - Walker-based webhook processing
+# @webhook_walker_endpoint("/webhooks/location-update")
+# class LocationUpdateWalker(Walker):
+#     """Process location updates through graph traversal."""
+#
+#     def __init__(self, payload: dict):
+#         super().__init__()
+#         self.payload = payload
+#         self.response = {"updated_locations": []}
+#
+#     @on_visit(Node)
+#     async def update_location_data(self, here: Node):
+#         locations = self.payload.get("locations", [])
+#
+#         for location_data in locations:
+#             location_id = location_data.get("id")
+#             coordinates = location_data.get("coordinates")
+#
+#             if location_id and coordinates:
+#                 here.coordinates = coordinates
+#                 await here.save()
+#
+#                 self.response["updated_locations"].append({
+#                     "id": location_id,
+#                     "coordinates": coordinates
+#                 })
+```
+
+### Environment Configuration
+
+Configure webhook behavior via environment variables:
+
+```env
+# Global webhook settings
+WEBHOOK_HMAC_SECRET=your-global-hmac-secret
+WEBHOOK_MAX_PAYLOAD_SIZE=5242880  # 5MB
+WEBHOOK_IDEMPOTENCY_TTL=3600      # 1 hour
+WEBHOOK_HTTPS_REQUIRED=true
+
+# Service-specific secrets
+STRIPE_WEBHOOK_SECRET=whsec_stripe_secret_key
+GITHUB_WEBHOOK_SECRET=github_webhook_secret
+```
+
+### Testing Webhooks
+
+```bash
+# Basic webhook test
+curl -X POST "http://localhost:8000/webhooks/payment" \
+  -H "Content-Type: application/json" \
+  -d '{"payment_id": "pay_123", "amount": 99.99}'
+
+# Webhook with path-based auth
+curl -X POST "http://localhost:8000/webhooks/stripe/key123:secret456" \
+  -H "Content-Type: application/json" \
+  -H "X-Signature: sha256=abc123..." \
+  -d '{"type": "payment_intent.succeeded"}'
+
+# With idempotency key
+curl -X POST "http://localhost:8000/webhooks/payment" \
+  -H "Content-Type: application/json" \
+  -H "X-Idempotency-Key: unique-123" \
+  -d '{"payment_id": "pay_124"}'
+```
+
+### Webhook Best Practices
+
+**✅ Recommended Patterns:**
+
+```python path=null start=null
+# Good: Always return 200 for webhook endpoints
+@webhook_endpoint("/webhooks/service")
+async def proper_webhook(payload: dict, endpoint):
+    try:
+        result = await process_webhook_data(payload)
+        return endpoint.webhook_response(status="success", result=result)
+    except Exception as e:
+        # Log error but still return 200
+        logger.error(f"Webhook processing failed: {e}")
+        return endpoint.webhook_response(status="received", error="logged")
+
+# Good: Use route-based dispatch for multiple services
+@webhook_endpoint("/webhooks/{service}")
+async def multi_service_webhook(payload: dict, service: str, endpoint):
+    handlers = {
+        "stripe": process_stripe,
+        "github": process_github
+    }
+
+    handler = handlers.get(service, process_generic)
+    return await handler(payload, endpoint)
+
+# Good: Validate webhook signatures when available
+@webhook_endpoint("/webhooks/secure", hmac_secret="webhook-secret")
+async def secure_webhook(raw_body: bytes, endpoint):
+    # HMAC verification is automatic when secret is provided
+    return endpoint.webhook_response(status="verified")
+```
+
+**❌ Avoided Patterns:**
+
+```python path=null start=null
+# Bad: Returning non-200 status codes
+@webhook_endpoint("/webhooks/bad")
+async def bad_webhook(payload: dict, endpoint):
+    if payload.get("invalid"):
+        # Don't do this - breaks webhook retry logic
+        raise HTTPException(status_code=400, detail="Invalid payload")
+
+# Bad: Not handling errors gracefully
+@webhook_endpoint("/webhooks/risky")
+async def risky_webhook(payload: dict, endpoint):
+    # Unhandled exceptions will return 500 - webhooks will retry
+    result = dangerous_operation(payload)  # Might throw
+    return endpoint.webhook_response(result=result)
+
+# Bad: Bypassing security features
+@webhook_endpoint("/webhooks/insecure")
+async def insecure_webhook(request: Request, endpoint):
+    # Don't manually read request body - use automatic payload injection
+    raw_body = await request.body()  # Wrong - middleware already processed
+    return endpoint.webhook_response(status="received")
+```
+
+> **📖 For complete webhook documentation and advanced patterns:** [Webhook Architecture Guide](docs/md/webhook-architecture.md) | [Webhook Quickstart](docs/md/webhooks-quickstart.md)
+
+---
+
 ## 🌐 API Integration with FastAPI Server
 
 The **jvspatial API** provides seamless integration with FastAPI to expose your graph operations as REST endpoints. It supports flexible endpoint registration using decorators and automatic parameter model generation from Walker and function properties.

@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from jvspatial.api.endpoint_router import EndpointField
-from jvspatial.api.response import EndpointResponseHelper
+from jvspatial.api.endpoint.response import EndpointResponseHelper
+from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.api.server import (
     Server,
     endpoint,
@@ -67,7 +67,7 @@ class TestWalkerEndpointIntegration:
 
             async def visit_node(self, node):
                 # Simulate endpoint injection (normally done by router)
-                from jvspatial.api.response import create_endpoint_helper
+                from jvspatial.api.endpoint.response import create_endpoint_helper
 
                 self.endpoint = create_endpoint_helper(walker_instance=self)
 
@@ -135,7 +135,7 @@ class TestWalkerEndpointIntegration:
 
             async def visit_node(self, node):
                 # Simulate endpoint injection
-                from jvspatial.api.response import create_endpoint_helper
+                from jvspatial.api.endpoint.response import create_endpoint_helper
 
                 self.endpoint = create_endpoint_helper(walker_instance=self)
 
@@ -345,7 +345,7 @@ class TestEndpointInjectionMechanism:
 
     def test_endpoint_helper_factory(self):
         """Test the endpoint helper factory function."""
-        from jvspatial.api.response import (
+        from jvspatial.api.endpoint.response import (
             EndpointResponseHelper,
             create_endpoint_helper,
         )

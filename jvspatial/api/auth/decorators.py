@@ -4,8 +4,9 @@ This module extends the existing @walker_endpoint and @endpoint decorators
 to support authentication requirements, permissions, and roles.
 """
 
+import inspect
 from functools import wraps
-from typing import Callable, List, Optional, Tuple, Type
+from typing import Any, Callable, List, Optional, Tuple, Type
 
 from fastapi import HTTPException, Request
 
@@ -158,6 +159,243 @@ def auth_endpoint(
             pass
 
         return auth_wrapper
+
+    return decorator
+
+
+def webhook_endpoint(
+    path: str,
+    *,
+    methods: Optional[List[str]] = None,
+    permissions: Optional[List[str]] = None,
+    roles: Optional[List[str]] = None,
+    hmac_secret: Optional[str] = None,
+    idempotency_key_field: str = "X-Idempotency-Key",
+    idempotency_ttl_hours: int = 24,
+    async_processing: bool = False,
+    path_key_auth: bool = False,
+    server=None,
+    **route_kwargs: Any,
+):
+    """Webhook endpoint decorator.
+
+    This decorator creates webhook endpoints that support webhook-specific functionality
+    including HMAC verification, idempotency handling, and optional path-based authentication.
+
+    Args:
+        path: URL path for the endpoint (optionally with {key} for path-based auth)
+        methods: HTTP methods allowed (defaults to ["POST"])
+        permissions: List of required permissions (all must be present)
+        roles: List of required roles (user must have at least one)
+        hmac_secret: Shared secret for HMAC signature verification
+        idempotency_key_field: Header field for idempotency key
+        idempotency_ttl_hours: TTL for idempotency records in hours
+        async_processing: Queue for async handling
+        path_key_auth: Enable path-based authentication with {key} parameter
+        server: Server instance to register with (uses default if None)
+        **route_kwargs: Additional FastAPI route parameters
+
+    Returns:
+        Decorator function
+
+    Examples:
+        ```python
+        @webhook_endpoint("/webhooks/payment")
+        async def handle_payment_webhook(payload: dict, endpoint):
+            # payload is verified JSON from request.body
+            return endpoint.success(message="Payment processed")
+
+        @webhook_endpoint(
+            "/webhooks/stripe/{key}",
+            path_key_auth=True,
+            hmac_secret="stripe-webhook-secret"  # pragma: allowlist secret
+        )
+        async def stripe_webhook_handler(raw_body: bytes, content_type: str, endpoint):
+            # Handle raw payload with path-based auth and HMAC verification
+            return endpoint.success(data={"processed": True})
+        ```
+    """
+    if methods is None:
+        methods = ["POST"]
+
+    # Validate path pattern if path_key_auth is enabled
+    if path_key_auth and "{key}" not in path:
+        raise ValueError(
+            "Webhook endpoint with path_key_auth=True must include {key} parameter in path"
+        )
+
+    def decorator(func: Callable) -> Callable:
+        if inspect.isclass(func):
+            raise TypeError(
+                "@webhook_endpoint can only be used on functions, not classes"
+            )
+
+        @wraps(func)
+        async def webhook_wrapper(*args: tuple, **kwargs: dict):
+            # The middleware will handle webhook processing before this runs
+            return await func(*args, **kwargs)
+
+        # Store webhook metadata on the function
+        webhook_wrapper._webhook_required = True  # type: ignore[attr-defined]
+        webhook_wrapper._auth_required = bool(permissions or roles)  # type: ignore[attr-defined]
+        webhook_wrapper._required_permissions = permissions or []  # type: ignore[attr-defined]
+        webhook_wrapper._required_roles = roles or []  # type: ignore[attr-defined]
+        webhook_wrapper._endpoint_path = path  # type: ignore[attr-defined]
+        webhook_wrapper._endpoint_methods = methods  # type: ignore[attr-defined]
+        webhook_wrapper._endpoint_server = server  # type: ignore[attr-defined]
+
+        # Webhook-specific metadata
+        webhook_wrapper._hmac_secret = hmac_secret  # type: ignore[attr-defined]
+        webhook_wrapper._idempotency_key_field = idempotency_key_field  # type: ignore[attr-defined]
+        webhook_wrapper._idempotency_ttl_hours = idempotency_ttl_hours  # type: ignore[attr-defined]
+        webhook_wrapper._async_processing = async_processing  # type: ignore[attr-defined]
+        webhook_wrapper._path_key_auth = path_key_auth  # type: ignore[attr-defined]
+        webhook_wrapper._is_webhook = True  # type: ignore[attr-defined]
+
+        # Store registration data for deferred registration
+        webhook_wrapper._route_config = {  # type: ignore[attr-defined]
+            "path": path,
+            "endpoint": webhook_wrapper,
+            "methods": methods,
+            **route_kwargs,
+        }
+
+        # Try to register with server if available, but don't fail if not
+        try:
+            target_server = server or get_default_server()
+            if target_server:
+                # Register the function with the server using the route decorator pattern
+                target_server._custom_routes.append(webhook_wrapper._route_config)  # type: ignore[attr-defined]
+
+                # Track function endpoint mapping
+                target_server._function_endpoint_mapping[webhook_wrapper] = {
+                    "path": path,
+                    "methods": methods,
+                    "kwargs": route_kwargs,
+                    "route_config": webhook_wrapper._route_config,  # type: ignore[attr-defined]
+                }
+        except (RuntimeError, AttributeError):
+            # Server not available during decoration (e.g., during test collection)
+            # Registration will be deferred
+            pass
+
+        return webhook_wrapper
+
+    return decorator
+
+
+def webhook_walker_endpoint(
+    path: str,
+    *,
+    methods: Optional[List[str]] = None,
+    permissions: Optional[List[str]] = None,
+    roles: Optional[List[str]] = None,
+    hmac_secret: Optional[str] = None,
+    idempotency_key_field: str = "X-Idempotency-Key",
+    idempotency_ttl_hours: int = 24,
+    async_processing: bool = False,
+    path_key_auth: bool = False,
+    server=None,
+    **route_kwargs: Any,
+):
+    """Webhook walker endpoint decorator.
+
+    This decorator creates webhook endpoints that use Walker classes for processing,
+    with webhook-specific functionality including HMAC verification, idempotency handling,
+    and optional path-based authentication.
+
+    Args:
+        path: URL path for the endpoint (optionally with {key} for path-based auth)
+        methods: HTTP methods allowed (defaults to ["POST"])
+        permissions: List of required permissions (all must be present)
+        roles: List of required roles (user must have at least one)
+        hmac_secret: Shared secret for HMAC signature verification
+        idempotency_key_field: Header field for idempotency key
+        idempotency_ttl_hours: TTL for idempotency records in hours
+        async_processing: Queue for async handling
+        path_key_auth: Enable path-based authentication with {key} parameter
+        server: Server instance to register with (uses default if None)
+        **route_kwargs: Additional FastAPI route parameters
+
+    Returns:
+        Decorator function
+
+    Examples:
+        ```python
+        @webhook_walker_endpoint("/webhooks/location-update")
+        class LocationUpdateWalker(Walker):
+            def __init__(self, payload: dict):
+                self.payload = payload  # Webhook data available here
+
+            @on_visit(Node)
+            async def update_location(self, here: Node):
+                # Update node with location from self.payload
+                here.location = self.payload.get("coordinates")
+                await here.save()
+                self.response["updated"] = True
+
+        @webhook_walker_endpoint(
+            "/webhooks/stripe/{key}",
+            path_key_auth=True,
+            hmac_secret="stripe-webhook-secret"  # pragma: allowlist secret
+        )
+        class StripeWebhookWalker(Walker):
+            def __init__(self, raw_body: bytes, content_type: str):
+                self.raw_body = raw_body
+                self.content_type = content_type
+        ```
+    """
+    if methods is None:
+        methods = ["POST"]
+
+    # Validate path pattern if path_key_auth is enabled
+    if path_key_auth and "{key}" not in path:
+        raise ValueError(
+            "Webhook walker endpoint with path_key_auth=True must include {key} parameter in path"
+        )
+
+    def decorator(walker_class: Type[Walker]) -> Type[Walker]:
+        if not inspect.isclass(walker_class):
+            raise TypeError(
+                "@webhook_walker_endpoint can only be used on Walker classes, not functions"
+            )
+
+        if not issubclass(walker_class, Walker):
+            raise TypeError(
+                "@webhook_walker_endpoint can only be used on Walker subclasses"
+            )
+
+        # Store webhook metadata on the walker class
+        walker_class._webhook_required = True
+        walker_class._auth_required = bool(permissions or roles)
+        walker_class._required_permissions = permissions or []
+        walker_class._required_roles = roles or []
+        walker_class._endpoint_path = path
+        walker_class._endpoint_methods = methods
+        walker_class._endpoint_server = server
+
+        # Webhook-specific metadata
+        walker_class._hmac_secret = hmac_secret
+        walker_class._idempotency_key_field = idempotency_key_field
+        walker_class._idempotency_ttl_hours = idempotency_ttl_hours
+        walker_class._async_processing = async_processing
+        walker_class._path_key_auth = path_key_auth
+        walker_class._is_webhook = True
+
+        # Try to register with server if available, but don't fail if not
+        try:
+            target_server = server or get_default_server()
+            if target_server:
+                # Register the walker with the server
+                target_server.register_walker_class(
+                    walker_class, path, methods, **route_kwargs
+                )
+        except (RuntimeError, AttributeError):
+            # Server not available during decoration (e.g., during test collection)
+            # Registration will be deferred
+            pass
+
+        return walker_class
 
     return decorator
 
