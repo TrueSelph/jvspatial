@@ -667,7 +667,7 @@ The **jvspatial API** provides seamless integration with FastAPI to expose your 
 
 ```python path=null start=null
 from jvspatial.api import Server, ServerConfig, endpoint, walker_endpoint
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core import Node, Walker
 from jvspatial.decorators import on_visit
 
@@ -710,7 +710,7 @@ The `@walker_endpoint` decorator automatically exposes Walker classes as API end
 
 ```python path=null start=null
 from jvspatial.api import walker_endpoint
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core import Walker, Node
 from jvspatial.decorators import on_visit
 from typing import List, Optional
@@ -1258,7 +1258,7 @@ async def detailed_health_check() -> Dict[str, Any]:
 The `EndpointField` provides extensive configuration for API parameters:
 
 ```python path=null start=null
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 from typing import List, Optional
 
 @walker_endpoint("/api/advanced-example", methods=["POST"])

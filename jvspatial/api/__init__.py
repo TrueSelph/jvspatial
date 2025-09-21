@@ -1,6 +1,6 @@
 """API package for the jvspatial framework."""
 
-from .endpoint_router import EndpointField, EndpointRouter
+from .endpoint.router import EndpointField, EndpointRouter
 from .server import (
     Server,
     ServerConfig,

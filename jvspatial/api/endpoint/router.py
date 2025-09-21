@@ -17,7 +17,7 @@ from pydantic import (
 )
 from pydantic.fields import FieldInfo, PydanticUndefined
 
-from jvspatial.api.response import create_endpoint_helper
+from jvspatial.api.endpoint.response import create_endpoint_helper
 from jvspatial.core.entities import Node, Walker
 
 # Module-level Body instance to avoid B008 flake8 warning

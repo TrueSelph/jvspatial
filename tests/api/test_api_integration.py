@@ -20,7 +20,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
-from jvspatial.api.endpoint_router import EndpointField, EndpointRouter
+from jvspatial.api.endpoint.router import EndpointField, EndpointRouter
 from jvspatial.api.server import Server, ServerConfig
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node, Walker, on_visit

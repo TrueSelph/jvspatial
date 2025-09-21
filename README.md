@@ -15,6 +15,7 @@
 - **Entity-Centric Design**: Clean, MongoDB-style query interface that works across different backends
 - **Object Pagination**: Efficient database-level pagination with `ObjectPager` for handling large datasets
 - **FastAPI Server Integration**: Built-in REST API endpoints with automatic OpenAPI documentation
+- **Enterprise Authentication**: JWT tokens, API keys, RBAC, and spatial permissions system
 - **Async/await Architecture**: Native async support throughout the library
 - **Multi-backend Persistence**: JSON and MongoDB backends with extensible database interface
 - **Graph Traversal**: Precise control over walker-based graph traversal with semantic filtering
@@ -162,7 +163,7 @@ if __name__ == "__main__":
 ### FastAPI Server Integration
 ```python
 from jvspatial.api import Server, walker_endpoint
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core import Walker, Node, on_visit
 
 # Create server with automatic database setup
@@ -457,7 +458,7 @@ The jvspatial Server class provides seamless FastAPI integration with automatic 
 
 ```python
 from jvspatial.api import Server, walker_endpoint
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core import Walker, Node, on_visit
 
 # Create server with automatic database setup
@@ -880,9 +881,19 @@ This project is licensed under the MIT License - see the [LICENSE](docs/md/licen
 
 ---
 
-## Support
+## Documentation & Support
 
-- **Documentation**: [Full Documentation](./docs/md/)
+### Core Documentation
+- **[Full Documentation](./docs/md/)** - Complete guide to jvspatial
+- **[API Reference](./docs/md/rest-api.md)** - REST API integration guide
+- **[Examples](./docs/md/examples.md)** - Working examples and patterns
+
+### Authentication & Security
+- **[Authentication System](./docs/md/authentication.md)** - JWT, API keys, and RBAC
+- **[Authentication Quickstart](./docs/md/auth-quickstart.md)** - Get secured in 5 minutes
+- **[Authentication Demo](./examples/auth_demo.py)** - Complete working example
+
+### Support
 - **Issues**: [GitHub Issues](https://github.com/TrueSelph/jvspatial/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/TrueSelph/jvspatial/discussions)
 

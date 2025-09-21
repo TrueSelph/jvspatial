@@ -31,8 +31,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from jvspatial.api.endpoint_router import EndpointRouter
-from jvspatial.api.response import create_endpoint_helper
+from jvspatial.api.endpoint.response import create_endpoint_helper
+from jvspatial.api.endpoint.router import EndpointRouter
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node, Root, Walker
 from jvspatial.db.factory import get_database

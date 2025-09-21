@@ -13,7 +13,7 @@ The recommended approach uses the modern `Server` class with entity-centric oper
 
 ```python
 from jvspatial.api import Server, walker_endpoint
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core import Walker, Node, on_visit
 
 # Define your entity
@@ -107,7 +107,7 @@ For maximum flexibility, use the modern `@walker_endpoint` and `@endpoint` decor
 
 ```python
 from jvspatial.api import walker_endpoint, endpoint
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core import Walker, Node, on_visit
 from fastapi import HTTPException
 from typing import List, Optional
@@ -648,7 +648,7 @@ class AdvancedProductSearch(Walker):
 ```python
 from jvspatial.core import Node, Edge, Walker, on_visit
 from jvspatial.api import walker_endpoint, Server
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 from typing import List, Optional
 
 # Entity definitions
@@ -847,7 +847,7 @@ curl -X POST "http://localhost:8000/api/users/skill-matching" \
 The `EndpointField` provides comprehensive parameter control for API endpoints:
 
 ```python
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 from typing import Optional, List
 
 class ExampleWalker(Walker):
@@ -1251,6 +1251,241 @@ class ProductSearch(Walker):
     )
 ```
 
+## Authentication Integration
+
+The jvspatial REST API includes comprehensive authentication support with JWT tokens, API keys, and role-based access control:
+
+### Quick Authentication Setup
+
+```python
+from jvspatial.api import create_server
+from jvspatial.api.auth import configure_auth, AuthenticationMiddleware
+
+# Configure authentication
+configure_auth(
+    jwt_secret_key="your-secret-key",
+    jwt_expiration_hours=24,
+    rate_limit_enabled=True
+)
+
+# Create server with authentication
+server = create_server(title="Authenticated API")
+server.app.add_middleware(AuthenticationMiddleware)
+```
+
+### Endpoint Protection Levels
+
+```python
+from jvspatial.api import endpoint, walker_endpoint  # Public endpoints
+from jvspatial.api.auth import auth_endpoint, auth_walker_endpoint, admin_endpoint
+
+# 1. Public endpoints - no authentication required
+@endpoint("/public/data")
+async def public_data():
+    return {"message": "Anyone can access"}
+
+@walker_endpoint("/public/search")
+class PublicSearch(Walker):
+    @on_visit(Node)
+    async def search(self, here: Node):
+        # Public search logic
+        pass
+
+# 2. Authenticated endpoints - login required
+@auth_endpoint("/protected/user-data")
+async def user_data():
+    return {"message": "Must be logged in"}
+
+@auth_walker_endpoint("/protected/spatial-query")
+class ProtectedSpatialQuery(Walker):
+    @on_visit(Node)
+    async def query(self, here: Node):
+        # Protected spatial operations
+        pass
+
+# 3. Permission-based endpoints
+@auth_endpoint("/reports/generate", permissions=["generate_reports"])
+async def generate_report():
+    return {"message": "Requires generate_reports permission"}
+
+# 4. Role-based endpoints
+@auth_endpoint("/admin/settings", roles=["admin"])
+async def admin_settings():
+    return {"message": "Admin role required"}
+
+# 5. Admin-only endpoints (shortcut)
+@admin_endpoint("/admin/users")
+async def manage_users():
+    return {"message": "Admin access only"}
+```
+
+### Authentication in Walker Endpoints
+
+```python
+from jvspatial.api.auth import auth_walker_endpoint, get_current_user
+
+@auth_walker_endpoint(
+    "/spatial/analysis",
+    permissions=["analyze_spatial_data"],
+    roles=["analyst", "admin"]
+)
+class SpatialAnalysis(Walker):
+    region: str = EndpointField(description="Target region")
+
+    @on_visit(City)
+    async def analyze_cities(self, here: City):
+        current_user = get_current_user(self.request)
+
+        # Check spatial permissions
+        if not current_user.can_access_region(self.region):
+            self.response = {"error": "Access denied to region"}
+            return
+
+        if not current_user.can_access_node_type("City"):
+            return  # Skip inaccessible node types
+
+        # Perform analysis for authorized user
+        self.response = {
+            "analysis": f"Spatial analysis of {here.name}",
+            "user": current_user.username,
+            "permissions": current_user.permissions
+        }
+```
+
+### Built-in Authentication Endpoints
+
+All authentication endpoints are automatically registered:
+
+**Public Authentication:**
+- `POST /auth/register` - User registration
+- `POST /auth/login` - User login with JWT tokens
+- `POST /auth/refresh` - Token refresh
+- `POST /auth/logout` - User logout
+
+**Authenticated User Management:**
+- `GET /auth/profile` - Get user profile
+- `PUT /auth/profile` - Update user profile
+- `POST /auth/api-keys` - Create API key
+- `GET /auth/api-keys` - List user's API keys
+- `DELETE /auth/api-keys/{key_id}` - Revoke API key
+
+**Admin User Management:**
+- `GET /auth/admin/users` - List all users
+- `PUT /auth/admin/users/{user_id}` - Update user
+- `DELETE /auth/admin/users/{user_id}` - Delete user
+- `GET /auth/admin/sessions` - List active sessions
+
+### API Key Authentication
+
+```python
+# Create API key endpoint
+@auth_endpoint("/create-service-key", methods=["POST"])
+async def create_service_key(request: Request):
+    from jvspatial.api.auth import APIKey, get_current_user
+
+    user = get_current_user(request)
+    api_key = await APIKey.create(
+        name="Data Export Service",
+        key_id="export-service-1",
+        key_hash=APIKey.hash_key("secret-key-123"),
+        user_id=user.id,
+        allowed_endpoints=["/api/export/*"],
+        rate_limit_per_hour=5000
+    )
+
+    return {
+        "key_id": api_key.key_id,
+        "secret": "secret-key-123",  # Only shown once
+        "allowed_endpoints": api_key.allowed_endpoints
+    }
+
+# Use API key in requests:
+# curl -H "X-API-Key: secret-key-123" http://localhost:8000/api/export/data
+```
+
+### Spatial Permissions
+
+Users can be restricted to specific regions and node types:
+
+```python
+@auth_walker_endpoint("/geo/query", permissions=["read_spatial"])
+class GeoQuery(Walker):
+    target_region: str = EndpointField(examples=["north_america", "europe"])
+
+    @on_visit(Node)
+    async def geo_search(self, here: Node):
+        current_user = get_current_user(self.request)
+
+        # Spatial region access control
+        if hasattr(here, 'region') and not current_user.can_access_region(here.region):
+            return  # Skip inaccessible regions
+
+        # Node type access control
+        if not current_user.can_access_node_type(here.__class__.__name__):
+            return  # Skip inaccessible node types
+
+        # Process accessible nodes
+        if "results" not in self.response:
+            self.response = {"results": [], "user_permissions": {
+                "allowed_regions": current_user.allowed_regions,
+                "allowed_node_types": current_user.allowed_node_types
+            }}
+
+        self.response["results"].append(here.export())
+```
+
+### Rate Limiting
+
+Automatic rate limiting per user:
+
+```python
+# Configure global rate limits
+configure_auth(
+    rate_limit_enabled=True,
+    default_rate_limit_per_hour=1000
+)
+
+# Per-user rate limits
+user.rate_limit_per_hour = 5000  # Premium user
+await user.save()
+```
+
+### Enhanced Response Handling with Authentication
+
+```python
+@auth_walker_endpoint("/secure/process", permissions=["process_data"])
+class SecureProcessor(Walker):
+    @on_visit(Node)
+    async def secure_process(self, here: Node):
+        current_user = get_current_user(self.request)
+
+        # Authentication-aware error handling
+        if not current_user.has_permission("advanced_processing"):
+            return self.endpoint.forbidden(
+                message="Advanced processing requires additional permissions",
+                details={"required_permission": "advanced_processing"}
+            )
+
+        # Rate limit check
+        if self._is_rate_limited(current_user):
+            return self.endpoint.error(
+                message="Rate limit exceeded",
+                status_code=429,
+                headers={"Retry-After": "3600"}
+            )
+
+        # Process with user context
+        result = await self._process_with_user_permissions(here, current_user)
+
+        return self.endpoint.success(
+            data=result,
+            message="Processing completed",
+            headers={"X-User-ID": current_user.id}
+        )
+```
+
+📖 **[Complete Authentication Guide →](authentication.md)**
+
 ## Benefits of Current Approach
 
 1. **Entity-Centric**: Direct integration with Node.find(), User.create(), etc.
@@ -1261,6 +1496,8 @@ class ProductSearch(Walker):
 6. **Semantic Filtering**: Advanced graph traversal capabilities
 7. **Performance**: Database-level operations for optimal speed
 8. **Maintainability**: Clean, readable code with proper separation of concerns
+9. **Security**: Enterprise-grade authentication with JWT and API keys
+10. **Spatial Permissions**: Region and node type access control
 
 ## Migration from Legacy Patterns
 

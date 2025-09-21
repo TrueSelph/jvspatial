@@ -7,9 +7,10 @@ This document showcases key examples that demonstrate the range of capabilities 
 1. [Core ORM Demo](#core-orm-demo) - Basic object-spatial ORM concepts
 2. [Travel Graph](#travel-graph) - Spatial operations and walker patterns
 3. [Agent Graph](#agent-graph) - Hierarchical systems with API endpoints
-4. [Dynamic Server](#dynamic-server) - Runtime endpoint registration
-5. [GraphContext Demo](#graphcontext-demo) - Database dependency injection
-6. [Semantic Filtering](#semantic-filtering) - Advanced query capabilities
+4. [Authentication Demo](#authentication-demo) - JWT tokens, API keys, and RBAC
+5. [Dynamic Server](#dynamic-server) - Runtime endpoint registration
+6. [GraphContext Demo](#graphcontext-demo) - Database dependency injection
+7. [Semantic Filtering](#semantic-filtering) - Advanced query capabilities
 
 ---
 
@@ -152,6 +153,254 @@ class MyAgent(Node):
     latitude: float = 0.0
     longitude: float = 0.0
     capabilities: List[str] = Field(default_factory=list)
+```
+
+---
+
+## Authentication Demo
+
+**File**: [`examples/auth_demo.py`](examples/auth_demo.py)
+
+**What it demonstrates**:
+- Complete JWT token authentication system
+- API key authentication for services
+- Role-based access control (RBAC)
+- Spatial region and node type permissions
+- Multi-level endpoint protection
+- User management and session handling
+- Rate limiting and security middleware
+
+### Key Features Shown
+
+**Authentication Configuration**:
+```python path=examples/auth_demo.py start=81
+configure_auth(
+    # JWT Configuration
+    jwt_secret_key=jwt_secret,
+    jwt_algorithm="HS256",
+    jwt_expiration_hours=24,
+    jwt_refresh_expiration_days=7,  # Shorter for demo
+
+    # API Key Configuration
+    api_key_header="X-API-Key",
+    api_key_query_param="api_key",
+
+    # Rate Limiting
+    rate_limit_enabled=True,
+    default_rate_limit_per_hour=100,  # Lower for demo
+
+    # Security (relaxed for demo)
+    require_https=False,
+    session_cookie_secure=False,
+    session_cookie_httponly=True
+)
+```
+
+**User Creation with Spatial Permissions**:
+```python path=examples/auth_demo.py start=175
+# 3. Regional Analyst with Spatial Restrictions
+regional_user = await User.create(
+    username="regional_user",
+    email="regional@demo.com",
+    password_hash=User.hash_password("regional123"),
+    is_admin=False,
+    is_active=True,
+    roles=["analyst", "regional_viewer"],
+    permissions=["read_spatial_data", "analyze_data", "export_reports"],
+    allowed_regions=["north_america"],  # Only North America
+    allowed_node_types=["City", "Highway"],  # No POIs
+    max_traversal_depth=15,
+    rate_limit_per_hour=2000
+)
+```
+
+**Multi-Level Endpoint Protection**:
+```python path=examples/auth_demo.py start=366
+@endpoint("/public/info", methods=["GET"])
+async def public_info():
+    """Public endpoint - no authentication required."""
+    return {
+        "message": "This is public information",
+        "service": "jvspatial Authentication Demo",
+        "version": "1.0.0",
+        "authentication": "Not required for this endpoint",
+        "timestamp": datetime.now().isoformat()
+    }
+
+@auth_endpoint("/protected/data", methods=["GET"])
+async def protected_data(request: Request):
+    """Protected endpoint requiring authentication."""
+    current_user = get_current_user(request)
+
+    return {
+        "message": "This is protected data",
+        "authentication": "Required - JWT token",
+        "user": {
+            "username": current_user.username,
+            "email": current_user.email,
+            "roles": current_user.roles,
+            "permissions": current_user.permissions
+        },
+        "timestamp": datetime.now().isoformat()
+    }
+
+@admin_endpoint("/admin/users", methods=["GET"])
+async def admin_list_users(request: Request):
+    """Admin endpoint to list all users."""
+    current_user = get_current_user(request)
+
+    all_users = await User.all()
+    return {
+        "message": "User management - Admin access only",
+        "authentication": "JWT token + admin role required",
+        "admin_user": current_user.username,
+        "total_users": len(all_users),
+        "users": [user.export() for user in all_users]
+    }
+```
+
+**Spatial Access Control in Walker Endpoints**:
+```python path=examples/auth_demo.py start=483
+@auth_walker_endpoint(
+    "/protected/spatial-query",
+    methods=["POST"],
+    permissions=["read_spatial_data"]
+)
+class ProtectedSpatialQuery(Walker):
+    """Protected spatial query walker with region-based access control."""
+
+    region: str = EndpointField(
+        description="Target region to query",
+        examples=["north_america", "europe", "asia"]
+    )
+
+    @on_visit(Node)
+    async def spatial_query(self, here: Node):
+        current_user = get_current_user(self.request)
+
+        # Check if user can access this region
+        if not current_user.can_access_region(self.region):
+            self.response = {
+                "error": "Access denied to region",
+                "region": self.region,
+                "user_allowed_regions": current_user.allowed_regions,
+                "message": "Your account doesn't have access to this region"
+            }
+            return
+```
+
+**API Key Authentication**:
+```python path=examples/auth_demo.py start=705
+@endpoint("/api/export/cities", methods=["GET"])
+async def api_key_export_cities(request: Request):
+    """Endpoint accessible via API key (demonstrates service authentication)."""
+
+    # This endpoint will be accessible via API key due to middleware
+    # Check if authenticated via API key
+    api_key_user = getattr(request.state, 'api_key_user', None)
+    jwt_user = getattr(request.state, 'current_user', None)
+
+    auth_method = "Unknown"
+    user_info = {}
+
+    if api_key_user:
+        auth_method = "API Key"
+        user_info = {
+            "api_key_name": api_key_user.get("name", "Unknown"),
+            "key_id": api_key_user.get("key_id", "Unknown")
+        }
+    elif jwt_user:
+        auth_method = "JWT Token"
+        user_info = {
+            "username": jwt_user.username,
+            "roles": jwt_user.roles
+        }
+```
+
+**Demo Accounts and Usage**:
+```python path=examples/auth_demo.py start=334
+"demo_accounts": {
+    "admin": {
+        "username": "demo_admin",
+        "password": "admin123",
+        "permissions": "Full admin access"
+    },
+    "user": {
+        "username": "demo_user",
+        "password": "user123",
+        "permissions": "Read access to North America and Europe"
+    },
+    "regional": {
+        "username": "regional_user",
+        "password": "regional123",
+        "permissions": "Analyst access limited to North America"
+    }
+}
+```
+
+### Running the Authentication Demo
+
+```bash
+cd examples/
+python auth_demo.py
+```
+
+Then visit:
+- **Dashboard**: http://localhost:8000/auth-demo - Demo overview and instructions
+- **API Docs**: http://localhost:8000/docs - Interactive API documentation
+- **Login**: POST /auth/login - Authenticate to get JWT tokens
+- **Public**: GET /public/* - No authentication required
+- **Protected**: GET /protected/* - JWT token required
+- **Admin**: GET /admin/* - Admin role required
+
+### Authentication Flow Examples
+
+**1. User Registration:**
+```bash
+curl -X POST "http://localhost:8000/auth/register" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "newuser",
+    "email": "user@example.com",
+    "password": "password123",
+    "confirm_password": "password123"
+  }'
+```
+
+**2. User Login:**
+```bash
+curl -X POST "http://localhost:8000/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "demo_user",
+    "password": "user123"
+  }'
+```
+
+**3. Access Protected Endpoint:**
+```bash
+# Use token from login response
+TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/protected/data"
+```
+
+**4. API Key Usage:**
+```bash
+curl -H "X-API-Key: demo-export-key-12345" \
+  "http://localhost:8000/api/export/cities"
+```
+
+**5. Spatial Query with Permissions:**
+```bash
+curl -X POST "http://localhost:8000/protected/spatial-query" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "region": "north_america",
+    "node_type": "City"
+  }'
 ```
 
 ---
@@ -350,3 +599,10 @@ Some examples (like `dynamic_server_demo.py`) start web servers and should be ac
 6. **Spatial Awareness**: Built-in support for geographic data and calculations
 
 The examples demonstrate how these concepts work together to create powerful, maintainable graph applications with spatial capabilities.
+
+## See Also
+
+- **[Authentication System Documentation](authentication.md)** - Complete authentication guide with JWT, API keys, and RBAC
+- **[Authentication Quickstart](auth-quickstart.md)** - Get authentication working in 5 minutes
+- **[REST API with Authentication](rest-api.md#authentication-integration)** - Securing your API endpoints
+- **[Server API Guide](server-api.md)** - Complete server configuration and setup

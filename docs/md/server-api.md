@@ -23,7 +23,7 @@ The jvspatial Server class provides a powerful, object-oriented abstraction for 
 ```python
 from jvspatial.api.server import Server, create_server
 from jvspatial.core.entities import Walker, Node, on_visit
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 
 # Create a server instance
 server = create_server(
@@ -313,7 +313,7 @@ my_walkers/
 ```python
 # my_walkers/walkers.py
 from jvspatial.api import register_walker_to_default
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core.entities import Walker, Root, on_visit
 
 @register_walker_to_default("/my-package/process")
@@ -716,7 +716,7 @@ The server automatically sets these environment variables:
 ```python
 from jvspatial.api.server import create_server
 from jvspatial.core.entities import Node, Root, Walker, on_visit
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 
 server = create_server(title="CRUD API", version="1.0.0")
 
@@ -1073,7 +1073,7 @@ If you're migrating from a direct FastAPI implementation:
 
 ```python
 from fastapi import FastAPI
-from jvspatial.api.endpoint_router import EndpointRouter
+from jvspatial.api.endpoint.router import EndpointRouter
 
 app = FastAPI(title="My API")
 api = EndpointRouter()
