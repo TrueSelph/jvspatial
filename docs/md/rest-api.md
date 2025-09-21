@@ -1,196 +1,526 @@
 # REST API Integration
 
-jvspatial provides seamless FastAPI integration through two approaches:
+jvspatial provides seamless **FastAPI integration** with automatic OpenAPI documentation generation, enabling you to quickly build production-ready APIs for your graph data. The library emphasizes two modern approaches:
 
-1. **Server Class (Recommended)** - High-level, object-oriented API server with automatic configuration
-2. **Direct EndpointRouter** - Lower-level integration for custom FastAPI applications
+1. **Server Class (Recommended)** - Complete API server with automatic database setup and configuration
+2. **Walker Endpoint Decorators** - Direct endpoint registration for maximum flexibility
 
-Both approaches use the enhanced `EndpointField` system for precise API parameter control.
+Both approaches leverage the current **entity-centric design** with MongoDB-style queries and support the library's core features like ObjectPager and semantic filtering.
 
 ## Quick Start with Server Class
 
-The recommended approach uses the `Server` class for simplified setup:
+The recommended approach uses the modern `Server` class with entity-centric operations:
 
 ```python
-from jvspatial.api.server import create_server
-from jvspatial.core.entities import Walker, Root, on_visit
+from jvspatial.api import Server, walker_endpoint
 from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.core import Walker, Node, on_visit
+
+# Define your entity
+class User(Node):
+    name: str = ""
+    email: str = ""
+    department: str = ""
+    active: bool = True
 
 # Create server with automatic configuration
-server = create_server(
-    title="My Spatial API",
-    description="Spatial data management API",
+server = Server(
+    title="User Management API",
+    description="Entity-centric user management with graph capabilities",
     version="1.0.0",
-    db_type="json",
-    db_path="jvdb/my_app"
+    debug=True
 )
 
-@server.walker("/greet")
-class GreetingWalker(Walker):
-    name: str = EndpointField(
-        default="World",
-        description="Name to greet",
-        examples=["Alice", "Bob"]
+@walker_endpoint("/api/users/search", methods=["POST"])
+class SearchUsers(Walker):
+    """Search users with MongoDB-style queries and semantic filtering."""
+
+    name_pattern: str = EndpointField(
+        description="Name pattern to search (supports regex)",
+        examples=["Alice", "John", "^A.*"],
+        min_length=1
     )
 
-    @on_visit(Root)
-    async def greet(self, here):
-        self.response["message"] = f"Hello, {self.name}!"
+    department: str = EndpointField(
+        default="",
+        description="Department filter",
+        examples=["engineering", "marketing", "sales"]
+    )
+
+    include_inactive: bool = EndpointField(
+        default=False,
+        description="Include inactive users in search"
+    )
+
+    @on_visit(Node)
+    async def search_users(self, here: Node):
+        # Build MongoDB-style query
+        query = {
+            "context.name": {"$regex": self.name_pattern, "$options": "i"}
+        }
+
+        if self.department:
+            query["context.department"] = self.department
+
+        if not self.include_inactive:
+            query["context.active"] = True
+
+        # Execute entity-centric search
+        users = await User.find(query)
+
+        self.response = {
+            "users": [
+                {
+                    "id": user.id,
+                    "name": user.name,
+                    "email": user.email,
+                    "department": user.department,
+                    "active": user.active
+                } for user in users
+            ],
+            "total_found": len(users),
+            "query_used": query
+        }
 
 if __name__ == "__main__":
-    server.run()  # Automatic database setup, docs at /docs
+    server.run()  # API available at http://localhost:8000/docs
 ```
 
-**Benefits of Server Class:**
-- Zero-configuration database setup
-- Automatic health checks and monitoring
-- Built-in CORS and security middleware
-- Lifecycle management with startup/shutdown hooks
-- Simplified deployment with `server.run()`
+**Benefits of Modern Server Class:**
+- **Zero-configuration**: Automatic database setup with sensible defaults
+- **Entity-centric**: Direct integration with Node.find(), User.create(), etc.
+- **MongoDB-style queries**: Unified query interface across all database backends
+- **Automatic OpenAPI docs**: Rich documentation with examples and validation
+- **Object pagination**: Built-in support for efficient large dataset handling
+- **Semantic filtering**: Advanced graph traversal capabilities in endpoints
+- **Production-ready**: Built-in CORS, health checks, and middleware support
 
 📖 **[See complete Server Class documentation →](server-api.md)**
 
 ---
 
-## Direct EndpointRouter Usage
+## Walker Endpoint Decorators
 
-For advanced use cases or custom FastAPI applications, you can use the EndpointRouter directly:
+For maximum flexibility, use the modern `@walker_endpoint` and `@endpoint` decorators:
 
-### Basic Usage
+### Walker Endpoints with Entity Operations
 
 ```python
-from fastapi import FastAPI
-from jvspatial.api.endpoint_router import EndpointRouter, EndpointField
-from jvspatial.core.entities import Walker, Root, on_visit, on_exit
+from jvspatial.api import walker_endpoint, endpoint
+from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.core import Walker, Node, on_visit
+from fastapi import HTTPException
+from typing import List, Optional
 
-app = FastAPI(title="My Spatial API")
-router = EndpointRouter()
+class Product(Node):
+    name: str = ""
+    price: float = 0.0
+    category: str = ""
+    in_stock: bool = True
+    description: str = ""
 
-@router.endpoint("/greet", methods=["POST"])
-class GreetingWalker(Walker):
-    # Basic field with description and examples
+@walker_endpoint("/api/products/create", methods=["POST"])
+class CreateProduct(Walker):
+    """Create a new product with entity-centric operations."""
+
     name: str = EndpointField(
-        default="World",
-        description="Name to greet",
-        examples=["Alice", "Bob", "Charlie"]
-    )
-
-    # Field with validation constraints
-    age: int = EndpointField(
-        default=25,
-        ge=0,
-        le=150,
-        description="Age of the person"
-    )
-
-    # Excluded field (not exposed in API)
-    internal_state: dict = EndpointField(
-        default_factory=dict,
-        exclude_endpoint=True
-    )
-
-    @on_visit(Root)
-    async def greet(self, here):
-        self.response["message"] = f"Hello, {self.name}! You are {self.age} years old."
-
-    @on_exit
-    async def finish(self):
-        self.response["status"] = "success"
-
-app.include_router(router.router)
-```
-
-## Advanced Parameter Control
-
-```python
-@router.endpoint("/user-search", methods=["POST"])
-class UserSearchWalker(Walker):
-    # Custom parameter name in API
-    user_id: str = EndpointField(
-        endpoint_name="userId",
-        description="Unique user identifier",
-        pattern=r"^[a-zA-Z0-9_]+$",
-        examples=["john_doe", "alice123"]
-    )
-
-    # Grouped authentication parameters
-    username: str = EndpointField(
-        endpoint_group="auth",
-        description="Username for authentication",
-        min_length=3,
-        max_length=50
-    )
-
-    password: str = EndpointField(
-        endpoint_group="auth",
-        endpoint_hidden=True,  # Hidden from OpenAPI docs
-        description="User password"
-    )
-
-    # Optional field made required for endpoint
-    config: Optional[dict] = EndpointField(
-        default=None,
-        endpoint_required=True,
-        description="Required configuration for API"
-    )
-
-    # Deprecated parameter with migration guidance
-    old_param: Optional[str] = EndpointField(
-        default=None,
-        endpoint_deprecated=True,
-        description="DEPRECATED: Use 'userId' instead"
-    )
-
-    # Internal processing fields (excluded)
-    _search_cache: dict = EndpointField(
-        default_factory=dict,
-        exclude_endpoint=True
-    )
-
-    @on_visit(Root)
-    async def search_user(self, here):
-        # Access grouped auth parameters
-        auth_success = self.authenticate(self.username, self.password)
-        if auth_success:
-            user = await self.find_user(self.user_id)
-            self.response["user"] = user
-        else:
-            self.response["error"] = "Authentication failed"
-```
-
-**Generated API Request Structure:**
-```json
-{
-  "userId": "john_doe",
-  "auth": {
-    "username": "john",
-    "password": "secret123"
-  },
-  "config": {"theme": "dark"},
-  "start_node": "n:Root:root"
-}
-```
-
-### Real-World Example: E-commerce Product Search
-
-```python
-@router.endpoint("/products/search", methods=["POST"])
-class ProductSearchWalker(Walker):
-    # Basic search parameter
-    query: str = EndpointField(
-        description="Product search query",
-        examples=["laptop", "smartphone", "headphones"],
+        description="Product name",
+        examples=["Laptop Pro", "Gaming Mouse"],
         min_length=1,
-        max_length=100
+        max_length=200
     )
 
-    # Grouped filter parameters
+    price: float = EndpointField(
+        description="Product price in USD",
+        examples=[299.99, 1499.99],
+        gt=0.0
+    )
+
+    category: str = EndpointField(
+        description="Product category",
+        examples=["electronics", "books", "clothing"]
+    )
+
+    description: str = EndpointField(
+        default="",
+        description="Product description",
+        max_length=1000
+    )
+
+    @on_visit(Node)
+    async def create_product(self, here: Node):
+        # Check for existing product
+        existing = await Product.find_one({
+            "context.name": self.name,
+            "context.category": self.category
+        })
+
+        if existing:
+            self.response = {
+                "error": "Product with this name already exists in category",
+                "existing_product_id": existing.id
+            }
+            return
+
+        # Create new product using entity-centric approach
+        product = await Product.create(
+            name=self.name,
+            price=self.price,
+            category=self.category,
+            description=self.description,
+            in_stock=True
+        )
+
+        self.response = {
+            "product": {
+                "id": product.id,
+                "name": product.name,
+                "price": product.price,
+                "category": product.category
+            },
+            "status": "created"
+        }
+```
+
+## Enhanced Response Handling with endpoint.response()
+
+The `@walker_endpoint` and `@endpoint` decorators now automatically inject semantic response helpers for clean, flexible HTTP responses:
+
+### Walker Endpoints with Semantic Responses
+
+```python
+@walker_endpoint("/api/products/details", methods=["POST"])
+class ProductDetails(Walker):
+    """Get product details with enhanced response handling."""
+
+    product_id: str = EndpointField(
+        description="Product ID to retrieve",
+        examples=["p:Product:12345"],
+        min_length=1
+    )
+
+    include_reviews: bool = EndpointField(
+        default=False,
+        description="Include product reviews in response"
+    )
+
+    @on_visit(Product)
+    async def get_product_details(self, here: Product):
+        if here.id != self.product_id:
+            return  # Continue traversal
+
+        # Product not found
+        if not here.data:
+            return self.endpoint.not_found(
+                message="Product not found",
+                details={"product_id": self.product_id}
+            )
+
+        # Out of stock check
+        if not here.in_stock:
+            return self.endpoint.response(
+                content={
+                    "message": "Product is currently out of stock",
+                    "product": {"id": here.id, "name": here.name},
+                    "estimated_restock": "2-3 weeks"
+                },
+                status_code=200,
+                headers={"X-Stock-Status": "out-of-stock"}
+            )
+
+        # Build product response
+        product_data = {
+            "id": here.id,
+            "name": here.name,
+            "price": here.price,
+            "category": here.category,
+            "description": here.description,
+            "in_stock": here.in_stock
+        }
+
+        if self.include_reviews:
+            # Find connected review nodes
+            reviews = await here.nodes(node=['Review'])
+            product_data["reviews"] = [
+                {"rating": r.rating, "comment": r.comment}
+                for r in reviews[:5]  # Limit to 5 recent reviews
+            ]
+
+        # Success response with proper headers
+        return self.endpoint.success(
+            data=product_data,
+            message="Product details retrieved successfully",
+            headers={"X-Product-Category": here.category}
+        )
+
+@walker_endpoint("/api/products/create-advanced", methods=["POST"])
+class CreateProductAdvanced(Walker):
+    """Create product with comprehensive validation and response handling."""
+
+    name: str = EndpointField(description="Product name", min_length=1)
+    price: float = EndpointField(description="Product price", gt=0.0)
+    category: str = EndpointField(description="Product category")
+
+    @on_visit(Node)
+    async def create_product(self, here: Node):
+        # Validation with specific error responses
+        if self.price > 10000:
+            return self.endpoint.unprocessable_entity(
+                message="Product price exceeds maximum allowed",
+                details={"price": self.price, "max_allowed": 10000}
+            )
+
+        # Check for conflicts
+        existing = await Product.find_one({
+            "context.name": self.name,
+            "context.category": self.category
+        })
+
+        if existing:
+            return self.endpoint.conflict(
+                message="Product already exists in this category",
+                details={
+                    "name": self.name,
+                    "category": self.category,
+                    "existing_id": existing.id
+                }
+            )
+
+        # Create product
+        product = await Product.create(
+            name=self.name,
+            price=self.price,
+            category=self.category
+        )
+
+        # Return 201 Created with location header
+        return self.endpoint.created(
+            data={
+                "id": product.id,
+                "name": product.name,
+                "price": product.price,
+                "category": product.category
+            },
+            message="Product created successfully",
+            headers={"Location": f"/api/products/{product.id}"}
+        )
+```
+
+### Function Endpoints with Enhanced Responses
+
+```python
+@endpoint("/api/health", methods=["GET"])
+async def enhanced_health_check(endpoint):
+    """Health check with semantic response handling."""
+    try:
+        # Test database connectivity
+        product_count = await Product.count()
+
+        return endpoint.success(
+            data={
+                "status": "healthy",
+                "version": "1.0.0",
+                "database": "connected",
+                "total_products": product_count
+            },
+            message="System is operating normally"
+        )
+    except Exception as e:
+        return endpoint.error(
+            message="Health check failed",
+            status_code=503,  # Service Unavailable
+            details={"error": str(e)}
+        )
+
+@endpoint("/api/products/{product_id}/status", methods=["PUT"])
+async def update_product_status(product_id: str, in_stock: bool, endpoint):
+    """Update product stock status with validation."""
+
+    # Find product
+    product = await Product.get(product_id)
+    if not product:
+        return endpoint.not_found(
+            message="Product not found",
+            details={"product_id": product_id}
+        )
+
+    # Update status
+    product.in_stock = in_stock
+    await product.save()
+
+    # Return success with updated data
+    return endpoint.success(
+        data={
+            "id": product.id,
+            "name": product.name,
+            "in_stock": product.in_stock,
+            "updated_at": "2025-09-21T06:32:18Z"
+        },
+        message=f"Product status updated to {'in stock' if in_stock else 'out of stock'}"
+    )
+
+@endpoint("/api/export/products", methods=["GET"])
+async def export_products(format: str, endpoint):
+    """Export products with flexible response formatting."""
+
+    # Validate format
+    supported_formats = ["json", "csv", "xml"]
+    if format not in supported_formats:
+        return endpoint.bad_request(
+            message="Unsupported export format",
+            details={
+                "requested": format,
+                "supported": supported_formats
+            }
+        )
+
+    # Generate export data
+    products = await Product.all()
+    export_data = {
+        "format": format,
+        "total_products": len(products),
+        "export_id": "exp_20250921_063218",
+        "download_url": f"/downloads/products.{format}"
+    }
+
+    # Custom response with export-specific headers
+    return endpoint.response(
+        content={
+            "data": export_data,
+            "message": f"Export prepared in {format} format"
+        },
+        status_code=202,  # Accepted - export is being processed
+        headers={
+            "X-Export-Format": format,
+            "X-Export-Count": str(len(products)),
+            "X-Processing-Time": "estimated 30 seconds"
+        }
+    )
+```
+
+### Available Response Methods
+
+The injected `endpoint` helper provides semantic methods for common HTTP responses:
+
+**Success Responses:**
+- `endpoint.success(data=result, message="Success")` → 200 OK
+- `endpoint.created(data=new_item, message="Created")` → 201 Created
+- `endpoint.no_content(headers={})` → 204 No Content
+
+**Error Responses:**
+- `endpoint.bad_request(message="Invalid input")` → 400 Bad Request
+- `endpoint.unauthorized(message="Auth required")` → 401 Unauthorized
+- `endpoint.forbidden(message="Access denied")` → 403 Forbidden
+- `endpoint.not_found(message="Not found")` → 404 Not Found
+- `endpoint.conflict(message="Resource exists")` → 409 Conflict
+- `endpoint.unprocessable_entity(message="Validation failed")` → 422 Unprocessable Entity
+- `endpoint.error(message="Custom error", status_code=500)` → Custom status
+
+**Flexible Response:**
+- `endpoint.response(content=data, status_code=202, headers={})` → Full control
+
+All methods support:
+- `data`: Response payload data
+- `message`: Human-readable message
+- `details`: Additional error/context information
+- `headers`: Custom HTTP headers
+
+### Migration from Manual Response Building
+
+**Before (manual response building):**
+```python
+@walker_endpoint("/api/example")
+class ExampleWalker(Walker):
+    async def process(self, here):
+        if error_condition:
+            self.response = {
+                "error": "Something went wrong",
+                "status": 400
+            }
+        else:
+            self.response = {
+                "data": result,
+                "message": "Success"
+            }
+```
+
+**After (semantic responses):**
+```python
+@walker_endpoint("/api/example")
+class ExampleWalker(Walker):
+    async def process(self, here):
+        if error_condition:
+            return self.endpoint.bad_request(
+                message="Something went wrong",
+                details={"reason": "validation_failed"}
+            )
+
+        return self.endpoint.success(
+            data=result,
+            message="Success"
+        )
+```
+
+### Function Endpoints for Simple Operations
+
+```python
+@endpoint("/api/products/count", methods=["GET"])
+async def get_product_count():
+    """Get total product count - simple function endpoint."""
+    total = await Product.count()
+    active = await Product.count({"context.in_stock": True})
+
+    return {
+        "total_products": total,
+        "in_stock": active,
+        "out_of_stock": total - active
+    }
+
+@endpoint("/api/products/{product_id}", methods=["GET"])
+async def get_product(product_id: str):
+    """Get product by ID with entity-centric retrieval."""
+    product = await Product.get(product_id)
+
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    return {
+        "product": {
+            "id": product.id,
+            "name": product.name,
+            "price": product.price,
+            "category": product.category,
+            "description": product.description,
+            "in_stock": product.in_stock
+        }
+    }
+
+@endpoint("/api/products/{product_id}", methods=["DELETE"])
+async def delete_product(product_id: str):
+    """Delete product using entity-centric operations."""
+    product = await Product.get(product_id)
+
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    await product.delete()
+
+    return {"message": "Product deleted successfully", "deleted_id": product_id}
+```
+
+## Advanced MongoDB-Style Query Endpoints
+
+```python
+@walker_endpoint("/api/products/advanced-search", methods=["POST"])
+class AdvancedProductSearch(Walker):
+    """Advanced product search with MongoDB-style queries and pagination."""
+
+    # Search filters (grouped)
     category: Optional[str] = EndpointField(
         default=None,
         endpoint_group="filters",
-        endpoint_name="categoryId",
         description="Product category filter",
-        examples=["electronics", "clothing", "books"]
+        examples=["electronics", "books", "clothing"]
     )
 
     min_price: Optional[float] = EndpointField(
@@ -207,7 +537,14 @@ class ProductSearchWalker(Walker):
         description="Maximum price filter"
     )
 
-    # Grouped pagination parameters
+    name_pattern: Optional[str] = EndpointField(
+        default=None,
+        endpoint_group="filters",
+        description="Name pattern (supports regex)",
+        examples=["laptop", "^Gaming", "mouse$"]
+    )
+
+    # Pagination (grouped)
     page: int = EndpointField(
         default=1,
         endpoint_group="pagination",
@@ -215,7 +552,7 @@ class ProductSearchWalker(Walker):
         description="Page number"
     )
 
-    limit: int = EndpointField(
+    page_size: int = EndpointField(
         default=20,
         endpoint_group="pagination",
         ge=1,
@@ -223,143 +560,755 @@ class ProductSearchWalker(Walker):
         description="Items per page"
     )
 
-    # API key (hidden from documentation)
-    api_key: str = EndpointField(
-        default="default_key",
-        endpoint_hidden=True,
-        description="Internal API authentication key"
+    # Sorting
+    sort_by: str = EndpointField(
+        default="name",
+        description="Field to sort by",
+        examples=["name", "price", "category"]
     )
 
-    # Internal state (excluded from API)
-    search_cache: dict = EndpointField(
-        default_factory=dict,
-        exclude_endpoint=True
+    sort_order: str = EndpointField(
+        default="asc",
+        description="Sort order",
+        examples=["asc", "desc"]
     )
 
-    @on_visit(Root)
-    async def search_products(self, here):
-        products = await self.perform_search(
-            query=self.query,
-            category=self.category,
-            min_price=self.min_price,
-            max_price=self.max_price,
-            page=self.page,
-            limit=self.limit
+    @on_visit(Node)
+    async def advanced_search(self, here: Node):
+        # Build MongoDB-style query
+        query = {"context.in_stock": True}  # Only in-stock products
+
+        # Add filters
+        if self.category:
+            query["context.category"] = self.category
+
+        if self.min_price is not None or self.max_price is not None:
+            price_filter = {}
+            if self.min_price is not None:
+                price_filter["$gte"] = self.min_price
+            if self.max_price is not None:
+                price_filter["$lte"] = self.max_price
+            query["context.price"] = price_filter
+
+        if self.name_pattern:
+            query["context.name"] = {
+                "$regex": self.name_pattern,
+                "$options": "i"
+            }
+
+        # Use ObjectPager for efficient pagination
+        from jvspatial.core.pager import ObjectPager
+
+        pager = ObjectPager(
+            Product,
+            page_size=self.page_size,
+            filters=query,
+            order_by=self.sort_by,
+            order_direction=self.sort_order
         )
 
-        self.response["products"] = products
-        self.response["total"] = len(products)
-        self.response["page"] = self.page
+        products = await pager.get_page(self.page)
+        pagination_info = pager.to_dict()
+
+        self.response = {
+            "products": [
+                {
+                    "id": p.id,
+                    "name": p.name,
+                    "price": p.price,
+                    "category": p.category,
+                    "description": p.description[:100] + "..." if len(p.description) > 100 else p.description
+                } for p in products
+            ],
+            "pagination": pagination_info,
+            "query_applied": query
+        }
 ```
 
-**API Request:**
+**Generated API Request Structure:**
 ```json
 {
-  "query": "laptop",
   "filters": {
-    "categoryId": "electronics",
-    "min_price": 500.0,
-    "max_price": 2000.0
+    "category": "electronics",
+    "min_price": 100.0,
+    "max_price": 1000.0,
+    "name_pattern": "laptop"
   },
   "pagination": {
     "page": 1,
-    "limit": 25
-  }
+    "page_size": 20
+  },
+  "sort_by": "price",
+  "sort_order": "asc"
 }
 ```
 
-### EndpointField Parameter Reference
+## Real-World Example: User Management with Graph Traversal
+
+```python
+from jvspatial.core import Node, Edge, Walker, on_visit
+from jvspatial.api import walker_endpoint, Server
+from jvspatial.api.endpoint_router import EndpointField
+from typing import List, Optional
+
+# Entity definitions
+class User(Node):
+    name: str = ""
+    email: str = ""
+    department: str = ""
+    role: str = "user"
+    active: bool = True
+    skills: List[str] = []
+
+class Collaboration(Edge):
+    project: str = ""
+    start_date: str = ""
+    status: str = "active"
+
+# Create server
+server = Server(
+    title="User Management API",
+    description="Advanced user management with graph relationships",
+    version="2.0.0"
+)
+
+@walker_endpoint("/api/users/network-analysis", methods=["POST"])
+class NetworkAnalysis(Walker):
+    """Analyze user collaboration networks using graph traversal."""
+
+    user_id: str = EndpointField(
+        description="User ID to analyze",
+        examples=["user123", "alice-smith"]
+    )
+
+    max_depth: int = EndpointField(
+        default=2,
+        description="Maximum traversal depth",
+        ge=1,
+        le=5
+    )
+
+    include_departments: List[str] = EndpointField(
+        default_factory=list,
+        description="Departments to include (empty = all)",
+        examples=[["engineering", "product"], ["marketing"]]
+    )
+
+    active_only: bool = EndpointField(
+        default=True,
+        description="Only include active users"
+    )
+
+    @on_visit(User)
+    async def analyze_network(self, here: User):
+        """Analyze collaboration network using semantic filtering."""
+        if here.id == self.user_id:
+            # This is our target user - start analysis
+            self.response["target_user"] = {
+                "id": here.id,
+                "name": here.name,
+                "department": here.department,
+                "role": here.role
+            }
+
+            # Find direct collaborators using semantic filtering
+            collaborator_filters = {"active": True} if self.active_only else {}
+            if self.include_departments:
+                # Use MongoDB-style query for department filtering
+                direct_collaborators = await here.nodes(
+                    node=[{
+                        'User': {
+                            "context.department": {"$in": self.include_departments},
+                            "context.active": True if self.active_only else {"$exists": True}
+                        }
+                    }],
+                    direction="both"
+                )
+            else:
+                direct_collaborators = await here.nodes(
+                    node=['User'],
+                    **collaborator_filters
+                )
+
+            self.response["direct_collaborators"] = [
+                {
+                    "id": user.id,
+                    "name": user.name,
+                    "department": user.department,
+                    "shared_skills": list(set(here.skills) & set(user.skills))
+                } for user in direct_collaborators
+            ]
+
+            # Continue traversal if depth allows
+            if self.max_depth > 1:
+                self.max_depth -= 1
+                await self.visit(direct_collaborators)
+        else:
+            # Secondary user - add to extended network
+            if "extended_network" not in self.response:
+                self.response["extended_network"] = []
+
+            self.response["extended_network"].append({
+                "id": here.id,
+                "name": here.name,
+                "department": here.department
+            })
+
+@walker_endpoint("/api/users/skill-matching", methods=["POST"])
+class SkillMatching(Walker):
+    """Find users with matching skills using MongoDB-style queries."""
+
+    required_skills: List[str] = EndpointField(
+        description="Required skills to match",
+        examples=[["python", "javascript"], ["design", "figma"]]
+    )
+
+    department_filter: Optional[str] = EndpointField(
+        default=None,
+        description="Filter by department",
+        examples=["engineering", "design", "product"]
+    )
+
+    min_skill_match: int = EndpointField(
+        default=1,
+        description="Minimum number of skills that must match",
+        ge=1
+    )
+
+    @on_visit(Node)
+    async def find_matching_users(self, here: Node):
+        # Build complex MongoDB-style query
+        query = {
+            "$and": [
+                {"context.active": True},
+                {"context.skills": {"$in": self.required_skills}}
+            ]
+        }
+
+        if self.department_filter:
+            query["$and"].append({"context.department": self.department_filter})
+
+        # Find matching users
+        matching_users = await User.find(query)
+
+        # Filter by minimum skill match count
+        filtered_users = []
+        for user in matching_users:
+            match_count = len(set(user.skills) & set(self.required_skills))
+            if match_count >= self.min_skill_match:
+                filtered_users.append({
+                    "id": user.id,
+                    "name": user.name,
+                    "email": user.email,
+                    "department": user.department,
+                    "matching_skills": list(set(user.skills) & set(self.required_skills)),
+                    "match_score": match_count / len(self.required_skills)
+                })
+
+        # Sort by match score (highest first)
+        filtered_users.sort(key=lambda x: x["match_score"], reverse=True)
+
+        self.response = {
+            "required_skills": self.required_skills,
+            "department_filter": self.department_filter,
+            "min_skill_match": self.min_skill_match,
+            "matching_users": filtered_users,
+            "total_matches": len(filtered_users)
+        }
+
+if __name__ == "__main__":
+    server.run()
+```
+
+**API Usage Examples:**
+```bash
+# Network analysis
+curl -X POST "http://localhost:8000/api/users/network-analysis" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "alice-123",
+    "max_depth": 2,
+    "include_departments": ["engineering", "product"],
+    "active_only": true
+  }'
+
+# Skill matching
+curl -X POST "http://localhost:8000/api/users/skill-matching" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "required_skills": ["python", "javascript", "react"],
+    "department_filter": "engineering",
+    "min_skill_match": 2
+  }'
+```
+
+## EndpointField Parameter Reference
+
+The `EndpointField` provides comprehensive parameter control for API endpoints:
+
+```python
+from jvspatial.api.endpoint_router import EndpointField
+from typing import Optional, List
+
+class ExampleWalker(Walker):
+    # Basic field with validation
+    name: str = EndpointField(
+        description="User name",
+        examples=["Alice", "Bob"],
+        min_length=1,
+        max_length=100
+    )
+
+    # Numeric field with constraints
+    age: int = EndpointField(
+        description="User age",
+        ge=0,
+        le=150,
+        examples=[25, 30, 45]
+    )
+
+    # Optional field with custom API name
+    user_id: Optional[str] = EndpointField(
+        default=None,
+        endpoint_name="userId",  # Shows as "userId" in API
+        description="Unique user identifier",
+        pattern=r"^[a-zA-Z0-9_-]+$"
+    )
+
+    # Grouped parameters (create nested objects in API)
+    min_price: Optional[float] = EndpointField(
+        default=None,
+        endpoint_group="filters",  # Groups under "filters" object
+        ge=0.0,
+        description="Minimum price filter"
+    )
+
+    max_price: Optional[float] = EndpointField(
+        default=None,
+        endpoint_group="filters",  # Groups under "filters" object
+        ge=0.0,
+        description="Maximum price filter"
+    )
+
+    # Hidden field (not in API docs but still accessible)
+    api_key: str = EndpointField(
+        default="default_key",
+        endpoint_hidden=True,  # Hidden from OpenAPI documentation
+        description="Internal API key"
+    )
+
+    # Excluded field (not exposed in API at all)
+    internal_cache: dict = EndpointField(
+        default_factory=dict,
+        exclude_endpoint=True  # Completely excluded from endpoint
+    )
+
+    # Deprecated field with migration guidance
+    old_parameter: Optional[str] = EndpointField(
+        default=None,
+        endpoint_deprecated=True,  # Marked as deprecated in docs
+        description="DEPRECATED: Use 'userId' instead"
+    )
+```
+
+### Complete Parameter Options
 
 ```python
 EndpointField(
     default=...,                    # Field default value
+    default_factory=...,            # Factory function for default
 
     # Standard Pydantic validation
-    title="Field Title",            # OpenAPI title
+    title="Field Title",            # OpenAPI title override
     description="Field description", # OpenAPI description
     examples=["example1", "example2"], # OpenAPI examples
-    gt=0, ge=0, lt=100, le=100,    # Numeric constraints
-    min_length=1, max_length=50,    # String length constraints
-    pattern=r"^[a-zA-Z]+$",        # String pattern validation
+
+    # Numeric constraints
+    gt=0,                          # Greater than
+    ge=0,                          # Greater than or equal
+    lt=100,                        # Less than
+    le=100,                        # Less than or equal
+    multiple_of=5,                 # Must be multiple of value
+
+    # String constraints
+    min_length=1,                  # Minimum string length
+    max_length=50,                 # Maximum string length
+    pattern=r"^[a-zA-Z]+$",        # Regex pattern validation
+
+    # Array/List constraints
+    min_items=1,                   # Minimum array length
+    max_items=10,                  # Maximum array length
 
     # Endpoint-specific configuration
     exclude_endpoint=False,         # Exclude from endpoint entirely
     endpoint_name="customName",     # Custom parameter name in API
-    endpoint_required=True,         # Override required status for endpoint
+    endpoint_required=None,         # Override required status (True/False/None)
     endpoint_hidden=False,          # Hide from OpenAPI docs
-    endpoint_deprecated=False,      # Mark as deprecated in OpenAPI
+    endpoint_deprecated=False,      # Mark as deprecated
     endpoint_group="groupName",     # Group related parameters
     endpoint_constraints={          # Additional OpenAPI constraints
-        "multipleOf": 10,
+        "format": "email",
         "pattern": r"^[A-Z]{2}-\d{4}$"
     }
 )
 ```
 
-### API Usage Examples
+## Integration Patterns
 
-```bash
-# Start the server
-python main.py
+### Startup Data Initialization
 
-# Simple greeting
-curl -X POST http://localhost:8000/greet \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Alice", "age": 30}'
-
-# Product search with filters
-curl -X POST http://localhost:8000/products/search \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "gaming laptop",
-    "filters": {
-      "categoryId": "electronics",
-      "min_price": 800,
-      "max_price": 3000
-    },
-    "pagination": {
-      "page": 1,
-      "limit": 10
-    }
-  }'
-
-# User search with authentication
-curl -X POST http://localhost:8000/user-search \
-  -H "Content-Type: application/json" \
-  -d '{
-    "userId": "john_doe",
-    "auth": {
-      "username": "john",
-      "password": "secret123"
-    },
-    "config": {"includePrivateData": true}
-  }'
-```
-
-### Alternative Comment-Based Approach
-
-For convenience, the library also supports the comment-based approach:
-
-**Convenient, comment-based approach:**
 ```python
-class MyWalker(Walker):
-    public_field: str = "default"
-    private_field: str  # endpoint: ignore
+@server.on_startup
+async def initialize_sample_data():
+    """Initialize sample data on server startup."""
+    # Check if we already have data
+    user_count = await User.count()
+    if user_count > 0:
+        print(f"Found {user_count} existing users, skipping initialization")
+        return
+
+    # Create sample users
+    sample_users = [
+        {"name": "Alice Johnson", "email": "alice@company.com", "department": "engineering", "skills": ["python", "javascript"]},
+        {"name": "Bob Smith", "email": "bob@company.com", "department": "product", "skills": ["design", "figma"]},
+        {"name": "Carol Davis", "email": "carol@company.com", "department": "engineering", "skills": ["python", "go"]}
+    ]
+
+    created_users = []
+    for user_data in sample_users:
+        user = await User.create(**user_data)
+        created_users.append(user)
+
+    # Create some collaborations
+    if len(created_users) >= 2:
+        collab = await Collaboration.create(
+            source=created_users[0],
+            target=created_users[2],
+            project="API Development",
+            start_date="2024-01-15"
+        )
+        await created_users[0].connect(created_users[2], edge=Collaboration)
+
+    print(f"Initialized {len(created_users)} sample users with collaborations")
+
+@server.on_shutdown
+async def cleanup():
+    """Cleanup tasks on shutdown."""
+    print("API server shutting down...")
 ```
 
-The formal approach is recommended, however, it provides:
-- **Better Performance**: 2-5x faster than AST parsing
-- **Type Safety**: Full IDE support and static analysis
-- **Rich Features**: Parameter grouping, custom naming, validation
-- **Reliability**: Works in all Python environments
+### Error Handling and Validation
 
-### Benefits of Enhanced Field Control
+```python
+from fastapi import HTTPException
 
-1. **Type Safety**: Full IDE support and static analysis
-2. **Rich Documentation**: Automatic OpenAPI generation with descriptions and examples
-3. **Flexible Validation**: Support for all Pydantic validation constraints
-4. **Parameter Grouping**: Organize related parameters into nested objects
-5. **Custom Naming**: API-friendly parameter names different from internal field names
-6. **Performance**: 2-5x faster than comment-based approach
-7. **Maintainability**: No AST parsing complexity
-8. **Extensibility**: Easy to add new endpoint-specific features
+@walker_endpoint("/api/users/update", methods=["PUT"])
+class UpdateUser(Walker):
+    user_id: str = EndpointField(description="User ID to update")
+    name: Optional[str] = EndpointField(default=None, min_length=1, max_length=100)
+    email: Optional[str] = EndpointField(default=None, pattern=r'^[^@]+@[^@]+\.[^@]+$')
+    department: Optional[str] = EndpointField(default=None)
+    skills: Optional[List[str]] = EndpointField(default=None)
+
+    @on_visit(Node)
+    async def update_user(self, here: Node):
+        # Validate user exists
+        user = await User.get(self.user_id)
+        if not user:
+            self.response = {"error": "User not found", "status": 404}
+            return
+
+        # Validate email uniqueness if provided
+        if self.email and self.email != user.email:
+            existing = await User.find_one({"context.email": self.email})
+            if existing:
+                self.response = {"error": "Email already in use", "status": 400}
+                return
+
+        # Update fields
+        update_data = {}
+        if self.name is not None:
+            update_data["name"] = self.name
+        if self.email is not None:
+            update_data["email"] = self.email
+        if self.department is not None:
+            update_data["department"] = self.department
+        if self.skills is not None:
+            update_data["skills"] = self.skills
+
+        # Apply updates
+        for field, value in update_data.items():
+            setattr(user, field, value)
+
+        await user.save()
+
+        self.response = {
+            "user": {
+                "id": user.id,
+                "name": user.name,
+                "email": user.email,
+                "department": user.department,
+                "skills": user.skills
+            },
+            "updated_fields": list(update_data.keys()),
+            "status": "updated"
+        }
+```
+
+## Best Practices and Patterns
+
+### 1. Entity-Centric Design
+
+```python
+# ✅ Good: Use entity-centric operations
+@walker_endpoint("/api/users/search")
+class SearchUsers(Walker):
+    @on_visit(Node)
+    async def search(self, here: Node):
+        # Direct entity operations
+        users = await User.find({"context.active": True})
+        total = await User.count()
+
+# ❌ Avoid: Direct database access
+class OldSearchUsers(Walker):
+    @on_visit(Node)
+    async def search(self, here: Node):
+        # Don't do this - bypasses entity layer
+        db = get_database()
+        users = await db.find("user", {"active": True})
+```
+
+### 2. MongoDB-Style Queries
+
+```python
+# ✅ Good: Use MongoDB-style queries for complex filtering
+@walker_endpoint("/api/products/advanced-search")
+class AdvancedSearch(Walker):
+    @on_visit(Node)
+    async def search(self, here: Node):
+        query = {
+            "$and": [
+                {"context.category": "electronics"},
+                {"context.price": {"$gte": 100, "$lte": 1000}},
+                {"context.name": {"$regex": "laptop", "$options": "i"}}
+            ]
+        }
+        products = await Product.find(query)
+
+# ❌ Avoid: Python-level filtering
+class BadSearch(Walker):
+    @on_visit(Node)
+    async def search(self, here: Node):
+        all_products = await Product.all()  # Loads everything
+        filtered = [p for p in all_products if p.price >= 100]  # Inefficient
+```
+
+### 3. Use Object Pagination for Large Datasets
+
+```python
+# ✅ Good: Use ObjectPager for efficient pagination
+@walker_endpoint("/api/users/list")
+class ListUsers(Walker):
+    page: int = EndpointField(default=1, ge=1)
+    page_size: int = EndpointField(default=20, ge=1, le=100)
+
+    @on_visit(Node)
+    async def list_users(self, here: Node):
+        from jvspatial.core.pager import ObjectPager
+
+        pager = ObjectPager(
+            User,
+            page_size=self.page_size,
+            filters={"context.active": True},
+            order_by="name"
+        )
+
+        users = await pager.get_page(self.page)
+        pagination_info = pager.to_dict()
+
+        self.response = {
+            "users": [user.export() for user in users],
+            "pagination": pagination_info
+        }
+```
+
+### 4. Semantic Filtering in Graph Traversal
+
+```python
+# ✅ Good: Use semantic filtering with nodes() method
+@walker_endpoint("/api/users/connections")
+class UserConnections(Walker):
+    user_id: str = EndpointField(description="User ID to analyze")
+
+    @on_visit(User)
+    async def analyze_connections(self, here: User):
+        if here.id == self.user_id:
+            # Use semantic filtering for connected users
+            colleagues = await here.nodes(
+                node=['User'],
+                department=here.department,  # Simple filtering
+                active=True
+            )
+
+            # Advanced filtering with MongoDB-style queries
+            skilled_colleagues = await here.nodes(
+                node=[{
+                    'User': {
+                        "context.skills": {"$in": ["python", "javascript"]},
+                        "context.active": True
+                    }
+                }]
+            )
+
+            self.response = {
+                "user": {"id": here.id, "name": here.name},
+                "colleagues": [u.export() for u in colleagues],
+                "skilled_colleagues": [u.export() for u in skilled_colleagues]
+            }
+```
+
+### 5. Error Handling and Validation
+
+```python
+# ✅ Good: Comprehensive error handling
+@walker_endpoint("/api/users/create")
+class CreateUser(Walker):
+    name: str = EndpointField(min_length=1, max_length=100)
+    email: str = EndpointField(pattern=r'^[^@]+@[^@]+\.[^@]+$')
+    department: str = EndpointField()
+
+    @on_visit(Node)
+    async def create_user(self, here: Node):
+        try:
+            # Check for existing user
+            existing = await User.find_one({"context.email": self.email})
+            if existing:
+                self.response = {
+                    "error": "Email already exists",
+                    "status": "conflict",
+                    "code": 409
+                }
+                return
+
+            # Create new user
+            user = await User.create(
+                name=self.name,
+                email=self.email,
+                department=self.department
+            )
+
+            self.response = {
+                "user": user.export(),
+                "status": "created",
+                "code": 201
+            }
+
+        except ValidationError as e:
+            self.response = {
+                "error": "Validation failed",
+                "details": str(e),
+                "status": "validation_error",
+                "code": 400
+            }
+        except Exception as e:
+            self.response = {
+                "error": "Internal server error",
+                "status": "error",
+                "code": 500
+            }
+```
+
+### 6. Proper API Documentation
+
+```python
+# ✅ Good: Rich documentation with examples
+@walker_endpoint("/api/products/search", methods=["POST"])
+class ProductSearch(Walker):
+    """Search products with advanced filtering and pagination.
+
+    This endpoint allows searching products using various filters including
+    category, price range, and text search. Results are paginated for
+    efficient handling of large product catalogs.
+    """
+
+    query: str = EndpointField(
+        description="Search query for product names and descriptions",
+        examples=["laptop", "gaming mouse", "wireless headphones"],
+        min_length=1,
+        max_length=100
+    )
+
+    category: Optional[str] = EndpointField(
+        default=None,
+        description="Filter by product category",
+        examples=["electronics", "books", "clothing", "home"]
+    )
+
+    price_range: Optional[dict] = EndpointField(
+        default=None,
+        description="Price range filter with min/max values",
+        examples=[{"min": 10.0, "max": 100.0}, {"min": 50.0}]
+    )
+```
+
+## Benefits of Current Approach
+
+1. **Entity-Centric**: Direct integration with Node.find(), User.create(), etc.
+2. **MongoDB Queries**: Familiar, powerful query syntax across all backends
+3. **Type Safety**: Full IDE support and static analysis with Pydantic
+4. **Rich Documentation**: Automatic OpenAPI generation with examples
+5. **Object Pagination**: Efficient handling of large datasets
+6. **Semantic Filtering**: Advanced graph traversal capabilities
+7. **Performance**: Database-level operations for optimal speed
+8. **Maintainability**: Clean, readable code with proper separation of concerns
+
+## Migration from Legacy Patterns
+
+If migrating from older REST API patterns:
+
+### Before (Legacy)
+```python
+# Old pattern - manual FastAPI setup
+from fastapi import FastAPI
+app = FastAPI()
+
+@app.post("/search")
+async def search_products(query: str):
+    # Manual database operations
+    db = get_database()
+    results = await db.find("products", {"name": query})
+    return results
+```
+
+### After (Current)
+```python
+# New pattern - entity-centric with server class
+from jvspatial.api import Server, walker_endpoint
+
+server = Server(title="Product API")
+
+@walker_endpoint("/api/products/search")
+class SearchProducts(Walker):
+    query: str = EndpointField(description="Search query")
+
+    @on_visit(Node)
+    async def search(self, here: Node):
+        # Entity-centric operations
+        products = await Product.find({
+            "context.name": {"$regex": self.query, "$options": "i"}
+        })
+        self.response = {"products": [p.export() for p in products]}
+```
+
+## See Also
+
+- [Server API Documentation](server-api.md) - Complete Server class reference
+- [Entity Reference](entity-reference.md) - API reference for entities
+- [MongoDB-Style Query Interface](mongodb-query-interface.md) - Query syntax for endpoints
+- [Object Pagination Guide](pagination.md) - Paginating API results
+- [Examples](examples.md) - API examples and patterns
+- [GraphContext & Database Management](graph-context.md) - Database integration
+
+---
+
+**[← Back to README](../../README.md)** | **[Server API →](server-api.md)**

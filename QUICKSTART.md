@@ -800,10 +800,211 @@ class UserAnalytics(Walker):
         if dept not in self.response["departments"]:
             self.response["departments"][dept] = 0
         self.response["departments"][dept] += 1
+        }
+```
+
+### Enhanced Response Handling with endpoint.response()
+
+The `@walker_endpoint` and `@endpoint` decorators now automatically inject semantic response helpers to make crafting HTTP responses clean and flexible:
+
+**Walker Endpoints with self.endpoint:**
+
+```python path=null start=null
+@walker_endpoint("/api/users/profile", methods=["POST"])
+class UserProfileWalker(Walker):
+    """Walker demonstrating semantic response patterns."""
+
+    user_id: str = EndpointField(description="User ID to retrieve")
+    include_details: bool = EndpointField(
+        default=False,
+        description="Include detailed profile information"
+    )
+
+    @on_visit("User")
+    async def get_user_profile(self, here: User):
+        """Get user profile with semantic responses."""
+        if here.id != self.user_id:
+            return  # Continue traversal
+
+        # User not found scenario
+        if not here.data:
+            return self.endpoint.not_found(
+                message="User profile not found",
+                details={"user_id": self.user_id}
+            )
+
+        # Authorization check
+        if here.private and not self.include_details:
+            return self.endpoint.forbidden(
+                message="Insufficient permissions",
+                details={"required_permission": "view_details"}
+            )
+
+        # Successful response
+        profile_data = {
+            "id": here.id,
+            "name": here.name,
+            "email": here.email
+        }
+
+        if self.include_details:
+            profile_data["department"] = here.department
+            profile_data["created_at"] = here.created_at
+
+        return self.endpoint.success(
+            data=profile_data,
+            message="User profile retrieved successfully"
+        )
+
+@walker_endpoint("/api/users/create", methods=["POST"])
+class CreateUserWalker(Walker):
+    """Walker for creating users with proper HTTP status codes."""
+
+    name: str = EndpointField(description="User name")
+    email: str = EndpointField(description="User email")
+
+    @on_visit("Root")
+    async def create_user(self, here):
+        """Create a new user with validation."""
+
+        # Validation example
+        if "@" not in self.email:
+            return self.endpoint.unprocessable_entity(
+                message="Invalid email format",
+                details={"email": self.email}
+            )
+
+        # Check for conflicts
+        existing_user = await User.find_one({"context.email": self.email})
+        if existing_user:
+            return self.endpoint.conflict(
+                message="User with this email already exists",
+                details={"email": self.email}
+            )
+
+        # Create user
+        user = await User.create(
+            name=self.name,
+            email=self.email
+        )
+
+        # Return 201 Created with location header
+        return self.endpoint.created(
+            data={
+                "id": user.id,
+                "name": user.name,
+                "email": user.email
+            },
+            message="User created successfully",
+            headers={"Location": f"/api/users/{user.id}"}
+        )
+```
+
+**Function Endpoints with endpoint parameter:**
+
+```python path=null start=null
+@endpoint("/api/health", methods=["GET"])
+async def health_check(endpoint) -> Any:
+    """Health check with semantic response."""
+    return endpoint.success(
+        data={"status": "healthy", "version": "1.0.0"},
+        message="Service is running normally"
+    )
+
+@endpoint("/api/users/{user_id}/status", methods=["PUT"])
+async def update_user_status(user_id: str, status: str, endpoint) -> Any:
+    """Update user status with validation and error handling."""
+
+    # Validation
+    valid_statuses = ["active", "inactive", "suspended"]
+    if status not in valid_statuses:
+        return endpoint.bad_request(
+            message="Invalid status value",
+            details={"provided": status, "valid_options": valid_statuses}
+        )
+
+    # Find user
+    user = await User.get(user_id)
+    if not user:
+        return endpoint.not_found(
+            message="User not found",
+            details={"user_id": user_id}
+        )
+
+    # Update status
+    user.status = status
+    await user.save()
+
+    return endpoint.success(
+        data={"id": user.id, "status": user.status},
+        message=f"User status updated to {status}"
+    )
+
+@endpoint("/api/export", methods=["GET"])
+async def export_data(format: str, endpoint) -> Any:
+    """Export data with custom response formatting."""
+
+    if format not in ["json", "csv", "xml"]:
+        return endpoint.error(
+            message="Unsupported export format",
+            status_code=406,  # Not Acceptable
+            details={"format": format, "supported": ["json", "csv", "xml"]}
+        )
+
+    # Generate export data
+    export_data = {
+        "format": format,
+        "records": 1500,
+        "export_id": "exp_20250921",
+        "download_url": f"/downloads/export.{format}"
+    }
+
+    # Use flexible response() method for custom headers
+    return endpoint.response(
+        content={
+            "data": export_data,
+            "message": f"Export ready in {format} format"
+        },
+        status_code=200,
+        headers={
+            "X-Export-Format": format,
+            "X-Record-Count": "1500"
+        }
+    )
+```
+
+**Available Response Methods:**
+
+```python path=null start=null
+# Success responses
+endpoint.success(data=result, message="Success")           # 200 OK
+endpoint.created(data=new_item, message="Created")         # 201 Created
+endpoint.no_content()                                      # 204 No Content
+
+# Error responses
+endpoint.bad_request(message="Invalid input")              # 400 Bad Request
+endpoint.unauthorized(message="Auth required")             # 401 Unauthorized
+endpoint.forbidden(message="Access denied")                # 403 Forbidden
+endpoint.not_found(message="Resource not found")           # 404 Not Found
+endpoint.conflict(message="Resource exists")               # 409 Conflict
+endpoint.unprocessable_entity(message="Validation failed") # 422 Unprocessable Entity
+
+# Flexible custom response
+endpoint.response(
+    content={"custom": "data"},
+    status_code=202,
+    headers={"X-Custom": "value"}
+)
+
+# Generic error with custom status code
+endpoint.error(
+    message="Custom error",
+    status_code=418,  # I'm a teapot
+    details={"reason": "custom"}
+)
 ```
 
 ### @endpoint Decorator for Regular Functions
-
 The `@endpoint` decorator exposes regular functions as API endpoints:
 
 ```python path=null start=null
@@ -1734,12 +1935,281 @@ class AnalyticsWalker(Walker):
         await asyncio.sleep(0.01)  # Simulate work
 ```
 
-        # Get incoming nodes for reverse traversal
-        previous_nodes = await node.nodes(direction="in")
+### Walker Trail Tracking
 
-        # Continue traversal with filtered nodes
-        await self.visit(connected)
+Walkers include built-in **trail tracking** capabilities to monitor and record the complete path taken during graph traversal. This is invaluable for debugging, analytics, audit trails, and optimizing traversal strategies.
+
+#### Basic Trail Tracking
+
+```python path=null start=null
+from jvspatial.core import Walker, on_visit
+
+class TrailTrackingWalker(Walker):
+    def __init__(self):
+        super().__init__()
+        # Enable trail tracking with memory management
+        self.trail_enabled = True
+        self.max_trail_length = 100  # Keep last 100 steps (0 = unlimited)
+
+    @on_visit('User')
+    async def process_user_with_trail(self, here: Node):
+        """Process user nodes while tracking the traversal trail.
+
+        Args:
+            here: The visited User node
+        """
+        print(f"Processing user: {here.name}")
+
+        # Access current trail information
+        current_trail = self.get_trail()  # List of node IDs
+        trail_length = self.get_trail_length()  # Current trail size
+        recent_steps = self.get_recent_trail(count=3)  # Last 3 steps
+
+        print(f"Trail length: {trail_length}, Recent: {recent_steps}")
+
+        # Avoid revisiting recently visited nodes
+        if here.id in recent_steps[:-1]:  # Exclude current node
+            print(f"Recently visited {here.name}, skipping deeper traversal")
+            self.skip()
+
+        # Continue normal traversal
+        colleagues = await here.nodes(
+            node=['User'],
+            department=here.department,
+            active=True
+        )
+        await self.visit(colleagues)
+
+    @on_exit
+    async def generate_trail_report(self):
+        """Generate comprehensive trail analysis report."""
+        # Get trail with actual node objects (database lookups)
+        trail_nodes = await self.get_trail_nodes()
+
+        # Get complete path with connecting edges
+        trail_path = await self.get_trail_path()
+
+        # Generate detailed report
+        self.response['trail_report'] = {
+            'summary': {
+                'total_steps': self.get_trail_length(),
+                'unique_nodes': len(set(self.get_trail())),
+                'efficiency_ratio': len(set(self.get_trail())) / max(self.get_trail_length(), 1)
+            },
+            'visited_nodes': [
+                {'step': i+1, 'node_type': node.__class__.__name__, 'node_name': getattr(node, 'name', node.id)}
+                for i, node in enumerate(trail_nodes)
+            ],
+            'path_analysis': [
+                {
+                    'step': i+1,
+                    'node': node.name if hasattr(node, 'name') else node.id,
+                    'via_edge': edge.edge_type if edge else 'start'
+                }
+                for i, (node, edge) in enumerate(trail_path)
+            ]
+        }
+
+        print(f"\n📊 Trail Report Generated:")
+        print(f"  - Total steps: {self.response['trail_report']['summary']['total_steps']}")
+        print(f"  - Unique nodes: {self.response['trail_report']['summary']['unique_nodes']}")
+        print(f"  - Path efficiency: {self.response['trail_report']['summary']['efficiency_ratio']:.2%}")
+
+# Usage example
+walker = TrailTrackingWalker()
+root = await Root.get()
+await walker.spawn(root)
+
+# Access trail data
+final_trail = walker.get_trail()
+print(f"Final trail: {final_trail}")
+print(f"Trail report: {walker.response.get('trail_report')}")
 ```
+
+#### Advanced Trail Use Cases
+
+```python path=null start=null
+class AdvancedTrailWalker(Walker):
+    def __init__(self):
+        super().__init__()
+        self.trail_enabled = True
+        self.max_trail_length = 0  # Unlimited for comprehensive analysis
+        self.visited_nodes = set()  # For cycle detection
+        self.performance_metrics = []
+
+    @on_visit('Document')
+    async def process_with_cycle_detection(self, here: Node):
+        """Process documents with cycle detection using trail data.
+
+        Args:
+            here: The visited Document node
+        """
+        import time
+        start_time = time.time()
+
+        # Cycle detection using trail
+        if here.id in self.visited_nodes:
+            trail = self.get_trail()
+            first_visit_index = trail.index(here.id)
+            cycle_length = len(trail) - first_visit_index - 1
+
+            print(f"🔄 Cycle detected at {here.id}! Length: {cycle_length} steps")
+
+            self.response.setdefault('cycles_detected', []).append({
+                'node_id': here.id,
+                'cycle_length': cycle_length,
+                'first_visit_step': first_visit_index + 1,
+                'detection_step': len(trail)
+            })
+
+            # Stop to avoid infinite loop
+            await self.disengage()
+            return
+
+        self.visited_nodes.add(here.id)
+
+        # Process document
+        await self.analyze_document(here)
+
+        # Record performance metrics
+        processing_time = time.time() - start_time
+        self.performance_metrics.append({
+            'node_id': here.id,
+            'processing_time': processing_time,
+            'step_number': self.get_trail_length(),
+            'metadata': self.get_trail_metadata()  # Get current step metadata
+        })
+
+        # Continue traversal with trail-aware filtering
+        related_docs = await here.nodes(
+            node=['Document'],
+            status='active'
+        )
+
+        # Filter out recently visited to avoid cycles
+        recent_trail = self.get_recent_trail(count=10)
+        unvisited_docs = [doc for doc in related_docs if doc.id not in recent_trail]
+
+        if unvisited_docs:
+            await self.visit(unvisited_docs)
+        else:
+            print("All related documents recently visited, exploring alternatives")
+
+    @on_visit('User')
+    async def audit_user_access(self, here: Node):
+        """Create audit trail for user access.
+
+        Args:
+            here: The visited User node
+        """
+        # Get current trail metadata (automatically includes timestamp, node_type, queue_length)
+        metadata = self.get_trail_metadata()
+
+        audit_entry = {
+            'timestamp': metadata.get('timestamp'),
+            'action': 'USER_ACCESS',
+            'user_id': here.id,
+            'user_name': getattr(here, 'name', 'Unknown'),
+            'trail_step': self.get_trail_length(),
+            'access_context': {
+                'queue_size': metadata.get('queue_length'),
+                'node_type': metadata.get('node_type'),
+                'previous_steps': self.get_recent_trail(count=3)[:-1]  # Exclude current
+            }
+        }
+
+        self.response.setdefault('audit_log', []).append(audit_entry)
+        print(f"📝 Audit: Accessed user {here.id} at step {audit_entry['trail_step']}")
+
+    @on_exit
+    async def comprehensive_analysis(self):
+        """Generate comprehensive trail and performance analysis."""
+        trail_path = await self.get_trail_path()
+
+        # Performance analysis
+        avg_processing_time = sum(m['processing_time'] for m in self.performance_metrics) / len(self.performance_metrics) if self.performance_metrics else 0
+
+        # Path efficiency analysis
+        total_steps = self.get_trail_length()
+        unique_nodes = len(set(self.get_trail()))
+
+        self.response['comprehensive_analysis'] = {
+            'trail_summary': {
+                'total_steps': total_steps,
+                'unique_nodes_visited': unique_nodes,
+                'path_efficiency': unique_nodes / total_steps if total_steps > 0 else 0,
+                'cycles_detected': len(self.response.get('cycles_detected', [])),
+                'trail_enabled': self.trail_enabled,
+                'trail_limit': self.max_trail_length
+            },
+            'performance_metrics': {
+                'avg_processing_time': avg_processing_time,
+                'total_processing_time': sum(m['processing_time'] for m in self.performance_metrics),
+                'slowest_step': max(self.performance_metrics, key=lambda x: x['processing_time']) if self.performance_metrics else None
+            },
+            'audit_summary': {
+                'total_audit_entries': len(self.response.get('audit_log', [])),
+                'user_accesses': len([e for e in self.response.get('audit_log', []) if e['action'] == 'USER_ACCESS'])
+            }
+        }
+
+        print("\n📈 Comprehensive Analysis Complete:")
+        print(f"  - Path efficiency: {self.response['comprehensive_analysis']['trail_summary']['path_efficiency']:.2%}")
+        print(f"  - Average processing time: {avg_processing_time:.3f}s")
+        print(f"  - Cycles detected: {len(self.response.get('cycles_detected', []))}")
+
+    async def analyze_document(self, doc):
+        """Simulate document analysis."""
+        import asyncio
+        await asyncio.sleep(0.02)  # Simulate processing time
+
+# Usage with trail management
+walker = AdvancedTrailWalker()
+
+# Enable debug mode for detailed trail information
+walker.debug_mode = True
+
+# Spawn and run analysis
+root = await Root.get()
+await walker.spawn(root)
+
+# Access comprehensive results
+analysis = walker.response.get('comprehensive_analysis', {})
+cycles = walker.response.get('cycles_detected', [])
+audit_log = walker.response.get('audit_log', [])
+
+print(f"Analysis complete. Efficiency: {analysis.get('trail_summary', {}).get('path_efficiency', 0):.2%}")
+print(f"Cycles detected: {len(cycles)}, Audit entries: {len(audit_log)}")
+```
+
+#### Trail API Quick Reference
+
+**Configuration (Read/Write):**
+- `self.trail_enabled = True` - Enable trail tracking
+- `self.max_trail_length = N` - Limit trail to N steps (0 = unlimited)
+
+**Trail Data (Read-Only Properties):**
+- `self.trail` - List of visited node IDs (returns copy)
+- `self.trail_edges` - Edge IDs between nodes (returns copy)
+- `self.trail_metadata` - Metadata per step (returns deep copy)
+
+**Trail Access Methods (O(1) operations):**
+- `self.get_trail()` - Get list of visited node IDs
+- `self.get_trail_length()` - Get current trail length
+- `self.get_recent_trail(count=N)` - Get last N trail steps
+- `self.clear_trail()` - Clear entire trail (only way to modify trail)
+
+**Advanced Access (Database operations):**
+- `await self.get_trail_nodes()` - Get actual Node objects from trail
+- `await self.get_trail_path()` - Get trail with connecting edges
+- `self.get_trail_metadata(step=-1)` - Get metadata for specific step
+
+**Use Cases:**
+- **Debugging**: Track walker path for troubleshooting
+- **Cycle Detection**: Avoid infinite loops in graph traversal
+- **Performance Analysis**: Measure processing time per step
+- **Audit Trails**: Comprehensive access logging for compliance
+- **Path Optimization**: Analyze and improve traversal efficiency
 
 ### Walker Queue Manipulation Methods
 

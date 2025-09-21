@@ -1107,3 +1107,16 @@ if __name__ == "__main__":
 ```
 
 The Server class provides a cleaner, more maintainable approach while preserving all the power of jvspatial and FastAPI.
+
+## See Also
+
+- [REST API Integration](rest-api.md) - Walker endpoints and API patterns
+- [Entity Reference](entity-reference.md) - Complete API reference
+- [MongoDB-Style Query Interface](mongodb-query-interface.md) - Query capabilities in endpoints
+- [Object Pagination Guide](pagination.md) - Paginating server responses
+- [Examples](examples.md) - Server usage examples
+- [GraphContext & Database Management](graph-context.md) - Database integration
+
+---
+
+**[← Back to README](../../README.md)** | **[REST API Integration ←](rest-api.md)**

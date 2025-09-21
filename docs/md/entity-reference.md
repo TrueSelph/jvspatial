@@ -1,3 +1,5 @@
+# Entity Reference
+
 ## Library Reference
 
 ### Core Classes
@@ -235,3 +237,15 @@ Register cleanup methods after traversal completion.
 async def cleanup(self):
     self.response["completed_at"] = datetime.now()
 ```
+
+## See Also
+
+- [MongoDB-Style Query Interface](mongodb-query-interface.md) - Advanced querying capabilities
+- [Object Pagination Guide](pagination.md) - Detailed pagination documentation
+- [Walker Queue Operations](walker-queue-operations.md) - Walker queue management
+- [Examples](examples.md) - Practical usage examples
+- [GraphContext & Database Management](graph-context.md) - Database integration
+
+---
+
+**[← Back to README](../../README.md)** | **[Examples →](examples.md)**

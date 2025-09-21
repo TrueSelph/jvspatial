@@ -197,24 +197,23 @@ class GraphContext:
             entity = target_class(id=data["id"], **context_data)
 
         elif entity_class.type_code == "e":
-            # Handle Edge-specific logic with source/target
-            # Handle both new and legacy data formats
+            # Handle Edge-specific logic with source/target/bidirectional
             if "source" in data and "target" in data:
-                # New format: source/target at top level
+                # New format: source/target/bidirectional at top level
                 source = data["source"]
                 target = data["target"]
-                direction = data.get("direction", "both")
+                bidirectional = data.get("bidirectional", True)
             else:
-                # Legacy format: source/target in context
+                # Context format: source/target/bidirectional in context
                 source = context_data.get("source", "")
                 target = context_data.get("target", "")
-                direction = context_data.get("direction", "both")
+                bidirectional = context_data.get("bidirectional", True)
 
             # Remove these from context_data to avoid duplication
             context_data = {
                 k: v
                 for k, v in context_data.items()
-                if k not in ["source", "target", "direction"]
+                if k not in ["source", "target", "bidirectional"]
             }
 
             # Extract _data if present
@@ -224,7 +223,7 @@ class GraphContext:
                 id=data["id"],
                 source=source,
                 target=target,
-                direction=direction,
+                bidirectional=bidirectional,
                 **context_data,
             )
 

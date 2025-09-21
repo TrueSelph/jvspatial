@@ -417,21 +417,17 @@ except Exception as e:
     print(f"Query error: {e}")
 ```
 
-## Migration from Direct Database Access
-
-If you're migrating from direct database access:
-
-### Before (Direct Database)
-```python
-# Old pattern - direct database access
-db = get_database()
-users = await db.find("user", {"age": {"$gte": 25}})
-```
-
-### After (Entity-Centric)
-```python
-# New pattern - entity-centric with MongoDB-style queries
-users = await User.find({"context.age": {"$gte": 25}})
-```
 
 The MongoDB-style query interface in jvspatial provides a powerful, consistent way to work with your graph data across any database backend, making it easy to build complex applications with familiar syntax.
+
+## See Also
+
+- [Entity Reference](entity-reference.md) - Complete API reference including query methods
+- [Object Pagination Guide](pagination.md) - Using queries with pagination
+- [Examples](examples.md) - Query examples and patterns
+- [GraphContext & Database Management](graph-context.md) - Database integration
+- [REST API Integration](rest-api.md) - Using queries in API endpoints
+
+---
+
+**[← Back to README](../../README.md)** | **[Entity Reference →](entity-reference.md)**

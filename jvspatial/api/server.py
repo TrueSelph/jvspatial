@@ -12,7 +12,18 @@ import logging
 import pkgutil
 import threading
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Set, Type, Union
+from typing import (
+    Any,
+    AsyncGenerator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Type,
+    Union,
+    cast,
+)
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -21,6 +32,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from jvspatial.api.endpoint_router import EndpointRouter
+from jvspatial.api.response import create_endpoint_helper
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node, Root, Walker
 from jvspatial.db.factory import get_database
@@ -249,7 +261,10 @@ class Server:
                 self._register_walker_dynamically(walker_class, path, methods, **kwargs)
 
             # Always register with the endpoint router
-            return self.endpoint_router.endpoint(path, methods, **kwargs)(walker_class)
+            return cast(
+                Type[Walker],
+                self.endpoint_router.endpoint(path, methods, **kwargs)(walker_class),
+            )
 
         return decorator
 
@@ -664,10 +679,32 @@ class Server:
                     kwargs = endpoint_config.get("kwargs", {})
 
                     if path:
+                        # Create wrapper that injects endpoint helper
+                        async def endpoint_wrapper(
+                            *args: Any, func_obj: Any = obj, **kwargs_inner: Any
+                        ) -> Any:
+                            # Create endpoint helper for function endpoints
+                            endpoint_helper = create_endpoint_helper(
+                                walker_instance=None
+                            )
+
+                            # Inject endpoint helper into function kwargs
+                            kwargs_inner["endpoint"] = endpoint_helper
+
+                            # Call original function with injected endpoint
+                            if inspect.iscoroutinefunction(func_obj):
+                                return await func_obj(*args, **kwargs_inner)
+                            else:
+                                return func_obj(*args, **kwargs_inner)
+
+                        # Preserve original function metadata
+                        endpoint_wrapper.__name__ = obj.__name__
+                        endpoint_wrapper.__doc__ = obj.__doc__
+
                         # Register the function as a custom route
                         route_config = {
                             "path": path,
-                            "endpoint": obj,
+                            "endpoint": endpoint_wrapper,
                             "methods": methods,
                             **kwargs,
                         }
@@ -679,7 +716,7 @@ class Server:
                             # If server is running, add route dynamically
                             if self._is_running and self.app is not None:
                                 self.app.add_api_route(
-                                    path, obj, methods=methods, **kwargs
+                                    path, endpoint_wrapper, methods=methods, **kwargs
                                 )
                                 self._logger.info(
                                     f"🔄 Dynamically registered function: {obj.__name__} at {path}"
@@ -1299,7 +1336,8 @@ def walker_endpoint(
     """Register a walker to the default server instance.
 
     This decorator allows packages to register walkers without having
-    direct access to a server instance.
+    direct access to a server instance. The decorator automatically injects
+    an 'endpoint' response helper into walker instances for semantic HTTP responses.
 
     Args:
         path: URL path for the endpoint
@@ -1313,6 +1351,9 @@ def walker_endpoint(
         @walker_endpoint("/users/create", methods=["POST"])
         class CreateUser(Walker):
             name: str = EndpointField(description="User name")
+
+            async def visit_root(self, node):
+                return self.endpoint.success(data={"name": self.name})
     """
 
     def decorator(walker_class: Type[Walker]) -> Type[Walker]:
@@ -1343,6 +1384,7 @@ def endpoint(
 
     This decorator allows packages to register simple function endpoints
     without Walker classes, similar to Flask or FastAPI decorators.
+    The decorator automatically injects an 'endpoint' parameter with response utilities.
 
     Args:
         path: URL path for the endpoint
@@ -1354,9 +1396,9 @@ def endpoint(
 
     Example:
         @endpoint("/users/count", methods=["GET"])
-        async def get_user_count():
+        async def get_user_count(endpoint):
             users = await User.all()
-            return {"count": len(users)}
+            return endpoint.success(data={"count": len(users)})
     """
 
     def decorator(func: Callable) -> Callable:
@@ -1371,9 +1413,27 @@ def endpoint(
         # Try to register with default server if available
         default_server = get_default_server()
         if default_server is not None:
+            # Create wrapper that injects endpoint helper
+            async def endpoint_wrapper(*args: Any, **kwargs_inner: Any) -> Any:
+                # Create endpoint helper for function endpoints
+                endpoint_helper = create_endpoint_helper(walker_instance=None)
+
+                # Inject endpoint helper into function kwargs
+                kwargs_inner["endpoint"] = endpoint_helper
+
+                # Call original function with injected endpoint
+                if inspect.iscoroutinefunction(func):
+                    return await func(*args, **kwargs_inner)
+                else:
+                    return func(*args, **kwargs_inner)
+
+            # Preserve original function metadata
+            endpoint_wrapper.__name__ = func.__name__
+            endpoint_wrapper.__doc__ = func.__doc__
+
             route_config = {
                 "path": path,
-                "endpoint": func,
+                "endpoint": endpoint_wrapper,
                 "methods": methods or ["GET"],
                 **kwargs,
             }
@@ -1387,12 +1447,13 @@ def endpoint(
                 "methods": methods or ["GET"],
                 "kwargs": kwargs,
                 "route_config": route_config,
+                "wrapper": endpoint_wrapper,
             }
 
             # If server is running, add route dynamically
             if default_server._is_running and default_server.app is not None:
                 default_server.app.add_api_route(
-                    path, func, methods=methods or ["GET"], **kwargs
+                    path, endpoint_wrapper, methods=methods or ["GET"], **kwargs
                 )
                 default_server._logger.info(
                     f"🔄 Dynamically registered function endpoint: {func.__name__} at {path}"

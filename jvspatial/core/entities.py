@@ -83,8 +83,6 @@ class Object(BaseModel):
     _data: dict = PrivateAttr(default_factory=dict)
     _graph_context: Optional["GraphContext"] = PrivateAttr(default=None)
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, validate_assignment=True)
-
     def set_context(self: "Object", context: "GraphContext") -> None:
         """Set the GraphContext for this object.
 
@@ -411,14 +409,23 @@ class Edge(Object):
     Attributes:
         source: Source node ID
         target: Target node ID
-        direction: Edge direction ('in', 'out', 'both')
+        bidirectional: Whether the edge is bidirectional
     """
 
     type_code: ClassVar[str] = "e"
     id: str = Field(default="")
     source: str
     target: str
-    direction: str = "both"
+    bidirectional: bool = True
+
+    @property
+    def direction(self: "Edge") -> str:
+        """Get the edge direction based on bidirectional flag.
+
+        Returns:
+            'both' if bidirectional, 'out' otherwise
+        """
+        return "both" if self.bidirectional else "out"
 
     def __init_subclass__(cls: Type["Edge"]) -> None:
         """Initialize subclass by registering visit hooks."""
@@ -451,11 +458,22 @@ class Edge(Object):
         direction: str = "both",
         **kwargs: Any,
     ) -> None:
-        """Initialize an Edge with source and target nodes."""
+        """Initialize an Edge with source and target nodes.
+
+        Args:
+            left: First node
+            right: Second node
+            direction: Direction used to orient source/target and set bidirectional
+                      'out': left->source, right->target, bidirectional=False
+                      'in': left->target, right->source, bidirectional=False
+                      'both': left->source, right->target, bidirectional=True
+            **kwargs: Additional edge attributes
+        """
         self._initializing = True
 
         source: str = ""
         target: str = ""
+        bidirectional: bool = direction == "both"
 
         if left and right:
             if direction == "out":
@@ -464,20 +482,25 @@ class Edge(Object):
             elif direction == "in":
                 source = right.id
                 target = left.id
-            else:
+            else:  # direction == "both"
                 source = left.id
                 target = right.id
 
+        # Allow override of computed values
         if "source" in kwargs:
             source = kwargs.pop("source")
         if "target" in kwargs:
             target = kwargs.pop("target")
+        if "bidirectional" in kwargs:
+            bidirectional = kwargs.pop("bidirectional")
 
         # Don't override ID if already provided
         if "id" not in kwargs:
             kwargs["id"] = generate_id("e", self.__class__.__name__)
 
-        kwargs.update({"source": source, "target": target, "direction": direction})
+        kwargs.update(
+            {"source": source, "target": target, "bidirectional": bidirectional}
+        )
 
         super().__init__(**kwargs)
         self._initializing = False
@@ -489,7 +512,7 @@ class Edge(Object):
             Dictionary representation of the edge
         """
         context = self.model_dump(
-            exclude={"id", "source", "target", "direction"}, exclude_none=False
+            exclude={"id", "source", "target", "bidirectional"}, exclude_none=False
         )
 
         # Include _data if it exists
@@ -502,8 +525,7 @@ class Edge(Object):
             "context": context,
             "source": self.source,
             "target": self.target,
-            "direction": self.direction,
-            "bidirectional": self.direction == "both",  # For backward compatibility
+            "bidirectional": self.bidirectional,
         }
 
     @classmethod
@@ -574,15 +596,15 @@ class Edge(Object):
         edges_data = await context.database.find(collection, {})
         edges = []
         for data in edges_data:
-            # Handle both new and legacy data formats
+            # Handle data format with bidirectional field
             if "source" in data and "target" in data:
                 source = data["source"]
                 target = data["target"]
-                direction = data.get("direction", "both")
+                bidirectional = data.get("bidirectional", True)
             else:
                 source = data["context"].get("source", "")
                 target = data["context"].get("target", "")
-                direction = data["context"].get("direction", "both")
+                bidirectional = data["context"].get("bidirectional", True)
 
             # Handle subclass instantiation based on stored name
             stored_name = data.get("name", cls.__name__)
@@ -591,7 +613,7 @@ class Edge(Object):
             context_data = {
                 k: v
                 for k, v in data["context"].items()
-                if k not in ["source", "target", "direction"]
+                if k not in ["source", "target", "bidirectional"]
             }
 
             # Extract _data if present
@@ -601,7 +623,7 @@ class Edge(Object):
                 id=data["id"],
                 source=source,
                 target=target,
-                direction=direction,
+                bidirectional=bidirectional,
                 **context_data,
             )
 
@@ -1516,6 +1538,7 @@ class Walker(BaseModel):
 
     Walkers are designed to traverse the graph by visiting nodes and following edges.
     They maintain a queue of nodes to visit and can carry state and responses during traversal.
+    They also track their traversal trail for path reconstruction and analysis.
 
     Attributes:
         id: Unique walker ID
@@ -1523,23 +1546,55 @@ class Walker(BaseModel):
         response: Response data from traversal
         current_node: Currently visited node
         paused: Whether traversal is paused
-        visited: Set of visited node IDs to avoid cycles
+        trail: Trail of visited node IDs in order (read-only)
+        trail_edges: Trail of edge IDs traversed between nodes (read-only)
+        trail_metadata: Additional metadata for each trail step (read-only)
+        trail_enabled: Whether trail tracking is enabled (configurable)
+        max_trail_length: Maximum trail length (0 = unlimited, configurable)
     """
+
+    # Trail properties are maintained internally during traversal:
+    # - trail, trail_edges, trail_metadata: Read-only, managed by walker
+    # - trail_enabled, max_trail_length: Configurable settings
 
     model_config = ConfigDict(extra="allow")
     type_code: ClassVar[str] = "w"
     id: str = Field(default="")
-    queue: deque = Field(default_factory=deque)
     response: dict = Field(default_factory=dict)
-    current_node: Optional[Node] = None
+    _queue: deque = PrivateAttr(default_factory=deque)
+    _current_node: Optional[Node] = PrivateAttr(default=None)
     _visit_hooks: ClassVar[dict] = {}
-    paused: bool = Field(default=False, exclude=True)
+    _paused: bool = PrivateAttr(default=False)
+
+    # Trail tracking attributes
+    _trail: List[str] = PrivateAttr(default_factory=list)  # Node IDs in visit order
+    _trail_edges: List[Optional[str]] = PrivateAttr(
+        default_factory=list
+    )  # Edge IDs between nodes
+    _trail_metadata: List[Dict[str, Any]] = PrivateAttr(
+        default_factory=list
+    )  # Metadata per step
+    _trail_enabled: bool = PrivateAttr(default=True)  # Whether to track trail
+    _max_trail_length: int = PrivateAttr(default=0)  # 0 = unlimited
 
     def __init__(self: "Walker", **kwargs: Any) -> None:
         """Initialize a walker with auto-generated ID if not provided."""
         if "id" not in kwargs:
             kwargs["id"] = generate_id(self.type_code, self.__class__.__name__)
+
+        # Extract private attr values from kwargs before calling super()
+        private_attrs = {
+            "trail_enabled": kwargs.pop("trail_enabled", True),
+            "max_trail_length": kwargs.pop("max_trail_length", 0),
+            "paused": kwargs.pop("paused", False),
+        }
+
         super().__init__(**kwargs)
+
+        # Set private attributes after initialization
+        self._trail_enabled = private_attrs["trail_enabled"]
+        self._max_trail_length = private_attrs["max_trail_length"]
+        self._paused = private_attrs["paused"]
 
     def __init_subclass__(cls: Type["Walker"]) -> None:
         """Handle subclass initialization."""
@@ -1567,6 +1622,89 @@ class Walker(BaseModel):
                             cls._visit_hooks[target] = []
                         cls._visit_hooks[target].append(method)
 
+    # Properties for backward compatibility
+    @property
+    def queue(self: "Walker") -> deque:
+        """Get the walker's queue."""
+        return self._queue
+
+    @queue.setter
+    def queue(self: "Walker", value: deque) -> None:
+        """Set the walker's queue."""
+        self._queue = value
+
+    @property
+    def current_node(self: "Walker") -> Optional[Node]:
+        """Get the current node being visited."""
+        return self._current_node
+
+    @current_node.setter
+    def current_node(self: "Walker", value: Optional[Node]) -> None:
+        """Set the current node being visited."""
+        self._current_node = value
+
+    @property
+    def paused(self: "Walker") -> bool:
+        """Get the paused state."""
+        return self._paused
+
+    @paused.setter
+    def paused(self: "Walker", value: bool) -> None:
+        """Set the paused state."""
+        self._paused = value
+
+    @property
+    def trail(self: "Walker") -> List[str]:
+        """Get the trail of visited node IDs (read-only).
+
+        The trail is maintained internally by the walker during traversal
+        and cannot be modified externally. Use clear_trail() to clear it.
+
+        Returns:
+            Copy of the trail list to prevent external modification
+        """
+        return self._trail.copy()
+
+    @property
+    def trail_edges(self: "Walker") -> List[Optional[str]]:
+        """Get the trail edges (read-only).
+
+        Returns:
+            Copy of the trail edges list to prevent external modification
+        """
+        return self._trail_edges.copy()
+
+    @property
+    def trail_metadata(self: "Walker") -> List[Dict[str, Any]]:
+        """Get the trail metadata (read-only).
+
+        Returns:
+            Copy of the trail metadata list to prevent external modification
+        """
+        import copy
+
+        return copy.deepcopy(self._trail_metadata)
+
+    @property
+    def trail_enabled(self: "Walker") -> bool:
+        """Get trail tracking enabled state."""
+        return self._trail_enabled
+
+    @trail_enabled.setter
+    def trail_enabled(self: "Walker", value: bool) -> None:
+        """Set trail tracking enabled state."""
+        self._trail_enabled = value
+
+    @property
+    def max_trail_length(self: "Walker") -> int:
+        """Get max trail length."""
+        return self._max_trail_length
+
+    @max_trail_length.setter
+    def max_trail_length(self: "Walker", value: int) -> None:
+        """Set max trail length."""
+        self._max_trail_length = value
+
     @property
     def here(self: "Walker") -> Optional[Node]:
         """Get the current node being visited.
@@ -1579,6 +1717,9 @@ class Walker(BaseModel):
     @property
     def visitor(self: "Walker") -> Optional["Walker"]:
         """Get the walker instance itself (as visitor).
+
+        With the visitor property, nodes can call methods on the walker that's visiting them,
+        enabling a conversation between the node and walker during traversal.
 
         Returns:
             The walker instance
@@ -1795,12 +1936,15 @@ class Walker(BaseModel):
 
     @contextmanager
     def visiting(
-        self: "Walker", item: Union["Node", Tuple[str, "Edge"]]
+        self: "Walker",
+        item: Union["Node", Tuple[str, "Edge"]],
+        edge_from_previous: Optional[str] = None,
     ) -> Generator[None, None, None]:
         """Context manager for visiting a node or edge.
 
         Args:
             item: Node, Edge, or tuple ('edge', Edge) to visit
+            edge_from_previous: Edge ID used to reach this node (for trail tracking)
         """
         if isinstance(item, tuple) and item[0] == "edge":
             # Visiting an edge
@@ -1816,6 +1960,20 @@ class Walker(BaseModel):
                 node = item
                 self.current_node = node
                 node.visitor = self
+
+                # Record trail step for this node
+                if self.trail_enabled:
+                    import time
+
+                    metadata = {
+                        "timestamp": time.time(),
+                        "node_type": node.__class__.__name__,
+                        "queue_length": (
+                            len(self.queue) if hasattr(self, "queue") else 0
+                        ),
+                    }
+                    self._record_trail_step(node, edge_from_previous, metadata)
+
                 try:
                     yield
                 finally:
@@ -1851,18 +2009,25 @@ class Walker(BaseModel):
         self.paused = False
         try:
             previous_node = None
+            connecting_edge_id = None
+
             while self.queue and not self.paused:
                 current = self.queue.popleft()
+                connecting_edge_id = None  # Reset for each iteration
 
-                # If we have a previous node and current node, traverse edges between them
+                # If we have a previous node and current node, find connecting edge and traverse
                 if (
                     previous_node
                     and isinstance(current, Node)
                     and not isinstance(current, tuple)
                 ):
+                    # Find the edge connecting these nodes for trail tracking
+                    connecting_edge_id = await self._find_connecting_edge(
+                        previous_node, current
+                    )
                     await self._traverse_edge_between_nodes(previous_node, current)
 
-                with self.visiting(current):
+                with self.visiting(current, connecting_edge_id):
                     try:
                         await self._process_hooks(current)
                     except TraversalSkipped:
@@ -1895,18 +2060,25 @@ class Walker(BaseModel):
         self.paused = False
         try:
             previous_node = getattr(self, "_last_node", None)
+            connecting_edge_id = None
+
             while self.queue and not self.paused:
                 current = self.queue.popleft()
+                connecting_edge_id = None  # Reset for each iteration
 
-                # If we have a previous node and current node, traverse edges between them
+                # If we have a previous node and current node, find connecting edge and traverse
                 if (
                     previous_node
                     and isinstance(current, Node)
                     and not isinstance(current, tuple)
                 ):
+                    # Find the edge connecting these nodes for trail tracking
+                    connecting_edge_id = await self._find_connecting_edge(
+                        previous_node, current
+                    )
                     await self._traverse_edge_between_nodes(previous_node, current)
 
-                with self.visiting(current):
+                with self.visiting(current, connecting_edge_id):
                     try:
                         await self._process_hooks(current)
                     except TraversalSkipped:
@@ -2023,6 +2195,35 @@ class Walker(BaseModel):
                     )
 
         return hooks
+
+    async def _find_connecting_edge(
+        self: "Walker", from_node: Node, to_node: Node
+    ) -> Optional[str]:
+        """Find the edge connecting two nodes and return its ID.
+
+        Args:
+            from_node: Source node
+            to_node: Target node
+
+        Returns:
+            The edge ID if found, None otherwise
+        """
+        try:
+            # Get all edges connected to the source node
+            edges = await from_node.edges()
+
+            # Find edge that connects from_node to to_node
+            for edge in edges:
+                if (edge.source == from_node.id and edge.target == to_node.id) or (
+                    edge.target == from_node.id and edge.source == to_node.id
+                ):
+                    return edge.id
+
+        except Exception:
+            # If there's an error, return None
+            pass
+
+        return None
 
     async def _traverse_edge_between_nodes(
         self: "Walker", from_node: Node, to_node: Node
@@ -2164,6 +2365,203 @@ class Walker(BaseModel):
                     walker_type=self.__class__.__name__,
                     target_type=context.__class__.__name__ if context else None,
                 )
+
+    # ============== TRAIL TRACKING METHODS ==============
+
+    def _record_trail_step(
+        self: "Walker",
+        node: Node,
+        edge_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Record a step in the walker's trail.
+
+        Args:
+            node: Node being visited
+            edge_id: ID of edge traversed to reach this node (None for starting node)
+            metadata: Additional metadata for this step
+        """
+        if not self._trail_enabled:
+            return
+
+        # Add node to trail
+        self._trail.append(node.id)
+        self._trail_edges.append(edge_id)
+        self._trail_metadata.append(metadata or {})
+
+        # Enforce max trail length if set
+        if self._max_trail_length > 0 and len(self._trail) > self._max_trail_length:
+            # Remove oldest entries
+            excess = len(self._trail) - self._max_trail_length
+            self._trail = self._trail[excess:]
+            self._trail_edges = self._trail_edges[excess:]
+            self._trail_metadata = self._trail_metadata[excess:]
+
+    def get_trail(self: "Walker") -> List[str]:
+        """Get the trail of visited node IDs.
+
+        Returns:
+            List of node IDs in the order they were visited
+        """
+        return self._trail.copy()
+
+    async def get_trail_nodes(self: "Walker") -> List[Node]:
+        """Get the actual Node objects from the trail.
+
+        Returns:
+            List of Node objects in the order they were visited
+        """
+        nodes = []
+        for node_id in self._trail:
+            try:
+                node = await Node.get(node_id)
+                if node:
+                    nodes.append(node)
+            except Exception:
+                continue  # Skip nodes that can't be retrieved
+        return nodes
+
+    async def get_trail_path(self: "Walker") -> List[Tuple[Node, Optional["Edge"]]]:
+        """Get the full trail path with nodes and connecting edges.
+
+        Returns:
+            List of tuples (node, edge) where edge is the edge used to reach the node
+            The first tuple will have edge=None (starting node)
+        """
+        path = []
+        nodes = await self.get_trail_nodes()
+
+        for i, node in enumerate(nodes):
+            edge = None
+            if i < len(self._trail_edges) and self._trail_edges[i] is not None:
+                edge_id = self._trail_edges[i]
+                if edge_id is not None:
+                    with suppress(Exception):
+                        edge = await Edge.get(edge_id)
+            path.append((node, edge))
+
+        return path
+
+    def get_trail_length(self: "Walker") -> int:
+        """Get the current length of the trail.
+
+        Returns:
+            Number of nodes in the trail
+        """
+        return len(self._trail)
+
+    def get_trail_metadata(self: "Walker", step: int = -1) -> Dict[str, Any]:
+        """Get metadata for a specific trail step.
+
+        Args:
+            step: Trail step index (negative for from-end indexing, default is last)
+
+        Returns:
+            Metadata dictionary for the specified step
+        """
+        if not self._trail_metadata:
+            return {}
+        try:
+            import copy
+
+            return copy.deepcopy(self._trail_metadata[step])
+        except IndexError:
+            return {}
+
+    def clear_trail(self: "Walker") -> None:
+        """Clear the entire trail history."""
+        self._trail.clear()
+        self._trail_edges.clear()
+        self._trail_metadata.clear()
+
+    def get_recent_trail(self: "Walker", count: int = 5) -> List[str]:
+        """Get the most recent N steps from the trail.
+
+        Args:
+            count: Number of recent steps to return
+
+        Returns:
+            List of node IDs from most recent steps
+        """
+        if count <= 0:
+            return []
+        return self._trail[-count:] if self._trail else []
+
+    def has_visited(self: "Walker", node_id: str) -> bool:
+        """Check if a node has been visited in this walker's trail.
+
+        Args:
+            node_id: ID of the node to check
+
+        Returns:
+            True if the node has been visited, False otherwise
+        """
+        return node_id in self._trail
+
+    def get_visit_count(self: "Walker", node_id: str) -> int:
+        """Get the number of times a node has been visited.
+
+        Args:
+            node_id: ID of the node to count visits for
+
+        Returns:
+            Number of times the node appears in the trail
+        """
+        return self._trail.count(node_id)
+
+    def detect_cycles(self: "Walker") -> List[Tuple[int, int]]:
+        """Detect cycles in the trail.
+
+        Returns:
+            List of tuples (start_index, end_index) representing cycle boundaries
+        """
+        cycles = []
+        seen_positions: Dict[str, int] = {}
+
+        for i, node_id in enumerate(self._trail):
+            if node_id in seen_positions:
+                # Found a cycle
+                start = seen_positions[node_id]
+                cycles.append((start, i))
+            else:
+                seen_positions[node_id] = i
+
+        return cycles
+
+    def get_trail_summary(self: "Walker") -> Dict[str, Any]:
+        """Get a summary of the current trail.
+
+        Returns:
+            Dictionary with trail statistics and information
+        """
+        cycles = self.detect_cycles()
+        unique_nodes = set(self._trail)
+
+        return {
+            "length": len(self._trail),
+            "unique_nodes": len(unique_nodes),
+            "cycles_detected": len(cycles),
+            "cycle_ranges": cycles,
+            "trail_enabled": self._trail_enabled,
+            "max_trail_length": self._max_trail_length,
+            "most_visited": (
+                max(self._trail, key=self._trail.count) if self._trail else None
+            ),
+            "recent_nodes": self.get_recent_trail(3),
+        }
+
+    def enable_trail_tracking(self: "Walker", max_length: int = 0) -> None:
+        """Enable trail tracking with optional maximum length.
+
+        Args:
+            max_length: Maximum trail length (0 for unlimited)
+        """
+        self.trail_enabled = True
+        self.max_trail_length = max_length
+
+    def disable_trail_tracking(self: "Walker") -> None:
+        """Disable trail tracking."""
+        self.trail_enabled = False
 
     async def _process_exit_hooks(self: "Walker") -> None:
         """Process all exit hooks after traversal completes."""

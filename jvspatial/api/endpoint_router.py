@@ -17,6 +17,7 @@ from pydantic import (
 )
 from pydantic.fields import FieldInfo, PydanticUndefined
 
+from jvspatial.api.response import create_endpoint_helper
 from jvspatial.core.entities import Node, Walker
 
 # Module-level Body instance to avoid B008 flake8 warning
@@ -524,7 +525,7 @@ class EndpointRouter:
         """Initialize the EndpointRouter with an APIRouter."""
         self.router = APIRouter()
 
-    def endpoint(
+    def walker_endpoint(
         self: "EndpointRouter",
         path: str,
         methods: Optional[List[str]] = None,
@@ -613,6 +614,8 @@ class EndpointRouter:
 
                     try:
                         walker = cls(**walker_data)
+                        # Inject endpoint response helper
+                        walker.endpoint = create_endpoint_helper(walker_instance=walker)
                     except ValidationError as e:
                         raise HTTPException(status_code=422, detail=e.errors())
 
@@ -726,6 +729,10 @@ class EndpointRouter:
 
                         try:
                             walker = cls(**walker_data)
+                            # Inject endpoint response helper
+                            walker.endpoint = create_endpoint_helper(
+                                walker_instance=walker
+                            )
                         except ValidationError as e:
                             raise HTTPException(status_code=422, detail=e.errors())
 
@@ -842,6 +849,8 @@ class EndpointRouter:
 
                     try:
                         walker = cls(**walker_data)
+                        # Inject endpoint response helper
+                        walker.endpoint = create_endpoint_helper(walker_instance=walker)
                     except ValidationError as e:
                         raise HTTPException(status_code=422, detail=e.errors())
 
@@ -878,5 +887,98 @@ class EndpointRouter:
                 )
 
             return cls
+
+        return decorator
+
+    def endpoint(
+        self: "EndpointRouter",
+        path: str,
+        methods: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> Callable[[Union[Type[Walker], Callable]], Union[Type[Walker], Callable]]:
+        """Universal endpoint decorator for both walkers and functions.
+
+        This decorator automatically detects whether the decorated object is a Walker
+        class or a function and applies the appropriate endpoint registration.
+        For Walker classes, it injects an 'endpoint' helper into the walker instance.
+        For functions, it injects an 'endpoint' parameter with response utilities.
+
+        Args:
+            path: The URL path for the endpoint
+            methods: HTTP methods allowed (default: ["POST"])
+            **kwargs: Additional arguments for route configuration
+
+        Returns:
+            Decorator function that works with both Walker classes and functions
+        """
+
+        def decorator(
+            target: Union[Type[Walker], Callable]
+        ) -> Union[Type[Walker], Callable]:
+            if inspect.isclass(target) and issubclass(target, Walker):
+                # Use walker endpoint decorator
+                return self.walker_endpoint(path, methods, **kwargs)(target)
+            else:
+                # Use function endpoint decorator
+                return self._function_endpoint_impl(path, methods, **kwargs)(target)
+
+        return decorator
+
+    def _function_endpoint_impl(
+        self: "EndpointRouter",
+        path: str,
+        methods: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> Callable[[Callable], Callable]:
+        """Internal implementation for function endpoint registration with endpoint response injection.
+
+        Args:
+            path: The URL path for the endpoint
+            methods: HTTP methods allowed (default: ["POST"])
+            **kwargs: Additional arguments for route configuration
+
+        Returns:
+            Decorator function for endpoint functions
+        """
+        if methods is None:
+            methods = ["POST"]
+
+        def decorator(func: Callable) -> Callable:
+            # Get the original function signature
+            sig = inspect.signature(func)
+
+            # Create wrapper function that injects endpoint helper
+            async def wrapper_handler(*args: Any, **kwargs_inner: Any) -> Any:
+                # Create endpoint helper for function endpoints
+                endpoint_helper = create_endpoint_helper(walker_instance=None)
+
+                # Inject endpoint helper into function kwargs
+                kwargs_inner["endpoint"] = endpoint_helper
+
+                # Call original function with injected endpoint
+                if inspect.iscoroutinefunction(func):
+                    return await func(*args, **kwargs_inner)
+                else:
+                    return func(*args, **kwargs_inner)
+
+            # Preserve original function metadata
+            wrapper_handler.__name__ = func.__name__
+            wrapper_handler.__doc__ = func.__doc__
+
+            # Update signature to include endpoint parameter
+            params = list(sig.parameters.values())
+            endpoint_param = inspect.Parameter(
+                "endpoint",
+                inspect.Parameter.KEYWORD_ONLY,
+                annotation="EndpointResponseHelper",
+            )
+            params.append(endpoint_param)
+            new_sig = sig.replace(parameters=params)
+            wrapper_handler.__signature__ = new_sig  # type: ignore
+
+            # Register the route
+            self.router.add_api_route(path, wrapper_handler, methods=methods, **kwargs)
+
+            return func  # Return original function for potential reuse
 
         return decorator

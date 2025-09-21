@@ -120,6 +120,7 @@ if __name__ == "__main__":
 - [MongoDB-Style Query Interface](#mongodb-style-query-interface)
 - [Object Pagination](#object-pagination)
 - [Walker Traversal Patterns](#walker-traversal-patterns)
+- [Walker Trail Tracking](#walker-trail-tracking)
 - [FastAPI Server Integration](#fastapi-server-integration)
 
 ### Advanced Topics
@@ -129,6 +130,7 @@ if __name__ == "__main__":
 - [Object Pagination Guide](docs/md/pagination.md)
 - [Entity Reference](docs/md/entity-reference.md)
 - [Walker Queue Operations](docs/md/walker-queue-operations.md)
+- [Walker Trail Tracking](docs/md/walker-trail-tracking.md)
 
 ### Resources
 - [Examples](docs/md/examples.md)
@@ -284,6 +286,86 @@ class DataCollector(Walker):
 # - disengage(): Permanently halt walker
 ```
 
+## Walker Trail Tracking
+
+jvspatial walkers include built-in trail tracking capabilities to monitor and record the path taken during graph traversal:
+
+```python
+from jvspatial.core import Walker, on_visit
+
+class TrackingWalker(Walker):
+    def __init__(self):
+        super().__init__()
+        # Enable trail tracking with maximum 50 steps
+        self.trail_enabled = True
+        self.max_trail_length = 50
+
+    @on_visit(User)
+    async def visit_user(self, here: User):
+        print(f"Visited user: {here.name}")
+
+        # Get current trail
+        trail = self.get_trail()  # List of node IDs
+        print(f"Current trail length: {len(trail)}")
+
+        # Get recent trail steps
+        recent_steps = self.get_recent_trail(count=3)
+        print(f"Recent steps: {recent_steps}")
+
+        # Continue traversal
+        colleagues = await here.nodes(node=['User'], department=here.department)
+        await self.visit(colleagues)
+
+    @on_exit
+    async def generate_trail_report(self):
+        """Generate a comprehensive trail report."""
+        # Get full trail with node objects
+        trail_nodes = await self.get_trail_nodes()
+
+        # Get trail with connecting edges
+        trail_path = await self.get_trail_path()
+
+        self.response["trail_report"] = {
+            "total_steps": self.get_trail_length(),
+            "visited_nodes": [node.name for node in trail_nodes],
+            "path_details": [
+                {
+                    "node": node.name,
+                    "edge": edge.edge_type if edge else "start"
+                }
+                for node, edge in trail_path
+            ]
+        }
+
+# Usage
+walker = TrackingWalker()
+root = await Root.get()
+await walker.spawn(root)
+
+# Access trail information
+print(f"Final trail: {walker.response['trail_report']}")
+```
+
+### Trail API Reference
+
+**Configuration (read/write):**
+- `trail_enabled` - Enable/disable trail tracking
+- `max_trail_length` - Maximum number of steps to retain (0 = unlimited)
+
+**Trail Data (read-only properties):**
+- `trail` - List of visited node IDs (returns copy to prevent modification)
+- `trail_edges` - List of edge IDs traversed between nodes (read-only)
+- `trail_metadata` - Metadata for each trail step (read-only)
+
+**Trail Access Methods:**
+- `get_trail()` - Get list of visited node IDs
+- `get_trail_nodes()` - Get actual Node objects from trail
+- `get_trail_path()` - Get trail with connecting edges
+- `get_trail_length()` - Get current trail length
+- `get_trail_metadata(step)` - Get metadata for specific step
+- `get_recent_trail(count)` - Get recent N steps
+- `clear_trail()` - Clear entire trail history (only way to modify trail)
+
 ## FastAPI Server Integration
 
 The jvspatial Server class provides seamless FastAPI integration with automatic OpenAPI documentation:
@@ -342,6 +424,50 @@ class AnalyzeUser(Walker):
 if __name__ == "__main__":
     server.run()  # Available at http://localhost:8000/docs
 ```
+
+### Enhanced Response Handling
+
+The `@walker_endpoint` and `@endpoint` decorators now automatically inject semantic response helpers for clean, flexible HTTP responses:
+
+```python
+@walker_endpoint("/api/users/profile", methods=["POST"])
+class UserProfileWalker(Walker):
+    user_id: str = EndpointField(description="User ID to retrieve")
+
+    @on_visit(User)
+    async def get_profile(self, here: User):
+        if here.id != self.user_id:
+            return  # Continue traversal
+
+        # Clean, semantic error responses
+        if not here.data:
+            return self.endpoint.not_found(
+                message="User not found",
+                details={"user_id": self.user_id}
+            )
+
+        # Successful response with proper status
+        return self.endpoint.success(
+            data={"id": here.id, "name": here.name},
+            message="User profile retrieved"
+        )
+
+@endpoint("/api/health", methods=["GET"])
+async def health_check(endpoint):
+    """Function endpoint with semantic responses."""
+    return endpoint.success(
+        data={"status": "healthy", "version": "1.0.0"},
+        message="Service is running"
+    )
+```
+
+**Available Response Methods:**
+- `endpoint.success()` - 200 OK responses
+- `endpoint.created()` - 201 Created responses
+- `endpoint.not_found()` - 404 Not Found errors
+- `endpoint.bad_request()` - 400 Bad Request errors
+- `endpoint.unauthorized()` - 401 Unauthorized errors
+- `endpoint.response()` - Flexible custom responses
 
 ### API Usage
 
