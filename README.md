@@ -41,6 +41,69 @@ pip install -e .[dev]
 - MongoDB 5.0+ (optional)
 - FastAPI 0.88+ (for REST features)
 
+## Environment Configuration
+
+jvspatial uses environment variables for database configuration and library setup. These variables provide flexible configuration without requiring code changes.
+
+### Core Database Configuration
+
+| Variable | Description | Default Value | Required |
+|----------|-------------|---------------|-----------|
+| `JVSPATIAL_DB_TYPE` | Database backend to use (`json` or `mongodb`) | `json` | No |
+| `JVSPATIAL_JSONDB_PATH` | Base path for JSON database files | `jvdb` | No |
+| `JVSPATIAL_MONGODB_URI` | MongoDB connection URI | `mongodb://localhost:27017` | No |
+| `JVSPATIAL_MONGODB_DB_NAME` | MongoDB database name | `jvspatial_db` | No |
+
+### Environment Setup Examples
+
+#### JSON Database (Default)
+```bash
+# Use default JSON database with custom path
+export JVSPATIAL_DB_TYPE=json
+export JVSPATIAL_JSONDB_PATH=/path/to/database
+```
+
+#### MongoDB Configuration
+```bash
+# Use MongoDB with custom connection
+export JVSPATIAL_DB_TYPE=mongodb
+export JVSPATIAL_MONGODB_URI=mongodb://user:password@localhost:27017
+export JVSPATIAL_MONGODB_DB_NAME=production_spatial_db
+```
+
+#### Production MongoDB with Authentication
+```bash
+# Production MongoDB setup with authentication
+export JVSPATIAL_DB_TYPE=mongodb
+export JVSPATIAL_MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/
+export JVSPATIAL_MONGODB_DB_NAME=jvspatial_production
+```
+
+### Using .env Files
+
+Create a `.env` file in your project root:
+
+```env
+# Database Configuration
+JVSPATIAL_DB_TYPE=mongodb
+JVSPATIAL_MONGODB_URI=mongodb://localhost:27017
+JVSPATIAL_MONGODB_DB_NAME=jvspatial_dev
+
+# Optional: JSON Database Path (if using JSON backend)
+JVSPATIAL_JSONDB_PATH=./data/jvdb
+```
+
+Then load it in your application:
+
+```python
+from dotenv import load_dotenv
+load_dotenv()  # Load .env file
+
+# jvspatial will automatically use the environment variables
+from jvspatial.core import GraphContext
+ctx = GraphContext()  # Uses environment configuration
+```
+
 ## Quick Start
 
 ### Entity-Centric CRUD Operations
@@ -125,6 +188,7 @@ if __name__ == "__main__":
 
 ### Advanced Topics
 - [GraphContext & Database Management](docs/md/graph-context.md)
+- [Environment Configuration](docs/md/environment-configuration.md)
 - [REST API Integration](docs/md/rest-api.md)
 - [MongoDB-Style Query Interface](docs/md/mongodb-query-interface.md)
 - [Object Pagination Guide](docs/md/pagination.md)

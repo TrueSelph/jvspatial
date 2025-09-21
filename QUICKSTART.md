@@ -6,6 +6,73 @@ This document provides guidance for AI language models and developers working wi
 
 The jvspatial library emphasizes **clean, entity-centric design** with a unified MongoDB-style query interface that works seamlessly across different database backends (JSON, MongoDB, custom implementations).
 
+## 🔧 Environment Setup
+
+Before getting started with jvspatial development, configure your environment variables for proper database connectivity.
+
+### Quick Setup
+
+1. **Copy the environment template:**
+   ```bash
+   cp .env.example .env
+   ```
+
+2. **Edit the .env file** with your preferred configuration:
+   ```env
+   # Choose database backend
+   JVSPATIAL_DB_TYPE=json              # or 'mongodb'
+
+   # JSON database configuration (default)
+   JVSPATIAL_JSONDB_PATH=./dev_data    # Local file storage path
+
+   # MongoDB configuration (if using MongoDB)
+   # JVSPATIAL_MONGODB_URI=mongodb://localhost:27017
+   # JVSPATIAL_MONGODB_DB_NAME=jvspatial_dev
+   ```
+
+3. **Load environment variables** in your code:
+   ```python
+   from dotenv import load_dotenv
+   load_dotenv()  # Load .env file
+
+   # jvspatial automatically uses environment variables
+   from jvspatial.core import GraphContext
+   ctx = GraphContext()  # Uses configured database
+   ```
+
+### Environment Variables Reference
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `JVSPATIAL_DB_TYPE` | `json` | Database backend (`json`, `mongodb`) |
+| `JVSPATIAL_JSONDB_PATH` | `jvdb` | Directory for JSON database files |
+| `JVSPATIAL_MONGODB_URI` | `mongodb://localhost:27017` | MongoDB connection string |
+| `JVSPATIAL_MONGODB_DB_NAME` | `jvspatial_db` | MongoDB database name |
+
+### Configuration Examples
+
+**Development (JSON Database):**
+```env
+JVSPATIAL_DB_TYPE=json
+JVSPATIAL_JSONDB_PATH=./dev_data
+```
+
+**Production (MongoDB):**
+```env
+JVSPATIAL_DB_TYPE=mongodb
+JVSPATIAL_MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/
+JVSPATIAL_MONGODB_DB_NAME=jvspatial_production
+```
+
+**Docker/Container Setup:**
+```env
+JVSPATIAL_DB_TYPE=mongodb
+JVSPATIAL_MONGODB_URI=mongodb://mongo_container:27017
+JVSPATIAL_MONGODB_DB_NAME=jvspatial_docker
+```
+
+> **📖 For comprehensive environment configuration details, see:** [Environment Configuration Guide](docs/md/environment-configuration.md)
+
 ## 📝 Code Generation Preferences
 
 ### 1. Entity-Centric CRUD Syntax (PREFERRED)
