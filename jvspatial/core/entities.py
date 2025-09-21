@@ -1540,17 +1540,32 @@ class Walker(BaseModel):
     They maintain a queue of nodes to visit and can carry state and responses during traversal.
     They also track their traversal trail for path reconstruction and analysis.
 
+    Infinite Walk Protection:
+    Walkers include comprehensive protection against infinite loops and runaway traversals
+    through multiple configurable limits and automatic halting mechanisms.
+
     Attributes:
         id: Unique walker ID
         queue: Queue of nodes to visit
         response: Response data from traversal
         current_node: Currently visited node
         paused: Whether traversal is paused
+
+        # Trail Tracking
         trail: Trail of visited node IDs in order (read-only)
         trail_edges: Trail of edge IDs traversed between nodes (read-only)
         trail_metadata: Additional metadata for each trail step (read-only)
         trail_enabled: Whether trail tracking is enabled (configurable)
         max_trail_length: Maximum trail length (0 = unlimited, configurable)
+
+        # Infinite Walk Protection
+        max_steps: Maximum number of steps before auto-halt (default: 10000)
+        max_visits_per_node: Maximum visits per node before auto-halt (default: 100)
+        max_execution_time: Maximum execution time in seconds (default: 300.0)
+        max_queue_size: Maximum queue size before limiting additions (default: 1000)
+        protection_enabled: Whether protection mechanisms are enabled (default: True)
+        step_count: Current number of steps taken (read-only)
+        node_visit_counts: Dictionary of per-node visit counts (read-only)
     """
 
     # Trail properties are maintained internally during traversal:
@@ -1577,16 +1592,56 @@ class Walker(BaseModel):
     _trail_enabled: bool = PrivateAttr(default=True)  # Whether to track trail
     _max_trail_length: int = PrivateAttr(default=0)  # 0 = unlimited
 
+    # Infinite walk protection attributes
+    _step_count: int = PrivateAttr(default=0)  # Current number of steps taken
+    _node_visit_counts: Dict[str, int] = PrivateAttr(
+        default_factory=dict
+    )  # Per-node visit counts
+    _start_time: Optional[float] = PrivateAttr(default=None)  # Traversal start time
+    _max_steps: int = PrivateAttr(default=10000)  # Maximum steps before halting
+    _max_visits_per_node: int = PrivateAttr(default=100)  # Maximum visits per node
+    _max_execution_time: float = PrivateAttr(
+        default=300.0
+    )  # Maximum execution time in seconds
+    _max_queue_size: int = PrivateAttr(default=1000)  # Maximum queue size
+    _protection_enabled: bool = PrivateAttr(
+        default=True
+    )  # Whether protection is enabled
+
     def __init__(self: "Walker", **kwargs: Any) -> None:
         """Initialize a walker with auto-generated ID if not provided."""
         if "id" not in kwargs:
             kwargs["id"] = generate_id(self.type_code, self.__class__.__name__)
+
+        # Import os for environment variable access
+        import os
 
         # Extract private attr values from kwargs before calling super()
         private_attrs = {
             "trail_enabled": kwargs.pop("trail_enabled", True),
             "max_trail_length": kwargs.pop("max_trail_length", 0),
             "paused": kwargs.pop("paused", False),
+            # Infinite walk protection attributes with environment variable support
+            "max_steps": kwargs.pop(
+                "max_steps", int(os.getenv("JVSPATIAL_WALKER_MAX_STEPS", "10000"))
+            ),
+            "max_visits_per_node": kwargs.pop(
+                "max_visits_per_node",
+                int(os.getenv("JVSPATIAL_WALKER_MAX_VISITS_PER_NODE", "100")),
+            ),
+            "max_execution_time": kwargs.pop(
+                "max_execution_time",
+                float(os.getenv("JVSPATIAL_WALKER_MAX_EXECUTION_TIME", "300.0")),
+            ),
+            "max_queue_size": kwargs.pop(
+                "max_queue_size",
+                int(os.getenv("JVSPATIAL_WALKER_MAX_QUEUE_SIZE", "1000")),
+            ),
+            "protection_enabled": kwargs.pop(
+                "protection_enabled",
+                os.getenv("JVSPATIAL_WALKER_PROTECTION_ENABLED", "true").lower()
+                == "true",
+            ),
         }
 
         super().__init__(**kwargs)
@@ -1595,6 +1650,13 @@ class Walker(BaseModel):
         self._trail_enabled = private_attrs["trail_enabled"]
         self._max_trail_length = private_attrs["max_trail_length"]
         self._paused = private_attrs["paused"]
+
+        # Set protection attributes
+        self._max_steps = private_attrs["max_steps"]
+        self._max_visits_per_node = private_attrs["max_visits_per_node"]
+        self._max_execution_time = private_attrs["max_execution_time"]
+        self._max_queue_size = private_attrs["max_queue_size"]
+        self._protection_enabled = private_attrs["protection_enabled"]
 
     def __init_subclass__(cls: Type["Walker"]) -> None:
         """Handle subclass initialization."""
@@ -1736,6 +1798,19 @@ class Walker(BaseModel):
             List of nodes added to the queue
         """
         nodes_list = nodes if isinstance(nodes, list) else [nodes]
+
+        # Check queue size protection
+        if (
+            self._protection_enabled
+            and (len(self.queue) + len(nodes_list)) > self._max_queue_size
+        ):
+            # Add only nodes that fit within the limit
+            available_space = max(0, self._max_queue_size - len(self.queue))
+            nodes_list = nodes_list[:available_space]
+            if available_space == 0:
+                # Queue is full, return empty list
+                return []
+
         self.queue.extend(nodes_list)
         return nodes_list
 
@@ -1996,7 +2071,13 @@ class Walker(BaseModel):
         Returns:
             The walker instance after traversal
         """
+        import time
         from collections import deque
+
+        # Initialize protection tracking
+        self._step_count = 0
+        self._node_visit_counts.clear()
+        self._start_time = time.time() if self._protection_enabled else None
 
         root = start or await Root.get()  # type: ignore[call-arg]
         # Preserve any existing queue items (like edges) and add the root at the beginning
@@ -2014,6 +2095,18 @@ class Walker(BaseModel):
             while self.queue and not self.paused:
                 current = self.queue.popleft()
                 connecting_edge_id = None  # Reset for each iteration
+
+                # Track step and node visits for protection BEFORE processing
+                if self._protection_enabled and isinstance(current, Node):
+                    self._step_count += 1
+                    node_id = current.id
+                    self._node_visit_counts[node_id] = (
+                        self._node_visit_counts.get(node_id, 0) + 1
+                    )
+
+                    # Check infinite walk protection after updating counters
+                    if not await self._check_protection_limits():
+                        break
 
                 # If we have a previous node and current node, find connecting edge and traverse
                 if (
@@ -2062,9 +2155,27 @@ class Walker(BaseModel):
             previous_node = getattr(self, "_last_node", None)
             connecting_edge_id = None
 
+            # Resume protection tracking if start time was not set
+            if self._protection_enabled and self._start_time is None:
+                import time
+
+                self._start_time = time.time()
+
             while self.queue and not self.paused:
                 current = self.queue.popleft()
                 connecting_edge_id = None  # Reset for each iteration
+
+                # Track step and node visits for protection BEFORE processing
+                if self._protection_enabled and isinstance(current, Node):
+                    self._step_count += 1
+                    node_id = current.id
+                    self._node_visit_counts[node_id] = (
+                        self._node_visit_counts.get(node_id, 0) + 1
+                    )
+
+                    # Check infinite walk protection after updating counters
+                    if not await self._check_protection_limits():
+                        break
 
                 # If we have a previous node and current node, find connecting edge and traverse
                 if (
@@ -2562,6 +2673,158 @@ class Walker(BaseModel):
     def disable_trail_tracking(self: "Walker") -> None:
         """Disable trail tracking."""
         self.trail_enabled = False
+
+    # ============== INFINITE WALK PROTECTION METHODS ==============
+
+    async def _check_protection_limits(self: "Walker") -> bool:
+        """Check if walker has exceeded any protection limits.
+
+        Returns:
+            True if walker can continue, False if limits exceeded
+        """
+        if not self._protection_enabled:
+            return True
+
+        import time
+
+        # Check step limit
+        if self._step_count >= self._max_steps:
+            self.response["protection_triggered"] = "max_steps"
+            self.response["steps_taken"] = self._step_count
+            self.response["max_steps"] = self._max_steps
+            await self.disengage()
+            return False
+
+        # Check execution time limit
+        if (
+            self._start_time
+            and (time.time() - self._start_time) >= self._max_execution_time
+        ):
+            self.response["protection_triggered"] = "timeout"
+            self.response["execution_time"] = time.time() - self._start_time
+            self.response["max_execution_time"] = self._max_execution_time
+            await self.disengage()
+            return False
+
+        # Check node visit frequency limits
+        for node_id, visit_count in self._node_visit_counts.items():
+            if visit_count > self._max_visits_per_node:
+                self.response["protection_triggered"] = "max_visits_per_node"
+                self.response["node_id"] = node_id
+                self.response["visit_count"] = visit_count
+                self.response["max_visits_per_node"] = self._max_visits_per_node
+                await self.disengage()
+                return False
+
+        return True
+
+    @property
+    def max_steps(self: "Walker") -> int:
+        """Get maximum steps limit."""
+        return self._max_steps
+
+    @max_steps.setter
+    def max_steps(self: "Walker", value: int) -> None:
+        """Set maximum steps limit."""
+        self._max_steps = max(0, value)
+
+    @property
+    def max_visits_per_node(self: "Walker") -> int:
+        """Get maximum visits per node limit."""
+        return self._max_visits_per_node
+
+    @max_visits_per_node.setter
+    def max_visits_per_node(self: "Walker", value: int) -> None:
+        """Set maximum visits per node limit."""
+        self._max_visits_per_node = max(0, value)
+
+    @property
+    def max_execution_time(self: "Walker") -> float:
+        """Get maximum execution time limit."""
+        return self._max_execution_time
+
+    @max_execution_time.setter
+    def max_execution_time(self: "Walker", value: float) -> None:
+        """Set maximum execution time limit."""
+        self._max_execution_time = max(0.0, value)
+
+    @property
+    def max_queue_size(self: "Walker") -> int:
+        """Get maximum queue size limit."""
+        return self._max_queue_size
+
+    @max_queue_size.setter
+    def max_queue_size(self: "Walker", value: int) -> None:
+        """Set maximum queue size limit."""
+        self._max_queue_size = max(0, value)
+
+    @property
+    def protection_enabled(self: "Walker") -> bool:
+        """Get protection enabled state."""
+        return self._protection_enabled
+
+    @protection_enabled.setter
+    def protection_enabled(self: "Walker", value: bool) -> None:
+        """Set protection enabled state."""
+        self._protection_enabled = value
+
+    @property
+    def step_count(self: "Walker") -> int:
+        """Get current step count."""
+        return self._step_count
+
+    @property
+    def node_visit_counts(self: "Walker") -> Dict[str, int]:
+        """Get dictionary of node visit counts."""
+        return self._node_visit_counts.copy()
+
+    def get_protection_status(self: "Walker") -> Dict[str, Any]:
+        """Get comprehensive protection status information.
+
+        Returns:
+            Dictionary with protection limits, current values, and percentages
+        """
+        import time
+
+        status = {
+            "protection_enabled": self._protection_enabled,
+            "step_count": self._step_count,
+            "max_steps": self._max_steps,
+            "step_usage_percent": (self._step_count / max(1, self._max_steps)) * 100,
+            "queue_size": len(self.queue),
+            "max_queue_size": self._max_queue_size,
+            "queue_usage_percent": (len(self.queue) / max(1, self._max_queue_size))
+            * 100,
+            "max_visits_per_node": self._max_visits_per_node,
+            "node_visit_counts": self._node_visit_counts.copy(),
+        }
+
+        if self._start_time:
+            elapsed_time = time.time() - self._start_time
+            status["elapsed_time"] = elapsed_time
+            status["max_execution_time"] = self._max_execution_time
+            status["time_usage_percent"] = (
+                elapsed_time / max(1.0, self._max_execution_time)
+            ) * 100
+        else:
+            status["elapsed_time"] = None
+            status["max_execution_time"] = self._max_execution_time
+            status["time_usage_percent"] = 0
+
+        # Find most visited node
+        if self._node_visit_counts:
+            most_visited_node = max(self._node_visit_counts.items(), key=lambda x: x[1])
+            status["most_visited_node"] = most_visited_node[0]
+            status["most_visited_count"] = most_visited_node[1]
+            status["most_visited_usage_percent"] = (
+                most_visited_node[1] / max(1, self._max_visits_per_node)
+            ) * 100
+        else:
+            status["most_visited_node"] = None
+            status["most_visited_count"] = 0
+            status["most_visited_usage_percent"] = 0
+
+        return status
 
     async def _process_exit_hooks(self: "Walker") -> None:
         """Process all exit hooks after traversal completes."""

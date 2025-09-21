@@ -18,6 +18,7 @@
 - **Async/await Architecture**: Native async support throughout the library
 - **Multi-backend Persistence**: JSON and MongoDB backends with extensible database interface
 - **Graph Traversal**: Precise control over walker-based graph traversal with semantic filtering
+- **Infinite Walk Protection**: Comprehensive safeguards against infinite loops with configurable limits
 - **Type Safety**: Pydantic-based modeling for nodes, edges, and walkers
 
 
@@ -53,6 +54,16 @@ jvspatial uses environment variables for database configuration and library setu
 | `JVSPATIAL_JSONDB_PATH` | Base path for JSON database files | `jvdb` | No |
 | `JVSPATIAL_MONGODB_URI` | MongoDB connection URI | `mongodb://localhost:27017` | No |
 | `JVSPATIAL_MONGODB_DB_NAME` | MongoDB database name | `jvspatial_db` | No |
+
+### Walker Infinite Walk Protection
+
+| Variable | Description | Default Value | Required |
+|----------|-------------|---------------|-----------|
+| `JVSPATIAL_WALKER_PROTECTION_ENABLED` | Enable/disable walker protection mechanisms | `true` | No |
+| `JVSPATIAL_WALKER_MAX_STEPS` | Maximum steps before auto-halt | `10000` | No |
+| `JVSPATIAL_WALKER_MAX_VISITS_PER_NODE` | Maximum visits per node before auto-halt | `100` | No |
+| `JVSPATIAL_WALKER_MAX_EXECUTION_TIME` | Maximum execution time in seconds | `300.0` | No |
+| `JVSPATIAL_WALKER_MAX_QUEUE_SIZE` | Maximum queue size before limiting additions | `1000` | No |
 
 ### Environment Setup Examples
 
@@ -91,6 +102,13 @@ JVSPATIAL_MONGODB_DB_NAME=jvspatial_dev
 
 # Optional: JSON Database Path (if using JSON backend)
 JVSPATIAL_JSONDB_PATH=./data/jvdb
+
+# Walker Protection Configuration
+JVSPATIAL_WALKER_PROTECTION_ENABLED=true
+JVSPATIAL_WALKER_MAX_STEPS=10000
+JVSPATIAL_WALKER_MAX_VISITS_PER_NODE=100
+JVSPATIAL_WALKER_MAX_EXECUTION_TIME=300.0
+JVSPATIAL_WALKER_MAX_QUEUE_SIZE=1000
 ```
 
 Then load it in your application:
@@ -189,6 +207,7 @@ if __name__ == "__main__":
 ### Advanced Topics
 - [GraphContext & Database Management](docs/md/graph-context.md)
 - [Environment Configuration](docs/md/environment-configuration.md)
+- [Infinite Walk Protection](docs/md/infinite-walk-protection.md)
 - [REST API Integration](docs/md/rest-api.md)
 - [MongoDB-Style Query Interface](docs/md/mongodb-query-interface.md)
 - [Object Pagination Guide](docs/md/pagination.md)
