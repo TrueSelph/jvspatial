@@ -34,27 +34,45 @@ class AuthConfig:
     """Configuration for authentication system."""
 
     def __init__(self):
+        import os
+
         # JWT Configuration
-        self.jwt_secret_key: str = (
-            "your-secret-key-change-in-production"  # Should be overridden
+        self.jwt_secret_key: str = os.getenv(
+            "JVSPATIAL_JWT_SECRET_KEY", "your-secret-key-change-in-production"
         )
-        self.jwt_algorithm: str = "HS256"
-        self.jwt_expiration_hours: int = 24
-        self.jwt_refresh_expiration_days: int = 30
+        self.jwt_algorithm: str = os.getenv("JVSPATIAL_JWT_ALGORITHM", "HS256")
+        self.jwt_expiration_hours: int = int(
+            os.getenv("JVSPATIAL_JWT_EXPIRATION_HOURS", "24")
+        )
+        self.jwt_refresh_expiration_days: int = int(
+            os.getenv("JVSPATIAL_JWT_REFRESH_EXPIRATION_DAYS", "30")
+        )
 
         # API Key Configuration
-        self.api_key_header: str = "X-API-Key"
-        self.api_key_query_param: str = "api_key"
-        self.hmac_header: str = "X-HMAC-Signature"
+        self.api_key_header: str = os.getenv("JVSPATIAL_API_KEY_HEADER", "X-API-Key")
+        self.api_key_query_param: str = os.getenv(
+            "JVSPATIAL_API_KEY_QUERY_PARAM", "api_key"
+        )
+        self.hmac_header: str = os.getenv("JVSPATIAL_HMAC_HEADER", "X-HMAC-Signature")
 
         # Rate Limiting
-        self.rate_limit_enabled: bool = True
-        self.default_rate_limit_per_hour: int = 1000
+        self.rate_limit_enabled: bool = (
+            os.getenv("JVSPATIAL_RATE_LIMIT_ENABLED", "true").lower() == "true"
+        )
+        self.default_rate_limit_per_hour: int = int(
+            os.getenv("JVSPATIAL_DEFAULT_RATE_LIMIT_PER_HOUR", "1000")
+        )
 
         # Security
-        self.require_https: bool = False  # Set to True in production
-        self.session_cookie_secure: bool = False  # Set to True in production
-        self.session_cookie_httponly: bool = True
+        self.require_https: bool = (
+            os.getenv("JVSPATIAL_REQUIRE_HTTPS", "false").lower() == "true"
+        )
+        self.session_cookie_secure: bool = (
+            os.getenv("JVSPATIAL_SESSION_COOKIE_SECURE", "false").lower() == "true"
+        )
+        self.session_cookie_httponly: bool = (
+            os.getenv("JVSPATIAL_SESSION_COOKIE_HTTPONLY", "true").lower() == "true"
+        )
 
 
 # Global auth config instance

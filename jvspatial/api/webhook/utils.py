@@ -413,11 +413,11 @@ def get_webhook_config_from_env() -> WebhookConfig:
     """Create WebhookConfig from environment variables.
 
     Environment variables:
-    - WEBHOOK_HMAC_SECRET: HMAC secret key
-    - WEBHOOK_HMAC_ALGORITHM: Hash algorithm (default: sha256)
-    - WEBHOOK_MAX_PAYLOAD_SIZE: Maximum payload size in bytes
-    - WEBHOOK_IDEMPOTENCY_TTL: Idempotency cache TTL in seconds
-    - WEBHOOK_HTTPS_REQUIRED: Require HTTPS (true/false)
+    - JVSPATIAL_WEBHOOK_HMAC_SECRET: HMAC secret key
+    - JVSPATIAL_WEBHOOK_HMAC_ALGORITHM: Hash algorithm (default: sha256)
+    - JVSPATIAL_WEBHOOK_MAX_PAYLOAD_SIZE: Maximum payload size in bytes
+    - JVSPATIAL_WEBHOOK_IDEMPOTENCY_TTL: Idempotency cache TTL in seconds
+    - JVSPATIAL_WEBHOOK_HTTPS_REQUIRED: Require HTTPS (true/false)
 
     Returns:
         WebhookConfig instance
@@ -425,11 +425,16 @@ def get_webhook_config_from_env() -> WebhookConfig:
     import os
 
     return WebhookConfig(
-        hmac_secret=os.getenv("WEBHOOK_HMAC_SECRET"),
-        hmac_algorithm=os.getenv("WEBHOOK_HMAC_ALGORITHM", "sha256"),
-        max_payload_size=int(os.getenv("WEBHOOK_MAX_PAYLOAD_SIZE", "1048576")),  # 1MB
-        idempotency_ttl=int(os.getenv("WEBHOOK_IDEMPOTENCY_TTL", "3600")),  # 1 hour
-        https_required=os.getenv("WEBHOOK_HTTPS_REQUIRED", "true").lower() == "true",
+        hmac_secret=os.getenv("JVSPATIAL_WEBHOOK_HMAC_SECRET"),
+        hmac_algorithm=os.getenv("JVSPATIAL_WEBHOOK_HMAC_ALGORITHM", "sha256"),
+        max_payload_size=int(
+            os.getenv("JVSPATIAL_WEBHOOK_MAX_PAYLOAD_SIZE", "1048576")
+        ),  # 1MB
+        idempotency_ttl=int(
+            os.getenv("JVSPATIAL_WEBHOOK_IDEMPOTENCY_TTL", "3600")
+        ),  # 1 hour
+        https_required=os.getenv("JVSPATIAL_WEBHOOK_HTTPS_REQUIRED", "true").lower()
+        == "true",
     )
 
 

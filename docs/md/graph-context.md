@@ -532,8 +532,8 @@ from jvspatial.core.context import GraphContext
 from jvspatial.db.factory import get_database
 
 def get_app_context() -> GraphContext:
-    db_type = os.getenv("DB_TYPE", "json")
-    base_path = os.getenv("DB_PATH", "./data")
+    db_type = os.getenv("JVSPATIAL_DB_TYPE", "json")
+    base_path = os.getenv("JVSPATIAL_JSONDB_PATH", "./jvdb")
 
     db = get_database(db_type=db_type, base_path=base_path)
     return GraphContext(database=db)

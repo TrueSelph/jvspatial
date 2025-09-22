@@ -105,14 +105,14 @@ The JSON database stores data in local files and is ideal for development, testi
 
 ```env
 JVSPATIAL_DB_TYPE=json
-JVSPATIAL_JSONDB_PATH=./data/spatial_db
+JVSPATIAL_JSONDB_PATH=./jvdb
 ```
 
 #### Path Examples
 
 ```bash
 # Relative paths (relative to application working directory)
-JVSPATIAL_JSONDB_PATH=./data
+JVSPATIAL_JSONDB_PATH=./jvdb
 JVSPATIAL_JSONDB_PATH=../shared/db
 
 # Absolute paths
@@ -184,7 +184,7 @@ JVSPATIAL_MONGODB_URI=mongodb://localhost:27017/?maxPoolSize=20&minPoolSize=5&co
 ```env
 # .env.development
 JVSPATIAL_DB_TYPE=json
-JVSPATIAL_JSONDB_PATH=./dev_data
+JVSPATIAL_JSONDB_PATH=./jvdb/dev
 ```
 
 ### Testing Environment
@@ -192,7 +192,7 @@ JVSPATIAL_JSONDB_PATH=./dev_data
 ```env
 # .env.test
 JVSPATIAL_DB_TYPE=json
-JVSPATIAL_JSONDB_PATH=./test_data
+JVSPATIAL_JSONDB_PATH=./jvdb/test
 ```
 
 ### Staging Environment

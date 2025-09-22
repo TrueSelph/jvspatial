@@ -187,7 +187,7 @@ def webhook_endpoint(
         methods: HTTP methods allowed (defaults to ["POST"])
         permissions: List of required permissions (all must be present)
         roles: List of required roles (user must have at least one)
-        hmac_secret: Shared secret for HMAC signature verification
+        hmac_secret: Shared secret for HMAC signature verification (overrides JVSPATIAL_WEBHOOK_HMAC_SECRET env var)
         idempotency_key_field: Header field for idempotency key
         idempotency_ttl_hours: TTL for idempotency records in hours
         async_processing: Queue for async handling
@@ -244,8 +244,13 @@ def webhook_endpoint(
         webhook_wrapper._endpoint_methods = methods  # type: ignore[attr-defined]
         webhook_wrapper._endpoint_server = server  # type: ignore[attr-defined]
 
-        # Webhook-specific metadata
-        webhook_wrapper._hmac_secret = hmac_secret  # type: ignore[attr-defined]
+        # Webhook-specific metadata with environment variable fallback
+        import os
+
+        effective_hmac_secret = hmac_secret or os.getenv(
+            "JVSPATIAL_WEBHOOK_HMAC_SECRET"
+        )
+        webhook_wrapper._hmac_secret = effective_hmac_secret  # type: ignore[attr-defined]
         webhook_wrapper._idempotency_key_field = idempotency_key_field  # type: ignore[attr-defined]
         webhook_wrapper._idempotency_ttl_hours = idempotency_ttl_hours  # type: ignore[attr-defined]
         webhook_wrapper._async_processing = async_processing  # type: ignore[attr-defined]
@@ -309,7 +314,7 @@ def webhook_walker_endpoint(
         methods: HTTP methods allowed (defaults to ["POST"])
         permissions: List of required permissions (all must be present)
         roles: List of required roles (user must have at least one)
-        hmac_secret: Shared secret for HMAC signature verification
+        hmac_secret: Shared secret for HMAC signature verification (overrides JVSPATIAL_WEBHOOK_HMAC_SECRET env var)
         idempotency_key_field: Header field for idempotency key
         idempotency_ttl_hours: TTL for idempotency records in hours
         async_processing: Queue for async handling
@@ -374,8 +379,13 @@ def webhook_walker_endpoint(
         walker_class._endpoint_methods = methods
         walker_class._endpoint_server = server
 
-        # Webhook-specific metadata
-        walker_class._hmac_secret = hmac_secret
+        # Webhook-specific metadata with environment variable fallback
+        import os
+
+        effective_hmac_secret = hmac_secret or os.getenv(
+            "JVSPATIAL_WEBHOOK_HMAC_SECRET"
+        )
+        walker_class._hmac_secret = effective_hmac_secret
         walker_class._idempotency_key_field = idempotency_key_field
         walker_class._idempotency_ttl_hours = idempotency_ttl_hours
         walker_class._async_processing = async_processing

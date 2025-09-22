@@ -103,7 +103,7 @@ JVSPATIAL_MONGODB_URI=mongodb://localhost:27017
 JVSPATIAL_MONGODB_DB_NAME=jvspatial_dev
 
 # Optional: JSON Database Path (if using JSON backend)
-JVSPATIAL_JSONDB_PATH=./data/jvdb
+JVSPATIAL_JSONDB_PATH=./jvdb
 
 # Walker Protection Configuration
 JVSPATIAL_WALKER_PROTECTION_ENABLED=true
@@ -685,10 +685,10 @@ server.run()  # Webhooks ready at /webhook/* paths
 
 ```bash
 # Global webhook settings
-WEBHOOK_HMAC_SECRET=your-global-hmac-secret
-WEBHOOK_MAX_PAYLOAD_SIZE=5242880  # 5MB
-WEBHOOK_IDEMPOTENCY_TTL=3600      # 1 hour
-WEBHOOK_HTTPS_REQUIRED=true
+JVSPATIAL_WEBHOOK_HMAC_SECRET=your-global-hmac-secret
+JVSPATIAL_WEBHOOK_MAX_PAYLOAD_SIZE=5242880  # 5MB
+JVSPATIAL_WEBHOOK_IDEMPOTENCY_TTL=3600      # 1 hour
+JVSPATIAL_WEBHOOK_HTTPS_REQUIRED=true
 ```
 
 ### Testing & Development

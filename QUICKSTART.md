@@ -23,7 +23,7 @@ Before getting started with jvspatial development, configure your environment va
    JVSPATIAL_DB_TYPE=json              # or 'mongodb'
 
    # JSON database configuration (default)
-   JVSPATIAL_JSONDB_PATH=./dev_data    # Local file storage path
+   JVSPATIAL_JSONDB_PATH=./jvdb/dev    # Local file storage path
 
    # MongoDB configuration (if using MongoDB)
    # JVSPATIAL_MONGODB_URI=mongodb://localhost:27017
@@ -54,7 +54,7 @@ Before getting started with jvspatial development, configure your environment va
 **Development (JSON Database):**
 ```env
 JVSPATIAL_DB_TYPE=json
-JVSPATIAL_JSONDB_PATH=./dev_data
+JVSPATIAL_JSONDB_PATH=./jvdb/dev
 ```
 
 **Production (MongoDB):**
@@ -1210,14 +1210,14 @@ Configure webhook behavior via environment variables:
 
 ```env
 # Global webhook settings
-WEBHOOK_HMAC_SECRET=your-global-hmac-secret
-WEBHOOK_MAX_PAYLOAD_SIZE=5242880  # 5MB
-WEBHOOK_IDEMPOTENCY_TTL=3600      # 1 hour
-WEBHOOK_HTTPS_REQUIRED=true
+JVSPATIAL_WEBHOOK_HMAC_SECRET=your-global-hmac-secret
+JVSPATIAL_WEBHOOK_MAX_PAYLOAD_SIZE=5242880  # 5MB
+JVSPATIAL_WEBHOOK_IDEMPOTENCY_TTL=3600      # 1 hour
+JVSPATIAL_WEBHOOK_HTTPS_REQUIRED=true
 
 # Service-specific secrets
-STRIPE_WEBHOOK_SECRET=whsec_stripe_secret_key
-GITHUB_WEBHOOK_SECRET=github_webhook_secret
+JVSPATIAL_WEBHOOK_STRIPE_SECRET=whsec_stripe_secret_key
+JVSPATIAL_WEBHOOK_GITHUB_SECRET=github_webhook_secret
 ```
 
 ### Testing Webhooks
