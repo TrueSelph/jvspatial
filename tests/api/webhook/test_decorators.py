@@ -28,7 +28,7 @@ class TestWebhookEndpointDecorator:
     def test_webhook_endpoint_basic(self):
         """Test basic @webhook_endpoint decorator application."""
 
-        @webhook_endpoint("/webhooks/basic")
+        @webhook_endpoint("/webhook/basic")
         async def basic_webhook(payload: dict, endpoint):
             return endpoint.webhook_response(status="ok")
 
@@ -38,7 +38,7 @@ class TestWebhookEndpointDecorator:
         assert basic_webhook._auth_required is False  # No permissions/roles specified
         assert basic_webhook._required_permissions == []
         assert basic_webhook._required_roles == []
-        assert basic_webhook._endpoint_path == "/webhooks/basic"
+        assert basic_webhook._endpoint_path == "/webhook/basic"
         assert basic_webhook._endpoint_methods == ["POST"]
 
         # Verify webhook-specific metadata
@@ -51,13 +51,13 @@ class TestWebhookEndpointDecorator:
         # Verify route config for registration
         assert hasattr(basic_webhook, "_route_config")
         route_config = basic_webhook._route_config
-        assert route_config["path"] == "/webhooks/basic"
+        assert route_config["path"] == "/webhook/basic"
         assert route_config["methods"] == ["POST"]
 
     def test_webhook_endpoint_with_custom_methods(self):
         """Test @webhook_endpoint with custom HTTP methods."""
 
-        @webhook_endpoint("/webhooks/custom", methods=["POST", "PUT"])
+        @webhook_endpoint("/webhook/custom", methods=["POST", "PUT"])
         async def custom_methods_webhook(payload: dict, endpoint):
             return endpoint.webhook_response(status="ok")
 
@@ -68,7 +68,7 @@ class TestWebhookEndpointDecorator:
         """Test @webhook_endpoint with required permissions."""
 
         @webhook_endpoint(
-            "/webhooks/secure",
+            "/webhook/secure",
             permissions=["process_webhooks", "read_events"],
             hmac_secret="test-secret",  # pragma: allowlist secret
         )
@@ -88,7 +88,7 @@ class TestWebhookEndpointDecorator:
         """Test @webhook_endpoint with path-based authentication."""
 
         @webhook_endpoint(
-            "/webhooks/stripe/{key}",
+            "/webhook/stripe/{key}",
             path_key_auth=True,
             hmac_secret="stripe-secret",  # pragma: allowlist secret
         )
@@ -100,13 +100,13 @@ class TestWebhookEndpointDecorator:
         assert (
             stripe_webhook._hmac_secret == "stripe-secret"  # pragma: allowlist secret
         )
-        assert stripe_webhook._endpoint_path == "/webhooks/stripe/{key}"
+        assert stripe_webhook._endpoint_path == "/webhook/stripe/{key}"
 
     def test_webhook_endpoint_path_key_validation(self):
         """Test that path_key_auth requires {key} parameter."""
         with pytest.raises(ValueError, match=r"must include \{key\} parameter"):
 
-            @webhook_endpoint("/webhooks/invalid", path_key_auth=True)
+            @webhook_endpoint("/webhook/invalid", path_key_auth=True)
             async def invalid_webhook(payload: dict, endpoint):
                 return endpoint.webhook_response()
 
@@ -114,7 +114,7 @@ class TestWebhookEndpointDecorator:
         """Test @webhook_endpoint with required roles."""
 
         @webhook_endpoint(
-            "/webhooks/admin/{route}/{auth_token}", roles=["admin", "webhook_manager"]
+            "/webhook/admin/{route}/{auth_token}", roles=["admin", "webhook_manager"]
         )
         async def admin_webhook(request):
             return {"status": "admin"}
@@ -128,7 +128,7 @@ class TestWebhookEndpointDecorator:
             return_value=self.mock_server,
         ):
 
-            @webhook_endpoint("/webhooks/register/{auth_token}")
+            @webhook_endpoint("/webhook/register/{auth_token}")
             async def register_webhook(request):
                 return {"status": "registered"}
 
@@ -142,7 +142,7 @@ class TestWebhookEndpointDecorator:
             "jvspatial.api.auth.decorators.get_default_server", return_value=None
         ):
 
-            @webhook_endpoint("/webhooks/deferred/{auth_token}")
+            @webhook_endpoint("/webhook/deferred/{auth_token}")
             async def deferred_webhook(request):
                 return {"status": "deferred"}
 
@@ -150,31 +150,31 @@ class TestWebhookEndpointDecorator:
             assert (
                 deferred_webhook._auth_required is False
             )  # No permissions/roles provided
-            assert deferred_webhook._endpoint_path == "/webhooks/deferred/{auth_token}"
+            assert deferred_webhook._endpoint_path == "/webhook/deferred/{auth_token}"
 
     def test_webhook_endpoint_path_pattern(self):
         """Test that the decorator uses the correct path pattern with route and auth_token."""
 
-        @webhook_endpoint("/webhooks/{route}/{auth_token}")
+        @webhook_endpoint("/webhook/{route}/{auth_token}")
         async def dynamic_route_webhook(request):
             return {"status": "dynamic"}
 
         # The path should include both route and auth_token parameters
-        assert dynamic_route_webhook._endpoint_path == "/webhooks/{route}/{auth_token}"
+        assert dynamic_route_webhook._endpoint_path == "/webhook/{route}/{auth_token}"
 
     def test_webhook_endpoint_custom_server(self):
         """Test @webhook_endpoint with explicit server parameter."""
         custom_server = MagicMock(spec=Server)
         custom_server._custom_routes = []
 
-        @webhook_endpoint("/webhooks/custom_server/{auth_token}", server=custom_server)
+        @webhook_endpoint("/webhook/custom_server/{auth_token}", server=custom_server)
         async def custom_server_webhook(request):
             return {"status": "custom"}
 
         # Should use custom server for registration
         assert len(custom_server._custom_routes) > 0
         assert any(
-            route["path"] == "/webhooks/custom_server/{auth_token}"
+            route["path"] == "/webhook/custom_server/{auth_token}"
             for route in custom_server._custom_routes
         )
 
@@ -184,7 +184,7 @@ class TestWebhookEndpointDecorator:
         mock_request = MagicMock()
         mock_request.state.current_user = self.test_user  # Mock auth already done
 
-        @webhook_endpoint("/webhooks/execute/{auth_token}")
+        @webhook_endpoint("/webhook/execute/{auth_token}")
         async def execute_webhook(request):
             user = request.state.current_user
             return {"user_id": user.id, "status": "executed"}
@@ -199,7 +199,7 @@ class TestWebhookEndpointDecorator:
         from jvspatial.api.auth.decorators import AuthAwareEndpointProcessor
 
         @webhook_endpoint(
-            "/webhooks/metadata/{route}/{auth_token}",
+            "/webhook/metadata/{route}/{auth_token}",
             permissions=["webhook_access"],
             roles=["operator"],
         )
@@ -214,15 +214,13 @@ class TestWebhookEndpointDecorator:
         assert requirements["auth_required"] is True
         assert requirements["required_permissions"] == ["webhook_access"]
         assert requirements["required_roles"] == ["operator"]
-        assert (
-            requirements["endpoint_path"] == "/webhooks/metadata/{route}/{auth_token}"
-        )
+        assert requirements["endpoint_path"] == "/webhook/metadata/{route}/{auth_token}"
 
     def test_webhook_endpoint_no_auth_required_variant(self):
         """Test variant without authentication (no permissions/roles)."""
 
         # Test that webhook_endpoint works without permissions/roles (auth_required=False)
-        @webhook_endpoint("/webhooks/noauth/{auth_token}")
+        @webhook_endpoint("/webhook/noauth/{auth_token}")
         async def noauth_webhook(request):
             return {"status": "no auth"}
 
@@ -237,7 +235,7 @@ class TestWebhookEndpointDecorator:
 
         with pytest.raises(TypeError):
             # Should not work with classes (walker_endpoint would be used)
-            @webhook_endpoint("/webhooks/walker/{auth_token}")
+            @webhook_endpoint("/webhook/walker/{auth_token}")
             class WalkerWebhook(Walker):
                 pass
 

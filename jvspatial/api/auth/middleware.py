@@ -281,16 +281,16 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         raw_body = None
         content_type = None
 
-        if request.url.path.startswith("/webhooks/"):
+        if request.url.path.startswith("/webhook/"):
             # Read raw body once (consumes stream)
             raw_body = await request.body()
             content_type = request.headers.get("content-type", "")
             request.state.raw_body = raw_body
             request.state.content_type = content_type
 
-            # Parse path: /webhooks/{route}/{key_id}:{secret}
+            # Parse path: /webhook/{route}/{key_id}:{secret}
             path_parts = request.url.path.strip("/").split("/")
-            if len(path_parts) == 3 and path_parts[0] == "webhooks":
+            if len(path_parts) == 3 and path_parts[0] == "webhook":
                 route = path_parts[1]
                 auth_token = path_parts[2]
                 if ":" in auth_token:

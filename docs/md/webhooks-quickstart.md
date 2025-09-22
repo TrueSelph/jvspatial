@@ -2,6 +2,10 @@
 
 JVspatial provides powerful webhook functionality through the `@webhook_endpoint` and `@webhook_walker_endpoint` decorators, enabling secure, reliable webhook processing with features like HMAC verification, idempotency handling, and asynchronous processing.
 
+## Simplified Response Handling
+
+Webhook endpoints use the standard endpoint response methods (`endpoint.success()`, `endpoint.bad_request()`, `endpoint.server_error()`, etc.) instead of webhook-specific response functions. This provides consistency across all endpoint types while maintaining proper HTTP status codes and response formatting.
+
 ## Basic Usage
 
 ### Simple Webhook Endpoint
@@ -9,7 +13,7 @@ JVspatial provides powerful webhook functionality through the `@webhook_endpoint
 ```python
 from jvspatial.api.auth.decorators import webhook_endpoint
 
-@webhook_endpoint("/webhooks/simple")
+@webhook_endpoint("/webhook/simple")
 async def simple_webhook(payload: dict, endpoint):
     """Process webhook payload and return response."""
     event_type = payload.get("type", "unknown")
@@ -17,10 +21,10 @@ async def simple_webhook(payload: dict, endpoint):
     # Process the event
     print(f"Received webhook: {event_type}")
 
-    # Return standardized webhook response
-    return endpoint.webhook_response(
-        status="processed",
-        message=f"Successfully processed {event_type} event"
+    # Return standardized response
+    return endpoint.success(
+        message=f"Successfully processed {event_type} event",
+        data={"status": "processed"}
     )
 ```
 
@@ -30,7 +34,7 @@ async def simple_webhook(payload: dict, endpoint):
 from jvspatial.api.auth.decorators import webhook_walker_endpoint
 from jvspatial.core.entities import Walker, Node, on_visit
 
-@webhook_walker_endpoint("/webhooks/data-update")
+@webhook_walker_endpoint("/webhook/data-update")
 class DataUpdateWalker(Walker):
     """Walker that updates graph data based on webhook events."""
 
@@ -58,7 +62,7 @@ class DataUpdateWalker(Walker):
 
 ```python
 @webhook_endpoint(
-    "/webhooks/payment",
+    "/webhook/payment",
     hmac_secret="your-webhook-secret"
 )
 async def payment_webhook(payload: dict, endpoint):
@@ -66,9 +70,9 @@ async def payment_webhook(payload: dict, endpoint):
     # Only authenticated requests reach this handler
 
     payment_id = payload.get("payment_id")
-    return endpoint.webhook_response(
-        status="processed",
-        payment_id=payment_id
+    return endpoint.success(
+        message="Payment processed",
+        data={"status": "processed", "payment_id": payment_id}
     )
 ```
 
@@ -76,7 +80,7 @@ async def payment_webhook(payload: dict, endpoint):
 
 ```python
 @webhook_endpoint(
-    "/webhooks/stripe/{key}",
+    "/webhook/stripe/{key}",
     path_key_auth=True,
     hmac_secret="stripe-webhook-secret"
 )
@@ -89,7 +93,10 @@ async def stripe_webhook(raw_body: bytes, content_type: str, endpoint):
         import json
         payload = json.loads(raw_body.decode('utf-8'))
 
-    return endpoint.webhook_response(status="received")
+    return endpoint.success(
+        message="Webhook received",
+        data={"status": "received"}
+    )
 ```
 
 ## Advanced Features
@@ -98,7 +105,7 @@ async def stripe_webhook(raw_body: bytes, content_type: str, endpoint):
 
 ```python
 @webhook_endpoint(
-    "/webhooks/order",
+    "/webhook/order",
     hmac_secret="order-secret",
     idempotency_ttl_hours=48  # Keep idempotency records for 2 days
 )
@@ -109,9 +116,9 @@ async def order_webhook(payload: dict, endpoint):
     order_id = payload.get("order_id")
     # Process order...
 
-    return endpoint.webhook_response(
-        status="processed",
-        order_id=order_id
+    return endpoint.success(
+        message="Order processed",
+        data={"status": "processed", "order_id": order_id}
     )
 ```
 
@@ -119,7 +126,7 @@ async def order_webhook(payload: dict, endpoint):
 
 ```python
 @webhook_endpoint(
-    "/webhooks/bulk-process",
+    "/webhook/bulk-process",
     async_processing=True,
     permissions=["process_bulk_data"]
 )
@@ -132,10 +139,13 @@ async def bulk_processing_webhook(payload: dict, endpoint):
     records = payload.get("records", [])
 
     # Process large batch of records...
-    return endpoint.webhook_response(
-        status="processed",
-        batch_id=batch_id,
-        record_count=len(records)
+    return endpoint.success(
+        message="Batch processing initiated",
+        data={
+            "status": "processed",
+            "batch_id": batch_id,
+            "record_count": len(records)
+        }
     )
 ```
 
@@ -143,7 +153,7 @@ async def bulk_processing_webhook(payload: dict, endpoint):
 
 ```python
 @webhook_endpoint(
-    "/webhooks/admin",
+    "/webhook/admin",
     permissions=["admin_webhooks"],
     roles=["admin", "webhook_manager"]
 )
@@ -152,7 +162,10 @@ async def admin_webhook(payload: dict, endpoint):
     # Only users with admin_webhooks permission AND
     # admin or webhook_manager role can access this
 
-    return endpoint.webhook_response(status="processed")
+    return endpoint.success(
+        message="Admin webhook processed",
+        data={"status": "processed"}
+    )
 ```
 
 ## Payload Processing
@@ -162,7 +175,7 @@ async def admin_webhook(payload: dict, endpoint):
 The webhook decorators automatically inject the appropriate payload format based on your function parameters:
 
 ```python
-@webhook_endpoint("/webhooks/flexible")
+@webhook_endpoint("/webhook/flexible")
 async def flexible_webhook(
     payload: dict,          # Parsed JSON payload
     raw_body: bytes,        # Raw request body
@@ -174,48 +187,51 @@ async def flexible_webhook(
 
     # Access different payload formats as needed
     if content_type == "application/json":
-        return endpoint.webhook_response(data=payload)
+        return endpoint.success(
+            message="JSON payload processed",
+            data=payload
+        )
     else:
         # Process raw body for other content types
-        return endpoint.webhook_response(
-            status="received",
-            content_type=content_type,
-            size=len(raw_body)
+        return endpoint.success(
+            message="Raw payload received",
+            data={
+                "status": "received",
+                "content_type": content_type,
+                "size": len(raw_body)
+            }
         )
 ```
 
 ## Error Handling
 
 ```python
-@webhook_endpoint("/webhooks/robust")
+@webhook_endpoint("/webhook/robust")
 async def robust_webhook(payload: dict, endpoint):
     """Webhook with comprehensive error handling."""
 
     try:
         # Validate required fields
         if "required_field" not in payload:
-            return endpoint.webhook_error(
-                message="Missing required_field",
-                error_code=400
+            return endpoint.bad_request(
+                message="Missing required_field"
             )
 
         # Process payload...
         result = process_data(payload)
 
-        return endpoint.webhook_response(
-            status="processed",
-            result=result
+        return endpoint.success(
+            message="Webhook processed successfully",
+            data={"status": "processed", "result": result}
         )
 
     except ValueError as e:
-        return endpoint.webhook_error(
-            message=f"Validation error: {e}",
-            error_code=400
+        return endpoint.bad_request(
+            message=f"Validation error: {e}"
         )
     except Exception as e:
-        return endpoint.webhook_error(
-            message="Internal processing error",
-            error_code=500
+        return endpoint.server_error(
+            message="Internal processing error"
         )
 ```
 
@@ -295,7 +311,7 @@ def test_webhook_endpoint():
 
     # Test successful webhook
     response = client.post(
-        "/webhooks/simple",
+        "/webhook/simple",
         json={"type": "test_event", "data": {"test": True}},
         headers={"Content-Type": "application/json"}
     )
@@ -306,7 +322,7 @@ def test_webhook_endpoint():
 
     # Test with idempotency key
     response = client.post(
-        "/webhooks/simple",
+        "/webhook/simple",
         json={"type": "test_event"},
         headers={
             "Content-Type": "application/json",
@@ -318,7 +334,7 @@ def test_webhook_endpoint():
 
     # Duplicate request should return cached response
     response2 = client.post(
-        "/webhooks/simple",
+        "/webhook/simple",
         json={"type": "different_event"},  # Different payload
         headers={
             "Content-Type": "application/json",
@@ -363,26 +379,42 @@ print(f"Cleaned up {cleanup_stats['events_cleaned']} events")
 9. **Use permissions and roles** to restrict access to sensitive webhook endpoints
 10. **Test webhook endpoints thoroughly** including edge cases and error conditions
 
-## Migration from Legacy Webhooks
+## Response Method Migration
 
-If you have existing webhook endpoints using the old `{auth_token}` pattern, you can migrate them:
+Webhook endpoints use standard endpoint response methods. This change provides consistency across all endpoint types.
+
+# Standard endpoint response methods
+@webhook_endpoint("/webhook/new")
+async def new_webhook(payload: dict, endpoint):
+    # Success response
+    return endpoint.success(
+        message="Event processed",
+        data={"status": "processed"}
+    )
+
+    # Error response
+    return endpoint.bad_request(
+        message="Validation failed"
+    )
+```
+
+## Authenticated Webhooks
+
+
 
 ```python
-# Old pattern (still supported)
-@webhook_endpoint("/webhooks/legacy/{auth_token}")
-async def legacy_webhook(request):
-    # Manual request processing
-    pass
 
-# New pattern (recommended)
+
 @webhook_endpoint(
-    "/webhooks/modern/{key}",
+    "/webhook/modern/{key}",
     path_key_auth=True,
     hmac_secret="webhook-secret"
 )
 async def modern_webhook(payload: dict, endpoint):
     # Automatic payload injection and response helpers
-    return endpoint.webhook_response(status="processed")
+    return endpoint.success(
+        message="Webhook processed",
+        data={"status": "processed"}
+    )
 ```
 
-The new pattern provides better security, automatic payload processing, standardized responses, and improved error handling.

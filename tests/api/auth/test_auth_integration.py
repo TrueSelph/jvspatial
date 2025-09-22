@@ -678,7 +678,7 @@ class TestAuthSystemScenarios:
                 }
 
         # Webhook endpoints for external integration
-        @auth_endpoint("/webhooks/external", permissions=["webhook_access"])
+        @auth_endpoint("/webhook/external", permissions=["webhook_access"])
         async def external_webhook():
             return {"webhook": "processed", "timestamp": datetime.now().isoformat()}
 

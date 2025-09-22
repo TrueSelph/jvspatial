@@ -48,7 +48,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         self,
         app,
         config: Optional[WebhookConfig] = None,
-        webhook_path_pattern: str = "/webhooks/",
+        webhook_path_pattern: str = "/webhook/",
         server=None,
     ):
         """Initialize webhook middleware.
@@ -441,8 +441,8 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         """Extract route parameter from webhook URL path.
 
         Attempts to extract route from patterns like:
-        - /webhooks/{route}/{auth_token}
-        - /webhooks/process/{route}/{auth_token}
+        - /webhook/{route}/{auth_token}
+        - /webhook/process/{route}/{auth_token}
 
         Args:
             request: FastAPI request object
@@ -456,13 +456,13 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         try:
             # Look for common webhook patterns
             if len(path_parts) >= 3 and path_parts[0] == "webhooks":
-                # Pattern: /webhooks/{route}/{auth_token}
+                # Pattern: /webhook/{route}/{auth_token}
                 if len(path_parts) == 3:
                     return str(path_parts[1])  # route is second part
-                # Pattern: /webhooks/process/{route}/{auth_token}
+                # Pattern: /webhook/process/{route}/{auth_token}
                 elif len(path_parts) == 4 and path_parts[1] == "process":
                     return str(path_parts[2])  # route is third part
-                # Pattern: /webhooks/{service}/{route}/{auth_token}
+                # Pattern: /webhook/{service}/{route}/{auth_token}
                 elif len(path_parts) >= 4:
                     # Could be service or route - prefer route (second-to-last non-token)
                     return str(path_parts[-2])  # Second to last (before auth_token)
@@ -478,7 +478,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
 def add_webhook_middleware(
     app,
     config: Optional[WebhookConfig] = None,
-    webhook_path_pattern: str = "/webhooks/",
+    webhook_path_pattern: str = "/webhook/",
     server=None,
 ) -> None:
     """Add webhook middleware to FastAPI application.

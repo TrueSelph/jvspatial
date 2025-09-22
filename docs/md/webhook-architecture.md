@@ -2,18 +2,9 @@
 
 ## Overview
 
-This document outlines the architecture for a new webhook endpoint system in JVspatial, introducing decorators `@webhook_endpoint` and `@webhook_walker_endpoint`. These decorators extend the existing `@endpoint` and `@walker_endpoint` patterns to support webhook-specific functionality while maintaining consistency in registration, metadata-driven authentication, and server integration.
+This document outlines the architecture for the webhook endpoint system in jvspatial built around decorators `@webhook_endpoint` and `@webhook_walker_endpoint`. These decorators extend the existing `@endpoint` and `@walker_endpoint` patterns to support webhook-specific functionality while maintaining consistency in registration, metadata-driven authentication, and server integration.
 
-The system registers POST routes for incoming webhook payloads, supports optional authentication via permissions and roles (checked by existing middleware), and incorporates webhook standards compliance including HTTPS enforcement, HMAC signature verification, idempotency keys, asynchronous processing, robust error handling (always acknowledging receipt with HTTP 200), and retry mechanisms.
-
-Key goals:
-- Seamless integration with the existing FastAPI-based server and GraphContext.
-- Minimal disruption to current decorator patterns.
-- Enhanced security and reliability for external event-driven integrations (e.g., from GitHub, Stripe, or custom services).
-
-## Decorator Design
-
-The new decorators follow the structure of `auth_endpoint` and `auth_walker_endpoint` from `jvspatial/api/auth/decorators.py`, storing metadata on the decorated function or class and deferring registration to the server instance (via `get_default_server()` or explicit `server` param).
+The system registers GET/POST routes for incoming webhook payloads, supports optional authentication via permissions and roles (checked by existing middleware), and incorporates webhook standards compliance including HTTPS enforcement, HMAC signature verification, idempotency keys, asynchronous processing, robust error handling (always acknowledging receipt with HTTP 200), and retry mechanisms.
 
 ### @webhook_endpoint
 
@@ -24,7 +15,7 @@ For simple function-based webhook handlers (non-graph traversal).
 @webhook_endpoint(
     path: str,
     *,
-    methods: List[str] = ["POST"],  # Fixed to POST for webhooks
+    methods: List[str] = ["POST"],  # GET or POST for webhooks
     permissions: Optional[List[str]] = None,
     roles: Optional[List[str]] = None,
     hmac_secret: Optional[str] = None,  # Shared secret for HMAC verification
@@ -47,7 +38,7 @@ For simple function-based webhook handlers (non-graph traversal).
 from jvspatial.api.server import webhook_endpoint
 
 @webhook_endpoint(
-    "/webhooks/payment",
+    "/webhook/payment",
     permissions=["process_payments"],
     hmac_secret="my-webhook-secret",
     async_processing=True
@@ -55,7 +46,10 @@ from jvspatial.api.server import webhook_endpoint
 async def handle_payment_webhook(payload: dict, endpoint):
     # payload is verified JSON from request.body
     # Process payment event
-    return endpoint.success(message="Payment processed")
+    return endpoint.success(
+        message="Payment processed",
+        data={"status": "processed"}
+    )
 ```
 
 ### @webhook_walker_endpoint
@@ -90,7 +84,7 @@ from jvspatial.core.entities import Walker, on_visit
 from jvspatial.api.server import webhook_walker_endpoint
 
 @webhook_walker_endpoint(
-    "/webhooks/location-update",
+    "/webhook/location-update",
     roles=["user"],
     hmac_secret="location-secret"
 )
@@ -106,17 +100,6 @@ class LocationUpdateWalker(Walker):
         self.response["updated"] = True
 ```
 
-## Metadata Structure
-
-Decorators attach attributes to functions/classes for middleware introspection:
-
-- **Core:** `_webhook_required: bool` (True), `_endpoint_path: str`, `_endpoint_methods: List[str]`.
-- **Auth (optional):** `_auth_required: bool`, `_required_permissions: List[str]`, `_required_roles: List[str]`.
-- **Webhook-Specific:** `_hmac_secret: Optional[str]`, `_idempotency_key_field: str`, `_idempotency_ttl_hours: int`, `_async_processing: bool`.
-- **Registration:** `_route_config: Dict` (for functions), or class-level tracking in server.
-
-Middleware extracts via `getattr(func_or_class, attr, default)`.
-
 ## Server Integration
 
 Leverage existing `Server` from `jvspatial/api/server.py`:
@@ -125,8 +108,6 @@ Leverage existing `Server` from `jvspatial/api/server.py`:
 - **Dynamic Support:** If server running (`_is_running=True`), add routes dynamically via `app.add_api_route` or new dynamic router.
 - **Discovery:** Extend package discovery in `discover_and_register_packages` to detect `@webhook_*` via `_jvspatial_webhook_config`.
 - **Path Prefix:** All webhook routes under `/webhooks` (configurable via server config).
-
-No changes to `GraphContext`; webhooks may trigger graph ops via walkers.
 
 ## Middleware Pipeline
 
@@ -145,9 +126,19 @@ Insert `WebhookMiddleware` early in the FastAPI middleware stack (before `Authen
 - `check_idempotency(ctx: GraphContext, key: str, ttl_hours: int) -> Optional[Dict]`: Queries/inserts idempotency record (use Node/Edge for events).
 - `queue_webhook_task(server: Server, handler: Callable, payload: dict) -> str`: Queues async, returns task ID.
 
+## Response Handling
+
+Webhook endpoints use the standard `EndpointResponseHelper` methods. This provides:
+
+- **Consistency:** Same response patterns across all endpoint types (`@endpoint`, `@webhook_endpoint`, `@walker_endpoint`, etc.)
+- **Standard HTTP Status Codes:** Automatic status code handling via `endpoint.success()` (200), `endpoint.bad_request()` (400), `endpoint.server_error()` (500), etc.
+- **Unified Error Handling:** No separate webhook error handling logic needed
+- **Parameter Injection:** Improved parameter injection handles both `payload: dict` and raw payload parameters based on function signature
+
+
 ## Payload Processing and Triggering
 
-- **Functions:** Wrapper injects `payload: dict` and `endpoint` helper. Handler: `async def handler(payload: dict, endpoint) -> Dict`.
+- **Functions:** Wrapper injects `payload: dict` and `endpoint` helper. Handler: `async def handler(payload: dict, endpoint)` returns standard endpoint responses via `endpoint.success()`, `endpoint.bad_request()`, etc.
 - **Walkers:** Create instance with `Walker(payload=payload)`, inject into graph walk. Access via `self.payload`. Response via `self.response`.
 - **Error Handling:** Catch exceptions in wrapper, log (with task ID for retries), return 200 `{ "status": "received", "task_id": "..." }`. Store error in DB for retry queue.
 - **Retries:** Exponential backoff (e.g., 5 attempts). Failed tasks trigger email/Slack alerts (configurable).
@@ -226,7 +217,7 @@ Addresses key vulnerabilities comprehensively, with HMAC providing essential int
 #### 3. Flexibility for External Integrations (Uncontrolled Payload Structures)
 **Status: Gap Identified**
 
-- Current design excels for structured JSON webhooks (e.g., Stripe/GitHub) with fixed paths (e.g., `/webhooks/payment`) and parsed payloads (`dict` injection).
+- Current design excels for structured JSON webhooks (e.g., Stripe/GitHub) with fixed paths (e.g., `/webhook/payment`) and parsed payloads (`dict` injection).
 - Assumes JSON via `request.body` parsing; lacks support for arbitrary formats (XML, form-data, binary/raw) or URL-embedded auth in path segments, limiting scenarios where external systems use simple URL-based auth for uncontrolled payloads.
 - Auth relies on middleware/headers (permissions/roles, API keys via `X-API-Key` or `?api_key=`), but not path-embedded keys, forcing custom handlers per external system and assuming payload format.
 
@@ -237,12 +228,12 @@ This constrains integrations with legacy/variable external services (e.g., IoT d
 To address the flexibility gap while preserving simplicity/security, leverage the existing API key subsystem (APIKey entity, middleware validation) for URL-based auth via path segments—no new entities needed. This reuses hashed key storage, permissions/roles, and validation. Retain HMAC as optional (default enabled) for integrity. Default to raw payloads for handling uncontrolled formats.
 
 1. **URL-Embedded Auth via Path Segments with API Keys:**
-   - Update decorators to support templated paths ending with key segment, e.g., `path="/webhooks/{route}/{key}"` where {route} is fixed per endpoint (e.g., "stripe"), and {key} is the last path segment (format: key_id:secret).
+   - Update decorators to support templated paths ending with key segment, e.g., `path="/webhook/{route}/{key}"` where {route} is fixed per endpoint (e.g., "stripe"), and {key} is the last path segment (format: key_id:secret).
    - In `WebhookMiddleware`, after HTTPS:
-     - Extract route from path (e.g., /webhooks/stripe/{key} -> route="stripe"), and {key} as last segment.
+     - Extract route from path (e.g., /webhook/stripe/{key} -> route="stripe"), and {key} as last segment.
      - Validate {key} using existing `_authenticate_api_key` from AuthenticationMiddleware (treat as key_id:secret), which queries APIKey, verifies hash, checks expiration/IP/endpoint permissions (match path to allowed_endpoints), and attaches user to `request.state.current_user`.
      - If valid, proceed to handler for that route; if invalid, 401/403.
-   - For multiple routes, use separate decorators with route-specific paths (e.g., @webhook_endpoint("/webhooks/stripe/{key}"), @webhook_endpoint("/webhooks/iot/{key}"))—explicit, no dynamic dispatch needed.
+   - For multiple routes, use separate decorators with route-specific paths (e.g., @webhook_endpoint("/webhook/stripe/{key}"), @webhook_endpoint("/webhook/iot/{key}"))—explicit, no dynamic dispatch needed.
    - Benefits: Reuses auth; supports per-key permissions/rate limiting; path-based avoids query string pollution.
 
 2. **Default Raw Payload Handling:**
@@ -257,12 +248,12 @@ To address the flexibility gap while preserving simplicity/security, leverage th
 
 4. **Implementation Steps (High-Level):**
    - Extend `WebhookMiddleware`: Parse path for route/{key}; call `AuthenticationMiddleware._authenticate_api_key` on {key}; if hmac_secret, verify signature post-auth. Default inject raw_body/content_type.
-   - Update decorators: Support templated paths like "/webhooks/{route}/{key}"; add `path_key_auth: bool = True` to enable key extraction. HMAC optional.
+   - Update decorators: Support templated paths like "/webhook/{route}/{key}"; add `path_key_auth: bool = True` to enable key extraction. HMAC optional.
    - Utilities: Reuse `APIKey.find_by_key_id`, `verify_secret`; add path parsing for key.
    - Example Usage:
      ```python
      @webhook_endpoint(
-         "/webhooks/stripe/{key}",
+         "/webhook/stripe/{key}",
          path_key_auth=True,
          hmac_secret="shared-secret"  # Optional for integrity
      )
@@ -271,9 +262,12 @@ To address the flexibility gap while preserving simplicity/security, leverage th
          if content_type == "application/json":
              payload = json.loads(raw_body)
          # Process Stripe event
-         return endpoint.success(data={"processed": True})
+         return endpoint.success(
+             message="Stripe webhook processed",
+             data={"processed": True}
+         )
      ```
-     External call: `POST /webhooks/stripe/key123:secret123` with raw payload and optional HMAC header.
+     External call: `POST /webhook/stripe/key123:secret123` with raw payload and optional HMAC header.
 
 These adjustments add minimal overhead (path parsing in middleware) while enabling URL-driven flexibility for arbitrary payloads/external systems using existing API keys. HMAC optional for integrity; raw default enhances uncontrolled handling. Simplicity/security preserved by reuse. Test via QUICKSTART.md examples (e.g., webhook with path-embedded key).
 

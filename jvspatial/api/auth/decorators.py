@@ -200,13 +200,13 @@ def webhook_endpoint(
 
     Examples:
         ```python
-        @webhook_endpoint("/webhooks/payment")
+        @webhook_endpoint("/webhook/payment")
         async def handle_payment_webhook(payload: dict, endpoint):
             # payload is verified JSON from request.body
             return endpoint.success(message="Payment processed")
 
         @webhook_endpoint(
-            "/webhooks/stripe/{key}",
+            "/webhook/stripe/{key}",
             path_key_auth=True,
             hmac_secret="stripe-webhook-secret"  # pragma: allowlist secret
         )
@@ -322,7 +322,7 @@ def webhook_walker_endpoint(
 
     Examples:
         ```python
-        @webhook_walker_endpoint("/webhooks/location-update")
+        @webhook_walker_endpoint("/webhook/location-update")
         class LocationUpdateWalker(Walker):
             def __init__(self, payload: dict):
                 self.payload = payload  # Webhook data available here
@@ -335,7 +335,7 @@ def webhook_walker_endpoint(
                 self.response["updated"] = True
 
         @webhook_walker_endpoint(
-            "/webhooks/stripe/{key}",
+            "/webhook/stripe/{key}",
             path_key_auth=True,
             hmac_secret="stripe-webhook-secret"  # pragma: allowlist secret
         )

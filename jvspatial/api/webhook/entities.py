@@ -214,7 +214,7 @@ class WebhookRetryRecord(Object):
 async def create_webhook_event(
     idempotency_key: Optional[str] = None,
     webhook_route: Optional[str] = None,
-    request_path: str = "/webhooks/unknown",
+    request_path: str = "/webhook/unknown",
     raw_payload: bytes = b"",
     content_type: str = "application/json",
     parsed_payload: Optional[Dict[str, Any]] = None,
@@ -263,7 +263,7 @@ async def create_webhook_event(
 async def get_or_create_idempotency_key(
     idempotency_key: str,
     webhook_route: Optional[str] = None,
-    request_path: str = "/webhooks/unknown",
+    request_path: str = "/webhook/unknown",
     request_hash: str = "",
     ttl_hours: int = 24,
 ) -> Tuple[WebhookIdempotencyKey, bool]:

@@ -579,7 +579,7 @@ from jvspatial.api.auth.decorators import webhook_endpoint, webhook_walker_endpo
 from jvspatial.core.entities import Walker, Node, on_visit
 
 # Simple webhook with automatic payload injection
-@webhook_endpoint("/webhooks/payment")
+@webhook_endpoint("/webhook/payment")
 async def payment_webhook(payload: dict, endpoint):
     """Process payment webhooks with automatic JSON parsing."""
     payment_id = payload.get("payment_id")
@@ -594,7 +594,7 @@ async def payment_webhook(payload: dict, endpoint):
 
 # Advanced webhook with security features
 @webhook_endpoint(
-    "/webhooks/stripe/{key}",
+    "/webhook/stripe/{key}",
     path_key_auth=True,                    # API key in URL path
     hmac_secret="stripe-webhook-secret",   # HMAC signature verification
     idempotency_ttl_hours=48,              # Duplicate handling for 48h
@@ -619,7 +619,7 @@ async def stripe_webhook(raw_body: bytes, content_type: str, endpoint):
     return endpoint.webhook_response(status="received")
 
 # Walker-based webhook for graph operations
-@webhook_walker_endpoint("/webhooks/location-update")
+@webhook_walker_endpoint("/webhook/location-update")
 class LocationUpdateWalker(Walker):
     """Update spatial data based on webhook events."""
 
@@ -674,7 +674,7 @@ server = Server(
 # Security middleware is automatically configured
 # Database entities for tracking are automatically created
 
-server.run()  # Webhooks ready at /webhooks/* paths
+server.run()  # Webhooks ready at /webhook/* paths
 ```
 
 ### Environment Configuration
@@ -691,18 +691,18 @@ WEBHOOK_HTTPS_REQUIRED=true
 
 ```bash
 # Simple webhook test
-curl -X POST "http://localhost:8000/webhooks/payment" \
+curl -X POST "http://localhost:8000/webhook/payment" \
   -H "Content-Type: application/json" \
   -d '{"payment_id": "pay_123", "amount": 99.99}'
 
 # Webhook with path-based auth
-curl -X POST "http://localhost:8000/webhooks/stripe/key123:secret456" \
+curl -X POST "http://localhost:8000/webhook/stripe/key123:secret456" \
   -H "Content-Type: application/json" \
   -H "X-Signature: sha256=abc123..." \
   -d '{"type": "payment_intent.succeeded"}'
 
 # With idempotency key
-curl -X POST "http://localhost:8000/webhooks/payment" \
+curl -X POST "http://localhost:8000/webhook/payment" \
   -H "Content-Type: application/json" \
   -H "X-Idempotency-Key: unique-123" \
   -d '{"payment_id": "pay_124"}'

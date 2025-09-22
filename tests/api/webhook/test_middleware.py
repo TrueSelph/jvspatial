@@ -60,7 +60,7 @@ class TestWebhookMiddleware:
         # Mock request for webhook path
         request = MagicMock(spec=Request)
         request.url.path = (
-            "/webhooks/test/key_id:test_secret"  # pragma: allowlist secret
+            "/webhook/test/key_id:test_secret"  # pragma: allowlist secret
         )
         request.body.return_value = b'{"test": "data"}'
         request.headers.get.side_effect = lambda k, default=None: (
@@ -102,7 +102,7 @@ class TestWebhookMiddleware:
     async def test_webhook_path_auth_invalid_key_id(self):
         """Test path-based auth failure with invalid key ID."""
         request = MagicMock(spec=Request)
-        request.url.path = "/webhooks/test/invalid_key:test_secret"
+        request.url.path = "/webhook/test/invalid_key:test_secret"
         request.body.return_value = b'{"test": "data"}'
         request.headers.get.side_effect = lambda k, default=None: (
             "application/json" if k == "content-type" else None
@@ -128,7 +128,7 @@ class TestWebhookMiddleware:
     async def test_webhook_path_auth_invalid_secret(self):
         """Test path-based auth failure with invalid secret."""
         request = MagicMock(spec=Request)
-        request.url.path = "/webhooks/test/test_key_123:wrong_secret"
+        request.url.path = "/webhook/test/test_key_123:wrong_secret"
         request.body.return_value = b'{"test": "data"}'
         request.headers.get.side_effect = lambda k, default=None: (
             "application/json" if k == "content-type" else None
@@ -159,7 +159,7 @@ class TestWebhookMiddleware:
         inactive_key.verify_secret.return_value = True
 
         request = MagicMock(spec=Request)
-        request.url.path = "/webhooks/test/test_key_123:valid_secret"
+        request.url.path = "/webhook/test/test_key_123:valid_secret"
         request.body.return_value = b'{"test": "data"}'
         request.headers.get.side_effect = lambda k, default=None: (
             "application/json" if k == "content-type" else None
@@ -190,7 +190,7 @@ class TestWebhookMiddleware:
         inactive_user.is_active = False
 
         request = MagicMock(spec=Request)
-        request.url.path = "/webhooks/test/test_key_123:valid_secret"
+        request.url.path = "/webhook/test/test_key_123:valid_secret"
         request.body.return_value = b'{"test": "data"}'
         request.headers.get.side_effect = lambda k, default=None: (
             "application/json" if k == "content-type" else None
@@ -221,7 +221,7 @@ class TestWebhookMiddleware:
         # Mock valid HMAC
         valid_signature = "a1b2c3d4e5f6"  # Mock valid sig  # pragma: allowlist secret
         request = MagicMock(spec=Request)
-        request.url.path = "/webhooks/test/test_key_123:valid_secret"
+        request.url.path = "/webhook/test/test_key_123:valid_secret"
         request.body.return_value = b'{"test": "data"}'
         request.headers.get.side_effect = lambda k, default=None: (
             valid_signature if k == auth_config.hmac_header else "application/json"
@@ -255,7 +255,7 @@ class TestWebhookMiddleware:
         """Test HMAC verification failure."""
         invalid_signature = "wrong_signature"
         request = MagicMock(spec=Request)
-        request.url.path = "/webhooks/test/test_key_123:valid_secret"
+        request.url.path = "/webhook/test/test_key_123:valid_secret"
         request.body.return_value = b'{"test": "data"}'
         request.headers.get.side_effect = lambda k, default=None: (
             invalid_signature if k == auth_config.hmac_header else "application/json"
@@ -288,7 +288,7 @@ class TestWebhookMiddleware:
     async def test_webhook_hmac_bypass_no_signature(self):
         """Test HMAC bypass when no signature provided."""
         request = MagicMock(spec=Request)
-        request.url.path = "/webhooks/test/test_key_123:valid_secret"
+        request.url.path = "/webhook/test/test_key_123:valid_secret"
         request.body.return_value = b'{"test": "data"}'
         request.headers.get.side_effect = lambda k, default=None: (
             None if k == auth_config.hmac_header else "application/json"
@@ -331,7 +331,7 @@ class TestWebhookMiddleware:
         key_no_secret.rate_limit_per_hour = 500
 
         request = MagicMock(spec=Request)
-        request.url.path = "/webhooks/test/test_key_123:valid_secret"
+        request.url.path = "/webhook/test/test_key_123:valid_secret"
         request.body.return_value = b'{"test": "data"}'
         request.headers.get.side_effect = lambda k, default=None: (
             "some_signature"
@@ -365,7 +365,7 @@ class TestWebhookMiddleware:
         """Test raw body preservation for non-JSON content types."""
         # Test with text/plain
         request = MagicMock(spec=Request)
-        request.url.path = "/webhooks/test/test_key_123:valid_secret"
+        request.url.path = "/webhook/test/test_key_123:valid_secret"
         raw_payload = b"This is plain text payload"
         request.body.return_value = raw_payload
         request.headers.get.side_effect = lambda k, default=None: (
@@ -398,7 +398,7 @@ class TestWebhookMiddleware:
         """Test fallback to header authentication when path auth fails."""
         # Invalid path auth, but valid header auth
         request = MagicMock(spec=Request)
-        request.url.path = "/webhooks/test/invalid_key:wrong_secret"
+        request.url.path = "/webhook/test/invalid_key:wrong_secret"
         request.body.return_value = b'{"test": "data"}'
         request.headers.get.side_effect = lambda k, default=None: (
             "valid_key:valid_secret"
@@ -438,7 +438,7 @@ class TestWebhookMiddleware:
     async def test_webhook_route_injection(self):
         """Test webhook route extraction and injection into request state."""
         request = MagicMock(spec=Request)
-        request.url.path = "/webhooks/stripe/test_key_123:valid_secret"
+        request.url.path = "/webhook/stripe/test_key_123:valid_secret"
         request.body.return_value = b'{"type": "payment"}'
         request.headers.get.side_effect = lambda k, default=None: (
             "application/json" if k == "content-type" else None
@@ -498,7 +498,7 @@ class TestWebhookMiddleware:
     async def test_webhook_no_body(self):
         """Test webhook handling with no request body."""
         request = MagicMock(spec=Request)
-        request.url.path = "/webhooks/test/test_key_123:valid_secret"
+        request.url.path = "/webhook/test/test_key_123:valid_secret"
         request.body.return_value = b""
         request.headers.get.side_effect = lambda k, default=None: (
             "application/json" if k == "content-type" else None
@@ -528,7 +528,7 @@ class TestWebhookMiddleware:
     async def test_webhook_rate_limiting_api_key(self):
         """Test rate limiting using API key limits for webhook."""
         request = MagicMock(spec=Request)
-        request.url.path = "/webhooks/test/test_key_123:valid_secret"
+        request.url.path = "/webhook/test/test_key_123:valid_secret"
         request.body.return_value = b'{"test": "data"}'
         request.headers.get.side_effect = lambda k, default=None: (
             "application/json" if k == "content-type" else None

@@ -10,97 +10,44 @@ from typing import Any, Callable, Dict, Optional
 
 from fastapi import Request
 
-from jvspatial.api.endpoint.response import EndpointResponseHelper as EndpointHelper
+from jvspatial.api.endpoint.response import EndpointResponseHelper
 from jvspatial.core.entities import Walker
 
 
-class WebhookEndpointHelper(EndpointHelper):
-    """Extended endpoint helper for webhook endpoints."""
-
-    def __init__(self, walker_instance: Optional[Walker] = None):
-        """Initialize webhook endpoint helper.
-
-        Args:
-            walker_instance: Walker instance if this is a walker endpoint
-        """
-        super().__init__(walker_instance)
-        self.webhook_data: Dict[str, Any] = {}
-
-    def webhook_response(
-        self,
-        status: str = "received",
-        message: Optional[str] = None,
-        task_id: Optional[str] = None,
-        **data,
-    ) -> Dict[str, Any]:
-        """Create standardized webhook response.
-
-        Args:
-            status: Webhook processing status (received, processed, queued, error)
-            message: Optional status message
-            task_id: Optional task ID for async processing
-            **data: Additional response data
-
-        Returns:
-            Standardized webhook response dictionary
-        """
-        response = self.success(data={"status": status, **data})
-
-        if message:
-            response["message"] = message
-
-        if task_id:
-            response["task_id"] = task_id
-
-        return response
-
-    def webhook_error(
-        self, message: str, error_code: Optional[int] = None, **data
-    ) -> Dict[str, Any]:
-        """Create standardized webhook error response.
-
-        Args:
-            message: Error message
-            error_code: Optional error code
-            **data: Additional error data
-
-        Returns:
-            Standardized webhook error response
-        """
-        response = self.error(message=message, **data)
-
-        if error_code:
-            response["error_code"] = error_code
-
-        return response
+class WebhookEndpointResponseHelper(EndpointResponseHelper):
+    webhook_data: Dict[str, Any]
 
 
 def create_webhook_endpoint_helper(
     walker_instance: Optional[Walker] = None, request: Optional[Request] = None
-) -> WebhookEndpointHelper:
-    """Create webhook-specific endpoint helper.
+) -> WebhookEndpointResponseHelper:
+    """Create endpoint helper with webhook-specific data attached.
 
     Args:
         walker_instance: Walker instance if this is a walker endpoint
         request: FastAPI request object with webhook state
 
     Returns:
-        WebhookEndpointHelper instance
+        EndpointResponseHelper instance with webhook_data attribute
     """
-    helper = WebhookEndpointHelper(walker_instance)
+    helper = WebhookEndpointResponseHelper(walker_instance)
+    helper.webhook_data = {}  # Initialize webhook_data as an empty dictionary
 
+    # Attach webhook-specific data as an attribute
+
+    # Attach webhook-specific data as an attribute if request is provided
     if request:
-        # Inject webhook-specific data from request state
-        helper.webhook_data = {
-            "raw_body": getattr(request.state, "raw_body", b""),
-            "content_type": getattr(request.state, "content_type", ""),
-            "parsed_payload": getattr(request.state, "parsed_payload", None),
-            "idempotency_key": getattr(request.state, "idempotency_key", None),
-            "webhook_route": getattr(request.state, "webhook_route", None),
-            "hmac_verified": getattr(request.state, "hmac_verified", False),
-            "webhook_config": getattr(request.state, "webhook_config", {}),
-        }
-
+        helper.webhook_data.update(
+            {
+                "raw_body": getattr(request.state, "raw_body", b""),
+                "content_type": getattr(request.state, "content_type", ""),
+                "parsed_payload": getattr(request.state, "parsed_payload", None),
+                "idempotency_key": getattr(request.state, "idempotency_key", None),
+                "webhook_route": getattr(request.state, "webhook_route", None),
+                "hmac_verified": getattr(request.state, "hmac_verified", False),
+                "webhook_config": getattr(request.state, "webhook_config", {}),
+            }
+        )
     return helper
 
 
@@ -216,34 +163,69 @@ def create_webhook_wrapper(endpoint_func: Callable) -> Callable:
     Returns:
         Wrapped function with webhook handling
     """
+    # Inspect the original function signature
+    sig = inspect.signature(endpoint_func)
 
-    @inject_webhook_payload
-    async def webhook_wrapper(request: Request, *args: Any, **kwargs: Any) -> Any:
+    async def webhook_wrapper(request: Request) -> Any:
         try:
             # Create webhook endpoint helper
-            endpoint_helper = create_webhook_endpoint_helper(request=request)
+            endpoint_helper: WebhookEndpointResponseHelper = (
+                create_webhook_endpoint_helper(request=request)
+            )
 
-            # Add endpoint helper to kwargs if expected
-            sig = inspect.signature(endpoint_func)
-            if "endpoint" in sig.parameters:
-                kwargs["endpoint"] = endpoint_helper
+            # Build kwargs based on function signature
+            kwargs = {}
 
-            # Call original function
+            # Inject parameters based on parameter names in the function signature
+            for param_name, param in sig.parameters.items():
+                if param_name == "request":
+                    kwargs["request"] = request
+                elif param_name == "payload":
+                    kwargs["payload"] = getattr(request.state, "parsed_payload", {})
+                elif param_name == "raw_body":
+                    kwargs["raw_body"] = getattr(request.state, "raw_body", b"")
+                elif param_name == "content_type":
+                    kwargs["content_type"] = getattr(request.state, "content_type", "")
+                elif param_name == "endpoint":
+                    kwargs["endpoint"] = endpoint_helper
+                elif param_name == "webhook_data":
+                    kwargs["webhook_data"] = {
+                        "raw_body": getattr(request.state, "raw_body", b""),
+                        "content_type": getattr(request.state, "content_type", ""),
+                        "parsed_payload": getattr(
+                            request.state, "parsed_payload", None
+                        ),
+                        "idempotency_key": getattr(
+                            request.state, "idempotency_key", None
+                        ),
+                        "webhook_route": getattr(request.state, "webhook_route", None),
+                    }
+                # If parameter has a default value and we don't have a value to inject, skip it
+                elif (param.default is not inspect.Parameter.empty) or (
+                    param.kind
+                    in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+                ):
+                    continue
+                # For any other required parameters, we'll let the function handle it
+                # and raise an error if needed
+
+            # Call original function with only the parameters it expects
             if asyncio.iscoroutinefunction(endpoint_func):
-                result = await endpoint_func(request, *args, **kwargs)
+                result = await endpoint_func(**kwargs)
             else:
-                result = endpoint_func(request, *args, **kwargs)
+                result = endpoint_func(**kwargs)
 
             # Format response if it's a plain dict
-            if isinstance(result, dict) and "status" not in result:
-                result = endpoint_helper.webhook_response(**result)
+            # Webhook endpoints typically return data that should be wrapped in a success response
+            if isinstance(result, dict) and "error" not in result:
+                # Use standard success response for webhook data
+                result = endpoint_helper.success(data=result)
 
             return result
 
         except Exception as e:
-            # Create error response
-            endpoint_helper = create_webhook_endpoint_helper(request=request)
-            return endpoint_helper.webhook_error(message=str(e), error_code=500)
+            # Use the existing endpoint_helper to create an error response
+            return endpoint_helper.internal_server_error(message=str(e))
 
     # Preserve function metadata
     webhook_wrapper.__name__ = endpoint_func.__name__
@@ -266,9 +248,7 @@ def create_webhook_walker_wrapper(walker_class: type) -> Callable:
     # Apply webhook payload injection to the walker class
     enhanced_walker_class = inject_walker_webhook_payload(walker_class)
 
-    async def webhook_walker_wrapper(
-        request: Request, *args: Any, **kwargs: Any
-    ) -> Any:
+    async def webhook_walker_wrapper(request: Request) -> Any:
         try:
             # Extract webhook data from request state
             webhook_data = {
@@ -281,7 +261,28 @@ def create_webhook_walker_wrapper(walker_class: type) -> Callable:
             }
 
             # Create walker instance with webhook data
-            walker = enhanced_walker_class(*args, webhook_data=webhook_data, **kwargs)
+            # Inspect the walker constructor to see what parameters it expects
+            import inspect
+
+            init_sig = inspect.signature(enhanced_walker_class.__init__)  # type: ignore
+
+            # Build constructor arguments based on what the walker expects
+            init_kwargs = {}
+            for param_name, param in init_sig.parameters.items():
+                if param_name == "self":
+                    continue
+                elif param_name == "payload":
+                    init_kwargs["payload"] = webhook_data.get("parsed_payload", {})
+                elif param_name == "webhook_data":
+                    init_kwargs["webhook_data"] = webhook_data
+                elif param_name in webhook_data:
+                    init_kwargs[param_name] = webhook_data[param_name]
+                # Skip parameters with defaults if we don't have a value
+                elif param.default is not inspect.Parameter.empty:
+                    continue
+
+            # Create walker instance
+            walker = enhanced_walker_class(**init_kwargs)
 
             # Execute walker (this would normally go through the graph system)
             # For now, create a simple response
@@ -316,7 +317,6 @@ def create_webhook_walker_wrapper(walker_class: type) -> Callable:
 
 # Export main functions
 __all__ = [
-    "WebhookEndpointHelper",
     "create_webhook_endpoint_helper",
     "inject_webhook_payload",
     "inject_walker_webhook_payload",

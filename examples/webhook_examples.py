@@ -15,7 +15,7 @@ from jvspatial.core.entities import Node, Walker, on_visit
 
 
 # Example 1: Simple webhook endpoint with JSON payload processing
-@webhook_endpoint("/webhooks/simple")
+@webhook_endpoint("/webhook/simple")
 async def simple_webhook(payload: dict, endpoint):
     """Simple webhook that processes JSON payloads.
 
@@ -29,18 +29,20 @@ async def simple_webhook(payload: dict, endpoint):
     # Log the event
     print(f"Received webhook event: {event_type}")
 
-    # Return success response
-    return endpoint.webhook_response(
-        status="processed",
+    # Return success response using standard endpoint.response
+    return endpoint.success(
+        data={
+            "status": "processed",
+            "event_type": event_type,
+            "processed_items": len(data) if isinstance(data, (list, dict)) else 1,
+        },
         message=f"Successfully processed {event_type} event",
-        event_type=event_type,
-        processed_items=len(data) if isinstance(data, (list, dict)) else 1,
     )
 
 
 # Example 2: HMAC-verified webhook with idempotency
 @webhook_endpoint(
-    "/webhooks/payment",
+    "/webhook/payment",
     hmac_secret="your-payment-webhook-secret",  # pragma: allowlist secret
     idempotency_ttl_hours=48,  # Keep idempotency records for 48 hours
 )
@@ -57,9 +59,7 @@ async def payment_webhook(payload: dict, endpoint):
     status = payload.get("status", "unknown")
 
     if not payment_id:
-        return endpoint.webhook_error(
-            message="Missing payment_id in payload", error_code=400
-        )
+        return endpoint.bad_request(message="Missing payment_id in payload")
 
     # Process payment update
     print(f"Processing payment {payment_id}: {amount} {currency} - {status}")
@@ -80,16 +80,18 @@ async def payment_webhook(payload: dict, endpoint):
             "status": status,
         }
 
-    return endpoint.webhook_response(
-        status="processed",
+    return endpoint.success(
+        data={
+            "status": "processed",
+            **result,
+        },
         message=f"Payment {payment_id} processed successfully",
-        **result,
     )
 
 
 # Example 3: Path-based authentication webhook
 @webhook_endpoint(
-    "/webhooks/stripe/{key}",
+    "/webhook/stripe/{key}",
     path_key_auth=True,
     hmac_secret="stripe-webhook-secret",  # pragma: allowlist secret
 )
@@ -104,13 +106,9 @@ async def stripe_webhook(raw_body: bytes, content_type: str, endpoint):
         try:
             payload = json.loads(raw_body.decode("utf-8"))
         except json.JSONDecodeError:
-            return endpoint.webhook_error(
-                message="Invalid JSON payload", error_code=400
-            )
+            return endpoint.bad_request(message="Invalid JSON payload")
     else:
-        return endpoint.webhook_error(
-            message="Unsupported content type", error_code=400
-        )
+        return endpoint.bad_request(message="Unsupported content type")
 
     # Process Stripe event
     event_type = payload.get("type", "unknown")
@@ -122,35 +120,41 @@ async def stripe_webhook(raw_body: bytes, content_type: str, endpoint):
     if event_type.startswith("payment_intent."):
         # Handle payment intent events
         payment_intent = payload.get("data", {}).get("object", {})
-        return endpoint.webhook_response(
-            status="processed",
+        return endpoint.success(
+            data={
+                "status": "processed",
+                "event_id": event_id,
+                "payment_intent_id": payment_intent.get("id"),
+            },
             message=f"Payment intent {event_type} processed",
-            event_id=event_id,
-            payment_intent_id=payment_intent.get("id"),
         )
 
     elif event_type.startswith("customer."):
         # Handle customer events
         customer = payload.get("data", {}).get("object", {})
-        return endpoint.webhook_response(
-            status="processed",
+        return endpoint.success(
+            data={
+                "status": "processed",
+                "event_id": event_id,
+                "customer_id": customer.get("id"),
+            },
             message=f"Customer {event_type} processed",
-            event_id=event_id,
-            customer_id=customer.get("id"),
         )
 
     else:
         # Unknown event type, but still acknowledge receipt
-        return endpoint.webhook_response(
-            status="received",
+        return endpoint.success(
+            data={
+                "status": "received",
+                "event_id": event_id,
+            },
             message=f"Event {event_type} received but not processed",
-            event_id=event_id,
         )
 
 
 # Example 4: Asynchronous webhook processing
 @webhook_endpoint(
-    "/webhooks/bulk-data", async_processing=True, permissions=["process_bulk_data"]
+    "/webhook/bulk-data", async_processing=True, permissions=["process_bulk_data"]
 )
 async def bulk_data_webhook(payload: dict, endpoint):
     """Bulk data processing webhook with asynchronous handling.
@@ -176,16 +180,18 @@ async def bulk_data_webhook(payload: dict, endpoint):
         if record_id:
             processed_count += 1
 
-    return endpoint.webhook_response(
-        status="processed",
+    return endpoint.success(
+        data={
+            "status": "processed",
+            "batch_id": batch_id,
+            "processed_count": processed_count,
+        },
         message=f"Processed {processed_count} records in batch {batch_id}",
-        batch_id=batch_id,
-        processed_count=processed_count,
     )
 
 
 # Example 5: Walker-based webhook for graph updates
-@webhook_walker_endpoint("/webhooks/location-update", roles=["location_manager"])
+@webhook_walker_endpoint("/webhook/location-update", roles=["location_manager"])
 class LocationUpdateWalker(Walker):
     """Walker that updates location data in the graph based on webhook events.
 
@@ -234,7 +240,7 @@ class LocationUpdateWalker(Walker):
 
 # Example 6: Advanced webhook with custom validation and error handling
 @webhook_endpoint(
-    "/webhooks/inventory",
+    "/webhook/inventory",
     hmac_secret="inventory-webhook-secret",  # pragma: allowlist secret
     permissions=["manage_inventory"],
     idempotency_ttl_hours=72,
@@ -251,10 +257,9 @@ async def inventory_webhook(payload: dict, endpoint, request: Request):
         missing_fields = [field for field in required_fields if field not in payload]
 
         if missing_fields:
-            return endpoint.webhook_error(
+            return endpoint.bad_request(
                 message=f"Missing required fields: {', '.join(missing_fields)}",
-                error_code=400,
-                missing_fields=missing_fields,
+                details={"missing_fields": missing_fields},
             )
 
         # Extract inventory data
@@ -266,16 +271,15 @@ async def inventory_webhook(payload: dict, endpoint, request: Request):
         # Validate operation type
         valid_operations = ["add", "remove", "set", "adjust"]
         if operation not in valid_operations:
-            return endpoint.webhook_error(
+            return endpoint.bad_request(
                 message=f"Invalid operation '{operation}'. Must be one of: {', '.join(valid_operations)}",
-                error_code=400,
-                valid_operations=valid_operations,
+                details={"valid_operations": valid_operations},
             )
 
         # Validate quantity
         if not isinstance(quantity, (int, float)) or quantity < 0:
-            return endpoint.webhook_error(
-                message="Quantity must be a non-negative number", error_code=400
+            return endpoint.bad_request(
+                message="Quantity must be a non-negative number"
             )
 
         # Process inventory update
@@ -298,45 +302,130 @@ async def inventory_webhook(payload: dict, endpoint, request: Request):
             )  # Can be negative for adjustments
 
         # Return detailed response
-        return endpoint.webhook_response(
-            status="processed",
+        return endpoint.success(
+            data={
+                "status": "processed",
+                "item_id": item_id,
+                "operation": operation,
+                "warehouse": warehouse,
+                "previous_quantity": current_quantity,
+                "new_quantity": new_quantity,
+                "quantity_change": new_quantity - current_quantity,
+            },
             message=f"Inventory {operation} completed for item {item_id}",
-            item_id=item_id,
-            operation=operation,
-            warehouse=warehouse,
-            previous_quantity=current_quantity,
-            new_quantity=new_quantity,
-            quantity_change=new_quantity - current_quantity,
         )
 
     except Exception as e:
         # Handle unexpected errors
         print(f"Error processing inventory webhook: {e}")
-        return endpoint.webhook_error(
+        return endpoint.internal_server_error(
             message="Internal processing error",
-            error_code=500,
-            error_type=type(e).__name__,
+            details={"error_type": type(e).__name__},
         )
 
 
 # Example server setup with webhook endpoints
-if __name__ == "__main__":
-    # Create server instance
+def create_server():
+    """Create and configure the server with webhook endpoints."""
     server = Server(
         title="Webhook Examples API",
         description="Demonstrates JVspatial webhook functionality",
     )
 
-    # The webhook endpoints are automatically registered via decorators
-    # The server will automatically add webhook middleware when it detects webhook endpoints
+    # Register function endpoints with the server
+    # Since the decorators store the functions in _custom_routes, we need to ensure
+    # they're properly registered by passing the server instance
+
+    # Re-register with explicit server to ensure proper registration
+    @webhook_endpoint("/webhook/simple", server=server)
+    async def simple_webhook_registered(payload: dict, endpoint):
+        return simple_webhook(payload, endpoint)
+
+    @webhook_endpoint(
+        "/webhook/payment",
+        hmac_secret="your-payment-webhook-secret",  # pragma: allowlist secret
+        idempotency_ttl_hours=48,
+        server=server,
+    )
+    async def payment_webhook_registered(payload: dict, endpoint):
+        return payment_webhook(payload, endpoint)
+
+    @webhook_endpoint(
+        "/webhook/stripe/{key}",
+        path_key_auth=True,
+        hmac_secret="stripe-webhook-secret",  # pragma: allowlist secret
+        server=server,
+    )
+    async def stripe_webhook_registered(raw_body: bytes, content_type: str, endpoint):
+        return stripe_webhook(raw_body, content_type, endpoint)
+
+    @webhook_endpoint(
+        "/webhook/bulk-data",
+        async_processing=True,
+        permissions=["process_bulk_data"],
+        server=server,
+    )
+    async def bulk_data_webhook_registered(payload: dict, endpoint):
+        return bulk_data_webhook(payload, endpoint)
+
+    @webhook_endpoint(
+        "/webhook/inventory",
+        hmac_secret="inventory-webhook-secret",  # pragma: allowlist secret
+        permissions=["manage_inventory"],
+        idempotency_ttl_hours=72,
+        server=server,
+    )
+    async def inventory_webhook_registered(payload: dict, endpoint, request: Request):
+        return inventory_webhook(payload, endpoint, request)
+
+    # Register the walker endpoint
+    @webhook_walker_endpoint(
+        "/webhook/location-update", roles=["location_manager"], server=server
+    )
+    class LocationUpdateWalkerRegistered(Walker):
+        def __init__(self, payload: dict):
+            super().__init__()
+            self.payload = payload
+            self.response = {"updated_locations": []}
+
+        @on_visit(Node)
+        async def update_location_data(self, here: Node):
+            # Copy the logic from the original walker
+            locations = self.payload.get("locations", [])
+
+            for location_data in locations:
+                location_id = location_data.get("id")
+                coordinates = location_data.get("coordinates")
+
+                if not location_id or not coordinates:
+                    continue
+
+                # Simulate finding and updating location node
+                # In a real implementation, this would query the graph
+                self.response["updated_locations"].append(
+                    {"id": location_id, "coordinates": coordinates, "updated": True}
+                )
+
+                print(f"Updated location {location_id} with coordinates {coordinates}")
+
+    return server
+
+
+if __name__ == "__main__":
+    # Create and run the server
+    server = create_server()
 
     print("Webhook endpoints registered:")
-    print("- POST /webhooks/simple - Simple JSON webhook")
-    print("- POST /webhooks/payment - Payment webhook with HMAC + idempotency")
-    print("- POST /webhooks/stripe/{key} - Stripe webhook with path auth")
-    print("- POST /webhooks/bulk-data - Async processing webhook")
-    print("- POST /webhooks/location-update - Walker-based location updates")
-    print("- POST /webhooks/inventory - Advanced inventory webhook")
+    print("- POST /webhook/simple - Simple JSON webhook")
+    print("- POST /webhook/payment - Payment webhook with HMAC + idempotency")
+    print("- POST /webhook/stripe/{key} - Stripe webhook with path auth")
+    print("- POST /webhook/bulk-data - Async processing webhook")
+    print("- POST /webhook/location-update - Walker-based location updates")
+    print("- POST /webhook/inventory - Advanced inventory webhook")
+    print()
+    print("FastAPI docs available at: http://localhost:8000/docs")
+    print("Health check available at: http://localhost:8000/health")
+    print()
 
     # Run the server
     server.run(host="0.0.0.0", port=8000)

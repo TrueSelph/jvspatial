@@ -682,7 +682,7 @@ from typing import Dict, Any
 import json
 
 # Basic webhook handler function
-@webhook_endpoint("/webhooks/{route}/{auth_token}", methods=["POST"])
+@webhook_endpoint("/webhook/{route}/{auth_token}", methods=["POST"])
 async def generic_webhook_handler(request: Request) -> Dict[str, Any]:
     """Generic webhook handler for multiple services.
 
@@ -723,7 +723,7 @@ async def generic_webhook_handler(request: Request) -> Dict[str, Any]:
         }
 
 # Service-specific webhook handlers
-@webhook_endpoint("/webhooks/stripe/{auth_token}", methods=["POST"])
+@webhook_endpoint("/webhook/stripe/{auth_token}", methods=["POST"])
 async def stripe_webhook_handler(request: Request) -> Dict[str, Any]:
     """Dedicated Stripe webhook handler with event processing."""
     raw_body = request.state.raw_body
@@ -789,7 +789,7 @@ Webhook endpoints require authentication tokens in the URL path and support addi
 ```python path=null start=null
 # Webhook with permission requirements
 @webhook_endpoint(
-    "/webhooks/admin/{route}/{auth_token}",
+    "/webhook/admin/{route}/{auth_token}",
     methods=["POST"],
     permissions=["process_webhooks", "admin_access"],
     roles=["admin", "webhook_manager"]
@@ -807,7 +807,7 @@ async def admin_webhook_handler(request: Request) -> Dict[str, Any]:
     }
 
 # HMAC signature verification (handled by middleware)
-@webhook_endpoint("/webhooks/secure/{service}/{auth_token}", methods=["POST"])
+@webhook_endpoint("/webhook/secure/{service}/{auth_token}", methods=["POST"])
 async def secure_webhook_handler(request: Request) -> Dict[str, Any]:
     """Webhook with HMAC signature verification.
 
@@ -836,7 +836,7 @@ The architecture supports webhook processing through graph traversal using Walke
 # from jvspatial.core import Walker, Node
 # from jvspatial.decorators import on_visit
 
-# @webhook_walker_endpoint("/webhooks/process/{route}/{auth_token}", methods=["POST"])
+# @webhook_walker_endpoint("/webhook/process/{route}/{auth_token}", methods=["POST"])
 # class WebhookProcessingWalker(Walker):
 #     """Walker-based webhook processing with graph traversal."""
 #
@@ -873,7 +873,7 @@ The architecture supports webhook processing through graph traversal using Walke
 Webhooks support idempotency keys to handle duplicate deliveries:
 
 ```python path=null start=null
-@webhook_endpoint("/webhooks/idempotent/{auth_token}", methods=["POST"])
+@webhook_endpoint("/webhook/idempotent/{auth_token}", methods=["POST"])
 async def idempotent_webhook_handler(request: Request) -> Dict[str, Any]:
     """Webhook handler with built-in idempotency support.
 
@@ -950,7 +950,7 @@ server.add_middleware(WebhookMiddleware)        # Webhook processing
 server.add_middleware(AuthenticationMiddleware) # Authentication
 
 # Webhook endpoints are automatically registered
-# Access at: POST https://your-domain.com/webhooks/{route}/{auth_token}
+# Access at: POST https://your-domain.com/webhook/{route}/{auth_token}
 
 # Environment configuration for webhook security
 # Set in .env file:
@@ -995,9 +995,9 @@ async def test_webhook_processing(test_webhook_request):
 # Development webhook testing with ngrok or similar
 # 1. Start your jvspatial server locally
 # 2. Use ngrok to expose: ngrok http 8000
-# 3. Configure webhook URLs: https://abc123.ngrok.io/webhooks/test/your-auth-token
+# 3. Configure webhook URLs: https://abc123.ngrok.io/webhook/test/your-auth-token
 # 4. Test with curl:
-#    curl -X POST https://abc123.ngrok.io/webhooks/test/your-token \
+#    curl -X POST https://abc123.ngrok.io/webhook/test/your-token \
 #         -H "Content-Type: application/json" \
 #         -d '{"test": "data"}'
 ```
@@ -1008,7 +1008,7 @@ async def test_webhook_processing(test_webhook_request):
 
 ```python path=null start=null
 # Good: Always return 200 status for webhooks
-@webhook_endpoint("/webhooks/service/{auth_token}")
+@webhook_endpoint("/webhook/service/{auth_token}")
 async def proper_webhook_handler(request: Request) -> Dict[str, Any]:
     try:
         # Process webhook
@@ -1020,7 +1020,7 @@ async def proper_webhook_handler(request: Request) -> Dict[str, Any]:
         return {"status": "received", "error": "logged"}
 
 # Good: Use route-based dispatch for multiple services
-@webhook_endpoint("/webhooks/{route}/{auth_token}")
+@webhook_endpoint("/webhook/{route}/{auth_token}")
 async def multi_service_webhook(request: Request) -> Dict[str, Any]:
     route = getattr(request.state, "webhook_route", "unknown")
 
@@ -1034,7 +1034,7 @@ async def multi_service_webhook(request: Request) -> Dict[str, Any]:
     return await handler(request)
 
 # Good: Validate authentication token format
-@webhook_endpoint("/webhooks/{service}/{auth_token}")
+@webhook_endpoint("/webhook/{service}/{auth_token}")
 async def secure_webhook_handler(request: Request) -> Dict[str, Any]:
     # Token validation is handled by middleware
     current_user = get_current_user(request)
@@ -1048,7 +1048,7 @@ async def secure_webhook_handler(request: Request) -> Dict[str, Any]:
 
 ```python path=null start=null
 # Bad: Returning non-200 status codes
-@webhook_endpoint("/webhooks/bad/{auth_token}")
+@webhook_endpoint("/webhook/bad/{auth_token}")
 async def bad_webhook_handler(request: Request) -> Dict[str, Any]:
     try:
         process_webhook(request.state.raw_body)
@@ -1057,14 +1057,14 @@ async def bad_webhook_handler(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail="Processing failed")
 
 # Bad: Not handling authentication properly
-@webhook_endpoint("/webhooks/unsecure/{auth_token}")
+@webhook_endpoint("/webhook/unsecure/{auth_token}")
 async def unsecure_webhook_handler(request: Request) -> Dict[str, Any]:
     # Don't bypass authentication checks
     # Always use get_current_user() or require auth in decorator
     return {"status": "processed"}
 
 # Bad: Not using middleware-processed data
-@webhook_endpoint("/webhooks/manual/{auth_token}")
+@webhook_endpoint("/webhook/manual/{auth_token}")
 async def manual_webhook_handler(request: Request) -> Dict[str, Any]:
     # Don't manually read request body - use request.state.raw_body
     # raw_body = await request.body()  # Wrong - middleware already processed
@@ -1087,7 +1087,7 @@ from jvspatial.api.auth.decorators import webhook_endpoint
 from jvspatial.api import Server
 
 # Simple webhook handler
-@webhook_endpoint("/webhooks/payment")
+@webhook_endpoint("/webhook/payment")
 async def payment_webhook(payload: dict, endpoint):
     """Process payment webhooks with automatic JSON parsing."""
     payment_id = payload.get("payment_id")
@@ -1103,7 +1103,7 @@ async def payment_webhook(payload: dict, endpoint):
 
 # Server automatically detects and configures webhook middleware
 server = Server(title="My Webhook API")
-server.run()  # Webhooks ready at /webhooks/* paths
+server.run()  # Webhooks ready at /webhook/* paths
 ```
 
 ### Advanced Webhook Features
@@ -1111,7 +1111,7 @@ server.run()  # Webhooks ready at /webhooks/* paths
 ```python path=null start=null
 # Webhook with full security features
 @webhook_endpoint(
-    "/webhooks/stripe/{key}",
+    "/webhook/stripe/{key}",
     path_key_auth=True,                    # API key in URL path
     hmac_secret="stripe-webhook-secret",   # HMAC signature verification
     idempotency_ttl_hours=48,              # Duplicate handling for 48h
@@ -1135,7 +1135,7 @@ async def secure_stripe_webhook(raw_body: bytes, content_type: str, endpoint):
     return endpoint.webhook_response(status="received")
 
 # Multi-service webhook dispatcher
-@webhook_endpoint("/webhooks/{service}")
+@webhook_endpoint("/webhook/{service}")
 async def multi_service_webhook(payload: dict, service: str, endpoint):
     """Route webhooks based on service parameter."""
     handlers = {
@@ -1171,7 +1171,7 @@ async def process_generic_event(payload: dict) -> dict:
 
 ```python path=null start=null
 # Future feature - Walker-based webhook processing
-# @webhook_walker_endpoint("/webhooks/location-update")
+# @webhook_walker_endpoint("/webhook/location-update")
 # class LocationUpdateWalker(Walker):
 #     """Process location updates through graph traversal."""
 #
@@ -1218,18 +1218,18 @@ GITHUB_WEBHOOK_SECRET=github_webhook_secret
 
 ```bash
 # Basic webhook test
-curl -X POST "http://localhost:8000/webhooks/payment" \
+curl -X POST "http://localhost:8000/webhook/payment" \
   -H "Content-Type: application/json" \
   -d '{"payment_id": "pay_123", "amount": 99.99}'
 
 # Webhook with path-based auth
-curl -X POST "http://localhost:8000/webhooks/stripe/key123:secret456" \
+curl -X POST "http://localhost:8000/webhook/stripe/key123:secret456" \
   -H "Content-Type: application/json" \
   -H "X-Signature: sha256=abc123..." \
   -d '{"type": "payment_intent.succeeded"}'
 
 # With idempotency key
-curl -X POST "http://localhost:8000/webhooks/payment" \
+curl -X POST "http://localhost:8000/webhook/payment" \
   -H "Content-Type: application/json" \
   -H "X-Idempotency-Key: unique-123" \
   -d '{"payment_id": "pay_124"}'
@@ -1241,7 +1241,7 @@ curl -X POST "http://localhost:8000/webhooks/payment" \
 
 ```python path=null start=null
 # Good: Always return 200 for webhook endpoints
-@webhook_endpoint("/webhooks/service")
+@webhook_endpoint("/webhook/service")
 async def proper_webhook(payload: dict, endpoint):
     try:
         result = await process_webhook_data(payload)
@@ -1252,7 +1252,7 @@ async def proper_webhook(payload: dict, endpoint):
         return endpoint.webhook_response(status="received", error="logged")
 
 # Good: Use route-based dispatch for multiple services
-@webhook_endpoint("/webhooks/{service}")
+@webhook_endpoint("/webhook/{service}")
 async def multi_service_webhook(payload: dict, service: str, endpoint):
     handlers = {
         "stripe": process_stripe,
@@ -1263,7 +1263,7 @@ async def multi_service_webhook(payload: dict, service: str, endpoint):
     return await handler(payload, endpoint)
 
 # Good: Validate webhook signatures when available
-@webhook_endpoint("/webhooks/secure", hmac_secret="webhook-secret")
+@webhook_endpoint("/webhook/secure", hmac_secret="webhook-secret")
 async def secure_webhook(raw_body: bytes, endpoint):
     # HMAC verification is automatic when secret is provided
     return endpoint.webhook_response(status="verified")
@@ -1273,21 +1273,21 @@ async def secure_webhook(raw_body: bytes, endpoint):
 
 ```python path=null start=null
 # Bad: Returning non-200 status codes
-@webhook_endpoint("/webhooks/bad")
+@webhook_endpoint("/webhook/bad")
 async def bad_webhook(payload: dict, endpoint):
     if payload.get("invalid"):
         # Don't do this - breaks webhook retry logic
         raise HTTPException(status_code=400, detail="Invalid payload")
 
 # Bad: Not handling errors gracefully
-@webhook_endpoint("/webhooks/risky")
+@webhook_endpoint("/webhook/risky")
 async def risky_webhook(payload: dict, endpoint):
     # Unhandled exceptions will return 500 - webhooks will retry
     result = dangerous_operation(payload)  # Might throw
     return endpoint.webhook_response(result=result)
 
 # Bad: Bypassing security features
-@webhook_endpoint("/webhooks/insecure")
+@webhook_endpoint("/webhook/insecure")
 async def insecure_webhook(request: Request, endpoint):
     # Don't manually read request body - use automatic payload injection
     raw_body = await request.body()  # Wrong - middleware already processed
