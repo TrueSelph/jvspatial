@@ -17,7 +17,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .utils import (
     WebhookConfig,
-    create_webhook_response,
     get_webhook_config_from_env,
     store_idempotent_response,
     validate_and_process_webhook,
@@ -196,11 +195,14 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             if webhook_config and webhook_config.get("async_processing", False):
                 # Queue for async processing and return immediate response
                 task_id = await self._queue_async_processing(request, call_next)
-                response_data = create_webhook_response(
-                    status="queued",
-                    message="Webhook queued for asynchronous processing",
-                    task_id=task_id,
-                )
+                from datetime import datetime
+
+                response_data = {
+                    "status": "queued",
+                    "timestamp": datetime.now().isoformat(),
+                    "message": "Webhook queued for asynchronous processing",
+                    "task_id": task_id,
+                }
                 return JSONResponse(content=response_data, status_code=200)
 
             # Continue to the endpoint handler
@@ -232,9 +234,14 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         except HTTPException as e:
             # Convert HTTPException to proper webhook response
             logger.warning(f"Webhook processing failed: {e.detail}")
-            error_response = create_webhook_response(
-                status="error", message=e.detail, error_code=e.status_code
-            )
+            from datetime import datetime
+
+            error_response = {
+                "status": "error",
+                "timestamp": datetime.now().isoformat(),
+                "message": e.detail,
+                "error_code": e.status_code,
+            }
             return JSONResponse(
                 content=error_response, status_code=200
             )  # Always return 200 for webhooks
@@ -242,9 +249,14 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         except Exception as e:
             # Handle unexpected errors
             logger.error(f"Unexpected error in webhook middleware: {e}", exc_info=True)
-            error_response = create_webhook_response(
-                status="error", message="Internal processing error", error_code=500
-            )
+            from datetime import datetime
+
+            error_response = {
+                "status": "error",
+                "timestamp": datetime.now().isoformat(),
+                "message": "Internal processing error",
+                "error_code": 500,
+            }
             return JSONResponse(
                 content=error_response, status_code=200
             )  # Always return 200 for webhooks

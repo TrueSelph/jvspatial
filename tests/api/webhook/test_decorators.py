@@ -30,7 +30,7 @@ class TestWebhookEndpointDecorator:
 
         @webhook_endpoint("/webhook/basic")
         async def basic_webhook(payload: dict, endpoint):
-            return endpoint.webhook_response(status="ok")
+            return endpoint.response(content={"status": "ok"})
 
         # Verify metadata is set correctly
         assert hasattr(basic_webhook, "_webhook_required")
@@ -59,7 +59,7 @@ class TestWebhookEndpointDecorator:
 
         @webhook_endpoint("/webhook/custom", methods=["POST", "PUT"])
         async def custom_methods_webhook(payload: dict, endpoint):
-            return endpoint.webhook_response(status="ok")
+            return endpoint.response(content={"status": "ok"})
 
         assert custom_methods_webhook._endpoint_methods == ["POST", "PUT"]
         assert custom_methods_webhook._route_config["methods"] == ["POST", "PUT"]
@@ -73,7 +73,7 @@ class TestWebhookEndpointDecorator:
             hmac_secret="test-secret",  # pragma: allowlist secret
         )
         async def secure_webhook(payload: dict, endpoint):
-            return endpoint.webhook_response(status="secure")
+            return endpoint.response(content={"status": "secure"})
 
         assert secure_webhook._required_permissions == [
             "process_webhooks",
@@ -93,7 +93,7 @@ class TestWebhookEndpointDecorator:
             hmac_secret="stripe-secret",  # pragma: allowlist secret
         )
         async def stripe_webhook(raw_body: bytes, content_type: str, endpoint):
-            return endpoint.webhook_response(status="received")
+            return endpoint.response(content={"status": "received"})
 
         # Verify path-based auth metadata
         assert stripe_webhook._path_key_auth is True
@@ -108,7 +108,7 @@ class TestWebhookEndpointDecorator:
 
             @webhook_endpoint("/webhook/invalid", path_key_auth=True)
             async def invalid_webhook(payload: dict, endpoint):
-                return endpoint.webhook_response()
+                return endpoint.response()
 
     def test_webhook_endpoint_with_roles(self):
         """Test @webhook_endpoint with required roles."""

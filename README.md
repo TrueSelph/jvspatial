@@ -587,9 +587,11 @@ async def payment_webhook(payload: dict, endpoint):
 
     # Process payment...
 
-    return endpoint.webhook_response(
-        status="processed",
-        message=f"Payment {payment_id} processed: ${amount}"
+    return endpoint.response(
+        content={
+            "status": "processed",
+            "message": f"Payment {payment_id} processed: ${amount}"
+        }
     )
 
 # Advanced webhook with security features
@@ -610,13 +612,15 @@ async def stripe_webhook(raw_body: bytes, content_type: str, endpoint):
 
         # Process different Stripe events
         if event_type == "payment_intent.succeeded":
-            return endpoint.webhook_response(
-                status="processed",
-                event_type=event_type,
-                message="Payment successful"
+            return endpoint.response(
+                content={
+                    "status": "processed",
+                    "event_type": event_type,
+                    "message": "Payment successful"
+                }
             )
 
-    return endpoint.webhook_response(status="received")
+    return endpoint.response(content={"status": "received"})
 
 # Walker-based webhook for graph operations
 @webhook_walker_endpoint("/webhook/location-update")

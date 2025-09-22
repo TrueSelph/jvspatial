@@ -1096,9 +1096,11 @@ async def payment_webhook(payload: dict, endpoint):
     # Process payment logic here
     print(f"Processing payment {payment_id}: ${amount}")
 
-    return endpoint.webhook_response(
-        status="processed",
-        message=f"Payment {payment_id} processed successfully"
+    return endpoint.response(
+        content={
+            "status": "processed",
+            "message": f"Payment {payment_id} processed successfully"
+        }
     )
 
 # Server automatically detects and configures webhook middleware
@@ -1126,13 +1128,15 @@ async def secure_stripe_webhook(raw_body: bytes, content_type: str, endpoint):
         event_type = payload.get("type", "unknown")
 
         if event_type == "payment_intent.succeeded":
-            return endpoint.webhook_response(
-                status="processed",
-                event_type=event_type,
-                message="Payment successful"
+            return endpoint.response(
+                content={
+                    "status": "processed",
+                    "event_type": event_type,
+                    "message": "Payment successful"
+                }
             )
 
-    return endpoint.webhook_response(status="received")
+    return endpoint.response(content={"status": "received"})
 
 # Multi-service webhook dispatcher
 @webhook_endpoint("/webhook/{service}")
@@ -1147,10 +1151,12 @@ async def multi_service_webhook(payload: dict, service: str, endpoint):
     handler = handlers.get(service, process_generic_event)
     result = await handler(payload)
 
-    return endpoint.webhook_response(
-        status="processed",
-        service=service,
-        result=result
+    return endpoint.response(
+        content={
+            "status": "processed",
+            "service": service,
+            "result": result
+        }
     )
 
 # Helper functions
@@ -1245,11 +1251,11 @@ curl -X POST "http://localhost:8000/webhook/payment" \
 async def proper_webhook(payload: dict, endpoint):
     try:
         result = await process_webhook_data(payload)
-        return endpoint.webhook_response(status="success", result=result)
+        return endpoint.response(content={"status": "success", "result": result})
     except Exception as e:
         # Log error but still return 200
         logger.error(f"Webhook processing failed: {e}")
-        return endpoint.webhook_response(status="received", error="logged")
+        return endpoint.response(content={"status": "received", "error": "logged"})
 
 # Good: Use route-based dispatch for multiple services
 @webhook_endpoint("/webhook/{service}")
@@ -1266,7 +1272,7 @@ async def multi_service_webhook(payload: dict, service: str, endpoint):
 @webhook_endpoint("/webhook/secure", hmac_secret="webhook-secret")
 async def secure_webhook(raw_body: bytes, endpoint):
     # HMAC verification is automatic when secret is provided
-    return endpoint.webhook_response(status="verified")
+    return endpoint.response(content={"status": "verified"})
 ```
 
 **❌ Avoided Patterns:**
@@ -1284,14 +1290,14 @@ async def bad_webhook(payload: dict, endpoint):
 async def risky_webhook(payload: dict, endpoint):
     # Unhandled exceptions will return 500 - webhooks will retry
     result = dangerous_operation(payload)  # Might throw
-    return endpoint.webhook_response(result=result)
+    return endpoint.response(content={"result": result})
 
 # Bad: Bypassing security features
 @webhook_endpoint("/webhook/insecure")
 async def insecure_webhook(request: Request, endpoint):
     # Don't manually read request body - use automatic payload injection
     raw_body = await request.body()  # Wrong - middleware already processed
-    return endpoint.webhook_response(status="received")
+    return endpoint.response(content={"status": "received"})
 ```
 
 > **📖 For complete webhook documentation and advanced patterns:** [Webhook Architecture Guide](docs/md/webhook-architecture.md) | [Webhook Quickstart](docs/md/webhooks-quickstart.md)

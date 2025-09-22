@@ -409,34 +409,6 @@ async def store_idempotent_response(
         _idempotency_manager.store_response(idempotency_key, response)
 
 
-def create_webhook_response(
-    status: str = "received",
-    message: Optional[str] = None,
-    data: Optional[Dict[str, Any]] = None,
-    **kwargs,
-) -> Dict[str, Any]:
-    """Create standardized webhook response.
-
-    Args:
-        status: Response status (received, success, error)
-        message: Optional message
-        data: Optional response data
-        **kwargs: Additional response fields
-
-    Returns:
-        Standardized webhook response dictionary
-    """
-    response = {"status": status, "timestamp": datetime.now().isoformat(), **kwargs}
-
-    if message:
-        response["message"] = message
-
-    if data:
-        response["data"] = data
-
-    return response
-
-
 def get_webhook_config_from_env() -> WebhookConfig:
     """Create WebhookConfig from environment variables.
 
