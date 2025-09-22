@@ -1,0 +1,16 @@
+# Core dependencies for jvspatial
+# Web framework and async server
+fastapi
+uvicorn
+python-multipart
+
+# Data validation and modeling
+pydantic>=2.0
+
+# Database drivers
+motor  # Async MongoDB driver
+pymongo  # MongoDB support
+
+# Authentication dependencies (optional but commonly used)
+PyJWT  # JWT token handling
+bcrypt  # Password hashing

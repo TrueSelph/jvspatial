@@ -1,0 +1,24 @@
+# Optional dependencies for jvspatial
+# These provide additional functionality but are not required for core operation
+
+# Enhanced JSON support (for better serialization)
+orjson  # Fast JSON library
+
+# Production ASGI server alternatives
+gunicorn  # WSGI/ASGI server
+hypercorn  # Alternative ASGI server
+
+# Environment management
+python-dotenv  # Load environment variables from .env files
+
+# Logging enhancements
+structlog  # Structured logging
+coloredlogs  # Colored console logs
+
+# Performance monitoring (if needed)
+# psutil  # System and process monitoring
+# prometheus-client  # Prometheus metrics
+
+# Documentation generation
+# mkdocs  # Documentation site generator
+# mkdocs-material  # Material theme for MkDocs

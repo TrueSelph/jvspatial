@@ -1,10 +1,14 @@
 # Test dependencies for jvspatial
+# Include base requirements
+-r requirements.txt
+
+# Testing framework and core utilities
 pytest>=7.0
 pytest-asyncio>=0.21.0
-httpx>=0.24.0
+httpx>=0.24.0  # For async HTTP client testing
 
-# Required for FastAPI TestClient
-starlette[testing]
+# FastAPI testing support
+starlette[testing]  # TestClient and testing utilities
 
-# Development tools
+# Development tools (optional for testing)
 pre-commit>=3.0.0

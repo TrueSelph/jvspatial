@@ -23,6 +23,8 @@ setup(
         "python-multipart",
         "motor",
         "pymongo",
+        "PyJWT",  # JWT token handling for authentication
+        "bcrypt",  # Password hashing for authentication
     ],
     extras_require={
         "dev": [
