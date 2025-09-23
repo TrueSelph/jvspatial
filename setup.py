@@ -25,6 +25,7 @@ setup(
         "pymongo",
         "PyJWT",  # JWT token handling for authentication
         "bcrypt",  # Password hashing for authentication
+        "schedule>=1.2.2",  # Job scheduling
     ],
     extras_require={
         "dev": [
@@ -37,6 +38,9 @@ setup(
             "pytest",
             "pytest-asyncio",
             "httpx",
+        ],
+        "scheduler": [
+            "schedule>=1.2.2",
         ],
     },
     classifiers=[

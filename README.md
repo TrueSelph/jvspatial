@@ -208,6 +208,59 @@ if __name__ == "__main__":
     server.run()  # API available at http://localhost:8000/docs
 ```
 
+### Scheduler Integration
+
+jvspatial includes optional scheduler support for background task automation using the `@on_schedule` decorator:
+
+```python
+from jvspatial.api import Server
+from jvspatial.api.scheduler import on_schedule
+from jvspatial.core import Object
+from datetime import datetime
+
+# Define entity for job tracking
+class ScheduledJob(Object):
+    job_name: str = ""
+    execution_time: datetime = datetime.now()
+    status: str = "pending"
+    duration_seconds: float = 0.0
+
+# Create scheduled function
+@on_schedule("every 30 minutes", description="System cleanup")
+async def cleanup_system():
+    """Automated cleanup with job tracking."""
+    start_time = datetime.now()
+
+    # Perform cleanup work
+    cleanup_count = perform_cleanup_work()
+
+    # Create job record
+    await ScheduledJob.create(
+        job_name="system_cleanup",
+        execution_time=start_time,
+        status="completed",
+        duration_seconds=(datetime.now() - start_time).total_seconds()
+    )
+    print(f"✅ Cleaned up {cleanup_count} items")
+
+# Create server with scheduler enabled
+server = Server(
+    title="Scheduled App",
+    scheduler_enabled=True,  # Enable scheduler
+    scheduler_interval=1,    # Check every second
+)
+
+if __name__ == "__main__":
+    server.run()  # Scheduler runs automatically
+```
+
+**Installation:**
+```bash
+pip install jvspatial[scheduler]
+```
+
+**📖 For comprehensive scheduler documentation:** [Scheduler Integration Guide](docs/md/scheduler.md)
+
 ## Table of Contents
 
 ### Getting Started
@@ -222,6 +275,7 @@ if __name__ == "__main__":
 - [Walker Traversal Patterns](#walker-traversal-patterns)
 - [Walker Trail Tracking](#walker-trail-tracking)
 - [FastAPI Server Integration](#fastapi-server-integration)
+- [Scheduler Integration](#scheduler-integration)
 - [Webhook Integration](#webhook-integration)
 
 ### Advanced Topics
@@ -229,6 +283,7 @@ if __name__ == "__main__":
 - [Environment Configuration](docs/md/environment-configuration.md)
 - [Infinite Walk Protection](docs/md/infinite-walk-protection.md)
 - [REST API Integration](docs/md/rest-api.md)
+- [Scheduler Integration](docs/md/scheduler.md)
 - [Webhook Architecture](docs/md/webhook-architecture.md)
 - [MongoDB-Style Query Interface](docs/md/mongodb-query-interface.md)
 - [Object Pagination Guide](docs/md/pagination.md)

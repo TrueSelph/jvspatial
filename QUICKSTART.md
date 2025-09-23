@@ -2170,9 +2170,9 @@ async def get_data():
 
 ### Core Entities
 
-1. **Object** - Base class for all entities with unified query interface
-2. **Node** - Extends Object, represents graph nodes with spatial/contextual data
-3. **Edge** - Represents relationships between nodes
+1. **Object** - Base class for all entities with unified query interface; used to store non-graph data
+2. **Node** - Extends Object, represents graph nodes with spatial/contextual data; used only as part of a graph
+3. **Edge** - Represents relationships between nodes on a graph
 4. **Walker** - Implements graph traversal and pathfinding algorithms
 5. **GraphContext** - Low-level database interface (use sparingly)
 
@@ -4415,6 +4415,171 @@ async def process_node(self, here: Node):
     # Use async alternatives
     await asyncio.sleep(1.0)  # Non-blocking
 ```
+
+---
+
+## ⏰ Scheduler Integration (Optional)
+
+jvspatial includes optional scheduler support for background task automation. Install with:
+
+```bash
+pip install jvspatial[scheduler]
+```
+
+### Basic Scheduled Tasks
+
+```python path=null start=null
+from jvspatial.api import Server
+from jvspatial.api.scheduler import on_schedule
+from jvspatial.core import Object
+from datetime import datetime
+from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Define entity for job tracking (entity-centric pattern)
+class ScheduledJob(Object):
+    """Entity representing scheduled job execution records."""
+    job_name: str = ""
+    execution_time: datetime = datetime.now()
+    status: str = "pending"  # pending, completed, failed
+    duration_seconds: Optional[float] = None
+    error_message: Optional[str] = None
+
+class SystemMetrics(Object):
+    """Entity for system metrics collection."""
+    timestamp: datetime = datetime.now()
+    cpu_usage: float = 0.0
+    memory_usage: float = 0.0
+    active_jobs: int = 0
+
+# Scheduled function with proper error handling
+@on_schedule("every 30 minutes", description="System cleanup with job tracking")
+async def cleanup_system():
+    """Automated cleanup with entity-centric job tracking."""
+    start_time = datetime.now()
+
+    try:
+        logger.info("🧹 Starting system cleanup")
+
+        # Perform cleanup work
+        cleanup_count = await perform_cleanup_work()
+
+        # Create success record
+        await ScheduledJob.create(
+            job_name="system_cleanup",
+            execution_time=start_time,
+            status="completed",
+            duration_seconds=(datetime.now() - start_time).total_seconds()
+        )
+
+        logger.info(f"✅ Cleanup completed: {cleanup_count} items processed")
+
+    except Exception as e:
+        # Create error record
+        await ScheduledJob.create(
+            job_name="system_cleanup",
+            execution_time=start_time,
+            status="failed",
+            error_message=str(e),
+            duration_seconds=(datetime.now() - start_time).total_seconds()
+        )
+        logger.error(f"❌ Cleanup failed: {str(e)}")
+        raise
+
+# Metrics collection with MongoDB-style queries
+@on_schedule("every 5 minutes", retry_count=2, description="Collect system metrics")
+async def collect_metrics():
+    """Collect system metrics with entity queries."""
+    import psutil
+
+    # Get system metrics
+    cpu_percent = psutil.cpu_percent()
+    memory = psutil.virtual_memory()
+
+    # Count active jobs using MongoDB-style query
+    active_jobs = await ScheduledJob.count({
+        "context.status": {"$in": ["pending", "running"]}
+    })
+
+    # Create metrics record
+    await SystemMetrics.create(
+        timestamp=datetime.now(),
+        cpu_usage=cpu_percent,
+        memory_usage=memory.percent,
+        active_jobs=active_jobs
+    )
+
+    logger.info(f"📊 Metrics: CPU {cpu_percent:.1f}%, Memory {memory.percent:.1f}%")
+
+async def perform_cleanup_work() -> int:
+    """Simulate cleanup work."""
+    # Query old records using entity-centric approach
+    cutoff_time = datetime.now().timestamp() - (7 * 24 * 3600)  # 7 days ago
+
+    old_jobs = await ScheduledJob.find({
+        "context.execution_time": {"$lt": cutoff_time}
+    })
+
+    # Delete old records
+    for job in old_jobs:
+        await job.delete()
+
+    return len(old_jobs)
+```
+
+### Server Integration
+
+```python path=null start=null
+from jvspatial.api import Server, endpoint
+from jvspatial.api.scheduler import register_scheduled_tasks
+from typing import Dict, Any
+from dotenv import load_dotenv
+
+# Load environment configuration (jvspatial pattern)
+load_dotenv()
+
+# Create server with scheduler enabled
+server = Server(
+    title="My Scheduled App",
+    description="Application with integrated scheduler",
+    version="1.0.0",
+    scheduler_enabled=True,    # Enable scheduler
+    scheduler_interval=1,      # Check every second
+    scheduler_timezone="UTC",  # Timezone for scheduling
+)
+
+# Register all decorated scheduled tasks
+if hasattr(server, 'scheduler_service') and server.scheduler_service:
+    register_scheduled_tasks(server.scheduler_service)
+    logger.info("✅ Scheduled tasks registered")
+
+# Add monitoring endpoint
+@endpoint("/api/scheduler/status", methods=["GET"])
+async def get_scheduler_status() -> Dict[str, Any]:
+    """Get scheduler status with entity-centric job statistics."""
+    # Get job statistics using entity queries
+    total_jobs = await ScheduledJob.count()
+    completed_jobs = await ScheduledJob.count({"context.status": "completed"})
+    failed_jobs = await ScheduledJob.count({"context.status": "failed"})
+
+    return {
+        "scheduler": "running",
+        "job_statistics": {
+            "total_jobs": total_jobs,
+            "completed_jobs": completed_jobs,
+            "failed_jobs": failed_jobs,
+            "success_rate": (completed_jobs / total_jobs * 100) if total_jobs > 0 else 0
+        },
+        "timestamp": datetime.now().isoformat()
+    }
+
+if __name__ == "__main__":
+    server.run(host="0.0.0.0", port=8000)  # Scheduler runs automatically
+```
+
+**📖 For comprehensive scheduler documentation:** [Scheduler Integration Guide](docs/md/scheduler.md)
 
 ---
 

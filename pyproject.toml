@@ -36,6 +36,7 @@ dependencies = [
     "pymongo",
     "PyJWT",  # JWT token handling for authentication
     "bcrypt",  # Password hashing for authentication
+    "schedule>=1.2.2",  # Job scheduling
 ]
 
 [project.optional-dependencies]
