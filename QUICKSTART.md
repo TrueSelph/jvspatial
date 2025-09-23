@@ -1,188 +1,147 @@
-# Quickstart Guide for jvspatial
+# jvspatial Language Model Coding Guide
 
-This document provides guidance for AI language models and developers working with the jvspatial library to ensure consistent, high-quality code generation and maintenance practices.
+This document provides concise guidance for AI language models to generate code that follows jvspatial library standards and conventions.
 
 ## 🎯 Core Philosophy
 
-The jvspatial library emphasizes **clean, entity-centric design** with a unified MongoDB-style query interface that works seamlessly across different database backends (JSON, MongoDB, custom implementations).
+jvspatial emphasizes **entity-centric design** with unified MongoDB-style queries across database backends (JSON, MongoDB). The library distinguishes between:
+
+- **Objects** - For standalone data entities (users, settings, logs) that don't require graph relationships
+- **Nodes** - For graph entities that are interconnected by Edges and traversed by Walkers
+- **Edges** - For relationships between Nodes in the graph
+- **Walkers** - For traversing and processing graph structures
+
+**Key Principle**: Use Objects for simple data storage, use Nodes when you need graph traversal and relationships.
 
 ## 🔧 Environment Setup
 
-Before getting started with jvspatial development, configure your environment variables for proper database connectivity.
-
-### Quick Setup
-
-1. **Copy the environment template:**
-   ```bash
-   cp .env.example .env
-   ```
-
-2. **Edit the .env file** with your preferred configuration:
-   ```env
-   # Choose database backend
-   JVSPATIAL_DB_TYPE=json              # or 'mongodb'
-
-   # JSON database configuration (default)
-   JVSPATIAL_JSONDB_PATH=./jvdb/dev    # Local file storage path
-
-   # MongoDB configuration (if using MongoDB)
-   # JVSPATIAL_MONGODB_URI=mongodb://localhost:27017
-   # JVSPATIAL_MONGODB_DB_NAME=jvspatial_dev
-   ```
-
-3. **Load environment variables** in your code:
-   ```python
-   from dotenv import load_dotenv
-   load_dotenv()  # Load .env file
-
-   # jvspatial automatically uses environment variables
-   from jvspatial.core import GraphContext
-   ctx = GraphContext()  # Uses configured database
-   ```
-
-### Environment Variables Reference
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `JVSPATIAL_DB_TYPE` | `json` | Database backend (`json`, `mongodb`) |
-| `JVSPATIAL_JSONDB_PATH` | `jvdb` | Directory for JSON database files |
-| `JVSPATIAL_MONGODB_URI` | `mongodb://localhost:27017` | MongoDB connection string |
-| `JVSPATIAL_MONGODB_DB_NAME` | `jvspatial_db` | MongoDB database name |
-
-### Configuration Examples
-
-**Development (JSON Database):**
-```env
-JVSPATIAL_DB_TYPE=json
-JVSPATIAL_JSONDB_PATH=./jvdb/dev
-```
-
-**Production (MongoDB):**
-```env
-JVSPATIAL_DB_TYPE=mongodb
-JVSPATIAL_MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/
-JVSPATIAL_MONGODB_DB_NAME=jvspatial_production
-```
-
-**Docker/Container Setup:**
-```env
-JVSPATIAL_DB_TYPE=mongodb
-JVSPATIAL_MONGODB_URI=mongodb://mongo_container:27017
-JVSPATIAL_MONGODB_DB_NAME=jvspatial_docker
-```
-
-> **📖 For comprehensive environment configuration details, see:** [Environment Configuration Guide](docs/md/environment-configuration.md)
-
-## 📝 Code Generation Preferences
-
-### 1. Entity-Centric CRUD Syntax (PREFERRED)
-
-**✅ DO: Use entity-centric syntax**
+### Essential Configuration
 ```python
-# Entity creation
-user = await User.create(name="Alice", email="alice@company.com")
+from dotenv import load_dotenv
+load_dotenv()  # Load .env file
+
+from jvspatial.core import GraphContext
+ctx = GraphContext()  # Uses configured database
+```
+
+### Environment Variables
+```env
+# Choose backend
+JVSPATIAL_DB_TYPE=json              # or 'mongodb'
+
+# JSON backend (default)
+JVSPATIAL_JSONDB_PATH=./jvdb/dev
+
+# MongoDB backend
+JVSPATIAL_MONGODB_URI=mongodb://localhost:27017
+JVSPATIAL_MONGODB_DB_NAME=jvspatial_dev
+```
+
+## 📝 Entity-Centric Code Patterns
+
+### Objects vs Nodes: When to Use Each
+
+**✅ Objects** - For standalone entities without graph relationships:
+```python
+from jvspatial.core import Object
+
+class UserProfile(Object):
+    name: str = ""
+    email: str = ""
+    settings: Dict[str, Any] = {}
+
+# Use for: user profiles, configuration, logs, simple data
+profile = await UserProfile.create(name="Alice", email="alice@company.com")
+```
+
+**✅ Nodes** - For graph entities with relationships and traversal:
+```python
+from jvspatial.core import Node
+
+class User(Node):
+    name: str = ""
+    department: str = ""
+
+class City(Node):
+    name: str = ""
+    population: int = 0
+
+# Use for: entities that connect to other entities via Edges
+user = await User.create(name="Alice", department="engineering")
+city = await City.create(name="San Francisco", population=800000)
+```
+
+### Entity Operations
+```python
+# Entity creation (no save() needed)
+entity = await Entity.create(name="value", field="data")
 
 # Entity retrieval
-user = await User.get(user_id)
-users = await User.find({"context.active": True})
-active_users = await User.find_by(active=True)
+entity = await Entity.get(entity_id)
+entities = await Entity.find({"context.active": True})
 
-# Entity updates
-user.name = "Alice Johnson"
-await user.save()
+# Entity updates (save() only needed after property modification)
+entity = await Entity.get(entity_id)
+entity.name = "Updated Name"  # Property modified
+await entity.save()  # save() required to persist changes
 
 # Entity deletion
-await user.delete()
+await entity.delete()
 
 # Counting and aggregation
-count = await User.count({"context.department": "engineering"})
-departments = await User.distinct("department")
+count = await Entity.count({"context.department": "engineering"})
+departments = await Entity.distinct("department")
 ```
+
+### save() Operation Rules
+**✅ save() is ONLY required when:**
+1. You modify entity properties after retrieval: `entity.field = "new_value"`
+2. You create entities without using `.create()` method
+
+**❌ save() is NOT needed when:**
+1. Using `.create()` method (automatically persists)
+2. Using `.delete()` method (automatically persists deletion)
+3. Just reading/querying entities
 
 **❌ AVOID: Direct GraphContext methods**
 ```python
-# Discouraged - direct database access
+# Don't do this
 db = get_database()
-users = await db.find("node", {"name": "User"})
-await db.create("node", user_data)
+entities = await db.find("object", {"name": "Entity"})
 ```
 
-### 2. MongoDB-Style Query Interface
+## 🔍 MongoDB-Style Query Patterns
 
-Always use the unified MongoDB-style query syntax with proper dot notation for nested fields:
+Always use dot notation for nested fields with `context.` prefix:
 
 ```python
 # Comparison operators
-senior_users = await User.find({"context.age": {"$gte": 35}})
-young_users = await User.find({"context.age": {"$lt": 30}})
-non_admin_users = await User.find({"context.role": {"$ne": "admin"}})
+users = await User.find({"context.age": {"$gte": 35}})
+users = await User.find({"context.role": {"$ne": "admin"}})
 
 # Logical operators
-engineers = await User.find({
+users = await User.find({
     "$and": [
         {"context.department": "engineering"},
         {"context.active": True}
     ]
 })
 
-# OR conditions
-senior_or_manager = await User.find({
-    "$or": [
-        {"context.age": {"$gte": 40}},
-        {"context.role": "manager"}
-    ]
-})
-
 # Array operations
-tech_users = await User.find({"context.skills": {"$in": ["python", "javascript"]}})
-non_tech_users = await User.find({"context.skills": {"$nin": ["python", "java"]}})
+users = await User.find({"context.skills": {"$in": ["python", "javascript"]}})
 
-# Regular expressions with case-insensitive matching
-johnson_family = await User.find({
+# Regular expressions
+users = await User.find({
     "context.name": {"$regex": "Johnson", "$options": "i"}
 })
-
-# Complex nested queries
-active_senior_engineers = await User.find({
-    "$and": [
-        {"context.department": "engineering"},
-        {"context.age": {"$gte": 35}},
-        {"context.active": True},
-        {"context.skills": {"$in": ["python", "go", "rust"]}}
-    ]
-})
-
-# Range queries
-mid_career = await User.find({
-    "context.experience_years": {
-        "$gte": 3,
-        "$lte": 10
-    }
-})
-
-# Existence checks
-users_with_github = await User.find({"context.github_profile": {"$exists": True}})
 ```
 
-## 🔧 Code Quality Standards
+## 🏢 Type Annotations & Error Handling
 
-### Linting and Formatting Requirements
-
-All generated code must adhere to:
-
-- **Black**: Code formatting (line length 88 chars)
-- **Flake8**: PEP 8 compliance and error detection
-- **mypy**: Type checking and annotations
-- **isort**: Import sorting and organization
-
-### Type Annotations
-
-Always include proper type annotations:
-
+### Required Typing Pattern
 ```python
-from typing import List, Optional, Dict, Any, Union
-from datetime import datetime
-from jvspatial.core import Node
+from typing import List, Optional, Dict, Any
+from jvspatial.core import Node, Object
 from jvspatial.exceptions import NodeNotFoundError, ValidationError
 
 class User(Node):
@@ -190,17 +149,8 @@ class User(Node):
     email: str = ""
     age: int = 0
     roles: List[str] = []
-    department: str = ""
-    created_at: datetime = datetime.now()
     active: bool = True
     metadata: Dict[str, Any] = {}
-
-async def find_users(department: str, active: bool = True) -> List[User]:
-    """Find users by department with optional activity filter."""
-    return await User.find({
-        "context.department": department,
-        "context.active": active
-    })
 
 async def get_user_by_id(user_id: str) -> Optional[User]:
     """Get user by ID, returning None if not found."""
@@ -208,458 +158,367 @@ async def get_user_by_id(user_id: str) -> Optional[User]:
         return await User.get(user_id)
     except NodeNotFoundError:
         return None
-
-async def find_users_advanced(
-    filters: Dict[str, Any],
-    limit: Optional[int] = None,
-    sort_by: Optional[str] = None
-) -> List[User]:
-    """Advanced user search with MongoDB-style filters."""
-    query = {}
-
-    # Build query with proper context prefixing
-    for field, value in filters.items():
-        if not field.startswith("context."):
-            query[f"context.{field}"] = value
-        else:
-            query[field] = value
-
-    users = await User.find(query)
-
-    # Apply sorting if specified
-    if sort_by:
-        users.sort(key=lambda u: getattr(u, sort_by, 0))
-
-    # Apply limit if specified
-    if limit and len(users) > limit:
-        users = users[:limit]
-
-    return users
 ```
 
-### Error Handling
-
-Include appropriate error handling patterns:
-
+### Error Handling Pattern
 ```python
 import logging
 from jvspatial.exceptions import NodeNotFoundError, ValidationError, DatabaseError
 
 logger = logging.getLogger(__name__)
 
-# Basic error handling pattern
 try:
     user = await User.get(user_id)
-    if not user:
-        raise ValueError(f"User {user_id} not found")
 except NodeNotFoundError:
-    logger.warning(f"User {user_id} not found in database")
+    logger.warning(f"User {user_id} not found")
     return None
 except DatabaseError as e:
-    logger.error(f"Database error retrieving user {user_id}: {e}")
+    logger.error(f"Database error: {e}")
     raise
-except Exception as e:
-    logger.error(f"Unexpected error retrieving user {user_id}: {e}")
-    raise
-
-# Advanced error handling with context management
-async def safe_user_operation(user_id: str, operation_data: Dict[str, Any]):
-    """Perform user operations with comprehensive error handling."""
-    try:
-        # Validate input data
-        if not user_id or not operation_data:
-            raise ValidationError("User ID and operation data are required")
-
-        # Retrieve user
-        user = await User.get(user_id)
-        if not user:
-            raise NodeNotFoundError(f"User {user_id} not found")
-
-        # Perform operation with transaction-like behavior
-        original_data = user.model_dump()  # Backup for rollback
-
-        try:
-            # Update user data
-            for field, value in operation_data.items():
-                if hasattr(user, field):
-                    setattr(user, field, value)
-                else:
-                    logger.warning(f"Ignoring unknown field: {field}")
-
-            # Validate and save
-            await user.validate()  # Custom validation if implemented
-            await user.save()
-
-            logger.info(f"Successfully updated user {user_id}")
-            return user
-
-        except ValidationError as e:
-            # Rollback changes
-            for field, value in original_data.items():
-                setattr(user, field, value)
-            logger.error(f"Validation failed for user {user_id}: {e}")
-            raise
-
-    except NodeNotFoundError:
-        logger.warning(f"User {user_id} not found for operation")
-        raise
-    except ValidationError:
-        logger.error(f"Validation error for user {user_id} operation")
-        raise
-    except DatabaseError as e:
-        logger.error(f"Database error during user {user_id} operation: {e}")
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error during user {user_id} operation: {e}")
-        raise RuntimeError(f"Operation failed for user {user_id}") from e
-
-# Context manager for batch operations
-class UserBatchProcessor:
-    def __init__(self):
-        self.success_count = 0
-        self.error_count = 0
-        self.errors: List[str] = []
-
-    async def __aenter__(self):
-        self.success_count = 0
-        self.error_count = 0
-        self.errors = []
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if exc_type:
-            logger.error(f"Batch processing failed: {exc_val}")
-        else:
-            logger.info(
-                f"Batch processing completed: {self.success_count} success, "
-                f"{self.error_count} errors"
-            )
-
-    async def process_user(self, user_data: Dict[str, Any]):
-        try:
-            user = await User.create(**user_data)
-            self.success_count += 1
-            return user
-        except Exception as e:
-            self.error_count += 1
-            error_msg = f"Failed to process user {user_data.get('email', 'unknown')}: {e}"
-            self.errors.append(error_msg)
-            logger.error(error_msg)
-            return None
-
-# Usage example
-async def batch_create_users(users_data: List[Dict[str, Any]]):
-    async with UserBatchProcessor() as processor:
-        results = []
-        for user_data in users_data:
-            result = await processor.process_user(user_data)
-            results.append(result)
-        return results
 ```
 
-## 📄 Object Pagination with ObjectPager
+## 📄 ObjectPager for Large Datasets
 
-The **ObjectPager** provides efficient, database-level pagination for any Object subclass (including Nodes, Edges, and custom objects) with filtering and ordering capabilities. It's designed for handling large datasets and UI integration.
+### Basic Pagination
+```python
+from jvspatial.core.pager import paginate_objects, ObjectPager
 
-### Quick Start
+# Simple pagination
+users = await paginate_objects(User, page=1, page_size=20)
 
-```python path=null start=null
-from jvspatial.core.pager import ObjectPager, paginate_objects, paginate_by_field
-from jvspatial.core import Node
-
-class City(Node):
-    name: str = ""
-    population: int = 0
-    state: str = ""
-
-class User(Node):
-    name: str = ""
-    email: str = ""
-    department: str = ""
-    active: bool = True
-
-# Simple pagination with convenience function
-cities = await paginate_objects(City, page=1, page_size=20)
-print(f"Found {len(cities)} cities on page 1")
-
-# Pagination with filters
-large_cities = await paginate_objects(
-    City,
+# With filters
+active_users = await paginate_objects(
+    User,
     page=1,
     page_size=10,
-    filters={"context.population": {"$gt": 1_000_000}}
+    filters={"context.active": True}
 )
 
-# Field-based pagination with ordering
-populous_cities = await paginate_by_field(
-    City,
-    field="population",
-    order="desc",  # Largest first
-    page_size=15
+# Advanced pager
+pager = ObjectPager(
+    User,
+    page_size=25,
+    filters={"context.department": "engineering"},
+    order_by="name"
 )
+users = await pager.get_page(1)
 ```
 
-### ObjectPager Class Usage
+## ⏰ Scheduler Integration
 
-```python path=null start=null
-async def advanced_pagination_example():
-    """Demonstrate ObjectPager class with full features."""
+### Task Scheduling
+```python
+from jvspatial.core.scheduler import Scheduler, ScheduledTask
+from datetime import datetime, timedelta
 
-    # Create pager with filters and ordering
-    pager = ObjectPager(
-        User,
-        page_size=25,
-        filters={"context.active": True},
-        order_by="name",
-        order_direction="asc"
+# Create scheduler
+scheduler = Scheduler()
+
+# Schedule recurring tasks
+@scheduler.task(interval=timedelta(hours=1))
+async def cleanup_expired_sessions():
+    """Clean up expired user sessions hourly."""
+    expired = await UserSession.find({
+        "context.expires_at": {"$lt": datetime.now()}
+    })
+    for session in expired:
+        await session.delete()
+    print(f"Cleaned up {len(expired)} expired sessions")
+
+# Schedule one-time tasks
+@scheduler.task(run_at=datetime.now() + timedelta(minutes=30))
+async def send_reminder_emails():
+    """Send reminder emails."""
+    users = await User.find({"context.reminder_due": True})
+    for user in users:
+        await send_email(user.email, "Reminder")
+        user.reminder_due = False
+        await user.save()
+
+# Start scheduler
+await scheduler.start()
+```
+
+### Walker-Based Scheduled Tasks
+```python
+from jvspatial.core import Walker
+from jvspatial.decorators import on_visit
+
+@scheduler.walker_task(interval=timedelta(days=1))
+class DailyMaintenanceWalker(Walker):
+    """Perform daily maintenance tasks via graph traversal."""
+
+    @on_visit("User")
+    async def check_user_activity(self, here: Node):
+        """Check user activity and update status."""
+        if here.last_active < datetime.now() - timedelta(days=30):
+            here.status = "inactive"
+            await here.save()
+            self.report({"deactivated_user": here.id})
+
+    @on_visit("DataNode")
+    async def cleanup_old_data(self, here: Node):
+        """Remove old data nodes."""
+        if here.created_at < datetime.now() - timedelta(days=90):
+            await here.delete()
+            self.report({"deleted_data_node": here.id})
+
+# Start scheduled walker
+await scheduler.start_walker_task(DailyMaintenanceWalker)
+```
+
+## 🌐 API Server with Server Class
+
+### Basic Server Setup
+```python
+from jvspatial.api import Server
+
+# Create server instance
+server = Server(
+    title="My Spatial API",
+    description="Graph-based spatial data management API",
+    version="1.0.0",
+    host="0.0.0.0",
+    port=8000
+)
+
+# Run server
+if __name__ == "__main__":
+    server.run()
+```
+
+### Walker Endpoints
+```python
+from jvspatial.api import walker_endpoint
+from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.core import Walker, Node
+from jvspatial.decorators import on_visit
+
+@walker_endpoint("/api/users/process", methods=["POST"])
+class ProcessUser(Walker):
+    """Process user data with graph traversal."""
+
+    user_name: str = EndpointField(
+        description="Name of user to process",
+        examples=["John Doe"]
     )
 
-    # Get first page
-    users_page1 = await pager.get_page(page=1)
-    print(f"Page 1: {len(users_page1)} users")
-
-    # Get pagination metadata for UI
-    pagination_info = pager.to_dict()
-    print(f"Total users: {pagination_info['total_items']}")
-    print(f"Total pages: {pagination_info['total_pages']}")
-    print(f"Has next page: {pagination_info['has_next']}")
-
-    # Navigate pages
-    if pager.has_next_page():
-        users_page2 = await pager.next_page()
-        print(f"Page 2: {len(users_page2)} users")
-
-    # Add additional filters dynamically
-    engineering_users = await pager.get_page(
-        page=1,
-        additional_filters={"context.department": "engineering"}
+    department: str = EndpointField(
+        default="general",
+        description="User department"
     )
-    print(f"Engineering users: {len(engineering_users)}")
 
-    return pager, pagination_info
+    @on_visit("User")
+    async def process_user(self, here: Node):
+        """Process user nodes - use 'here' for visited node."""
+        if here.name == self.user_name:
+            self.report({
+                "found_user": {
+                    "id": here.id,
+                    "name": here.name,
+                    "department": here.department
+                }
+            })
+
+        # Get connected nodes and continue traversal
+        colleagues = await here.nodes(
+            node=['User'],
+            department=self.department
+        )
+        await self.visit(colleagues)
 ```
 
-### Batch Processing with Pagination
+### Function Endpoints
+```python
+from jvspatial.api import endpoint
 
-```python path=null start=null
-async def process_large_dataset_example():
-    """Process large datasets efficiently with pagination."""
+@endpoint("/api/users/count", methods=["GET"])
+async def get_user_count() -> Dict[str, int]:
+    """Get total user count."""
+    users = await User.all()
+    return {"total_users": len(users)}
 
-    # Create pager for batch processing
-    pager = ObjectPager(User, page_size=100)  # Larger batches for processing
-    processed_count = 0
+@endpoint("/api/users/{user_id}", methods=["GET"])
+async def get_user(user_id: str, endpoint) -> Any:
+    """Get user with semantic response."""
+    user = await User.get(user_id)
+    if not user:
+        return endpoint.not_found(
+            message="User not found",
+            details={"user_id": user_id}
+        )
 
-    print("Starting batch processing...")
-
-    while True:
-        # Get next batch of users
-        users_batch = await pager.next_page()
-
-        if not users_batch:
-            print("No more users to process")
-            break
-
-        # Process batch
-        print(f"Processing batch {pager.current_page}: {len(users_batch)} users")
-
-        for user in users_batch:
-            # Simulate processing (e.g., send emails, update records)
-            await process_user(user)
-            processed_count += 1
-
-        print(f"Completed page {pager.current_page}, total processed: {processed_count}")
-
-        # Optional: Add delay between batches
-        # await asyncio.sleep(1.0)
-
-    print(f"Batch processing complete: {processed_count} users processed")
-    return processed_count
-
-async def process_user(user: User):
-    """Process individual user (mock implementation)."""
-    # Update user's last processed timestamp
-    user.data['last_processed'] = datetime.now().isoformat()
-    await user.save()
+    return endpoint.success(
+        data={"id": user.id, "name": user.name, "email": user.email}
+    )
 ```
 
-### UI Integration Pattern
+### Server with Scheduler Integration
+```python
+from jvspatial.api import Server
+from jvspatial.core.scheduler import Scheduler
 
-```python path=null start=null
-class PaginationService:
-    """Service for UI pagination integration."""
+# Create integrated server with scheduler
+server = Server(title="Scheduled API", port=8000)
+scheduler = Scheduler()
 
+# Add scheduled tasks
+@scheduler.task(interval=timedelta(minutes=5))
+async def periodic_health_check():
+    """Check system health every 5 minutes."""
+    # Health check logic here
+    pass
+
+@server.on_startup
+async def startup_tasks():
+    """Start scheduler when server starts."""
+    await scheduler.start()
+    print("✅ Server and scheduler started")
+
+@server.on_shutdown
+async def shutdown_tasks():
+    """Stop scheduler when server shuts down."""
+    await scheduler.stop()
+    print("🛑 Server and scheduler stopped")
+
+# Run integrated server
+if __name__ == "__main__":
+    server.run()
+```
+
+## 🔗 Webhook Integration
+
+### Basic Webhook Handler
+```python
+from jvspatial.api.auth.decorators import webhook_endpoint
+from fastapi import Request
+
+@webhook_endpoint("/webhook/{service}/{auth_token}", methods=["POST"])
+async def webhook_handler(request: Request) -> Dict[str, Any]:
+    """Process webhooks with automatic payload parsing."""
+    raw_body = request.state.raw_body
+    content_type = request.state.content_type
+    current_user = get_current_user(request)
+
+    # Always return 200 for webhooks
+    try:
+        # Process webhook logic here
+        return {"status": "success", "processed_at": datetime.now().isoformat()}
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return {"status": "received", "error": "logged"}
+```
+
+## 🏗️ Core Architecture & Walker Patterns
+
+### Entity Hierarchy
+- **Object** - Base class for all entities with unified query interface
+- **Node** - Graph nodes with spatial/contextual data (extends Object)
+- **Edge** - Relationships between nodes
+- **Walker** - Graph traversal and processing logic
+- **GraphContext** - Low-level database interface (use sparingly)
+
+### Walker Traversal (CRITICAL PATTERNS)
+
+#### Naming Convention for @on_visit Methods
+**ALWAYS** use these parameter names:
+- **`here`** - The visited node/edge (current location)
+- **`visitor`** - The visiting walker (when accessing from node context)
+
+```python
+@on_visit("User")
+async def process_user(self, here: Node):
+    """Use 'here' for visited node."""
+    connected_users = await here.nodes(node=['User'])
+    await self.visit(connected_users)
+
+@on_visit("City")
+async def process_city(self, here: Node):
+    """Process cities with filtering."""
+    # Skip small cities
+    if here.population < 10000:
+        self.skip()  # Skip to next node
+        return
+
+    # Get large connected cities
+    large_cities = await here.nodes(
+        node=['City'],
+        population={"$gte": 500000}
+    )
+    await self.visit(large_cities)
+```
+
+#### Walker Control Flow
+```python
+class DataWalker(Walker):
     def __init__(self):
-        self.pagers = {}
+        super().__init__()
+        self.processed_count = 0
+        self.max_items = 100
 
-    def create_pager(self, key: str, object_class, **kwargs):
-        """Create and store pager for reuse."""
-        self.pagers[key] = ObjectPager(object_class, **kwargs)
-        return self.pagers[key]
+    @on_visit("Document")
+    async def process_document(self, here: Node):
+        """Process with control flow."""
+        # Skip invalid documents
+        if here.status == "invalid":
+            self.skip()  # Continue to next node
 
-    async def get_page_data(self, key: str, page: int = 1, additional_filters=None):
-        """Get paginated data with metadata for UI consumption."""
-        if key not in self.pagers:
-            raise ValueError(f"Pager '{key}' not found")
+        # Stop at limit
+        if self.processed_count >= self.max_items:
+            await self.disengage()  # Permanently halt walker
+            return
 
-        pager = self.pagers[key]
-        objects = await pager.get_page(page, additional_filters)
+        # Pause for rate limiting
+        if self.processed_count % 50 == 0:
+            self.pause("Rate limit pause")
 
-        return {
-            "data": [obj.model_dump() for obj in objects],
-            "pagination": pager.to_dict(),
-            "cached": pager.is_cached
-        }
+        # Normal processing
+        self.processed_count += 1
+        next_docs = await here.nodes(node=['Document'])
+        await self.visit(next_docs)
 
-# Usage example
-async def ui_pagination_example():
-    """Example of pagination for UI/API integration."""
-    service = PaginationService()
-
-    # Setup pagers for different views
-    service.create_pager(
-        "cities",
-        City,
-        page_size=20,
-        filters={"context.state": "CA"},
-        order_by="population",
-        order_direction="desc"
-    )
-
-    service.create_pager(
-        "users",
-        User,
-        page_size=25,
-        filters={"context.active": True}
-    )
-
-    # Get page data (as would be called from API endpoint)
-    cities_response = await service.get_page_data("cities", page=1)
-
-    print(f"API Response:")
-    print(f"  Cities on page: {len(cities_response['data'])}")
-    print(f"  Total cities: {cities_response['pagination']['total_items']}")
-    print(f"  Total pages: {cities_response['pagination']['total_pages']}")
-    print(f"  From cache: {cities_response['cached']}")
-
-    return cities_response
+    @on_exit
+    async def cleanup(self):
+        """Called when walker completes/pauses/disengages."""
+        print(f"Processed {self.processed_count} documents")
 ```
 
-### Complex Filtering Examples
+## 📋 Quick Reference Checklist
 
-```python path=null start=null
-async def advanced_filtering_examples():
-    """Demonstrate complex filtering patterns."""
+### Entity Operations
+- ✅ Use `await Entity.create(**kwargs)`
+- ✅ Use `await Entity.find(query_dict)`
+- ✅ Use `await entity.save()` only after property modification
+- ✅ Use Objects for standalone data, Nodes for graph entities
+- ❌ Avoid direct GraphContext database calls
 
-    # Multi-condition filters
-    complex_pager = ObjectPager(
-        User,
-        page_size=30,
-        filters={
-            "$and": [
-                {"context.active": True},
-                {"context.department": {"$in": ["engineering", "product"]}},
-                {"context.email": {"$regex": "@company\.com$", "$options": "i"}}
-            ]
-        },
-        order_by="name"
-    )
+### Query Patterns
+- ✅ Use `"context.field"` dot notation for nested fields
+- ✅ Use MongoDB operators: `$gte`, `$in`, `$regex`, `$and`, `$or`
+- ✅ Combine dict filters with kwargs: `node=[{'User': {...}}], active=True`
 
-    company_employees = await complex_pager.get_page()
-    print(f"Active company employees: {len(company_employees)}")
+### Walker Patterns
+- ✅ Use `here` parameter for visited nodes
+- ✅ Use `await here.nodes()` to get connected nodes
+- ✅ Use `await self.visit(nodes)` to continue traversal
+- ✅ Use `self.skip()` to skip current node
+- ✅ Use `await self.disengage()` to permanently halt
+- ✅ Use `self.pause()` for temporary suspension
 
-    # Range filters for numeric data
-    mid_size_cities_pager = ObjectPager(
-        City,
-        page_size=20,
-        filters={
-            "context.population": {
-                "$gte": 50_000,
-                "$lte": 500_000
-            }
-        },
-        order_by="population",
-        order_direction="desc"
-    )
+### API Patterns
+- ✅ Use `@walker_endpoint` for graph processing
+- ✅ Use `@endpoint` for simple functions
+- ✅ Use `EndpointField` for parameter configuration
+- ✅ Use `endpoint.success()`, `endpoint.not_found()` for responses
+- ✅ Always return 200 for webhooks with try/catch
 
-    mid_size_cities = await mid_size_cities_pager.get_page()
-    print(f"Mid-size cities: {len(mid_size_cities)}")
+### Type Safety
+- ✅ Always include proper type annotations
+- ✅ Import from `typing` and `jvspatial.exceptions`
+- ✅ Handle `NodeNotFoundError`, `ValidationError`, `DatabaseError`
+- ✅ Use structured error logging
 
-    # Text search with pagination
-    search_pager = ObjectPager(
-        User,
-        page_size=15,
-        filters={
-            "$or": [
-                {"context.name": {"$regex": "john", "$options": "i"}},
-                {"context.email": {"$regex": "john", "$options": "i"}}
-            ]
-        }
-    )
-
-    search_results = await search_pager.get_page()
-    print(f"Search results for 'john': {len(search_results)}")
-
-    return company_employees, mid_size_cities, search_results
-```
-
-### Best Practices
-
-**✅ Recommended Patterns:**
-
-```python path=null start=null
-# Good: Use database-level filtering
-filtered_pager = ObjectPager(
-    City,
-    filters={"context.population": {"$gt": 100_000}}
-)
-large_cities = await filtered_pager.get_page()
-
-# Good: Appropriate page sizes for use case
-ui_pager = ObjectPager(User, page_size=20)      # UI display
-batch_pager = ObjectPager(User, page_size=100)  # Batch processing
-
-# Good: Reuse pager instances for consistent state
-pager = ObjectPager(City, page_size=25)
-page1 = await pager.get_page(1)
-page2 = await pager.next_page()  # Maintains pagination state
-
-# Good: Use pagination metadata for UI
-info = pager.to_dict()
-if info['has_next']:
-    show_next_button = True
-
-# Good: Convenience functions for simple cases
-cities = await paginate_objects(City, page=1, page_size=10)
-sorted_users = await paginate_by_field(User, "name", order="asc")
-```
-
-**❌ Avoided Patterns:**
-
-```python path=null start=null
-# Bad: Python-level filtering (loads all data)
-all_cities = await City.all()
-large_cities = [c for c in all_cities if c.population > 100_000]  # Inefficient
-
-# Bad: Page sizes too small or too large
-tiny_pager = ObjectPager(City, page_size=1)     # Too many requests
-huge_pager = ObjectPager(City, page_size=10_000) # Memory issues
-
-# Bad: Creating new pager for each request
-for page_num in range(1, 10):
-    pager = ObjectPager(City, page_size=10)  # Recreates each time
-    cities = await pager.get_page(page_num)
-
-# Bad: Not checking pagination bounds
-cities = await pager.get_page(999)  # Page may not exist
-
-# Better: Check bounds first
-if page_num <= pager.to_dict()['total_pages']:
-    cities = await pager.get_page(page_num)
-```
-
----
-
-## 🔗 Webhook Integration and Handlers
+This guide provides the essential patterns for generating jvspatial-compliant code. Focus on entity-centric operations, proper typing, and following the established naming conventions for walker traversal.
 
 The **jvspatial webhook system** provides secure, flexible webhook endpoints with built-in authentication, HMAC verification, idempotency keys, and automatic payload processing. Webhooks integrate seamlessly with the FastAPI server and support both function-based handlers and graph traversal processing.
 
@@ -831,7 +690,7 @@ async def secure_webhook_handler(request: Request) -> Dict[str, Any]:
 The architecture supports webhook processing through graph traversal using Walker classes:
 
 ```python path=null start=null
-# NOTE: This functionality is planned for future release
+
 # from jvspatial.api.auth.decorators import webhook_walker_endpoint
 # from jvspatial.core import Walker, Node
 # from jvspatial.decorators import on_visit
