@@ -1184,7 +1184,7 @@ async def process_generic_event(payload: dict) -> dict:
 #     def __init__(self, payload: dict):
 #         super().__init__()
 #         self.payload = payload
-#         self.response = {"updated_locations": []}
+#         # Use the report() method to collect data during traversal
 #
 #     @on_visit(Node)
 #     async def update_location_data(self, here: Node):
@@ -1198,9 +1198,11 @@ async def process_generic_event(payload: dict) -> dict:
 #                 here.coordinates = coordinates
 #                 await here.save()
 #
-#                 self.response["updated_locations"].append({
-#                     "id": location_id,
-#                     "coordinates": coordinates
+#                 self.report({
+#                     "updated_location": {
+#                         "id": location_id,
+#                         "coordinates": coordinates
+#                     }
 #                 })
 ```
 
@@ -1419,24 +1421,28 @@ class ProcessUser(Walker):
         """
         # Check if user matches criteria
         if here.name == self.user_name:
-            self.response["found_user"] = {
+        self.report({
+            "found_user": {
                 "id": here.id,
                 "name": here.name,
                 "email": here.email,
                 "department": here.department
             }
+        })
 
-            # Find connected users in same department
-            colleagues = await here.nodes(
-                node=['User'],
-                department=self.department,
-                active=True if not self.include_inactive else None
-            )
+        # Find connected users in same department
+        colleagues = await here.nodes(
+            node=['User'],
+            department=self.department,
+            active=True if not self.include_inactive else None
+        )
 
-            self.response["colleagues"] = [
+        self.report({
+            "colleagues": [
                 {"name": u.name, "email": u.email}
                 for u in colleagues[:self.max_connections]
             ]
+        })
 
     @on_visit("City")
     async def process_city_connection(self, here: City):
@@ -1445,13 +1451,12 @@ class ProcessUser(Walker):
         Args:
             here: The visited City node
         """
-        if "city_info" not in self.response:
-            self.response["city_info"] = []
-
-        self.response["city_info"].append({
-            "name": here.name,
-            "population": here.population,
-            "state": here.state
+        self.report({
+            "city_info": {
+                "name": here.name,
+                "population": here.population,
+                "state": here.state
+            }
         })
 
 # Advanced walker with field grouping
@@ -1493,10 +1498,6 @@ class UserAnalytics(Walker):
         Args:
             here: The visited User node
         """
-        if "users_analyzed" not in self.response:
-            self.response["users_analyzed"] = 0
-            self.response["departments"] = {}
-
         # Filter by department if specified
         if self.departments and here.department not in self.departments:
             return
@@ -1505,13 +1506,15 @@ class UserAnalytics(Walker):
         if not self.include_inactive and not here.active:
             return
 
-        self.response["users_analyzed"] += 1
-
-        # Track department statistics
-        dept = here.department
-        if dept not in self.response["departments"]:
-            self.response["departments"][dept] = 0
-        self.response["departments"][dept] += 1
+        # Report individual user analysis
+        self.report({
+            "user_analyzed": {
+                "id": here.id,
+                "name": here.name,
+                "department": here.department,
+                "active": here.active
+            }
+        })
         }
 ```
 
@@ -1865,13 +1868,13 @@ class DataProcessor(Walker):
         Args:
             here: The visited Node
         """
-        if "processed_nodes" not in self.response:
-            self.response["processed_nodes"] = []
-
-        self.response["processed_nodes"].append({
-            "id": here.id,
-            "type": here.__class__.__name__,
-            "processed_at": datetime.now().isoformat()
+        # Use report() to collect processed node information
+        self.report({
+            "processed_node": {
+                "id": here.id,
+                "type": here.__class__.__name__,
+                "processed_at": datetime.now().isoformat()
+            }
         })
 
 @server.route("/health-detailed", methods=["GET"])
@@ -2000,16 +2003,18 @@ class AdvancedEndpointExample(Walker):
         Args:
             here: The visited User node
         """
-        self.response["processed_user"] = {
-            "username": self.username,
-            "score": self.user_score,
-            "config": {
-                "timeout": self.config_timeout,
-                "retries": self.config_retries
-            },
-            "tags": self.tags,
-            "debug_enabled": self.debug_mode
-        }
+        self.report({
+            "processed_user": {
+                "username": self.username,
+                "score": self.user_score,
+                "config": {
+                    "timeout": self.config_timeout,
+                    "retries": self.config_retries
+                },
+                "tags": self.tags,
+                "debug_enabled": self.debug_mode
+            }
+        })
 ```
 
 ### Running the Server
@@ -2647,6 +2652,378 @@ class AnalyticsWalker(Walker):
         await asyncio.sleep(0.01)  # Simulate work
 ```
 
+### Walker Reporting System
+
+Walkers feature a simplified reporting system that allows you to collect and aggregate any data during traversal. The reporting system eliminates complex nested structures and provides direct access to collected data.
+
+#### Basic Reporting
+
+```python path=null start=null
+from jvspatial.core import Walker, on_visit, on_exit
+
+class DataCollectionWalker(Walker):
+    """Walker demonstrating the simple reporting system."""
+
+    def __init__(self):
+        super().__init__()
+        self.processed_count = 0
+
+    @on_visit('User')
+    async def collect_user_data(self, here: Node):
+        """Collect user data using the report system."""
+        # Report any data - strings, dicts, numbers, lists, etc.
+        self.report({
+            "user_processed": {
+                "id": here.id,
+                "name": here.name,
+                "department": here.department,
+                "timestamp": time.time()
+            }
+        })
+
+        # Report simple values
+        self.report(f"Processed user: {here.name}")
+
+        # Report lists
+        if hasattr(here, 'skills'):
+            self.report(["skills", here.skills])
+
+        self.processed_count += 1
+
+    @on_exit
+    async def generate_summary(self):
+        """Generate final summary in the report."""
+        report_items = self.get_report()
+
+        self.report({
+            "summary": {
+                "total_items_collected": len(report_items),
+                "users_processed": self.processed_count,
+                "collection_complete": True
+            }
+        })
+
+# Usage
+walker = DataCollectionWalker()
+result_walker = await walker.spawn()  # spawn() returns the walker instance
+
+# Access collected data directly as a simple list
+report = result_walker.get_report()
+print(f"Total items collected: {len(report)}")
+
+# Iterate through all collected data
+for item in report:
+    if isinstance(item, dict) and "user_processed" in item:
+        user_data = item["user_processed"]
+        print(f"User: {user_data['name']} from {user_data['department']}")
+    elif isinstance(item, str):
+        print(f"Log: {item}")
+```
+
+#### Advanced Reporting Patterns
+
+```python path=null start=null
+class AnalyticsWalker(Walker):
+    """Walker with advanced reporting for analytics."""
+
+    def __init__(self):
+        super().__init__()
+        self.department_counts = {}
+        self.error_count = 0
+
+    @on_visit('User')
+    async def analyze_user(self, here: Node):
+        """Analyze user and report findings."""
+        try:
+            # Track department statistics
+            dept = here.department or "unknown"
+            self.department_counts[dept] = self.department_counts.get(dept, 0) + 1
+
+            # Report individual analysis
+            analysis = await self.perform_user_analysis(here)
+            self.report({
+                "user_analysis": {
+                    "user_id": here.id,
+                    "department": dept,
+                    "performance_score": analysis.get("score", 0),
+                    "risk_level": analysis.get("risk", "low"),
+                    "recommendations": analysis.get("recommendations", [])
+                }
+            })
+
+        except Exception as e:
+            self.error_count += 1
+            self.report({
+                "error": {
+                    "user_id": here.id,
+                    "error_message": str(e),
+                    "error_type": type(e).__name__
+                }
+            })
+
+    @on_exit
+    async def generate_analytics_report(self):
+        """Generate comprehensive analytics."""
+        all_data = self.get_report()
+
+        # Analyze collected data
+        user_analyses = [item for item in all_data
+                        if isinstance(item, dict) and "user_analysis" in item]
+        errors = [item for item in all_data
+                 if isinstance(item, dict) and "error" in item]
+
+        # Calculate metrics
+        avg_score = sum(ua["user_analysis"]["performance_score"]
+                       for ua in user_analyses) / len(user_analyses) if user_analyses else 0
+
+        high_risk_users = [ua for ua in user_analyses
+                          if ua["user_analysis"]["risk_level"] == "high"]
+
+        # Report final analytics
+        self.report({
+            "final_analytics": {
+                "total_users_analyzed": len(user_analyses),
+                "average_performance_score": round(avg_score, 2),
+                "department_breakdown": self.department_counts,
+                "high_risk_users_count": len(high_risk_users),
+                "error_rate": self.error_count / max(len(user_analyses), 1),
+                "processing_summary": {
+                    "success": len(user_analyses),
+                    "errors": self.error_count,
+                    "total_items_in_report": len(all_data)
+                }
+            }
+        })
+
+    async def perform_user_analysis(self, user):
+        """Simulate user analysis."""
+        import random
+        return {
+            "score": random.randint(1, 100),
+            "risk": random.choice(["low", "medium", "high"]),
+            "recommendations": ["Update profile", "Complete training"]
+        }
+```
+
+### Walker Event System
+
+Walkers can communicate with each other during traversal using an event system. This enables real-time coordination, data sharing, and complex multi-walker workflows.
+
+#### Basic Event Communication
+
+```python path=null start=null
+from jvspatial.core.events import on_emit
+
+class AlertWalker(Walker):
+    """Walker that emits alerts when finding critical issues."""
+
+    @on_visit('SystemNode')
+    async def check_system_health(self, here: Node):
+        """Check system health and emit alerts."""
+        if hasattr(here, 'cpu_usage') and here.cpu_usage > 90:
+            # Emit event to other walkers
+            await self.emit("high_cpu_alert", {
+                "node_id": here.id,
+                "cpu_usage": here.cpu_usage,
+                "severity": "critical",
+                "walker_id": self.id
+            })
+
+            self.report({"alert_sent": f"High CPU on {here.id}"})
+
+class MonitoringWalker(Walker):
+    """Walker that receives and processes alerts from other walkers."""
+
+    def __init__(self):
+        super().__init__()
+        self.alerts_received = 0
+
+    @on_emit("high_cpu_alert")
+    async def handle_cpu_alert(self, event_data):
+        """Handle high CPU alerts from AlertWalker."""
+        self.alerts_received += 1
+
+        self.report({
+            "alert_processed": {
+                "from_walker": event_data.get("walker_id"),
+                "node_id": event_data.get("node_id"),
+                "cpu_usage": event_data.get("cpu_usage"),
+                "action_taken": "Notification sent to admin",
+                "handler_id": self.id
+            }
+        })
+
+        # Take action based on alert
+        await self.send_notification(event_data)
+
+    @on_visit('SystemNode')
+    async def log_system_visit(self, here: Node):
+        """Log system node visits."""
+        self.report({"system_visited": here.id})
+
+    async def send_notification(self, alert_data):
+        """Send notification to administrators."""
+        print(f"🚨 ALERT: High CPU {alert_data['cpu_usage']}% on {alert_data['node_id']}")
+
+# Run multiple walkers concurrently
+import asyncio
+
+alert_walker = AlertWalker()
+monitoring_walker = MonitoringWalker()
+
+# Start both walkers concurrently
+tasks = [
+    alert_walker.spawn(),
+    monitoring_walker.spawn()
+]
+
+walkers = await asyncio.gather(*tasks)
+
+# Check reports from both walkers
+alert_report = alert_walker.get_report()
+monitoring_report = monitoring_walker.get_report()
+
+print(f"Alerts sent: {len([r for r in alert_report if 'alert_sent' in str(r)])}")
+print(f"Alerts processed: {monitoring_walker.alerts_received}")
+```
+
+#### Advanced Event Patterns
+
+```python path=null start=null
+class DataProcessorWalker(Walker):
+    """Walker that processes data and emits completion events."""
+
+    def __init__(self, batch_id: str):
+        super().__init__()
+        self.batch_id = batch_id
+        self.processed_items = 0
+
+    @on_visit('DataNode')
+    async def process_data(self, here: Node):
+        """Process data nodes."""
+        # Simulate processing
+        await asyncio.sleep(0.01)
+        self.processed_items += 1
+
+        self.report({"data_processed": here.id})
+
+        # Emit progress event every 10 items
+        if self.processed_items % 10 == 0:
+            await self.emit("batch_progress", {
+                "batch_id": self.batch_id,
+                "processed_count": self.processed_items,
+                "processor_id": self.id
+            })
+
+    @on_exit
+    async def emit_completion(self):
+        """Emit batch completion event."""
+        await self.emit("batch_complete", {
+            "batch_id": self.batch_id,
+            "total_processed": self.processed_items,
+            "processor_id": self.id
+        })
+
+        self.report({"batch_completed": self.batch_id})
+
+class BatchCoordinator(Walker):
+    """Walker that coordinates multiple batch processors."""
+
+    def __init__(self):
+        super().__init__()
+        self.batch_progress = {}
+        self.completed_batches = []
+
+    @on_emit("batch_progress")
+    async def track_progress(self, event_data):
+        """Track progress from batch processors."""
+        batch_id = event_data.get("batch_id")
+        processed_count = event_data.get("processed_count")
+
+        self.batch_progress[batch_id] = processed_count
+
+        self.report({
+            "progress_update": {
+                "batch_id": batch_id,
+                "items_processed": processed_count,
+                "coordinator_id": self.id
+            }
+        })
+
+    @on_emit("batch_complete")
+    async def handle_completion(self, event_data):
+        """Handle batch completion events."""
+        batch_id = event_data.get("batch_id")
+        total_processed = event_data.get("total_processed")
+
+        self.completed_batches.append(batch_id)
+
+        self.report({
+            "batch_completed": {
+                "batch_id": batch_id,
+                "total_items": total_processed,
+                "completed_batches_count": len(self.completed_batches)
+            }
+        })
+
+        # Check if all batches are complete
+        if len(self.completed_batches) >= 3:  # Expecting 3 batches
+            await self.emit("all_batches_complete", {
+                "total_batches": len(self.completed_batches),
+                "coordinator_id": self.id
+            })
+
+    @on_emit("all_batches_complete")
+    async def finalize_processing(self, event_data):
+        """Finalize when all processing is complete."""
+        self.report({
+            "processing_finalized": {
+                "total_batches_completed": event_data.get("total_batches"),
+                "finalization_time": time.time()
+            }
+        })
+
+# Example: Run coordinated batch processing
+coordinator = BatchCoordinator()
+processors = [
+    DataProcessorWalker("batch_1"),
+    DataProcessorWalker("batch_2"),
+    DataProcessorWalker("batch_3")
+]
+
+# Start all walkers
+all_walkers = [coordinator] + processors
+tasks = [walker.spawn() for walker in all_walkers]
+results = await asyncio.gather(*tasks)
+
+# Check final reports
+for walker in all_walkers:
+    report = walker.get_report()
+    print(f"Walker {walker.id}: {len(report)} items in report")
+```
+
+#### Key Reporting & Event Features
+
+**Reporting System:**
+- `walker.report(any_data)` - Add any data to walker's report
+- `walker.get_report()` - Get simple list of all reported items
+- No complex nested structures - direct access to your data
+- Support for any data type (strings, dicts, lists, numbers, etc.)
+
+**Event System:**
+- `await walker.emit(event_name, payload)` - Send events to other walkers
+- `@on_emit(event_name)` - Handle specific events
+- Multiple walkers can receive the same event
+- Events enable real-time coordination between concurrent walkers
+- Both Walkers and Nodes can use `@on_emit` decorators
+
+**Best Practices:**
+- Use `self.report()` to add data, never return values from decorated methods
+- Access reports after traversal: `report = walker.get_report()`
+- Use events for walker-to-walker communication during traversal
+- Filter reported data by checking item structure/content
+- Leverage `@on_exit` hooks for final summaries and cleanup
+
 ### Walker Trail Tracking
 
 Walkers include built-in **trail tracking** capabilities to monitor and record the complete path taken during graph traversal. This is invaluable for debugging, analytics, audit trails, and optimizing traversal strategies.
@@ -2701,8 +3078,8 @@ class TrailTrackingWalker(Walker):
         # Get complete path with connecting edges
         trail_path = await self.get_trail_path()
 
-        # Generate detailed report
-        self.response['trail_report'] = {
+        # Generate detailed report using report() method
+        trail_report = {
             'summary': {
                 'total_steps': self.get_trail_length(),
                 'unique_nodes': len(set(self.get_trail())),
@@ -2722,10 +3099,13 @@ class TrailTrackingWalker(Walker):
             ]
         }
 
+        # Report the trail data
+        self.report(trail_report)
+
         print(f"\n📊 Trail Report Generated:")
-        print(f"  - Total steps: {self.response['trail_report']['summary']['total_steps']}")
-        print(f"  - Unique nodes: {self.response['trail_report']['summary']['unique_nodes']}")
-        print(f"  - Path efficiency: {self.response['trail_report']['summary']['efficiency_ratio']:.2%}")
+        print(f"  - Total steps: {trail_report['summary']['total_steps']}")
+        print(f"  - Unique nodes: {trail_report['summary']['unique_nodes']}")
+        print(f"  - Path efficiency: {trail_report['summary']['efficiency_ratio']:.2%}")
 
 # Usage example
 walker = TrailTrackingWalker()
@@ -2735,7 +3115,10 @@ await walker.spawn(root)
 # Access trail data
 final_trail = walker.get_trail()
 print(f"Final trail: {final_trail}")
-print(f"Trail report: {walker.response.get('trail_report')}")
+# Access the trail report from walker's collected data
+report = walker.get_report()
+trail_reports = [item for item in report if isinstance(item, dict) and 'trail_report' in str(item)]
+print(f"Trail report: {trail_reports[0] if trail_reports else 'No trail report found'}")
 ```
 
 #### Advanced Trail Use Cases
@@ -2767,11 +3150,13 @@ class AdvancedTrailWalker(Walker):
 
             print(f"🔄 Cycle detected at {here.id}! Length: {cycle_length} steps")
 
-            self.response.setdefault('cycles_detected', []).append({
-                'node_id': here.id,
-                'cycle_length': cycle_length,
-                'first_visit_step': first_visit_index + 1,
-                'detection_step': len(trail)
+            self.report({
+                'cycle_detected': {
+                    'node_id': here.id,
+                    'cycle_length': cycle_length,
+                    'first_visit_step': first_visit_index + 1,
+                    'detection_step': len(trail)
+                }
             })
 
             # Stop to avoid infinite loop
@@ -2830,7 +3215,7 @@ class AdvancedTrailWalker(Walker):
             }
         }
 
-        self.response.setdefault('audit_log', []).append(audit_entry)
+        self.report({'audit_entry': audit_entry})
         print(f"📝 Audit: Accessed user {here.id} at step {audit_entry['trail_step']}")
 
     @on_exit
@@ -2845,12 +3230,12 @@ class AdvancedTrailWalker(Walker):
         total_steps = self.get_trail_length()
         unique_nodes = len(set(self.get_trail()))
 
-        self.response['comprehensive_analysis'] = {
+        comprehensive_analysis = {
             'trail_summary': {
                 'total_steps': total_steps,
                 'unique_nodes_visited': unique_nodes,
                 'path_efficiency': unique_nodes / total_steps if total_steps > 0 else 0,
-                'cycles_detected': len(self.response.get('cycles_detected', [])),
+                'cycles_detected': len([item for item in walker.get_report() if isinstance(item, dict) and 'cycle_detected' in item]),
                 'trail_enabled': self.trail_enabled,
                 'trail_limit': self.max_trail_length
             },
@@ -2860,15 +3245,18 @@ class AdvancedTrailWalker(Walker):
                 'slowest_step': max(self.performance_metrics, key=lambda x: x['processing_time']) if self.performance_metrics else None
             },
             'audit_summary': {
-                'total_audit_entries': len(self.response.get('audit_log', [])),
-                'user_accesses': len([e for e in self.response.get('audit_log', []) if e['action'] == 'USER_ACCESS'])
+                'total_audit_entries': len([item for item in self.get_report() if isinstance(item, dict) and 'audit_entry' in item]),
+                'user_accesses': len([item for item in self.get_report() if isinstance(item, dict) and 'audit_entry' in item and item.get('audit_entry', {}).get('action') == 'USER_ACCESS'])
             }
         }
 
+        # Report the comprehensive analysis
+        self.report(comprehensive_analysis)
+
         print("\n📈 Comprehensive Analysis Complete:")
-        print(f"  - Path efficiency: {self.response['comprehensive_analysis']['trail_summary']['path_efficiency']:.2%}")
+        print(f"  - Path efficiency: {comprehensive_analysis['trail_summary']['path_efficiency']:.2%}")
         print(f"  - Average processing time: {avg_processing_time:.3f}s")
-        print(f"  - Cycles detected: {len(self.response.get('cycles_detected', []))}")
+        print(f"  - Cycles detected: {len([item for item in self.get_report() if isinstance(item, dict) and 'cycle_detected' in item])}")
 
     async def analyze_document(self, doc):
         """Simulate document analysis."""
@@ -2885,13 +3273,14 @@ walker.debug_mode = True
 root = await Root.get()
 await walker.spawn(root)
 
-# Access comprehensive results
-analysis = walker.response.get('comprehensive_analysis', {})
-cycles = walker.response.get('cycles_detected', [])
-audit_log = walker.response.get('audit_log', [])
+# Access comprehensive results from walker's report
+report = walker.get_report()
+analysis = next((item for item in report if isinstance(item, dict) and 'trail_summary' in item), {})
+cycles = [item for item in report if isinstance(item, dict) and 'cycle_detected' in item]
+audit_entries = [item for item in report if isinstance(item, dict) and 'audit_entry' in item]
 
 print(f"Analysis complete. Efficiency: {analysis.get('trail_summary', {}).get('path_efficiency', 0):.2%}")
-print(f"Cycles detected: {len(cycles)}, Audit entries: {len(audit_log)}")
+print(f"Cycles detected: {len(cycles)}, Audit entries: {len(audit_entries)}")
 ```
 
 #### Trail API Quick Reference

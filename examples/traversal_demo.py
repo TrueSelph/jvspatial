@@ -61,11 +61,13 @@ class DeliveryWalker(Walker):
     @on_exit
     async def final_report(self):
         """Generate final traversal report"""
-        self.response = {
-            "delivered": self.packages_delivered,
-            "visited": len(self.visited_nodes),
-            "distance": round(self.total_distance, 2),
-        }
+        self.report(
+            {
+                "delivered": self.packages_delivered,
+                "visited": len(self.visited_nodes),
+                "distance": round(self.total_distance, 2),
+            }
+        )
 
 
 async def complex_traversal():
@@ -88,8 +90,9 @@ async def complex_traversal():
     walker = DeliveryWalker()
     await walker.spawn(start=metro)
 
-    print(f"Results: {walker.response}")
-    return walker.response
+    report = walker.get_report()
+    print(f"Results: {report}")
+    return report
 
 
 if __name__ == "__main__":

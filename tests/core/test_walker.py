@@ -169,7 +169,7 @@ class TestWalkerBasicFunctionality:
         assert walker.id.startswith("w:WalkerTestWalker:")
         assert isinstance(walker.queue, deque)
         assert len(walker.queue) == 0
-        assert walker.response == {}
+        assert walker.get_report() == []
         assert walker.current_node is None
         assert not walker.paused
 
@@ -179,11 +179,10 @@ class TestWalkerBasicFunctionality:
         walker = WalkerTestWalker(id=custom_id)
         assert walker.id == custom_id
 
-    def test_walker_response_initialization(self):
-        """Test Walker response initialization."""
-        response_data = {"status": 200, "data": []}
-        walker = WalkerTestWalker(response=response_data)
-        assert walker.response == response_data
+    def test_walker_report_initialization(self):
+        """Test Walker report initialization."""
+        walker = WalkerTestWalker()
+        assert walker.get_report() == []
 
     def test_here_property(self):
         """Test the 'here' property returns current_node."""
@@ -641,9 +640,9 @@ class TestWalkerErrorHandling:
         await walker.spawn(nodes[0])
 
         # Walker should continue despite hook errors
-        # Check that error was logged to response
-        assert walker.response.get("status") == 500
-        assert "messages" in walker.response
+        # Check that error was logged to report
+        report = walker.get_report()
+        assert any("hook_error" in item for item in report if isinstance(item, dict))
 
     @pytest.mark.asyncio
     async def test_traversal_exception_handling(self):
@@ -663,7 +662,8 @@ class TestWalkerErrorHandling:
         result = await walker.spawn(nodes[0])
 
         assert result == walker
-        assert walker.response.get("status") == 500
+        report = walker.get_report()
+        assert any("hook_error" in item for item in report if isinstance(item, dict))
 
     def test_skip_outside_traversal(self):
         """Test skip() raises exception when not in traversal."""
@@ -735,7 +735,7 @@ class TestWalkerEdgeCases:
         # Reset for second traversal
         walker.visited_nodes.clear()
         walker.exit_called = False
-        walker.response.clear()
+        walker._report.clear()
 
         # Second traversal
         node2 = WalkerTestNode(name="second")

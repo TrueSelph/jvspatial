@@ -203,7 +203,7 @@ class LocationUpdateWalker(Walker):
         """Initialize walker with webhook payload."""
         super().__init__()
         self.payload = payload
-        self.response = {"updated_locations": []}
+        self.response: dict = {"updated_locations": []}
 
     @on_visit(Node)
     async def update_location_data(self, here: Node):
@@ -386,7 +386,7 @@ def create_server():
         def __init__(self, payload: dict):
             super().__init__()
             self.payload = payload
-            self.response = {"updated_locations": []}
+            self.response: dict = {"updated_locations": []}
 
         @on_visit(Node)
         async def update_location_data(self, here: Node):

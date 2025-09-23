@@ -241,9 +241,17 @@ class TestMaxStepsProtection:
         await walker.spawn(start_node)
 
         # Check protection was triggered
-        assert walker.response.get("protection_triggered") == "max_steps"
-        assert walker.response.get("steps_taken") == 5
-        assert walker.response.get("max_steps") == 5
+        report = walker.get_report()
+        protection_reports = [
+            item
+            for item in report
+            if isinstance(item, dict) and "protection_triggered" in item
+        ]
+        assert len(protection_reports) >= 1
+        protection_report = protection_reports[0]
+        assert protection_report["protection_triggered"] == "max_steps"
+        assert protection_report["steps_taken"] == 5
+        assert protection_report["max_steps"] == 5
         assert walker.paused is True  # Should be disengaged/paused
 
     @pytest.mark.asyncio
@@ -260,7 +268,13 @@ class TestMaxStepsProtection:
             pass  # Expected when protection is disabled
 
         # Check protection was not triggered
-        assert "protection_triggered" not in walker.response
+        report = walker.get_report()
+        protection_reports = [
+            item
+            for item in report
+            if isinstance(item, dict) and "protection_triggered" in item
+        ]
+        assert len(protection_reports) == 0
         assert walker.steps_taken > 5  # Should have exceeded the limit
 
     @pytest.mark.asyncio
@@ -291,10 +305,18 @@ class TestNodeVisitProtection:
         await walker.spawn(start_node)
 
         # Check protection was triggered
-        assert walker.response.get("protection_triggered") == "max_visits_per_node"
-        assert walker.response.get("node_id") == start_node.id
-        assert walker.response.get("visit_count") > 3
-        assert walker.response.get("max_visits_per_node") == 3
+        report = walker.get_report()
+        protection_reports = [
+            item
+            for item in report
+            if isinstance(item, dict) and "protection_triggered" in item
+        ]
+        assert len(protection_reports) >= 1
+        protection_report = protection_reports[0]
+        assert protection_report["protection_triggered"] == "max_visits_per_node"
+        assert protection_report["node_id"] == start_node.id
+        assert protection_report["visit_count"] > 3
+        assert protection_report["max_visits_per_node"] == 3
 
     @pytest.mark.asyncio
     async def test_node_visit_counting(self):
@@ -348,10 +370,18 @@ class TestTimeoutProtection:
         await walker.spawn(start_node)
 
         # Check timeout protection was triggered
-        assert walker.response.get("protection_triggered") == "timeout"
-        assert "execution_time" in walker.response
-        assert walker.response.get("max_execution_time") == 0.5
-        assert walker.response["execution_time"] >= 0.5
+        report = walker.get_report()
+        protection_reports = [
+            item
+            for item in report
+            if isinstance(item, dict) and "protection_triggered" in item
+        ]
+        assert len(protection_reports) >= 1
+        protection_report = protection_reports[0]
+        assert protection_report["protection_triggered"] == "timeout"
+        assert "execution_time" in protection_report
+        assert protection_report["max_execution_time"] == 0.5
+        assert protection_report["execution_time"] >= 0.5
 
     @pytest.mark.asyncio
     async def test_timeout_protection_with_resume(self):
@@ -364,10 +394,17 @@ class TestTimeoutProtection:
         await walker.spawn(start_node)
 
         # Check first timeout
-        assert walker.response.get("protection_triggered") == "timeout"
+        report = walker.get_report()
+        protection_reports = [
+            item
+            for item in report
+            if isinstance(item, dict) and "protection_triggered" in item
+        ]
+        assert len(protection_reports) >= 1
+        assert protection_reports[0]["protection_triggered"] == "timeout"
 
         # Try to resume (should timeout again quickly since start time is preserved)
-        walker.response.clear()  # Clear previous response
+        walker._report.clear()  # Clear previous report
         await walker.resume()
 
         # May timeout again or complete depending on timing
@@ -390,7 +427,14 @@ class TestQueueSizeProtection:
         await walker.spawn(start_node)
 
         # Check that protection triggered (should be max_steps since queue limiting doesn't stop traversal)
-        assert walker.response.get("protection_triggered") == "max_steps"
+        report = walker.get_report()
+        protection_reports = [
+            item
+            for item in report
+            if isinstance(item, dict) and "protection_triggered" in item
+        ]
+        assert len(protection_reports) >= 1
+        assert protection_reports[0]["protection_triggered"] == "max_steps"
 
         # Check that queue size was limited throughout execution
         final_queue_size = len(walker.queue)
@@ -428,7 +472,14 @@ class TestQueueSizeProtection:
 
         # When queue protection is disabled, queue can grow larger than the limit
         # But step protection should still stop the walker
-        assert walker.response.get("protection_triggered") == "max_steps"
+        report = walker.get_report()
+        protection_reports = [
+            item
+            for item in report
+            if isinstance(item, dict) and "protection_triggered" in item
+        ]
+        assert len(protection_reports) >= 1
+        assert protection_reports[0]["protection_triggered"] == "max_steps"
         final_queue_size = len(walker.queue)
         # Queue should be able to grow beyond the normal limit
         assert final_queue_size > 10  # Should exceed the "limit"
@@ -542,7 +593,14 @@ class TestProtectionIntegration:
         await walker.spawn(start_node)
 
         # Check both protection and trail worked
-        assert walker.response.get("protection_triggered") == "max_steps"
+        report = walker.get_report()
+        protection_reports = [
+            item
+            for item in report
+            if isinstance(item, dict) and "protection_triggered" in item
+        ]
+        assert len(protection_reports) >= 1
+        assert protection_reports[0]["protection_triggered"] == "max_steps"
         assert len(walker.get_trail()) <= walker.max_steps
         assert walker.get_trail_length() > 0
 
@@ -551,10 +609,15 @@ class TestProtectionIntegration:
         """Test that protection preserves existing response data."""
 
         class ResponseTestWalker(Walker):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.visit_count = 0
+
             @on_visit(ProtectionTestNode)
             async def set_response_data(self, here):
-                self.response["custom_data"] = "preserved"
-                self.response["visit_count"] = self.response.get("visit_count", 0) + 1
+                self.report({"custom_data": "preserved"})
+                self.visit_count += 1
+                self.report({"visit_count": self.visit_count})
 
                 # Add nodes to trigger protection
                 if len(self.queue) < 20:
@@ -569,9 +632,24 @@ class TestProtectionIntegration:
         await walker.spawn(start_node)
 
         # Check protection data was added without overwriting custom data
-        assert walker.response.get("protection_triggered") == "max_steps"
-        assert walker.response.get("custom_data") == "preserved"
-        assert walker.response.get("visit_count") > 0
+        report = walker.get_report()
+        protection_reports = [
+            item
+            for item in report
+            if isinstance(item, dict) and "protection_triggered" in item
+        ]
+        custom_data_reports = [
+            item for item in report if isinstance(item, dict) and "custom_data" in item
+        ]
+        visit_count_reports = [
+            item for item in report if isinstance(item, dict) and "visit_count" in item
+        ]
+
+        assert len(protection_reports) >= 1
+        assert protection_reports[0]["protection_triggered"] == "max_steps"
+        assert len(custom_data_reports) >= 1
+        assert custom_data_reports[0]["custom_data"] == "preserved"
+        assert len(visit_count_reports) >= 1
 
     @pytest.mark.asyncio
     async def test_multiple_protection_triggers(self):
@@ -588,8 +666,14 @@ class TestProtectionIntegration:
         await walker.spawn(start_node)
 
         # One of the protections should have triggered
-        assert "protection_triggered" in walker.response
-        protection_type = walker.response["protection_triggered"]
+        report = walker.get_report()
+        protection_reports = [
+            item
+            for item in report
+            if isinstance(item, dict) and "protection_triggered" in item
+        ]
+        assert len(protection_reports) >= 1
+        protection_type = protection_reports[0]["protection_triggered"]
         assert protection_type in ["max_steps", "max_visits_per_node", "timeout"]
 
 
@@ -628,8 +712,14 @@ class TestProtectionErrorHandling:
         assert walker.step_count > 0  # Should have processed some steps
         assert walker.error_count > 0  # Should have encountered some errors
         # The important thing is that errors don't break the protection system
-        if "protection_triggered" in walker.response:
-            assert walker.response["protection_triggered"] == "max_steps"
+        report = walker.get_report()
+        protection_reports = [
+            item
+            for item in report
+            if isinstance(item, dict) and "protection_triggered" in item
+        ]
+        if len(protection_reports) > 0:
+            assert protection_reports[0]["protection_triggered"] == "max_steps"
 
     def test_protection_with_invalid_configuration(self):
         """Test handling of invalid protection configuration."""

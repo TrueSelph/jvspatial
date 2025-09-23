@@ -103,9 +103,18 @@ class EndpointResponseHelper:
         )
 
         if self.walker_instance is not None:
-            # For walkers, update the response property
-            self.walker_instance.response = endpoint_response.to_dict()
-            return endpoint_response.to_dict()
+            # For walkers, set response property (backwards compatibility)
+            # and also add to report if the walker has a report method
+            response_dict = endpoint_response.to_dict()
+
+            # Set response property for backwards compatibility with existing tests
+            self.walker_instance.response = response_dict
+
+            # Also add to report if available (for proper walkers)
+            if hasattr(self.walker_instance, "report"):
+                self.walker_instance.report(response_dict)
+
+            return response_dict
         else:
             # For function endpoints, return JSONResponse directly
             return endpoint_response.to_json_response()

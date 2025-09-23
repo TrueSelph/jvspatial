@@ -95,34 +95,59 @@ class TestWalkerEndpointIntegration:
         walker = ResponseTestWalker(response_type="success")
         asyncio.run(walker.visit_node(None))
 
-        assert walker.response["status"] == 200
-        assert walker.response["data"]["message"] == "Success response"
-        assert walker.response["message"] == "Operation completed"
+        report = walker.get_report()
+        # Find the response data in the report
+        response_items = [
+            item for item in report if isinstance(item, dict) and "status" in item
+        ]
+        assert len(response_items) >= 1
+        response_data = response_items[0]
+        assert response_data["status"] == 200
+        assert response_data["data"]["message"] == "Success response"
+        assert response_data["message"] == "Operation completed"
 
         # Test error response
         walker = ResponseTestWalker(response_type="error")
         asyncio.run(walker.visit_node(None))
 
-        assert walker.response["status"] == 400
-        assert walker.response["error"] == "Invalid request"
-        assert walker.response["details"]["field"] == "test_field"
+        report = walker.get_report()
+        response_items = [
+            item for item in report if isinstance(item, dict) and "status" in item
+        ]
+        assert len(response_items) >= 1
+        response_data = response_items[0]
+        assert response_data["status"] == 400
+        assert response_data["error"] == "Invalid request"
+        assert response_data["details"]["field"] == "test_field"
 
         # Test not found response
         walker = ResponseTestWalker(response_type="not_found")
         asyncio.run(walker.visit_node(None))
 
-        assert walker.response["status"] == 404
-        assert walker.response["error"] == "Resource not found"
-        assert walker.response["details"]["resource_id"] == "123"
+        report = walker.get_report()
+        response_items = [
+            item for item in report if isinstance(item, dict) and "status" in item
+        ]
+        assert len(response_items) >= 1
+        response_data = response_items[0]
+        assert response_data["status"] == 404
+        assert response_data["error"] == "Resource not found"
+        assert response_data["details"]["resource_id"] == "123"
 
         # Test created response
         walker = ResponseTestWalker(response_type="created")
         asyncio.run(walker.visit_node(None))
 
-        assert walker.response["status"] == 201
-        assert walker.response["data"]["id"] == "new_123"
-        assert walker.response["message"] == "Resource created"
-        assert walker.response["headers"]["Location"] == "/resources/123"
+        report = walker.get_report()
+        response_items = [
+            item for item in report if isinstance(item, dict) and "status" in item
+        ]
+        assert len(response_items) >= 1
+        response_data = response_items[0]
+        assert response_data["status"] == 201
+        assert response_data["data"]["id"] == "new_123"
+        assert response_data["message"] == "Resource created"
+        assert response_data["headers"]["Location"] == "/resources/123"
 
     def test_walker_endpoint_custom_response(self):
         """Test walker endpoint with custom response formatting."""
@@ -154,11 +179,17 @@ class TestWalkerEndpointIntegration:
         walker = CustomResponseWalker(status_code=202)
         asyncio.run(walker.visit_node(None))
 
-        assert walker.response["status"] == 202
-        assert walker.response["custom_message"] == "Custom response format"
-        assert walker.response["processed_at"] == "2025-09-21T06:32:18Z"
-        assert walker.response["headers"]["X-Custom-Header"] == "test-value"
-        assert walker.response["headers"]["X-Status-Code"] == "202"
+        report = walker.get_report()
+        response_items = [
+            item for item in report if isinstance(item, dict) and "status" in item
+        ]
+        assert len(response_items) >= 1
+        response_data = response_items[0]
+        assert response_data["status"] == 202
+        assert response_data["custom_message"] == "Custom response format"
+        assert response_data["processed_at"] == "2025-09-21T06:32:18Z"
+        assert response_data["headers"]["X-Custom-Header"] == "test-value"
+        assert response_data["headers"]["X-Status-Code"] == "202"
 
 
 class TestFunctionEndpointIntegration:

@@ -187,7 +187,15 @@ class TestErrorConditions:
 
             # Walker should complete despite error
             assert result == walker
-            assert walker.response.get("status") == 500
+            report = walker.get_report()
+            # Check for hook error reports
+            hook_error_reports = [
+                item
+                for item in report
+                if isinstance(item, dict) and "hook_error" in item
+            ]
+            assert len(hook_error_reports) >= 1
+            assert "Simulated runtime error" in hook_error_reports[0]["hook_error"]
 
     @pytest.mark.asyncio
     async def test_walker_memory_error_handling(self, mock_context):
@@ -802,7 +810,7 @@ class TestComplexScenarios:
                 sync_result = self.sync_operation(here.name)
                 async_result = await self.async_operation(here.name)
 
-                self.response[here.id] = {"sync": sync_result, "async": async_result}
+                self.report({here.id: {"sync": sync_result, "async": async_result}})
 
         walker = MixedWalker()
         nodes = [EdgeCaseTestNode(name=f"mixed_{i}") for i in range(5)]

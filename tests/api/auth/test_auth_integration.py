@@ -103,7 +103,7 @@ class TestAuthIntegration:
 
             @on_visit(MockNode)
             async def process_data(self, here):
-                self.response["data"] = f"Processed: {here.name} - {self.query}"
+                self.report({"data": f"Processed: {here.name} - {self.query}"})
 
         # Check walker is registered with auth requirements
         assert AuthDataWalker in server._registered_walker_classes
@@ -315,7 +315,7 @@ class TestAuthIntegration:
 
             @on_visit(MockNode)
             async def process(self, here):
-                self.response["public"] = True
+                self.report({"public": True})
 
         # Add authenticated walker
         @auth_walker_endpoint("/auth/data", permissions=["read_data"], server=server)
@@ -324,7 +324,7 @@ class TestAuthIntegration:
 
             @on_visit(MockNode)
             async def process(self, here):
-                self.response["authenticated"] = True
+                self.report({"authenticated": True})
 
         # Add admin walker
         @admin_endpoint("/admin/control", server=server)
@@ -489,7 +489,7 @@ class TestAuthIntegration:
         class IntegratedWalker(Walker):
             @on_visit(MockNode)
             async def process(self, here):
-                self.response["integrated"] = True
+                self.report({"integrated": True})
 
         @admin_endpoint("/integrated/admin", server=server)
         async def integrated_admin():
@@ -576,7 +576,7 @@ class TestAuthSystemScenarios:
 
             @on_visit(MockNode)
             async def get_data(self, here):
-                self.response["data"] = [{"id": 1, "name": here.name}]
+                self.report({"data": [{"id": 1, "name": here.name}]})
 
         # Admin management endpoints
         @admin_endpoint("/api/v1/admin/stats")
@@ -603,7 +603,7 @@ class TestAuthSystemScenarios:
 
             @on_visit(MockNode)
             async def manage_tenant(self, here):
-                self.response["tenant_action"] = f"{self.action} for {self.tenant_id}"
+                self.report({"tenant_action": f"{self.action} for {self.tenant_id}"})
 
         # User data endpoints with tenant isolation
         @auth_walker_endpoint("/tenant/data", permissions=["read_tenant_data"])
@@ -613,7 +613,7 @@ class TestAuthSystemScenarios:
             @on_visit(MockNode)
             async def get_tenant_data(self, here):
                 # In real implementation, would filter by tenant
-                self.response["tenant_data"] = {"tenant": self.tenant_id}
+                self.report({"tenant_data": {"tenant": self.tenant_id}})
 
         # System admin endpoints
         @admin_endpoint("/system/tenants")
@@ -642,9 +642,9 @@ class TestAuthSystemScenarios:
 
             @on_visit(MockNode)
             async def v2_feature(self, here):
-                self.response["version"] = "2.0"
-                self.response["feature"] = self.feature
-                self.response["enhanced"] = True
+                self.report(
+                    {"version": "2.0", "feature": self.feature, "enhanced": True}
+                )
 
         # V3 API - role-based features
         @auth_endpoint("/api/v3/premium", roles=["premium", "admin"])
@@ -671,11 +671,15 @@ class TestAuthSystemScenarios:
 
             @on_visit(MockNode)
             async def sync_data(self, here):
-                self.response["sync"] = {
-                    "service": self.service_name,
-                    "type": self.data_type,
-                    "status": "synced",
-                }
+                self.report(
+                    {
+                        "sync": {
+                            "service": self.service_name,
+                            "type": self.data_type,
+                            "status": "synced",
+                        }
+                    }
+                )
 
         # Webhook endpoints for external integration
         @auth_endpoint("/webhook/external", permissions=["webhook_access"])

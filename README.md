@@ -20,6 +20,8 @@
 - **Async/await Architecture**: Native async support throughout the library
 - **Multi-backend Persistence**: JSON and MongoDB backends with extensible database interface
 - **Graph Traversal**: Precise control over walker-based graph traversal with semantic filtering
+- **Walker Reporting System**: Simple, direct data collection and aggregation during traversal
+- **Inter-Walker Communication**: Event-driven coordination between concurrent walkers
 - **Infinite Walk Protection**: Comprehensive safeguards against infinite loops with configurable limits
 - **Type Safety**: Pydantic-based modeling for nodes, edges, and walkers
 
@@ -140,9 +142,19 @@ class UserProcessor(Walker):
     @on_visit(User)
     async def process_user(self, here: User):
         print(f"Processing user: {here.name} ({here.email})")
+
+        # Use the new reporting system to collect data
+        self.report({
+            "user_processed": {
+                "name": here.name,
+                "email": here.email,
+                "active": here.active
+            }
+        })
+
         # Use MongoDB-style queries for connected users
         active_users = await User.find({"context.active": True})
-        print(f"Found {len(active_users)} active users")
+        self.report(f"Found {len(active_users)} active users")
 
 async def main():
     # Entity-centric CRUD (automatic database setup)
@@ -152,10 +164,15 @@ async def main():
     users = await User.find({"context.active": True})
     senior_users = await User.find({"context.name": {"$regex": "^A", "$options": "i"}})
 
-    # Walker traversal
+    # Walker traversal with new reporting system
     walker = UserProcessor()
-    await walker.spawn(user)
-    print(f"Result: {walker.response}")
+    result_walker = await walker.spawn(user)  # spawn() returns the walker
+
+    # Get collected data as a simple list
+    report = result_walker.get_report()
+    print(f"Collected {len(report)} items:")
+    for item in report:
+        print(f"  - {item}")
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -185,7 +202,7 @@ class ProcessUser(Walker):
     @on_visit(Node)
     async def process(self, here: Node):
         users = await User.find({"context.name": self.user_name})
-        self.response["found"] = len(users)
+        self.report({"found_users": len(users)})
 
 if __name__ == "__main__":
     server.run()  # API available at http://localhost:8000/docs
@@ -412,25 +429,31 @@ class TrackingWalker(Walker):
         # Get trail with connecting edges
         trail_path = await self.get_trail_path()
 
-        self.response["trail_report"] = {
-            "total_steps": self.get_trail_length(),
-            "visited_nodes": [node.name for node in trail_nodes],
-            "path_details": [
-                {
-                    "node": node.name,
-                    "edge": edge.edge_type if edge else "start"
-                }
-                for node, edge in trail_path
-            ]
-        }
+        # Use report() method to collect trail data
+        self.report({
+            "trail_report": {
+                "total_steps": self.get_trail_length(),
+                "visited_nodes": [node.name for node in trail_nodes],
+                "path_details": [
+                    {
+                        "node": node.name,
+                        "edge": edge.edge_type if edge else "start"
+                    }
+                    for node, edge in trail_path
+                ]
+            }
+        })
 
 # Usage
 walker = TrackingWalker()
 root = await Root.get()
 await walker.spawn(root)
 
-# Access trail information
-print(f"Final trail: {walker.response['trail_report']}")
+# Access trail information from walker's report
+report = walker.get_report()
+trail_reports = [item for item in report if isinstance(item, dict) and 'trail_report' in item]
+trail_report = trail_reports[0]['trail_report'] if trail_reports else None
+print(f"Final trail: {trail_report}")
 ```
 
 ### Trail API Reference
@@ -500,13 +523,16 @@ class AnalyzeUser(Walker):
                 active=True
             )
 
-            self.response = {
-                "user": {"name": user.name, "email": user.email},
-                "colleagues": len(colleagues),
-                "department": self.department
-            }
+            # Use report() method to collect analysis results
+            self.report({
+                "user_analysis": {
+                    "user": {"name": user.name, "email": user.email},
+                    "colleagues": len(colleagues),
+                    "department": self.department
+                }
+            })
         else:
-            self.response = {"error": "User not found"}
+            self.report({"error": "User not found"})
 
 if __name__ == "__main__":
     server.run()  # Available at http://localhost:8000/docs
@@ -630,7 +656,7 @@ class LocationUpdateWalker(Walker):
     def __init__(self, payload: dict):
         super().__init__()
         self.payload = payload
-        self.response = {"updated_locations": []}
+        # Use report() method for data collection during traversal
 
     @on_visit(Node)
     async def update_location_data(self, here: Node):
@@ -646,9 +672,11 @@ class LocationUpdateWalker(Walker):
                 here.coordinates = coordinates
                 await here.save()
 
-                self.response["updated_locations"].append({
-                    "id": location_id,
-                    "coordinates": coordinates
+                self.report({
+                    "location_updated": {
+                        "id": location_id,
+                        "coordinates": coordinates
+                    }
                 })
 ```
 
@@ -791,11 +819,13 @@ class DeliveryWalker(Walker):
 
     @on_exit
     async def final_report(self):
-        # Highlight 3: Built-in metrics collection
-        self.response = {
-            "delivered": self.packages_delivered,
-            "visited": len(self.visited_nodes)
-        }
+        # Highlight 3: Built-in metrics collection using report()
+        self.report({
+            "delivery_summary": {
+                "delivered": self.packages_delivered,
+                "visited": len(self.visited_nodes)
+            }
+        })
 ```
 Key Features Demonstrated:
 - Conditional node processing
@@ -830,9 +860,11 @@ class InspectionWalker(Walker):
     @on_visit()  # No parameters = catch-all
     async def inspect_anything(self, here):
         # This runs for EVERY node and edge visited
-        self.response.setdefault("inspected", []).append({
-            "type": here.__class__.__name__,
-            "id": here.id
+        self.report({
+            "inspected_item": {
+                "type": here.__class__.__name__,
+                "id": here.id
+            }
         })
 ```
 
@@ -866,17 +898,17 @@ class SmartWarehouse(Warehouse):
     @on_visit(LogisticsWalker, InspectionWalker)  # Multi-target response
     async def handle_authorized_access(self, visitor):
         if isinstance(visitor, LogisticsWalker):
-            visitor.response["inventory_access"] = "GRANTED"
+            visitor.report({"inventory_access": "GRANTED"})
         elif isinstance(visitor, InspectionWalker):
-            visitor.response["compliance_report"] = self.get_compliance_data()
+            visitor.report({"compliance_report": self.get_compliance_data()})
 
 # Smart edge with walker-specific behavior
 class SmartHighway(Highway):
     @on_visit(LogisticsWalker)
     async def commercial_vehicle_access(self, visitor):
         # Give commercial vehicles priority lane access
-        visitor.response["priority_lane"] = True
-        visitor.response["toll_discount"] = 0.15
+        visitor.report({"priority_lane": True})
+        visitor.report({"toll_discount": 0.15})
 ```
 
 ### Type Validation
@@ -896,6 +928,106 @@ class BadWalker(Walker):
     @on_visit(LogisticsWalker)  # TypeError!
     async def invalid_hook(self, here): pass
 ```
+
+## Walker Reporting and Event Systems
+
+### Simple Data Collection with `report()`
+
+The reporting system allows walkers to collect any data during traversal using a simple, direct approach:
+
+```python
+from jvspatial.core import Walker, on_visit, on_exit
+
+class DataCollector(Walker):
+    @on_visit(User)
+    async def collect_user_data(self, here: User):
+        # Report any data - dicts, strings, numbers, lists
+        self.report({
+            "user": {
+                "id": here.id,
+                "name": here.name,
+                "department": here.department
+            }
+        })
+
+        # Report simple values
+        self.report(f"Processed: {here.name}")
+
+    @on_exit
+    async def generate_summary(self):
+        current_data = self.get_report()
+        self.report({"total_items": len(current_data)})
+
+# Usage - get data as a simple list
+walker = DataCollector()
+result_walker = await walker.spawn()
+report = result_walker.get_report()  # Direct list access
+
+for item in report:
+    print(f"Collected: {item}")
+```
+
+### Inter-Walker Communication with Events
+
+Walkers can communicate in real-time using the event system:
+
+```python
+from jvspatial.core.events import on_emit
+import asyncio
+
+class AlertWalker(Walker):
+    """Walker that detects issues and emits alerts."""
+
+    @on_visit('ServerNode')
+    async def monitor_server(self, here: Node):
+        if here.cpu_usage > 90:
+            # Emit event to other walkers
+            await self.emit("high_cpu_alert", {
+                "server_id": here.id,
+                "cpu_usage": here.cpu_usage,
+                "severity": "critical"
+            })
+            self.report({"alert_sent": here.id})
+
+class ResponseWalker(Walker):
+    """Walker that responds to alerts from other walkers."""
+
+    @on_emit("high_cpu_alert")
+    async def handle_cpu_alert(self, event_data):
+        server_id = event_data.get("server_id")
+        self.report({
+            "alert_handled": {
+                "server": server_id,
+                "action": "cleanup_initiated"
+            }
+        })
+
+# Run walkers concurrently - they'll communicate automatically
+alert_walker = AlertWalker()
+response_walker = ResponseWalker()
+
+# Both walkers run and communicate via events
+results = await asyncio.gather(
+    alert_walker.spawn(),
+    response_walker.spawn()
+)
+```
+
+### Key Benefits
+
+**Reporting System:**
+- **Simple**: `walker.report(any_data)` and `walker.get_report()`
+- **Direct Access**: No nested structures - get a plain list of your data
+- **Flexible**: Report strings, dicts, numbers, lists - any data type
+- **Aggregation**: Perfect for collecting analytics and generating summaries
+
+**Event System:**
+- **Real-time**: Walkers communicate during traversal
+- **Decoupled**: Walkers don't need to know about each other
+- **Concurrent**: Multiple walkers can run and coordinate simultaneously
+- **Event-Driven**: Build complex workflows with event chains
+
+**[📖 Complete Guide: Walker Reporting & Events](./docs/md/walker-reporting-events.md)**
 
 ## Advanced Features
 
@@ -926,7 +1058,7 @@ class InventoryWalker(Walker):
             await self.visit(storage_rooms[0])
         else:
             print("No storage rooms found")
-            self.response["error"] = "No storage facilities available"
+            self.report({"error": "No storage facilities available"})
 
     @on_visit("StorageRoom")
     async def check_storage(self, here):
@@ -941,17 +1073,27 @@ class InventoryWalker(Walker):
     @on_visit("InventoryItem")
     async def record_item(self, here):
         print(f"Scanning item: {here.name} ({here.serial_number})")
-        self.response.setdefault("items", []).append({
-            "id": here.id,
-            "name": here.name,
-            "location": here.storage_location
+        self.report({
+            "inventory_item": {
+                "id": here.id,
+                "name": here.name,
+                "location": here.storage_location
+            }
         })
 
     @on_exit
     async def final_report(self):
-        self.response["total_items"] = len(self.found_items)
-        self.response["unique_categories"] = len({item.category for item in self.found_items})
-        print(f"Inventory check complete. Found {self.response['total_items']} items.")
+        # Report final inventory summary
+        total_items = len(self.found_items)
+        unique_categories = len({item.category for item in self.found_items})
+
+        self.report({
+            "inventory_summary": {
+                "total_items": total_items,
+                "unique_categories": unique_categories
+            }
+        })
+        print(f"Inventory check complete. Found {total_items} items.")
 ```
 
 ### Pydantic Validation
@@ -1044,6 +1186,7 @@ This project is licensed under the MIT License - see the [LICENSE](docs/md/licen
 ### Core Documentation
 - **[Full Documentation](./docs/md/)** - Complete guide to jvspatial
 - **[API Reference](./docs/md/rest-api.md)** - REST API integration guide
+- **[Walker Reporting & Events](./docs/md/walker-reporting-events.md)** - Data collection and inter-walker communication
 - **[Examples](./docs/md/examples.md)** - Working examples and patterns
 
 ### Authentication & Security

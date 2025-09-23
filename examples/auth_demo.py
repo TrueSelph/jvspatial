@@ -22,7 +22,7 @@ import asyncio
 import logging
 import secrets
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, Field
@@ -431,11 +431,14 @@ class PublicSearch(Walker):
     @on_visit(City)
     async def search_cities(self, here: City):
         if self.query.lower() in here.name.lower():
-            if "results" not in self.response:
-                self.response["results"] = []
+            # Get current report to check results count
+            current_report = self.get_report()
+            results_count = sum(
+                1 for item in current_report if isinstance(item, dict) and "id" in item
+            )
 
-            if len(self.response["results"]) < self.limit:
-                self.response["results"].append(
+            if results_count < self.limit:
+                self.report(
                     {
                         "id": here.id,
                         "name": here.name,
@@ -445,11 +448,6 @@ class PublicSearch(Walker):
                         "coordinates": [here.latitude, here.longitude],
                     }
                 )
-
-        # Add metadata
-        self.response["query"] = self.query
-        self.response["authentication"] = "Public endpoint - no login required"
-        self.response["total_found"] = len(self.response.get("results", []))
 
 
 # ==================== AUTHENTICATED ENDPOINTS ====================
@@ -516,48 +514,56 @@ class ProtectedSpatialQuery(Walker):
     async def spatial_query(self, here: Node):
         current_user = get_current_user(self.request)
         if current_user is None:
-            self.response = {"error": "Not authenticated"}
+            self.report({"error": "Not authenticated"})
             return
 
         # Check if user can access this region
         if not current_user.can_access_region(self.region):
-            self.response = {
-                "error": "Access denied to region",
-                "region": self.region,
-                "user_allowed_regions": current_user.allowed_regions,
-                "message": "Your account doesn't have access to this region",
-            }
+            self.report(
+                {
+                    "error": "Access denied to region",
+                    "region": self.region,
+                    "user_allowed_regions": current_user.allowed_regions,
+                    "message": "Your account doesn't have access to this region",
+                }
+            )
             return
 
         # Check if user can access this node type
         node_type_name = self.node_type
         if not current_user.can_access_node_type(node_type_name):
-            self.response = {
-                "error": "Access denied to node type",
-                "node_type": node_type_name,
-                "user_allowed_types": current_user.allowed_node_types,
-                "message": "Your account doesn't have access to this node type",
-            }
+            self.report(
+                {
+                    "error": "Access denied to node type",
+                    "node_type": node_type_name,
+                    "user_allowed_types": current_user.allowed_node_types,
+                    "message": "Your account doesn't have access to this node type",
+                }
+            )
             return
 
-        # Initialize response
-        if "results" not in self.response:
-            self.response = {
-                "query": {"region": self.region, "node_type": self.node_type},
-                "user": current_user.username,
-                "authentication": "JWT token + read_spatial_data permission",
-                "spatial_permissions": {
-                    "allowed_regions": current_user.allowed_regions,
-                    "allowed_node_types": current_user.allowed_node_types,
-                    "max_traversal_depth": current_user.max_traversal_depth,
-                },
-                "results": [],
-            }
+        # Report query metadata once
+        current_report = self.get_report()
+        if not any(
+            isinstance(item, dict) and "query" in item for item in current_report
+        ):
+            self.report(
+                {
+                    "query": {"region": self.region, "node_type": self.node_type},
+                    "user": current_user.username,
+                    "authentication": "JWT token + read_spatial_data permission",
+                    "spatial_permissions": {
+                        "allowed_regions": current_user.allowed_regions,
+                        "allowed_node_types": current_user.allowed_node_types,
+                        "max_traversal_depth": current_user.max_traversal_depth,
+                    },
+                }
+            )
 
         # Query based on node type
         if self.node_type == "City" and isinstance(here, City):
             if here.region == self.region:
-                self.response["results"].append(
+                self.report(
                     {
                         "id": here.id,
                         "name": here.name,
@@ -570,7 +576,7 @@ class ProtectedSpatialQuery(Walker):
 
         elif self.node_type == "Highway" and isinstance(here, Highway):
             if here.region == self.region:
-                self.response["results"].append(
+                self.report(
                     {
                         "id": here.id,
                         "name": here.name,
@@ -586,7 +592,7 @@ class ProtectedSpatialQuery(Walker):
             try:
                 city = await City.get(here.city_id) if here.city_id else None
                 if city and city.region == self.region:
-                    self.response["results"].append(
+                    self.report(
                         {
                             "id": here.id,
                             "name": here.name,
@@ -619,43 +625,49 @@ class ProtectedAnalysis(Walker):
     async def analyze_cities(self, here: City):
         current_user = get_current_user(self.request)
         if current_user is None:
-            self.response = {"error": "Not authenticated"}
+            self.report({"error": "Not authenticated"})
             return
 
-        if "analysis" not in self.response:
-            self.response = {
-                "analysis_type": self.analysis_type,
-                "user": current_user.username,
-                "authentication": "JWT token + analyze_data permission + analyst/admin role",
-                "results": [],
-            }
+        # Report analysis metadata once
+        current_report = self.get_report()
+        if not any(
+            isinstance(item, dict) and "analysis_type" in item
+            for item in current_report
+        ):
+            self.report(
+                {
+                    "analysis_type": self.analysis_type,
+                    "user": current_user.username,
+                    "authentication": "JWT token + analyze_data permission + analyst/admin role",
+                }
+            )
 
         # Check region access
         if not current_user.can_access_region(here.region):
-            return  # Skip inaccessible regions
-
-        # Perform analysis based on type
-        if self.analysis_type == "demographic":
-            analysis_result = {
-                "city": here.name,
-                "region": here.region,
-                "population": here.population,
-                "population_category": (
-                    "large"
-                    if here.population > 5000000
-                    else "medium" if here.population > 1000000 else "small"
-                ),
-                "analysis": f"Demographic analysis for {here.name}",
-            }
+            pass  # Skip inaccessible regions
         else:
-            analysis_result = {
-                "city": here.name,
-                "region": here.region,
-                "analysis": f"{self.analysis_type.title()} analysis for {here.name}",
-                "status": "completed",
-            }
+            # Perform analysis based on type
+            if self.analysis_type == "demographic":
+                analysis_result = {
+                    "city": here.name,
+                    "region": here.region,
+                    "population": here.population,
+                    "population_category": (
+                        "large"
+                        if here.population > 5000000
+                        else "medium" if here.population > 1000000 else "small"
+                    ),
+                    "analysis": f"Demographic analysis for {here.name}",
+                }
+            else:
+                analysis_result = {
+                    "city": here.name,
+                    "region": here.region,
+                    "analysis": f"{self.analysis_type.title()} analysis for {here.name}",
+                    "status": "completed",
+                }
 
-        self.response["results"].append(analysis_result)
+            self.report(analysis_result)
 
 
 # ==================== ADMIN-ONLY ENDPOINTS ====================

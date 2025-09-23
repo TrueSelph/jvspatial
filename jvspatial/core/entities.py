@@ -2,6 +2,7 @@
 
 import asyncio
 import inspect
+import os
 import uuid
 
 # math import removed - no longer needed after spatial function extraction
@@ -12,6 +13,7 @@ from datetime import datetime
 from functools import wraps
 from typing import (
     Any,
+    Awaitable,
     Callable,
     ClassVar,
     Dict,
@@ -27,6 +29,8 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from typing_extensions import override
 
 from jvspatial.core.context import GraphContext
+
+from .events import event_bus
 
 # ----------------- HELPER FUNCTIONS -----------------
 
@@ -489,9 +493,9 @@ class Edge(Object):
             left: First node
             right: Second node
             direction: Direction used to orient source/target and set bidirectional
-                      'out': left->source, right->target, bidirectional=False
-                      'in': left->target, right->source, bidirectional=False
-                      'both': left->source, right->target, bidirectional=True
+                          'out': left->source, right->target, bidirectional=False
+                          'in': left->target, right->source, bidirectional=False
+                          'both': left->source, right->target, bidirectional=True
             **kwargs: Additional edge attributes
         """
         self._initializing = True
@@ -1119,21 +1123,21 @@ class Node(Object):
         if not edge_filter:
             return []
 
-        types = []
+        edge_types = []
         if isinstance(edge_filter, str):
-            types.append(edge_filter)
+            edge_types.append(edge_filter)
         elif inspect.isclass(edge_filter):
-            types.append(edge_filter.__name__)
+            edge_types.append(edge_filter.__name__)
         elif isinstance(edge_filter, list):
             for item in edge_filter:
                 if isinstance(item, str):
-                    types.append(item)
+                    edge_types.append(item)
                 elif inspect.isclass(item):
-                    types.append(item.__name__)
+                    edge_types.append(item.__name__)
                 elif isinstance(item, dict):
-                    types.extend(item.keys())
+                    edge_types.extend(item.keys())
 
-        return types
+        return edge_types
 
     def _parse_edge_properties_from_filter(
         self,
@@ -1165,17 +1169,17 @@ class Node(Object):
         if not node_filter:
             return []
 
-        types = []
+        node_types = []
         if isinstance(node_filter, str):
-            types.append(node_filter)
+            node_types.append(node_filter)
         elif isinstance(node_filter, list):
             for item in node_filter:
                 if isinstance(item, str):
-                    types.append(item)
+                    node_types.append(item)
                 elif isinstance(item, dict):
-                    types.extend(item.keys())
+                    node_types.extend(item.keys())
 
-        return types
+        return node_types
 
     def _parse_node_properties_from_filter(
         self,
@@ -1568,7 +1572,7 @@ class Walker(BaseModel):
     """Base class for graph walkers that traverse nodes along edges.
 
     Walkers are designed to traverse the graph by visiting nodes and following edges.
-    They maintain a queue of nodes to visit and can carry state and responses during traversal.
+    They maintain a queue of nodes to visit and can carry state and reports during traversal.
     They also track their traversal trail for path reconstruction and analysis.
 
     Infinite Walk Protection:
@@ -1578,7 +1582,6 @@ class Walker(BaseModel):
     Attributes:
         id: Unique walker ID
         queue: Queue of nodes to visit
-        response: Response data from traversal
         current_node: Currently visited node
         paused: Whether traversal is paused
 
@@ -1606,7 +1609,14 @@ class Walker(BaseModel):
     model_config = ConfigDict(extra="allow")
     type_code: ClassVar[str] = "w"
     id: str = Field(default="")
-    response: dict = Field(default_factory=dict)
+
+    # Reporting system
+    _report: List[Any] = PrivateAttr(default_factory=list)
+
+    # Event system
+    _event_handlers: Dict[str, List[Callable]] = PrivateAttr(default_factory=dict)
+
+    # Walker core attributes
     _queue: deque = PrivateAttr(default_factory=deque)
     _current_node: Optional[Node] = PrivateAttr(default=None)
     _visit_hooks: ClassVar[dict] = {}
@@ -1643,9 +1653,6 @@ class Walker(BaseModel):
         """Initialize a walker with auto-generated ID if not provided."""
         if "id" not in kwargs:
             kwargs["id"] = generate_id(self.type_code, self.__class__.__name__)
-
-        # Import os for environment variable access
-        import os
 
         # Extract private attr values from kwargs before calling super()
         private_attrs = {
@@ -1689,6 +1696,16 @@ class Walker(BaseModel):
         self._max_queue_size = private_attrs["max_queue_size"]
         self._protection_enabled = private_attrs["protection_enabled"]
 
+        # Initialize reporting system
+        self._report = []
+
+        # Initialize event system
+        self._event_handlers = {}
+        self._register_event_handlers()
+
+        # Register with global event bus
+        event_bus.register_entity(self)
+
     def __init_subclass__(cls: Type["Walker"]) -> None:
         """Handle subclass initialization."""
         cls._visit_hooks = {}
@@ -1717,6 +1734,43 @@ class Walker(BaseModel):
                             raise TypeError(
                                 f"Walker @on_visit must target Node/Edge types or string names, got {target.__name__ if hasattr(target, '__name__') else target}"
                             )
+
+    def _register_event_handlers(self):
+        """Register all @on_emit methods for event handling."""
+        for _name, method in inspect.getmembers(self.__class__, inspect.isfunction):
+            if hasattr(method, "_is_event_handler"):
+                event_types = getattr(method, "_event_types", [])
+                for event_type in event_types:
+                    if event_type not in self._event_handlers:
+                        self._event_handlers[event_type] = []
+                    self._event_handlers[event_type].append(method)
+
+    def report(self, data: Any) -> None:
+        """Add data to the walker's report.
+
+        Args:
+            data: Any data to add to the report
+        """
+        self._report.append(data)
+
+    def get_report(self) -> List[Any]:
+        """Get the current report list.
+
+        Returns:
+            The list of all reported items
+        """
+        return self._report
+
+    async def emit(
+        self,
+        description: str,
+        payload: Optional[Any] = None,
+        callback: Optional[Callable[[int], Awaitable[None]]] = None,
+    ) -> None:
+        """Emit event using the global event bus."""
+        responses = await event_bus.emit(description, payload, self.id)
+        if callback:
+            await callback(responses)
 
     # Properties for backward compatibility
     @property
@@ -2171,7 +2225,7 @@ class Walker(BaseModel):
             self.paused = True
         except Exception as e:
             print(f"Walker error: {str(e)}")
-            self.response = {"status": 500, "messages": [f"Traversal error: {str(e)}"]}
+            self._report.append({"status": 500, "error": str(e)})
             with suppress(Exception):
                 await self._process_exit_hooks()
         return self
@@ -2240,7 +2294,7 @@ class Walker(BaseModel):
         except TraversalPaused:
             pass
         except Exception as e:
-            self.response = {"status": 500, "messages": [f"Traversal error: {str(e)}"]}
+            self._report.append({"status": 500, "error": str(e)})
             with suppress(Exception):
                 await self._process_exit_hooks()
         return self
@@ -2276,6 +2330,10 @@ class Walker(BaseModel):
 
         # Pause the walker
         self.paused = True
+
+        # Unregister from event bus
+        event_bus.unregister_entity(self.id)
+
         return self
 
     async def _process_hooks(
@@ -2496,11 +2554,7 @@ class Walker(BaseModel):
             raise  # Re-raise to pause traversal
         except Exception as e:
             print(f"Error executing hook {hook.__name__}: {e}")
-            if not self.response.get("status"):
-                self.response["status"] = 500
-                if "messages" not in self.response:
-                    self.response["messages"] = []
-                self.response["messages"].append(f"Hook error: {str(e)}")
+            self._report.append({"hook_error": str(e), "hook_name": hook.__name__})
         finally:
             duration = asyncio.get_event_loop().time() - start_time
             if perf_monitor:
@@ -2723,9 +2777,13 @@ class Walker(BaseModel):
 
         # Check step limit
         if self._step_count >= self._max_steps:
-            self.response["protection_triggered"] = "max_steps"
-            self.response["steps_taken"] = self._step_count
-            self.response["max_steps"] = self._max_steps
+            self._report.append(
+                {
+                    "protection_triggered": "max_steps",
+                    "steps_taken": self._step_count,
+                    "max_steps": self._max_steps,
+                }
+            )
             await self.disengage()
             return False
 
@@ -2734,19 +2792,27 @@ class Walker(BaseModel):
             self._start_time
             and (time.time() - self._start_time) >= self._max_execution_time
         ):
-            self.response["protection_triggered"] = "timeout"
-            self.response["execution_time"] = time.time() - self._start_time
-            self.response["max_execution_time"] = self._max_execution_time
+            self._report.append(
+                {
+                    "protection_triggered": "timeout",
+                    "execution_time": time.time() - self._start_time,
+                    "max_execution_time": self._max_execution_time,
+                }
+            )
             await self.disengage()
             return False
 
         # Check node visit frequency limits
         for node_id, visit_count in self._node_visit_counts.items():
             if visit_count > self._max_visits_per_node:
-                self.response["protection_triggered"] = "max_visits_per_node"
-                self.response["node_id"] = node_id
-                self.response["visit_count"] = visit_count
-                self.response["max_visits_per_node"] = self._max_visits_per_node
+                self._report.append(
+                    {
+                        "protection_triggered": "max_visits_per_node",
+                        "node_id": node_id,
+                        "visit_count": visit_count,
+                        "max_visits_per_node": self._max_visits_per_node,
+                    }
+                )
                 await self.disengage()
                 return False
 
@@ -2873,6 +2939,9 @@ class Walker(BaseModel):
                         method()
             except (AttributeError, TypeError):
                 continue
+
+        # Unregister from event bus when traversal completes
+        event_bus.unregister_entity(self.id)
 
 
 class TraversalPaused(Exception):

@@ -630,17 +630,25 @@ class EndpointRouter:
                             )
                     result = await walker.spawn(start=start_node_obj)
 
-                    if result.response:
-                        if (
-                            "status" in result.response
-                            and isinstance(result.response["status"], int)
-                            and result.response["status"] >= 400
-                        ):
-                            raise HTTPException(
-                                status_code=result.response["status"],
-                                detail=result.response.get("detail", "Unknown error"),
-                            )
-                        return result.response
+                    # Convert reports to HTTP response format
+                    reports = result.get_report()
+                    if reports:
+                        # Merge all report dictionaries into a single response
+                        response_data = {}
+                        for report in reports:
+                            if isinstance(report, dict):
+                                # Check for error status codes in reports
+                                if (
+                                    "status" in report
+                                    and isinstance(report["status"], int)
+                                    and report["status"] >= 400
+                                ):
+                                    raise HTTPException(
+                                        status_code=report["status"],
+                                        detail=report.get("detail", "Unknown error"),
+                                    )
+                                response_data.update(report)
+                        return response_data
                     return {}
 
                 # Update the function signature with query parameters
@@ -747,19 +755,27 @@ class EndpointRouter:
                                 )
                         result = await walker.spawn(start=start_node_obj)
 
-                        if result.response:
-                            if (
-                                "status" in result.response
-                                and isinstance(result.response["status"], int)
-                                and result.response["status"] >= 400
-                            ):
-                                raise HTTPException(
-                                    status_code=result.response["status"],
-                                    detail=result.response.get(
-                                        "detail", "Unknown error"
-                                    ),
-                                )
-                            return result.response
+                        # Convert reports to HTTP response format
+                        reports = result.get_report()
+                        if reports:
+                            # Merge all report dictionaries into a single response
+                            response_data = {}
+                            for report in reports:
+                                if isinstance(report, dict):
+                                    # Check for error status codes in reports
+                                    if (
+                                        "status" in report
+                                        and isinstance(report["status"], int)
+                                        and report["status"] >= 400
+                                    ):
+                                        raise HTTPException(
+                                            status_code=report["status"],
+                                            detail=report.get(
+                                                "detail", "Unknown error"
+                                            ),
+                                        )
+                                    response_data.update(report)
+                            return response_data
                         return {}
 
                     # Update handler annotation
@@ -866,17 +882,25 @@ class EndpointRouter:
                             )
                     result = await walker.spawn(start=start_node_obj)
 
-                    if result.response:
-                        if (
-                            "status" in result.response
-                            and isinstance(result.response["status"], int)
-                            and result.response["status"] >= 400
-                        ):
-                            raise HTTPException(
-                                status_code=result.response["status"],
-                                detail=result.response.get("detail", "Unknown error"),
-                            )
-                        return result.response
+                    # Convert reports to HTTP response format
+                    reports = result.get_report()
+                    if reports:
+                        # Merge all report dictionaries into a single response
+                        response_data = {}
+                        for report in reports:
+                            if isinstance(report, dict):
+                                # Check for error status codes in reports
+                                if (
+                                    "status" in report
+                                    and isinstance(report["status"], int)
+                                    and report["status"] >= 400
+                                ):
+                                    raise HTTPException(
+                                        status_code=report["status"],
+                                        detail=report.get("detail", "Unknown error"),
+                                    )
+                                response_data.update(report)
+                        return response_data
                     return {}
 
                 # Update handler annotation to use the actual param_model

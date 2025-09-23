@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from jvspatial.api.endpoint.router import EndpointField, EndpointRouter
 from jvspatial.api.server import Server, ServerConfig
 from jvspatial.core.context import GraphContext
-from jvspatial.core.entities import Node, Walker, on_visit
+from jvspatial.core.entities import Node, Walker, on_exit, on_visit
 
 
 class ApiTestNode(Node):
@@ -69,7 +69,7 @@ class FailingWalker(Walker):
         """Process with potential failure."""
         if self.should_fail:
             raise ValueError("Intentional test failure")
-        self.response["status"] = "success"
+        self.report({"status": "success"})
 
 
 class ValidationWalker(Walker):
@@ -324,7 +324,7 @@ class TestAPIRoutes:
 
             @on_visit(ApiTestNode)
             async def process(self, here):
-                self.response["processed_message"] = self.message.upper()
+                self.report({"processed_message": self.message.upper()})
 
         app = test_server._create_app()
         client = TestClient(app)
@@ -349,7 +349,7 @@ class TestAPIRoutes:
 
             @on_visit(ApiTestNode)
             async def process(self, here):
-                self.response["param_received"] = self.param
+                self.report({"param_received": self.param})
 
         app = test_server._create_app()
         client = TestClient(app)
@@ -417,11 +417,10 @@ class TestAPIRoutes:
                 if len(self.results) >= self.limit:
                     await self.disengage()
 
-            async def spawn(self, start=None):
-                await super().spawn(start)
-                self.response["results"] = self.results
-                self.response["count"] = len(self.results)
-                return self
+            @on_exit
+            async def finalize_results(self):
+                self.report({"results": self.results})
+                self.report({"count": len(self.results)})
 
         app = test_server._create_app()
         client = TestClient(app)
@@ -480,7 +479,7 @@ class TestAPIErrorHandling:
             async def process_with_error(self, here):
                 if self.should_fail:
                     raise RuntimeError("Test runtime error")
-                self.response["status"] = "success"
+                self.report({"status": "success"})
 
         app = test_server._create_app()
         client = TestClient(app)
@@ -493,9 +492,14 @@ class TestAPIErrorHandling:
             response = client.post("/api/error-walker", json={"should_fail": False})
             assert response.status_code == 200
 
-            # Test error handling - framework should return 500 for unhandled errors
+            # Test error handling - errors should be reported via reporting system
             response = client.post("/api/error-walker", json={"should_fail": True})
-            assert response.status_code == 500
+            assert response.status_code == 200
+            data = response.json()
+            assert "hook_error" in data
+            assert "hook_name" in data
+            assert data["hook_error"] == "Test runtime error"
+            assert data["hook_name"] == "process_with_error"
 
     @pytest.mark.asyncio
     async def test_function_error_handling(self, test_server):

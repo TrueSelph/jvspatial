@@ -24,6 +24,7 @@ from .entities import (
     on_exit,
     on_visit,
 )
+from .events import on_emit
 from .pager import ObjectPager, paginate_by_field, paginate_objects
 
 __all__ = [
@@ -41,6 +42,7 @@ __all__ = [
     # Decorators
     "on_visit",
     "on_exit",
+    "on_emit",
     # Utilities
     "generate_id",
     "find_subclass_by_name",
