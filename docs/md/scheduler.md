@@ -34,7 +34,7 @@ from datetime import datetime
 from typing import Optional
 
 # Define entities for job tracking
-class ScheduledJob(Node):
+class ScheduledJob(Object):
     """Entity representing scheduled job execution records."""
     job_name: str = ""
     execution_time: datetime = datetime.now()
@@ -42,7 +42,7 @@ class ScheduledJob(Node):
     duration_seconds: Optional[float] = None
     error_message: Optional[str] = None
 
-class SystemMetrics(Node):
+class SystemMetrics(Object):
     """Entity for system metrics collection."""
     timestamp: datetime = datetime.now()
     cpu_usage: float = 0.0
@@ -582,7 +582,7 @@ Always leverage jvspatial's Node entities for structured data storage and retrie
 
 ```python
 # ✅ Good: Use entities for structured data
-class JobResult(Node):
+class JobResult(Object):
     job_name: str
     execution_time: datetime
     status: str
