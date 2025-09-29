@@ -160,21 +160,101 @@ async def get_user_by_id(user_id: str) -> Optional[User]:
         return None
 ```
 
-### Error Handling Pattern
+### Error Handling Patterns
+
+**🎯 Always catch specific exceptions first:**
+
 ```python
 import logging
-from jvspatial.exceptions import NodeNotFoundError, ValidationError, DatabaseError
+from jvspatial.exceptions import (
+    JVSpatialError,
+    ValidationError,
+    EntityNotFoundError,
+    NodeNotFoundError,
+    DatabaseError,
+    ConnectionError
+)
 
 logger = logging.getLogger(__name__)
 
-try:
-    user = await User.get(user_id)
-except NodeNotFoundError:
-    logger.warning(f"User {user_id} not found")
-    return None
-except DatabaseError as e:
-    logger.error(f"Database error: {e}")
-    raise
+# Entity operations with error handling
+async def safe_user_operation(user_id: str) -> Optional[User]:
+    try:
+        user = await User.get(user_id)
+        return user
+    except NodeNotFoundError as e:
+        logger.warning(f"User not found: {e.entity_id}")
+        return None
+    except ValidationError as e:
+        logger.error(f"Validation failed: {e.message}")
+        if e.field_errors:
+            for field, error in e.field_errors.items():
+                logger.error(f"  {field}: {error}")
+        return None
+    except DatabaseError as e:
+        logger.error(f"Database error: {e.message}")
+        raise  # Re-raise for higher-level handling
+    except JVSpatialError as e:
+        logger.error(f"jvspatial error: {e.message}")
+        return None
+```
+
+**🔄 Database operations with fallback:**
+
+```python
+from jvspatial.exceptions import ConnectionError, QueryError
+
+async def robust_user_search(query: Dict[str, Any]) -> List[User]:
+    try:
+        # Try complex query
+        return await User.find(query)
+    except QueryError as e:
+        logger.warning(f"Complex query failed: {e.message}")
+        # Fallback to simple query
+        try:
+            all_users = await User.all()
+            # Apply filtering in Python
+            return [u for u in all_users if u.active]
+        except Exception:
+            logger.error("All query methods failed")
+            return []
+    except ConnectionError as e:
+        logger.error(f"Database connection failed: {e.database_type}")
+        return []  # Graceful degradation
+```
+
+**⚠️ Walker error handling:**
+
+```python
+from jvspatial.exceptions import WalkerExecutionError, WalkerTimeoutError
+
+class SafeUserProcessor(Walker):
+    @on_visit(User)
+    async def process_user(self, here: User):
+        try:
+            # Potentially risky operation
+            result = await external_api_call(here)
+            self.report(result)
+        except Exception as e:
+            # Don't let individual errors stop traversal
+            logger.warning(f"Failed to process user {here.id}: {e}")
+            self.report({"error": str(e), "user_id": here.id})
+
+async def run_safe_walker():
+    try:
+        walker = SafeUserProcessor()
+        result = await walker.spawn(start_user)
+
+        # Get results and errors
+        report = result.get_report()
+        errors = [r for r in report if isinstance(r, dict) and "error" in r]
+        logger.info(f"Processed with {len(errors)} errors")
+
+    except WalkerTimeoutError as e:
+        logger.error(f"Walker timed out after {e.timeout_seconds}s")
+        # Access partial results if needed
+    except WalkerExecutionError as e:
+        logger.error(f"Walker failed: {e.walker_class} - {e.message}")
 ```
 
 ## 📄 ObjectPager for Large Datasets

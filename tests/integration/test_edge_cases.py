@@ -24,7 +24,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import Field, PrivateAttr
 
-from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.api.server import Server, ServerConfig
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import (

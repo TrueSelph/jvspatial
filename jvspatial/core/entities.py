@@ -29,6 +29,11 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from typing_extensions import override
 
 from jvspatial.core.context import GraphContext
+from jvspatial.exceptions import (
+    GraphError,
+    JVSpatialError,
+    ValidationError,
+)
 
 from .events import event_bus
 
@@ -473,8 +478,12 @@ class Edge(Object):
                     # Register for each specified target type
                     for target in targets:
                         if not (inspect.isclass(target) and issubclass(target, Walker)):
-                            raise TypeError(
-                                f"Edge @on_visit must target Walker types, got {target.__name__ if hasattr(target, '__name__') else target}"
+                            raise ValidationError(
+                                f"Edge @on_visit must target Walker types, got {target.__name__ if hasattr(target, '__name__') else target}",
+                                details={
+                                    "target_type": str(target),
+                                    "expected_type": "Walker",
+                                },
                             )
                         if target not in cls._visit_hooks:
                             cls._visit_hooks[target] = []
@@ -700,8 +709,12 @@ class Node(Object):
                     # Register for each specified target type
                     for target in targets:
                         if not (inspect.isclass(target) and issubclass(target, Walker)):
-                            raise TypeError(
-                                f"Node @on_visit must target Walker types, got {target.__name__ if hasattr(target, '__name__') else target}"
+                            raise ValidationError(
+                                f"Node @on_visit must target Walker types, got {target.__name__ if hasattr(target, '__name__') else target}",
+                                details={
+                                    "target_type": str(target),
+                                    "expected_type": "Walker",
+                                },
                             )
                         if target not in cls._visit_hooks:
                             cls._visit_hooks[target] = []
@@ -969,9 +982,20 @@ class Node(Object):
                 context, direction, node_filter, edge_filter, limit, kwargs
             )
         except Exception as e:
+            # Log the warning and fallback to basic approach
             print(f"Warning: Optimized query failed ({e}), using basic approach")
-            # Fallback to basic node retrieval
-            return await self._execute_basic_nodes_query(context, direction, limit)
+            try:
+                # Fallback to basic node retrieval
+                return await self._execute_basic_nodes_query(context, direction, limit)
+            except Exception as fallback_error:
+                raise GraphError(
+                    "Failed to execute node query with both optimized and basic approaches",
+                    details={
+                        "original_error": str(e),
+                        "fallback_error": str(fallback_error),
+                        "direction": direction,
+                    },
+                )
 
     async def _execute_semantic_filtering(
         self,
@@ -2095,7 +2119,7 @@ class Walker(BaseModel):
                 # Process the node normally
                 await self.do_heavy_processing(here)
         """
-        raise TraversalSkipped()
+        raise TraversalSkipped("Processing of current node skipped")
 
     @contextmanager
     def visiting(
@@ -2553,8 +2577,18 @@ class Walker(BaseModel):
         except TraversalPaused:
             raise  # Re-raise to pause traversal
         except Exception as e:
-            print(f"Error executing hook {hook.__name__}: {e}")
-            self._report.append({"hook_error": str(e), "hook_name": hook.__name__})
+            # Log and record hook execution error
+            error_msg = f"Error executing hook {hook.__name__}: {e}"
+            print(error_msg)
+            self._report.append(
+                {
+                    "hook_error": str(e),
+                    "hook_name": hook.__name__,
+                    "hook_type": type(e).__name__,
+                    "context_type": context.__class__.__name__ if context else None,
+                }
+            )
+            # Don't re-raise - allow traversal to continue with other hooks
         finally:
             duration = asyncio.get_event_loop().time() - start_time
             if perf_monitor:
@@ -2944,12 +2978,17 @@ class Walker(BaseModel):
         event_bus.unregister_entity(self.id)
 
 
-class TraversalPaused(Exception):
+# Traversal control exceptions - now defined in exceptions.py
+class TraversalPaused(JVSpatialError):
     """Exception raised to pause a traversal."""
 
+    pass
 
-class TraversalSkipped(BaseException):
+
+class TraversalSkipped(JVSpatialError):
     """Exception raised to skip processing of the current node and continue to the next node."""
+
+    pass
 
 
 # ----------------- DECORATOR FUNCTIONS -----------------

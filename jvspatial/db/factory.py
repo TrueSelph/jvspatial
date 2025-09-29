@@ -3,6 +3,11 @@
 import os
 from typing import Any, Callable, Dict, Optional, Type
 
+from jvspatial.exceptions import (
+    InvalidConfigurationError,
+    ValidationError,
+)
+
 from .database import Database
 
 # Registry for database implementations
@@ -32,12 +37,18 @@ def register_database(
         ValueError: If name is already registered
     """
     if not issubclass(database_class, Database):
-        raise TypeError(
-            f"Database class {database_class.__name__} must inherit from Database"
+        raise ValidationError(
+            f"Database class {database_class.__name__} must inherit from Database",
+            details={"database_class": database_class.__name__},
         )
 
     if name in _DATABASE_REGISTRY:
-        raise ValueError(f"Database type '{name}' is already registered")
+        raise InvalidConfigurationError(
+            "database_type",
+            name,
+            "Database type is already registered",
+            details={"name": name},
+        )
 
     _DATABASE_REGISTRY[name] = database_class
 
@@ -79,9 +90,11 @@ def set_default_database(name: str) -> None:
     """
     if name not in _DATABASE_REGISTRY:
         available_types = ", ".join(sorted(_DATABASE_REGISTRY.keys()))
-        raise ValueError(
-            f"Database type '{name}' is not registered. "
-            f"Available types: {available_types}"
+        raise InvalidConfigurationError(
+            "database_type",
+            name,
+            f"Database type is not registered. Available types: {available_types}",
+            details={"available_types": available_types},
         )
 
     global _DEFAULT_DATABASE
@@ -126,11 +139,7 @@ def get_database(db_type: Optional[str] = None, **kwargs: Any) -> Database:
         db_type = os.getenv("JVSPATIAL_DB_TYPE", _DEFAULT_DATABASE)
 
     if db_type not in _DATABASE_REGISTRY:
-        available_types = ", ".join(sorted(_DATABASE_REGISTRY.keys()))
-        raise ValueError(
-            f"Unsupported database type: '{db_type}'. "
-            f"Available types: {available_types}"
-        )
+        raise ValueError(f"Unsupported database type: '{db_type}'")
 
     # Use the registered configurator to create the database instance
     configurator = _DATABASE_CONFIGURATORS[db_type]
@@ -138,7 +147,12 @@ def get_database(db_type: Optional[str] = None, **kwargs: Any) -> Database:
     try:
         return configurator(kwargs)
     except Exception as e:
-        raise TypeError(f"Failed to configure {db_type} database: {e}") from e
+        raise InvalidConfigurationError(
+            "database_configuration",
+            db_type,
+            f"Failed to configure database: {e}",
+            details={"kwargs": kwargs},
+        ) from e
 
 
 # Register built-in database implementations
