@@ -446,7 +446,7 @@ class MultiInteractionMessage(InteractionMessage):
         """Validate multi message."""
         if not self.messages:
             return False
-        
+
         # Collect all validation results first
         validation_results = [await msg.validate() for msg in self.messages]
         return all(validation_results)
@@ -822,7 +822,7 @@ class InteractionResponse(Object):
     async def health_check(self) -> Dict[str, Any]:
         """Perform health check on the response."""
         health: Dict[str, Any] = {
-            "status": "healthy", 
+            "status": "healthy",
             "issues": [],  # type: ignore
             "warnings": []  # type: ignore
         }
