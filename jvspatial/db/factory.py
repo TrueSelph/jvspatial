@@ -182,9 +182,7 @@ def _register_builtin_databases() -> None:
                     "JVSPATIAL_MONGODB_URI", "mongodb://localhost:27017"
                 )
             if "db_name" not in kwargs:
-                kwargs["db_name"] = os.getenv(
-                    "JVSPATIAL_MONGODB_DB_NAME", "jvspatial_db"
-                )
+                kwargs["db_name"] = os.getenv("JVSPATIAL_MONGODB_DB_NAME", "jvdb")
 
             return MongoDB(**kwargs)
 

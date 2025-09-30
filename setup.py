@@ -26,6 +26,7 @@ setup(
         "PyJWT",  # JWT token handling for authentication
         "bcrypt",  # Password hashing for authentication
         "schedule>=1.2.2",  # Job scheduling
+        "typing-extensions",  # For @override decorator and enhanced typing
     ],
     extras_require={
         "dev": [

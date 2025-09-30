@@ -48,7 +48,7 @@ class MongoDB(Database):
                             "JVSPATIAL_MONGODB_URI", "mongodb://localhost:27017"
                         )
                         db_name = self._connection_kwargs.get("db_name") or os.getenv(
-                            "JVSPATIAL_MONGODB_DB_NAME", "jvspatial_db"
+                            "JVSPATIAL_MONGODB_DB_NAME", "jvdb"
                         )
 
                         # Set default connection parameters if not provided

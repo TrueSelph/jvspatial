@@ -6,6 +6,8 @@
 pytest>=7.0
 pytest-asyncio>=0.21.0
 httpx>=0.24.0  # For async HTTP client testing
+pytest-mock  # For mocking in tests
+pytest-cov  # Coverage reporting for tests
 
 # FastAPI testing support
 starlette[testing]  # TestClient and testing utilities

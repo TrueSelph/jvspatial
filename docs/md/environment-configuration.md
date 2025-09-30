@@ -43,7 +43,7 @@ jvspatial uses environment variables to configure database connections, file pat
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `JVSPATIAL_MONGODB_URI` | string | `mongodb://localhost:27017` | MongoDB connection URI |
-| `JVSPATIAL_MONGODB_DB_NAME` | string | `jvspatial_db` | MongoDB database name |
+| `JVSPATIAL_MONGODB_DB_NAME` | string | `jvdb` | MongoDB database name |
 
 ## Configuration Methods
 

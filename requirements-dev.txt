@@ -6,6 +6,7 @@
 pytest>=7.0
 pytest-asyncio>=0.21.0
 httpx>=0.24.0  # For testing FastAPI endpoints
+pytest-mock  # For mocking in tests
 
 # Code quality and formatting
 pre-commit>=3.0.0

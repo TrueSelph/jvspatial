@@ -6,10 +6,14 @@ python-multipart
 
 # Data validation and modeling
 pydantic>=2.0
+typing-extensions  # For @override decorator and enhanced typing
 
 # Database drivers
 motor  # Async MongoDB driver
 pymongo  # MongoDB support
+
+# Scheduling and task management
+schedule>=1.2.2  # Job scheduling
 
 # Authentication dependencies (optional but commonly used)
 PyJWT  # JWT token handling

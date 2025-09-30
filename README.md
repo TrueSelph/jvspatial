@@ -57,7 +57,7 @@ jvspatial uses environment variables for database configuration and library setu
 | `JVSPATIAL_DB_TYPE` | Database backend to use (`json` or `mongodb`) | `json` | No |
 | `JVSPATIAL_JSONDB_PATH` | Base path for JSON database files | `jvdb` | No |
 | `JVSPATIAL_MONGODB_URI` | MongoDB connection URI | `mongodb://localhost:27017` | No |
-| `JVSPATIAL_MONGODB_DB_NAME` | MongoDB database name | `jvspatial_db` | No |
+| `JVSPATIAL_MONGODB_DB_NAME` | MongoDB database name | `jvdb` | No |
 
 ### Walker Infinite Walk Protection
 
