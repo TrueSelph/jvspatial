@@ -120,12 +120,12 @@ async def lifespan(app: FastAPI):
 
             # Verify connections
             print("\n🔗 Relationship Verification:")
-            org_agents = await sample_org.connected_nodes(Agent)
+            org_agents = await sample_org.nodes(node="Agent")
             print(f"Organization '{sample_org.name}' has {len(org_agents)} agents")
 
             all_missions = await Mission.all()
             for mission in all_missions:
-                mission_agents = await mission.connected_nodes(Agent)
+                mission_agents = await mission.nodes(node="Agent")
                 print(
                     f"Mission '{mission.title}' has {len(mission_agents)} assigned agents"
                 )

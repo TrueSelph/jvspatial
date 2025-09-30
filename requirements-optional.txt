@@ -18,8 +18,8 @@ python-dotenv  # Load environment variables from .env files
 structlog  # Structured logging
 coloredlogs  # Colored console logs
 
-# Performance monitoring (if needed)
-# psutil  # System and process monitoring
+# Performance monitoring
+psutil>=5.9.0  # System and process monitoring
 # prometheus-client  # Prometheus metrics
 
 # Security enhancements

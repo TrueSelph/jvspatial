@@ -46,11 +46,16 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "httpx>=0.24.0",
     "pre-commit>=3.0.0",
+    "python-dotenv>=1.0.0",
 ]
 test = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21.0",
     "httpx>=0.24.0",
+]
+scheduler = [
+    "psutil>=5.9.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.urls]
