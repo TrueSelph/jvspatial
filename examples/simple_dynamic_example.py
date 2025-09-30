@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Optional
 
 from jvspatial.api import create_server, walker_endpoint
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core.entities import Node, Root, Walker, on_visit
 
 # ====================== DATA MODELS ======================
@@ -74,20 +74,23 @@ class CreateUser(Walker):
 
             await here.connect(user)
 
-            self.response = {
-                "status": "success",
-                "user_id": user.id,
-                "name": user.name,
-                "email": user.email,
-                "role": user.role,
-                "created_at": datetime.now().isoformat(),
-            }
+            return self.endpoint.created(
+                data={
+                    "user_id": user.id,
+                    "name": user.name,
+                    "email": user.email,
+                    "role": user.role,
+                    "created_at": datetime.now().isoformat(),
+                },
+                message="User created successfully",
+            )
 
         except Exception as e:
-            self.response = {
-                "status": "error",
-                "error": f"Failed to create user: {str(e)}",
-            }
+            return self.endpoint.error(
+                message="Failed to create user",
+                status_code=500,
+                details={"error": str(e)},
+            )
 
 
 # ====================== PACKAGE-STYLE ENDPOINTS ======================
@@ -131,15 +134,19 @@ class SearchUsers(Walker):
                 for user in filtered_users_entities
             ]
 
-            self.response = {
-                "status": "success",
-                "users": filtered_users,
-                "count": len(filtered_users),
-                "filters": {"role": self.role, "active_only": self.active_only},
-            }
+            return self.endpoint.success(
+                data={
+                    "users": filtered_users,
+                    "count": len(filtered_users),
+                    "filters": {"role": self.role, "active_only": self.active_only},
+                },
+                message="Users retrieved successfully",
+            )
 
         except Exception as e:
-            self.response = {"status": "error", "error": f"Search failed: {str(e)}"}
+            return self.endpoint.error(
+                message="Search failed", status_code=500, details={"error": str(e)}
+            )
 
 
 @walker_endpoint("/users/update")
@@ -165,8 +172,9 @@ class UpdateUser(Walker):
         try:
             user = await User.get(self.user_id)
             if not user:
-                self.response = {"status": "error", "error": "User not found"}
-                return
+                return self.endpoint.not_found(
+                    message="User not found", details={"user_id": self.user_id}
+                )
 
             # Update fields if provided
             updates = {}
@@ -182,21 +190,25 @@ class UpdateUser(Walker):
 
             await user.save()
 
-            self.response = {
-                "status": "success",
-                "user_id": user.id,
-                "updated_fields": updates,
-                "current_state": {
-                    "name": user.name,
-                    "email": user.email,
-                    "role": user.role,
-                    "active": user.active,
+            return self.endpoint.success(
+                data={
+                    "user_id": user.id,
+                    "updated_fields": updates,
+                    "current_state": {
+                        "name": user.name,
+                        "email": user.email,
+                        "role": user.role,
+                        "active": user.active,
+                    },
+                    "updated_at": datetime.now().isoformat(),
                 },
-                "updated_at": datetime.now().isoformat(),
-            }
+                message="User updated successfully",
+            )
 
         except Exception as e:
-            self.response = {"status": "error", "error": f"Update failed: {str(e)}"}
+            return self.endpoint.error(
+                message="Update failed", status_code=500, details={"error": str(e)}
+            )
 
 
 # ====================== RUNTIME REGISTRATION EXAMPLE ======================
@@ -238,23 +250,29 @@ def register_additional_endpoints():
                     inactive_count = await User.count({"context.active": False})
                     stats = {"active": active_count, "inactive": inactive_count}
                 else:
-                    stats = {"error": "Invalid group_by parameter"}
+                    return self.endpoint.bad_request(
+                        message="Invalid group_by parameter",
+                        details={"valid_options": ["role", "active"]},
+                    )
 
                 total_users = await User.count()
 
-                self.response = {
-                    "status": "success",
-                    "group_by": self.group_by,
-                    "total_users": total_users,
-                    "statistics": stats,
-                    "generated_at": datetime.now().isoformat(),
-                }
+                return self.endpoint.success(
+                    data={
+                        "group_by": self.group_by,
+                        "total_users": total_users,
+                        "statistics": stats,
+                        "generated_at": datetime.now().isoformat(),
+                    },
+                    message="Statistics generated successfully",
+                )
 
             except Exception as e:
-                self.response = {
-                    "status": "error",
-                    "error": f"Stats generation failed: {str(e)}",
-                }
+                return self.endpoint.error(
+                    message="Stats generation failed",
+                    status_code=500,
+                    details={"error": str(e)},
+                )
 
     # Register the endpoint dynamically
     server.register_walker_class(GetUserStats, "/users/stats", methods=["GET", "POST"])

@@ -35,6 +35,10 @@ JVSPATIAL_JSONDB_PATH=./jvdb/dev
 # MongoDB backend
 JVSPATIAL_MONGODB_URI=mongodb://localhost:27017
 JVSPATIAL_MONGODB_DB_NAME=jvspatial_dev
+
+# Caching (optional)
+JVSPATIAL_CACHE_BACKEND=memory      # 'memory', 'redis', or 'layered'
+JVSPATIAL_CACHE_SIZE=1000           # Max cached entities (0 to disable)
 ```
 
 ## 📝 Entity-Centric Code Patterns
@@ -73,25 +77,27 @@ city = await City.create(name="San Francisco", population=800000)
 
 ### Entity Operations
 ```python
-# Entity creation (no save() needed)
+# Entity creation (no save() needed, automatically cached)
 entity = await Entity.create(name="value", field="data")
 
-# Entity retrieval
-entity = await Entity.get(entity_id)
-entities = await Entity.find({"context.active": True})
+# Entity retrieval (uses cache after first access)
+entity = await Entity.get(entity_id)  # Cached by ID
+entities = await Entity.find({"context.active": True})  # Not cached
 
-# Entity updates (save() only needed after property modification)
+# Entity updates (save() only needed after property modification, updates cache)
 entity = await Entity.get(entity_id)
 entity.name = "Updated Name"  # Property modified
-await entity.save()  # save() required to persist changes
+await entity.save()  # save() required to persist changes + update cache
 
-# Entity deletion
+# Entity deletion (removes from cache)
 await entity.delete()
 
-# Counting and aggregation
+# Counting and aggregation (not cached)
 count = await Entity.count({"context.department": "engineering"})
 departments = await Entity.distinct("department")
 ```
+
+**Note**: Caching is automatic and transparent. Individual entity retrievals by ID (`Entity.get(id)`) are cached. Queries (`find()`, `all()`, `count()`) always hit the database as they can change frequently.
 
 ### save() Operation Rules
 **✅ save() is ONLY required when:**

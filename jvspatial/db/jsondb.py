@@ -11,14 +11,21 @@ from jvspatial.db.query import matches_query
 
 
 class JsonDB(Database):
-    """JSON file-based database implementation."""
+    """JSON file-based database implementation with caching."""
 
-    def __init__(self, base_path: str = "jvdb") -> None:
+    def __init__(
+        self, base_path: str = "jvdb", cache_size: Optional[int] = None
+    ) -> None:
         """Initialize JSON database.
 
         Args:
             base_path: Base directory for JSON files
+            cache_size: Maximum number of documents to cache. If None, reads from
+                       JVSPATIAL_CACHE_SIZE environment variable (default: 500).
+                       Set to 0 to disable caching.
         """
+        import os
+
         self.base_path = Path(base_path).resolve()
         try:
             self.base_path.mkdir(parents=True, exist_ok=True)
@@ -27,6 +34,14 @@ class JsonDB(Database):
                 f"Cannot create database directory {base_path}: {e}"
             ) from e
         self._lock = asyncio.Lock()
+        self._cache: Dict[str, Dict[str, Any]] = {}  # Cache for document data
+
+        # Get cache size from parameter, environment variable, or default
+        if cache_size is None:
+            cache_size = int(os.getenv("JVSPATIAL_CACHE_SIZE", "500"))
+        self._cache_size = cache_size
+
+        self._cache_mtime: Dict[str, float] = {}  # Track file modification times
 
     @property
     def data_dir(self) -> Path:
@@ -121,7 +136,7 @@ class JsonDB(Database):
         return data
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
-        """Get document by ID.
+        """Get document by ID with caching.
 
         Args:
             collection: Collection name
@@ -136,13 +151,43 @@ class JsonDB(Database):
             return None  # Invalid ID returns None instead of error
 
         if not file_path.exists():
+            # Remove from cache if file doesn't exist
+            cache_key = f"{collection}:{id}"
+            self._cache.pop(cache_key, None)
+            self._cache_mtime.pop(cache_key, None)
             return None
+
+        # Check cache with file modification time
+        cache_key = f"{collection}:{id}"
+        if self._cache_size > 0 and cache_key in self._cache:
+            try:
+                file_mtime = file_path.stat().st_mtime
+                if (
+                    cache_key in self._cache_mtime
+                    and self._cache_mtime[cache_key] == file_mtime
+                ):
+                    return self._cache[
+                        cache_key
+                    ].copy()  # Return copy to prevent mutations
+            except OSError:
+                pass
 
         async with self._lock:
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     result = json.load(f)
-                    return dict(result) if isinstance(result, dict) else None
+                    if isinstance(result, dict):
+                        # Add to cache
+                        if self._cache_size > 0:
+                            # Simple LRU eviction
+                            if len(self._cache) >= self._cache_size:
+                                first_key = next(iter(self._cache))
+                                del self._cache[first_key]
+                                self._cache_mtime.pop(first_key, None)
+                            self._cache[cache_key] = result
+                            self._cache_mtime[cache_key] = file_path.stat().st_mtime
+                        return dict(result)
+                    return None
             except (OSError, json.JSONDecodeError):
                 # Corrupted or inaccessible file - return None
                 return None

@@ -122,6 +122,10 @@ class Railroad(Edge):
 class Tourist(Walker):
     """Walker that visits cities via highways and explores road networks."""
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.visited_cities = []  # Track visited cities internally
+
     @on_visit(City)
     async def visit_city(self: "Tourist", here: City) -> None:
         """Visit a city and traverse connected cities via highways.
@@ -129,12 +133,20 @@ class Tourist(Walker):
         Args:
             here: The visited City node
         """
-        self.response.setdefault("visited", [])
-        self.response.setdefault("routes_taken", [])
-
-        if here.name not in self.response["visited"]:
-            self.response["visited"].append(here.name)
+        if here.name not in self.visited_cities:
+            self.visited_cities.append(here.name)
             print(f"🎅 Tourist visiting {here.name} (pop: {here.population:,})")
+
+            # Report the visit
+            self.report(
+                {
+                    "city_visited": {
+                        "name": here.name,
+                        "population": here.population,
+                        "location": {"lat": here.latitude, "lon": here.longitude},
+                    }
+                }
+            )
 
             # RECOMMENDED: Use nodes() method with semantic filtering
             highway_neighbors = await here.nodes(direction="out", edge=[Highway])
@@ -145,14 +157,14 @@ class Tourist(Walker):
             for edge in highway_edges:
                 if isinstance(edge, Highway) and edge.length:
                     target = await City.get(edge.target)
-                    if target and target.name not in self.response["visited"]:
+                    if target and target.name not in self.visited_cities:
                         print(
                             f"    → {target.name} via Highway ({edge.length} miles, {edge.lanes} lanes)"
                         )
 
             # Visit unvisited cities
             to_visit = [
-                n for n in highway_neighbors if n.name not in self.response["visited"]
+                n for n in highway_neighbors if n.name not in self.visited_cities
             ]
             if to_visit:
                 print(f"  📍 Next destinations: {[n.name for n in to_visit]}")
@@ -165,6 +177,11 @@ class FreightTrain(Walker):
     max_cargo_capacity: int = 5000  # tons
     current_cargo_weight: int = 0
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.route_cities = []  # Track visited cities for route
+        self.cargo_list = []  # Track cargo loaded
+
     @on_visit(City)
     async def load_cargo(self: "FreightTrain", here: City) -> None:
         """Load cargo based on the visited city's characteristics.
@@ -172,9 +189,7 @@ class FreightTrain(Walker):
         Args:
             here: The visited City node
         """
-        self.response.setdefault("cargo", [])
-        self.response.setdefault("route", [])
-        self.response["route"].append(here.name)
+        self.route_cities.append(here.name)
 
         # Load cargo based on city characteristics
         cargo_loaded = False
@@ -187,10 +202,21 @@ class FreightTrain(Walker):
                 "weight": 2000,
                 "destination": "Kansas City",
             }
-            self.response["cargo"].append(chicago_cargo)
+            self.cargo_list.append(chicago_cargo)
             self.current_cargo_weight += chicago_cargo["weight"]
             print(
                 f"🚂 Loaded {chicago_cargo['weight']} tons of {chicago_cargo['type']} in {here.name}"
+            )
+            # Report cargo loaded
+            self.report(
+                {
+                    "cargo_loaded": {
+                        "city": here.name,
+                        "type": chicago_cargo["type"],
+                        "weight": chicago_cargo["weight"],
+                        "destination": chicago_cargo["destination"],
+                    }
+                }
             )
             cargo_loaded = True
         elif (
@@ -202,10 +228,21 @@ class FreightTrain(Walker):
                 "weight": 1500,
                 "destination": "St. Louis",
             }
-            self.response["cargo"].append(kansas_cargo)
+            self.cargo_list.append(kansas_cargo)
             self.current_cargo_weight += kansas_cargo["weight"]
             print(
                 f"🚂 Loaded {kansas_cargo['weight']} tons of {kansas_cargo['type']} in {here.name}"
+            )
+            # Report cargo loaded
+            self.report(
+                {
+                    "cargo_loaded": {
+                        "city": here.name,
+                        "type": kansas_cargo["type"],
+                        "weight": kansas_cargo["weight"],
+                        "destination": kansas_cargo["destination"],
+                    }
+                }
             )
             cargo_loaded = True
 
@@ -214,7 +251,7 @@ class FreightTrain(Walker):
 
         # Continue along railroad connections
         rail_neighbors = await here.nodes(direction="out", edge=[Railroad])
-        unvisited = [n for n in rail_neighbors if n.name not in self.response["route"]]
+        unvisited = [n for n in rail_neighbors if n.name not in self.route_cities]
         if unvisited:
             await self.visit(unvisited)
 
@@ -224,15 +261,24 @@ class FreightTrain(Walker):
 
         Called when walker completes traversal.
         """
-        cargo_list = self.response.get("cargo", [])
-        route = self.response.get("route", [])
-
-        if cargo_list:
-            total_weight = sum(c["weight"] for c in cargo_list)
-            cargo_types = [f"{c['weight']}t {c['type']}" for c in cargo_list]
+        if self.cargo_list:
+            total_weight = sum(c["weight"] for c in self.cargo_list)
+            cargo_types = [f"{c['weight']}t {c['type']}" for c in self.cargo_list]
             print(f"📦 Freight delivery complete! Total cargo: {total_weight} tons")
             print(f"  Cargo manifest: {', '.join(cargo_types)}")
-            print(f"  Route taken: {' → '.join(route)}")
+            print(f"  Route taken: {' → '.join(self.route_cities)}")
+
+            # Report final delivery summary
+            self.report(
+                {
+                    "delivery_summary": {
+                        "total_weight": total_weight,
+                        "cargo_items": len(self.cargo_list),
+                        "route": self.route_cities,
+                        "cargo_manifest": self.cargo_list,
+                    }
+                }
+            )
         else:
             print("🚂 Freight train completed route with no cargo")
 
@@ -495,8 +541,10 @@ async def main() -> None:
     tourist = Tourist()
     await tourist.spawn(start=chicago)
 
-    tourist_visited = tourist.response.get("visited", [])
-    print(f"🗂️ Tourist route: {' → '.join(tourist_visited)}")
+    # Access walker's collected data
+    tourist_report = tourist.get_report()
+    print(f"🗂️ Tourist route: {' → '.join(tourist.visited_cities)}")
+    print(f"📊 Tourist collected {len(tourist_report)} reports")
 
     # Create and run freight train walker
     print("\n🚂 Starting FreightTrain walker (follows railroads)")
@@ -518,12 +566,12 @@ async def main() -> None:
             tourist2.spawn(start=chicago), freight_train2.spawn(start=kansas_city)
         )
 
-        print(
-            f"🎅 Tourist 2 visited: {', '.join(tourist2.response.get('visited', []))}"
-        )
-        freight_cargo = freight_train2.response.get("cargo", [])
-        if freight_cargo:
-            cargo_summary = [f"{c['weight']}t {c['type']}" for c in freight_cargo]
+        # Access data from walkers
+        print(f"🎅 Tourist 2 visited: {', '.join(tourist2.visited_cities)}")
+        if freight_train2.cargo_list:
+            cargo_summary = [
+                f"{c['weight']}t {c['type']}" for c in freight_train2.cargo_list
+            ]
             print(f"🚂 Freight 2 cargo: {', '.join(cargo_summary)}")
         else:
             print("🚂 Freight 2: No cargo loaded")

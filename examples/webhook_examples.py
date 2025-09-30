@@ -5,7 +5,7 @@ decorators to create webhook endpoints with various configurations.
 """
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from fastapi import Request
 
@@ -203,7 +203,7 @@ class LocationUpdateWalker(Walker):
         """Initialize walker with webhook payload."""
         super().__init__()
         self.payload = payload
-        self.response: dict = {"updated_locations": []}
+        self.updated_locations: List[dict] = []
 
     @on_visit(Node)
     async def update_location_data(self, here: Node):
@@ -227,14 +227,20 @@ class LocationUpdateWalker(Walker):
                 location_node.last_updated = location_data.get("timestamp")
                 await location_node.save()
 
-                self.response["updated_locations"].append(
+                self.updated_locations.append(
                     {"id": location_id, "coordinates": coordinates, "updated": True}
+                )
+                self.report(
+                    {"location_updated": location_id, "coordinates": coordinates}
                 )
 
                 print(f"Updated location {location_id} with coordinates {coordinates}")
             else:
-                self.response["updated_locations"].append(
+                self.updated_locations.append(
                     {"id": location_id, "error": "Location not found"}
+                )
+                self.report(
+                    {"location_error": location_id, "error": "Location not found"}
                 )
 
 
@@ -386,7 +392,7 @@ def create_server():
         def __init__(self, payload: dict):
             super().__init__()
             self.payload = payload
-            self.response: dict = {"updated_locations": []}
+            self.updated_locations: List[dict] = []
 
         @on_visit(Node)
         async def update_location_data(self, here: Node):
@@ -402,8 +408,11 @@ def create_server():
 
                 # Simulate finding and updating location node
                 # In a real implementation, this would query the graph
-                self.response["updated_locations"].append(
+                self.updated_locations.append(
                     {"id": location_id, "coordinates": coordinates, "updated": True}
+                )
+                self.report(
+                    {"location_updated": location_id, "coordinates": coordinates}
                 )
 
                 print(f"Updated location {location_id} with coordinates {coordinates}")

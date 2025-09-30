@@ -49,13 +49,24 @@ highway1 = await new_york.connect(chicago, Highway, distance=790.0, lanes=4)
 large_cities = await City.find({"context.population": {"$gt": 5000000}})
 ```
 
-**Walker Traversal**:
+**Walker Traversal with Report Pattern**:
 ```python path=examples/orm_demo.py start=29
 class TravelWalker(Walker):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.cities_visited = []
+
     @on_visit(City)
     async def visit_city(self, here: City):
         print(f"🚶 Visiting {here.name} (pop: {here.population:,})")
         self.cities_visited.append(here.name)
+        self.report({"city_visited": here.name})
+
+# Usage
+walker = TravelWalker()
+await walker.spawn(start=city)
+report = walker.get_report()  # List of reported items
+visited = walker.cities_visited  # Internal state
 ```
 
 ---
@@ -101,9 +112,16 @@ class FreightTrain(Walker):
     max_cargo_capacity: int = 5000  # tons
     current_cargo_weight: int = 0
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.route_cities = []  # Track visited cities
+        self.cargo_list = []  # Track cargo loaded
+
     @on_visit(City)
     async def load_cargo(self, here: City):
-        # Complex cargo loading logic based on city characteristics
+        self.route_cities.append(here.name)
+        # Complex cargo loading logic
+        self.report({"cargo_loaded": {...}})  # Report each cargo operation
 ```
 
 ---
@@ -122,8 +140,10 @@ class FreightTrain(Walker):
 
 **Hierarchical Structure**: Root → App → Agents → MyAgent → Actions
 
-**API Endpoint Integration**:
+**API Endpoint Integration with Semantic Responses**:
 ```python path=examples/agent_graph.py start=116
+from jvspatial.api.endpoint.router import EndpointField
+
 @walker_endpoint("/api/agents/interact", methods=["POST"])
 class InteractWalker(Walker):
     target_agent_name: str = EndpointField(
@@ -131,6 +151,14 @@ class InteractWalker(Walker):
         description="Name of specific agent to target (optional)",
         examples=["ProductionAgent", "TestAgent"],
     )
+
+    @on_visit(Node)
+    async def process(self, here: Node):
+        # Use endpoint semantic responses for API endpoints
+        return self.endpoint.success(
+            data={"result": "processed"},
+            message="Processing complete"
+        )
 ```
 
 **Entity-Centric CRUD**:
@@ -280,13 +308,13 @@ class ProtectedSpatialQuery(Walker):
 
         # Check if user can access this region
         if not current_user.can_access_region(self.region):
-            self.response = {
-                "error": "Access denied to region",
-                "region": self.region,
-                "user_allowed_regions": current_user.allowed_regions,
-                "message": "Your account doesn't have access to this region"
-            }
-            return
+            return self.endpoint.forbidden(
+                message="Access denied to region",
+                details={
+                    "region": self.region,
+                    "user_allowed_regions": current_user.allowed_regions
+                }
+            )
 ```
 
 **API Key Authentication**:
@@ -566,14 +594,30 @@ good_free_roads = await new_york.nodes(
 
 The `examples/` directory contains many more specialized examples:
 
+### Core Examples (All Passing ✅)
 - **`crud_demo.py`** - Basic CRUD operations
+- **`orm_demo.py`** - ORM patterns and best practices
+- **`walker_traversal_demo.py`** - Walker traversal patterns
+- **`walker_events_demo.py`** - Walker event communication system
+- **`walker_reporting_demo.py`** - Walker reporting system with `report()` pattern
 - **`database_switching_example.py`** - Multiple database backends
-- **`endpoint_decorator_demo.py`** - API endpoint patterns
-- **`multi_target_hooks_demo.py`** - Advanced walker hooks
+- **`multi_target_hooks_demo.py`** - Advanced walker hooks with `@on_visit(TypeA, TypeB)`
 - **`object_pagination_demo.py`** - Pagination and performance
-- **`testing_with_graphcontext.py`** - Testing strategies
+- **`testing_with_graphcontext.py`** - Testing strategies with database isolation
 - **`traversal_demo.py`** - Graph traversal patterns
+- **`semantic_filtering.py`** - Advanced MongoDB-style queries
+- **`enhanced_nodes_filtering.py`** - Enhanced filtering capabilities
 - **`unified_query_interface_example.py`** - Advanced query interfaces
+- **`exception_handling_demo.py`** - Error handling patterns
+
+### Server Examples
+- **`simple_dynamic_example.py`** ✅ - Dynamic endpoint registration patterns
+- **`server_demo.py`** ✅ - Comprehensive server features
+- **`auth_demo.py`** - JWT and API key authentication (runs indefinitely)
+- **`scheduler_example.py`** - Scheduled tasks (runs indefinitely)
+- **`dynamic_server_demo.py`** - Advanced dynamic endpoints
+- **`endpoint_decorator_demo.py`** - Endpoint decorator patterns
+- **`fastapi_server.py`** - FastAPI integration
 
 ## Running the Examples
 

@@ -35,19 +35,29 @@ class Highway(Edge):
 class Tourist(Walker):
     """Walker that visits cities and tracks distances."""
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.cities_visited = []
+
     @on_visit(City)
     async def visit_city(self, here: City):
         """Visit a city and record the visit."""
-        if "cities_visited" not in self.response:
-            self.response["cities_visited"] = []
-        self.response["cities_visited"].append(here.name)
+        self.cities_visited.append(here.name)
+        self.report({"city_visited": here.name})
         print(f"🏛️  Visiting {here.name} (population: {here.population:,})")
 
     @on_exit
     async def trip_summary(self):
         """Provide a trip summary."""
-        cities = self.response.get("cities_visited", [])
-        print(f"🎒 Trip complete! Visited {len(cities)} cities")
+        print(f"🎒 Trip complete! Visited {len(self.cities_visited)} cities")
+        self.report(
+            {
+                "trip_summary": {
+                    "total_cities": len(self.cities_visited),
+                    "cities": self.cities_visited,
+                }
+            }
+        )
 
 
 async def demonstrate_original_api():

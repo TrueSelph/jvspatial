@@ -2,7 +2,7 @@
 
 import time
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, TypeVar
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, TypeVar, cast
 
 if TYPE_CHECKING:
     from .entities import Object
@@ -125,13 +125,25 @@ class GraphContext:
         retrieved = await ctx.get_node(node.id)
     """
 
-    def __init__(self, database: Optional[Database] = None):
+    def __init__(self, database: Optional[Database] = None, cache_backend=None):
         """Initialize GraphContext.
 
         Args:
             database: Database instance to use. If None, uses factory default.
+            cache_backend: Cache backend instance (CacheBackend). If None, creates
+                          one based on environment configuration. Can be:
+                          - CacheBackend instance
+                          - None (auto-detect from environment)
         """
         self._database = database
+
+        # Initialize cache backend
+        if cache_backend is None:
+            from jvspatial.cache import get_cache_backend
+
+            self._cache = get_cache_backend()
+        else:
+            self._cache = cache_backend
 
     @property
     def database(self) -> Database:
@@ -143,6 +155,34 @@ class GraphContext:
     def set_database(self, database: Database) -> None:
         """Set a new database instance."""
         self._database = database
+        # Clear cache when database changes
+        import asyncio
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(self._cache.clear())
+            else:
+                loop.run_until_complete(self._cache.clear())
+        except RuntimeError:
+            # No event loop, will clear on next access
+            pass
+
+    async def _get_from_cache(self, entity_id: str) -> Optional[Any]:
+        """Get entity from cache if available."""
+        return await self._cache.get(entity_id)
+
+    async def _add_to_cache(self, entity_id: str, entity: Any) -> None:
+        """Add entity to cache."""
+        await self._cache.set(entity_id, entity)
+
+    async def clear_cache(self) -> None:
+        """Clear the entity cache."""
+        await self._cache.clear()
+
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """Get cache statistics."""
+        return self._cache.get_stats()
 
     # Entity creation methods
     async def create(self, entity_class: Type[T], **kwargs) -> T:
@@ -161,7 +201,7 @@ class GraphContext:
         return entity
 
     async def get(self, entity_class: Type[T], entity_id: str) -> Optional[T]:
-        """Retrieve an entity from the database by ID.
+        """Retrieve an entity from the database by ID with caching.
 
         Args:
             entity_class: The entity class type
@@ -170,6 +210,11 @@ class GraphContext:
         Returns:
             Entity instance if found, else None
         """
+        # Check cache first
+        cached = await self._get_from_cache(entity_id)
+        if cached and isinstance(cached, entity_class):
+            return cast(T, cached)
+
         # Import here to avoid circular imports
         from .entities import find_subclass_by_name
 
@@ -238,6 +283,9 @@ class GraphContext:
         if stored_data:
             entity._data.update(stored_data)
 
+        # Add to cache
+        await self._add_to_cache(entity_id, entity)
+
         return entity
 
     async def save(self, entity):
@@ -252,6 +300,8 @@ class GraphContext:
         record = entity.export()
         collection = self._get_collection_name(entity.type_code)
         await self.database.save(collection, record)
+        # Update cache with latest version
+        await self._add_to_cache(entity.id, entity)
         return entity
 
     async def delete(self, entity, cascade: bool = True) -> None:
@@ -266,6 +316,8 @@ class GraphContext:
 
         collection = self._get_collection_name(entity.type_code)
         await self.database.delete(collection, entity.id)
+        # Remove from cache
+        await self._cache.delete(entity.id)
 
     async def _cascade_delete(self, node_entity) -> None:
         """Delete related objects when cascading."""

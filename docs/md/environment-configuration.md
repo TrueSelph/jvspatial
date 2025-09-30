@@ -45,6 +45,18 @@ jvspatial uses environment variables to configure database connections, file pat
 | `JVSPATIAL_MONGODB_URI` | string | `mongodb://localhost:27017` | MongoDB connection URI |
 | `JVSPATIAL_MONGODB_DB_NAME` | string | `jvdb` | MongoDB database name |
 
+### Performance & Caching Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `JVSPATIAL_CACHE_BACKEND` | string | auto | Cache backend to use: `memory`, `redis`, or `layered`. Auto-detected based on Redis URL availability. |
+| `JVSPATIAL_CACHE_SIZE` | integer | `1000` | Number of entities to cache in memory (for memory backend or L1 in layered cache). |
+| `JVSPATIAL_L1_CACHE_SIZE` | integer | `500` | Size of L1 (memory) cache when using layered caching. |
+| `JVSPATIAL_REDIS_URL` | string | `redis://localhost:6379` | Redis connection URL for redis/layered cache backends. |
+| `JVSPATIAL_REDIS_TTL` | integer | `3600` | Time-to-live in seconds for Redis cache entries. |
+
+See the [Caching Documentation](caching.md) for detailed information about cache backends and configuration.
+
 ## Configuration Methods
 
 ### 1. Environment Variables

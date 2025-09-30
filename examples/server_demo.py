@@ -25,7 +25,7 @@ from typing import List, Optional
 from fastapi.responses import JSONResponse
 from pydantic import Field
 
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 
 # Import the new Server class
 from jvspatial.api.server import Server, create_server
@@ -288,27 +288,24 @@ class CreateLocation(Walker):
 
             await here.connect(location)
 
-            self.response.update(
-                {
-                    "status": "created",
+            return self.endpoint.created(
+                data={
                     "location_id": location.id,
                     "name": location.name,
                     "coordinates": [location.latitude, location.longitude],
                     "type": location.location_type,
                     "elevation": location.elevation,
-                }
+                    "timestamp": datetime.now().isoformat(),
+                },
+                message="Location created successfully",
             )
 
         except Exception as e:
-            self.response = {
-                "status": "error",
-                "error": f"Failed to create location: {str(e)}",
-            }
-
-    @on_exit
-    async def finalize(self):
-        if self.response.get("status") == "created":
-            self.response["timestamp"] = datetime.now().isoformat()
+            return self.endpoint.error(
+                message="Failed to create location",
+                status_code=500,
+                details={"error": str(e)},
+            )
 
 
 @server.walker("/agents/nearby")
@@ -385,18 +382,20 @@ class FindNearbyAgents(Walker):
             # Sort by distance
             nearby_agents.sort(key=lambda x: x["distance_km"])
 
-            self.response.update(
-                {
-                    "status": "success",
+            return self.endpoint.success(
+                data={
                     "search_center": [self.latitude, self.longitude],
                     "radius_km": self.radius_km,
                     "agent_count": len(nearby_agents),
                     "agents": nearby_agents,
-                }
+                },
+                message="Nearby agents retrieved successfully",
             )
 
         except Exception as e:
-            self.response = {"status": "error", "error": f"Search failed: {str(e)}"}
+            return self.endpoint.error(
+                message="Search failed", status_code=500, details={"error": str(e)}
+            )
 
 
 @server.walker("/missions/assign")
@@ -431,11 +430,9 @@ class AssignMission(Walker):
             # Get the mission
             mission = await Mission.get(self.mission_id)
             if not mission:
-                self.response = {
-                    "status": "error",
-                    "error": f"Mission {self.mission_id} not found",
-                }
-                return
+                return self.endpoint.not_found(
+                    message="Mission not found", details={"mission_id": self.mission_id}
+                )
 
             # Find suitable agents
             all_agents = await Agent.all()
@@ -487,9 +484,8 @@ class AssignMission(Walker):
                     }
                 )
 
-            self.response.update(
-                {
-                    "status": "success",
+            return self.endpoint.success(
+                data={
                     "mission_id": mission.id,
                     "mission_title": mission.title,
                     "assigned_count": len(assigned_agents),
@@ -498,11 +494,14 @@ class AssignMission(Walker):
                         mission.target_latitude,
                         mission.target_longitude,
                     ],
-                }
+                },
+                message="Agents assigned to mission successfully",
             )
 
         except Exception as e:
-            self.response = {"status": "error", "error": f"Assignment failed: {str(e)}"}
+            return self.endpoint.error(
+                message="Assignment failed", status_code=500, details={"error": str(e)}
+            )
 
 
 # ====================== CUSTOM ROUTES ======================

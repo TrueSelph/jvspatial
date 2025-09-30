@@ -26,7 +26,7 @@ from typing import List, Optional
 from pydantic import Field
 
 from jvspatial.api import Server, create_server, get_default_server, walker_endpoint
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core.entities import Node, Root, Walker, on_exit, on_visit
 
 # ====================== NODE TYPES ======================
@@ -173,19 +173,20 @@ class CreateTask(Walker):
 
             await here.connect(task)
 
-            self.response = {
-                "status": "success",
-                "task_id": task.id,
-                "title": task.title,
-                "priority": task.priority,
-                "created_at": task.created_at,
-            }
+            return self.endpoint.success(
+                data={
+                    "task_id": task.id,
+                    "title": task.title,
+                    "priority": task.priority,
+                    "created_at": task.created_at,
+                },
+                message="Task created successfully",
+            )
 
         except Exception as e:
-            self.response = {
-                "status": "error",
-                "error": f"Failed to create task: {str(e)}",
-            }
+            return self.endpoint.error(
+                message="Failed to create task", details={"error": str(e)}
+            )
 
 
 @server.walker("/tasks/search")
@@ -241,20 +242,24 @@ class SearchTasks(Walker):
                     }
                 )
 
-            self.response = {
-                "status": "success",
-                "tasks": filtered_tasks,
-                "count": len(filtered_tasks),
-                "filters_applied": {
-                    "status": self.status,
-                    "priority": self.priority,
-                    "assigned_to": self.assigned_to,
-                    "include_completed": self.include_completed,
+            return self.endpoint.success(
+                data={
+                    "tasks": filtered_tasks,
+                    "count": len(filtered_tasks),
+                    "filters_applied": {
+                        "status": self.status,
+                        "priority": self.priority,
+                        "assigned_to": self.assigned_to,
+                        "include_completed": self.include_completed,
+                    },
                 },
-            }
+                message="Search completed successfully",
+            )
 
         except Exception as e:
-            self.response = {"status": "error", "error": f"Search failed: {str(e)}"}
+            return self.endpoint.error(
+                message="Search failed", details={"error": str(e)}
+            )
 
 
 # ====================== CUSTOM ROUTES ======================
@@ -343,25 +348,30 @@ def register_dynamic_endpoints():
             try:
                 task = await Task.get(self.task_id)
                 if not task:
-                    self.response = {"status": "error", "error": "Task not found"}
-                    return
+                    return self.endpoint.not_found(
+                        message="Task not found", details={"task_id": self.task_id}
+                    )
 
                 old_status = task.status
                 task.status = self.new_status
                 await task.save()
 
-                self.response = {
-                    "status": "success",
-                    "task_id": task.id,
-                    "title": task.title,
-                    "old_status": old_status,
-                    "new_status": self.new_status,
-                    "completion_notes": self.completion_notes,
-                    "updated_at": datetime.now().isoformat(),
-                }
+                return self.endpoint.success(
+                    data={
+                        "task_id": task.id,
+                        "title": task.title,
+                        "old_status": old_status,
+                        "new_status": self.new_status,
+                        "completion_notes": self.completion_notes,
+                        "updated_at": datetime.now().isoformat(),
+                    },
+                    message="Task status updated successfully",
+                )
 
             except Exception as e:
-                self.response = {"status": "error", "error": f"Update failed: {str(e)}"}
+                return self.endpoint.error(
+                    message="Update failed", details={"error": str(e)}
+                )
 
     # Register the dynamic walker
     server.register_walker_class(
@@ -385,8 +395,10 @@ def register_dynamic_endpoints():
             try:
                 work_item = await WorkItem.get(self.work_item_id)
                 if not work_item:
-                    self.response = {"status": "error", "error": "Work item not found"}
-                    return
+                    return self.endpoint.not_found(
+                        message="Work item not found",
+                        details={"work_item_id": self.work_item_id},
+                    )
 
                 work_item.completion_percentage = self.completion_percentage
                 if self.actual_hours is not None:
@@ -394,17 +406,21 @@ def register_dynamic_endpoints():
 
                 await work_item.save()
 
-                self.response = {
-                    "status": "success",
-                    "work_item_id": work_item.id,
-                    "name": work_item.name,
-                    "completion_percentage": work_item.completion_percentage,
-                    "actual_hours": work_item.actual_hours,
-                    "updated_at": datetime.now().isoformat(),
-                }
+                return self.endpoint.success(
+                    data={
+                        "work_item_id": work_item.id,
+                        "name": work_item.name,
+                        "completion_percentage": work_item.completion_percentage,
+                        "actual_hours": work_item.actual_hours,
+                        "updated_at": datetime.now().isoformat(),
+                    },
+                    message="Work item progress updated successfully",
+                )
 
             except Exception as e:
-                self.response = {"status": "error", "error": f"Update failed: {str(e)}"}
+                return self.endpoint.error(
+                    message="Update failed", details={"error": str(e)}
+                )
 
     server.register_walker_class(
         UpdateWorkProgress, "/work-items/update-progress", methods=["POST"]
@@ -476,16 +492,20 @@ class TaskAnalytics(Walker):
                     "message": f"Analysis type '{self.analysis_type}' not yet implemented"
                 }
 
-            self.response = {
-                "status": "success",
-                "analysis_type": self.analysis_type,
-                "date_range_days": self.date_range_days,
-                "analysis": analysis,
-                "generated_at": datetime.now().isoformat(),
-            }
+            return self.endpoint.success(
+                data={
+                    "analysis_type": self.analysis_type,
+                    "date_range_days": self.date_range_days,
+                    "analysis": analysis,
+                    "generated_at": datetime.now().isoformat(),
+                },
+                message="Analysis completed successfully",
+            )
 
         except Exception as e:
-            self.response = {"status": "error", "error": f"Analysis failed: {str(e)}"}
+            return self.endpoint.error(
+                message="Analysis failed", details={"error": str(e)}
+            )
 
 
 # ====================== MONITORING AND MANAGEMENT ======================

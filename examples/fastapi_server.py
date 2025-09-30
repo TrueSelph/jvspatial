@@ -21,7 +21,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from jvspatial.api.endpoint_router import EndpointField, EndpointRouter
+from jvspatial.api.endpoint.router import EndpointField, EndpointRouter
 from jvspatial.core.entities import Node, Root, Walker, on_exit, on_visit
 
 
@@ -300,31 +300,29 @@ class CreateAgent(Walker):
             await here.connect(agent)
 
             # Connect to organization if provided
+            # Build response data
+            response_data = {
+                "agent_id": agent.id,
+                "name": agent.name,
+                "status": "created",
+                "coordinates": [agent.latitude, agent.longitude],
+                "timestamp": datetime.now().isoformat(),
+            }
+
             if self.organization_id:
                 org = await Organization.get(self.organization_id)
                 if org:
                     await org.connect(agent)
-                    self.response["organization"] = org.name
+                    response_data["organization"] = org.name
 
-            self.response.update(
-                {
-                    "agent_id": agent.id,
-                    "name": agent.name,
-                    "status": "created",
-                    "coordinates": [agent.latitude, agent.longitude],
-                }
+            return self.endpoint.success(
+                data=response_data, message="Agent created successfully"
             )
 
         except Exception as e:
-            self.response = {
-                "error": f"Failed to create agent: {str(e)}",
-                "status": "error",
-            }
-
-    @on_exit
-    async def finalize(self):
-        if "error" not in self.response:
-            self.response["timestamp"] = datetime.now().isoformat()
+            return self.endpoint.error(
+                message="Failed to create agent", details={"error": str(e)}
+            )
 
 
 @api.endpoint("/agents/nearby", methods=["POST"])
@@ -413,22 +411,20 @@ class FindNearbyAgents(Walker):
                     }
                 )
 
-            self.response.update(
-                {
+            return self.endpoint.success(
+                data={
                     "agents": agents_data,
                     "count": len(agents_data),
                     "search_center": [self.latitude, self.longitude],
                     "radius_km": self.radius_km,
-                }
+                },
+                message="Search completed successfully",
             )
 
         except Exception as e:
-            self.response = {"error": f"Search failed: {str(e)}", "status": "error"}
-
-    @on_exit
-    async def finalize(self):
-        if "error" not in self.response:
-            self.response["status"] = "success"
+            return self.endpoint.error(
+                message="Search failed", details={"error": str(e)}
+            )
 
 
 @api.endpoint("/missions", methods=["POST"])
@@ -582,27 +578,23 @@ class CreateMission(Walker):
                             }
                         )
 
-            self.response.update(
-                {
+            return self.endpoint.success(
+                data={
                     "mission_id": mission.id,
                     "title": mission.title,
                     "status": "created",
                     "target_coordinates": [mission.target_lat, mission.target_lon],
                     "assigned_agents": assigned_agents,
                     "priority": mission.priority,
-                }
+                    "timestamp": datetime.now().isoformat(),
+                },
+                message="Mission created successfully",
             )
 
         except Exception as e:
-            self.response = {
-                "error": f"Failed to create mission: {str(e)}",
-                "status": "error",
-            }
-
-    @on_exit
-    async def finalize(self):
-        if "error" not in self.response:
-            self.response["timestamp"] = datetime.now().isoformat()
+            return self.endpoint.error(
+                message="Failed to create mission", details={"error": str(e)}
+            )
 
 
 @api.endpoint("/agents/{agent_id}/status", methods=["POST"])
@@ -646,8 +638,9 @@ class UpdateAgentStatus(Walker):
         try:
             agent = await Agent.get(self.agent_id)
             if not agent:
-                self.response = {"error": "Agent not found", "status": "error"}
-                return
+                return self.endpoint.not_found(
+                    message="Agent not found", details={"agent_id": self.agent_id}
+                )
 
             # Update fields
             if self.status:
@@ -660,24 +653,22 @@ class UpdateAgentStatus(Walker):
             agent.last_contact = datetime.now().isoformat()
             await agent.save()
 
-            self.response.update(
-                {
+            return self.endpoint.success(
+                data={
                     "agent_id": agent.id,
                     "name": agent.name,
                     "status": agent.status,
                     "coordinates": [agent.latitude, agent.longitude],
                     "last_contact": agent.last_contact,
-                }
+                    "timestamp": datetime.now().isoformat(),
+                },
+                message="Agent updated successfully",
             )
 
         except Exception as e:
-            self.response = {"error": f"Update failed: {str(e)}", "status": "error"}
-
-    @on_exit
-    async def finalize(self):
-        if "error" not in self.response:
-            self.response["status"] = "updated"
-            self.response["timestamp"] = datetime.now().isoformat()
+            return self.endpoint.error(
+                message="Update failed", details={"error": str(e)}
+            )
 
 
 @api.endpoint("/analytics/overview", methods=["POST"])
@@ -780,23 +771,21 @@ class SystemOverview(Walker):
                     mission_stats["by_priority"].get(priority, 0) + 1
                 )
 
-            self.response.update(
-                {
+            return self.endpoint.success(
+                data={
                     "system_status": "operational",
                     "agents": agent_stats,
                     "missions": mission_stats,
                     "organizations": {"total": len(all_organizations)},
                     "last_updated": datetime.now().isoformat(),
-                }
+                },
+                message="Analytics completed successfully",
             )
 
         except Exception as e:
-            self.response = {"error": f"Analytics failed: {str(e)}", "status": "error"}
-
-    @on_exit
-    async def finalize(self):
-        if "error" not in self.response:
-            self.response["status"] = "success"
+            return self.endpoint.error(
+                message="Analytics failed", details={"error": str(e)}
+            )
 
 
 # ====================== STANDARD REST ENDPOINTS ======================

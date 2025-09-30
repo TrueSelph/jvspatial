@@ -10,18 +10,16 @@ import asyncio
 from typing import Any, Dict, List
 
 from jvspatial.core import Root
+from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Edge, Node, Walker, on_exit, on_visit
-from jvspatial.core.graph import GraphContext
 
 
 class DataNode(Node):
     """A node that contains some data to be collected."""
 
-    def __init__(self, name: str, value: int, category: str = "default", **kwargs):
-        super().__init__(**kwargs)
-        self.name = name
-        self.value = value
-        self.category = category
+    name: str = ""
+    value: int = 0
+    category: str = "default"
 
 
 class CollectorWalker(Walker):
@@ -158,44 +156,43 @@ class AnalyticsWalker(Walker):
 
 async def create_sample_graph() -> None:
     """Create a sample graph with data nodes."""
-    async with GraphContext():
-        root = await Root.get("root")
-        if root is None:
-            raise RuntimeError("Could not get root node")
+    root = await Root.get()  # type: ignore[call-arg]
+    if root is None:
+        raise RuntimeError("Could not get root node")
 
-        # Create data nodes with various values and categories
-        nodes = [
-            DataNode(name="Alpha", value=15, category="processing"),
-            DataNode(name="Beta", value=42, category="storage"),
-            DataNode(name="Gamma", value=8, category="processing"),
-            DataNode(name="Delta", value=67, category="compute"),
-            DataNode(name="Epsilon", value=23, category="storage"),
-            DataNode(name="Zeta", value=3, category="processing"),
-            DataNode(name="Eta", value=91, category="compute"),
-            DataNode(name="Theta", value=34, category="storage"),
-        ]
+    # Create data nodes with various values and categories
+    nodes = [
+        DataNode(name="Alpha", value=15, category="processing"),
+        DataNode(name="Beta", value=42, category="storage"),
+        DataNode(name="Gamma", value=8, category="processing"),
+        DataNode(name="Delta", value=67, category="compute"),
+        DataNode(name="Epsilon", value=23, category="storage"),
+        DataNode(name="Zeta", value=3, category="processing"),
+        DataNode(name="Eta", value=91, category="compute"),
+        DataNode(name="Theta", value=34, category="storage"),
+    ]
 
-        # Save all nodes
-        for node in nodes:
-            await node.save()
+    # Save all nodes
+    for node in nodes:
+        await node.save()
 
-        # Connect nodes to root and create a traversal path
-        for i, node in enumerate(nodes):
-            edge = Edge(
-                source_id=root.id,
-                target_id=node.id,
-                name=f"connects_to_{node.name.lower()}",
+    # Connect nodes to root and create a traversal path
+    for i, node in enumerate(nodes):
+        edge = Edge(
+            source_id=root.id,
+            target_id=node.id,
+            name=f"connects_to_{node.name.lower()}",
+        )
+        await edge.save()
+
+        # Create some inter-node connections
+        if i < len(nodes) - 1:
+            inter_edge = Edge(
+                source_id=node.id,
+                target_id=nodes[i + 1].id,
+                name=f"next_in_sequence",
             )
-            await edge.save()
-
-            # Create some inter-node connections
-            if i < len(nodes) - 1:
-                inter_edge = Edge(
-                    source_id=node.id,
-                    target_id=nodes[i + 1].id,
-                    name=f"next_in_sequence",
-                )
-                await inter_edge.save()
+            await inter_edge.save()
 
 
 async def demonstrate_reporting():

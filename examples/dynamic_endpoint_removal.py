@@ -39,7 +39,10 @@ class UserWalker(Walker):
 
     @on_visit(Node)
     async def process_user(self, here):
-        self.response["result"] = f"Processing user: {self.username}"
+        return self.endpoint.success(
+            data={"result": f"Processing user: {self.username}"},
+            message="User processed successfully",
+        )
 
 
 @server.walker("/api/admin-walker")
@@ -48,7 +51,10 @@ class AdminWalker(Walker):
 
     @on_visit(Node)
     async def process_admin(self, here):
-        self.response["admin_result"] = f"Admin action: {self.admin_action}"
+        return self.endpoint.success(
+            data={"admin_result": f"Admin action: {self.admin_action}"},
+            message="Admin action completed",
+        )
 
 
 # Function endpoints to test removal

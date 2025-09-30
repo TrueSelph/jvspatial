@@ -88,12 +88,14 @@ class TouristWalker(Walker):
     async def visit_city(self, here):
         self.cities_visited += 1
         self.budget -= 50.0  # Spending money in the city
-        self.response.setdefault("cities", []).append(
+        self.report(
             {
-                "name": here.name,
-                "population": here.population,
-                "tourism_score": here.tourism_score,
-                "money_spent": 50.0,
+                "city_visited": {
+                    "name": here.name,
+                    "population": here.population,
+                    "tourism_score": here.tourism_score,
+                    "money_spent": 50.0,
+                }
             }
         )
 
@@ -107,12 +109,14 @@ class TouristWalker(Walker):
             + (here.distance_km if hasattr(here, "distance_km") else 0) * 0.1
         )
         self.budget -= travel_cost
-        self.response.setdefault("transportation", []).append(
+        self.report(
             {
-                "type": "Highway",
-                "name": here.name,
-                "cost": travel_cost,
-                "lanes": here.lanes,
+                "transportation_used": {
+                    "type": "Highway",
+                    "name": here.name,
+                    "cost": travel_cost,
+                    "lanes": here.lanes,
+                }
             }
         )
 
@@ -137,16 +141,18 @@ class LogisticsWalker(Walker):
         elif facility_type == "Port":
             # International shipping operations
             if here.has_customs:
-                self.response.setdefault("customs_clearance", []).append(here.name)
+                self.report({"customs_clearance": here.name})
 
-        self.response.setdefault("facilities", []).append(
+        self.report(
             {
-                "name": here.name,
-                "type": facility_type,
-                "capacity": getattr(
-                    here, "capacity", getattr(here, "cargo_capacity", 0)
-                ),
-                "cargo_loaded": getattr(self, "current_cargo", 0),
+                "facility_visited": {
+                    "name": here.name,
+                    "type": facility_type,
+                    "capacity": getattr(
+                        here, "capacity", getattr(here, "cargo_capacity", 0)
+                    ),
+                    "cargo_loaded": getattr(self, "current_cargo", 0),
+                }
             }
         )
 
@@ -167,12 +173,14 @@ class LogisticsWalker(Walker):
         elif transport_type == "Highway":
             cost = here.toll_cost + 100.0  # Toll plus fuel
 
-        self.response.setdefault("transportation", []).append(
+        self.report(
             {
-                "type": transport_type,
-                "name": here.name,
-                "cost": cost,
-                "cargo_weight": self.current_cargo,
+                "transportation_used": {
+                    "type": transport_type,
+                    "name": here.name,
+                    "cost": cost,
+                    "cargo_weight": self.current_cargo,
+                }
             }
         )
 
@@ -197,12 +205,14 @@ class InspectionWalker(Walker):
         if has_violation:
             self.violations_found += 1
 
-        self.response.setdefault("inspections", []).append(
+        self.report(
             {
-                "facility": here.name,
-                "type": facility_type,
-                "violation": has_violation,
-                "inspection_id": f"INS-{self.inspection_count:04d}",
+                "facility_inspection": {
+                    "facility": here.name,
+                    "type": facility_type,
+                    "violation": has_violation,
+                    "inspection_id": f"INS-{self.inspection_count:04d}",
+                }
             }
         )
 
@@ -218,12 +228,14 @@ class InspectionWalker(Walker):
             safety_scores = {"Highway": 85, "Railroad": 92, "ShippingRoute": 78}
             safety_score = safety_scores.get(route_type, 70)
 
-            self.response.setdefault("route_inspections", []).append(
+            self.report(
                 {
-                    "route": here.name,
-                    "type": route_type,
-                    "safety_score": safety_score,
-                    "status": "PASS" if safety_score >= 80 else "NEEDS_IMPROVEMENT",
+                    "route_inspection": {
+                        "route": here.name,
+                        "type": route_type,
+                        "safety_score": safety_score,
+                        "status": "PASS" if safety_score >= 80 else "NEEDS_IMPROVEMENT",
+                    }
                 }
             )
 
@@ -239,29 +251,33 @@ class SmartCity(City):
     @on_visit(TouristWalker)
     async def welcome_tourist(self, visitor):
         # Offer tourist discounts and recommendations
-        visitor.response.setdefault("special_offers", []).append(
+        visitor.report(
             {
-                "city": self.name,
-                "offer": "20% discount at local attractions",
-                "bonus_points": self.tourism_score * 10,
+                "special_offer": {
+                    "city": self.name,
+                    "offer": "20% discount at local attractions",
+                    "bonus_points": self.tourism_score * 10,
+                }
             }
         )
 
         # Smart city provides optimal route recommendations
         if hasattr(visitor, "budget") and visitor.budget < 200:
-            visitor.response.setdefault("warnings", []).append(
+            visitor.report(
                 f"Low budget warning in {self.name} - consider budget accommodations"
             )
 
     @on_visit(InspectionWalker)
     async def prepare_for_inspection(self, visitor):
         # Smart city auto-reports compliance metrics
-        visitor.response.setdefault("auto_reports", []).append(
+        visitor.report(
             {
-                "city": self.name,
-                "compliance_score": 95,
-                "last_inspection": "2024-01-15",
-                "status": "EXCELLENT",
+                "auto_report": {
+                    "city": self.name,
+                    "compliance_score": 95,
+                    "last_inspection": "2024-01-15",
+                    "status": "EXCELLENT",
+                }
             }
         )
 
@@ -275,25 +291,29 @@ class SmartWarehouse(Warehouse):
 
         if visitor_type == "LogisticsWalker":
             # Provide real-time inventory data
-            visitor.response.setdefault("inventory_data", []).append(
+            visitor.report(
                 {
-                    "warehouse": self.name,
-                    "current_stock": self.current_stock,
-                    "available_capacity": self.capacity - self.current_stock,
-                    "optimal_load": min(
-                        visitor.cargo_capacity, self.capacity - self.current_stock
-                    ),
+                    "inventory_data": {
+                        "warehouse": self.name,
+                        "current_stock": self.current_stock,
+                        "available_capacity": self.capacity - self.current_stock,
+                        "optimal_load": min(
+                            visitor.cargo_capacity, self.capacity - self.current_stock
+                        ),
+                    }
                 }
             )
 
         elif visitor_type == "InspectionWalker":
             # Provide automated compliance reports
-            visitor.response.setdefault("automated_compliance", []).append(
+            visitor.report(
                 {
-                    "warehouse": self.name,
-                    "safety_systems": "ACTIVE",
-                    "temperature_controlled": True,
-                    "last_maintenance": "2024-02-01",
+                    "automated_compliance": {
+                        "warehouse": self.name,
+                        "safety_systems": "ACTIVE",
+                        "temperature_controlled": True,
+                        "last_maintenance": "2024-02-01",
+                    }
                 }
             )
 
@@ -309,28 +329,34 @@ class SmartHighway(Highway):
     @on_visit(LogisticsWalker)
     async def handle_commercial_traffic(self, visitor):
         # Commercial vehicles get different rates and priority lanes
-        visitor.response.setdefault("highway_services", []).append(
+        visitor.report(
             {
-                "highway": self.name,
-                "commercial_rate": self.toll_cost * 0.8,  # 20% discount for logistics
-                "priority_lane_access": True,
-                "estimated_time": (
-                    f"{self.distance_km / (self.speed_limit * 0.9):.1f} hours"
-                    if hasattr(self, "distance_km")
-                    else "N/A"
-                ),
+                "highway_service": {
+                    "highway": self.name,
+                    "commercial_rate": self.toll_cost
+                    * 0.8,  # 20% discount for logistics
+                    "priority_lane_access": True,
+                    "estimated_time": (
+                        f"{self.distance_km / (self.speed_limit * 0.9):.1f} hours"
+                        if hasattr(self, "distance_km")
+                        else "N/A"
+                    ),
+                }
             }
         )
 
     @on_visit(TouristWalker)
     async def handle_tourist_traffic(self, visitor):
         # Tourists get scenic route information
-        visitor.response.setdefault("scenic_info", []).append(
+        visitor.report(
             {
-                "highway": self.name,
-                "scenic_rating": 8,
-                "rest_stops": 3,
-                "tourist_rate": self.toll_cost * 1.1,  # Small premium for scenic routes
+                "scenic_info": {
+                    "highway": self.name,
+                    "scenic_rating": 8,
+                    "rest_stops": 3,
+                    "tourist_rate": self.toll_cost
+                    * 1.1,  # Small premium for scenic routes
+                }
             }
         )
 
@@ -414,23 +440,37 @@ async def run_walker_demo(walker, start_location, walker_name):
     print(f"\n🚶 Running {walker_name} Demo")
     print("=" * 50)
 
-    result = await walker.spawn(start=start_location)
+    await walker.spawn(start=start_location)
 
     print(f"📊 {walker_name} Results:")
-    for key, value in result.response.items():
-        if isinstance(value, list) and len(value) > 0:
-            print(f"  {key.replace('_', ' ').title()}:")
-            for item in value[:3]:  # Show first 3 items
-                if isinstance(item, dict):
-                    print(f"    • {item}")
-                else:
-                    print(f"    • {item}")
-            if len(value) > 3:
-                print(f"    ... and {len(value) - 3} more items")
-        else:
-            print(f"  {key.replace('_', ' ').title()}: {value}")
+    report = walker.get_report()
 
-    return result
+    # Group report items by type
+    report_types = {}
+    for item in report:
+        if isinstance(item, dict):
+            for key in item.keys():
+                if key not in report_types:
+                    report_types[key] = []
+                report_types[key].append(item[key])
+        elif isinstance(item, str):
+            if "messages" not in report_types:
+                report_types["messages"] = []
+            report_types["messages"].append(item)
+
+    # Display grouped results
+    for key, values in report_types.items():
+        print(f"  {key.replace('_', ' ').title()}: {len(values)} items")
+        for item in values[:3]:  # Show first 3 items
+            if isinstance(item, dict):
+                print(f"    • {item}")
+            else:
+                print(f"    • {item}")
+        if len(values) > 3:
+            print(f"    ... and {len(values) - 3} more items")
+
+    print(f"  Total Report Items: {len(report)}")
+    return walker
 
 
 async def main():

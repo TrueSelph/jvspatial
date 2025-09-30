@@ -3,7 +3,7 @@
 import asyncio
 import contextlib
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
 from pymongo import ReturnDocument
@@ -22,6 +22,9 @@ class MongoDB(Database):
     _client: Optional[AsyncIOMotorClient] = None
     _db = None
     _lock = asyncio.Lock()
+    _query_cache: Dict[str, Tuple[List[Dict[str, Any]], float]] = {}
+    _cache_ttl: float = 60.0  # Cache TTL in seconds
+    _max_cache_size: int = 100  # Maximum number of cached queries
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize MongoDB database.
@@ -278,13 +281,14 @@ class MongoDB(Database):
             pass
 
     async def find(
-        self, collection: str, query: Dict[str, Any]
+        self, collection: str, query: Dict[str, Any], limit: Optional[int] = None
     ) -> List[Dict[str, Any]]:
-        """Find documents matching query.
+        """Find documents matching query with optional limit.
 
         Args:
             collection: Collection name
             query: MongoDB-style query parameters (empty dict for all records)
+            limit: Optional limit on number of results
 
         Returns:
             List of matching documents
@@ -292,7 +296,10 @@ class MongoDB(Database):
         try:
             coll = await self._get_collection(collection)
             # MongoDB can handle the query natively - no need for custom parsing
-            return [dict(doc) async for doc in coll.find(query)]
+            cursor = coll.find(query)
+            if limit:
+                cursor = cursor.limit(limit)
+            return [dict(doc) async for doc in cursor]
         except PyMongoError:
             return []  # Return empty list on database errors
 

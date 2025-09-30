@@ -53,8 +53,7 @@ class InventoryWalker(Walker):
     @on_visit(Order)
     async def process_order(self, here: Order):
         """Process an order by checking inventory."""
-        self.response.setdefault("processed_orders", [])
-        self.response["processed_orders"].append(here.id)
+        self.report({"processed_order": here.id})
 
         # Get products in this order
         edges = await here.edges()
@@ -242,7 +241,12 @@ async def test_integration_with_real_database():
     await walker.spawn(start=order)
 
     # Verify results
-    processed_orders = walker.response.get("processed_orders", [])
+    report = walker.get_report()
+    processed_orders = [
+        r["processed_order"]
+        for r in report
+        if isinstance(r, dict) and "processed_order" in r
+    ]
     framework.assert_equal(len(processed_orders), 1, "One order processed")
     framework.assert_equal(processed_orders[0], order.id, "Correct order processed")
 
@@ -342,12 +346,17 @@ async def test_original_api_compatibility():
         retrieved_order.customer_id, "legacy_customer", "Legacy order retrieval"
     )
 
-    # 4. Walker processing the old way
+    # 4. Walker processing - now using report pattern
     walker = InventoryWalker()
     await walker.spawn(start=order)
 
-    processed = walker.response.get("processed_orders", [])
-    framework.assert_equal(len(processed), 1, "Legacy walker processing")
+    report = walker.get_report()
+    processed = [
+        r["processed_order"]
+        for r in report
+        if isinstance(r, dict) and "processed_order" in r
+    ]
+    framework.assert_equal(len(processed), 1, "Walker processing with report")
 
     framework.summary()
     return framework.tests_failed == 0

@@ -7,7 +7,7 @@ an 'endpoint' helper for flexible HTTP response creation.
 
 from typing import Any, Dict, Optional
 
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.api.server import create_server, endpoint, walker_endpoint
 from jvspatial.core.entities import Node, Walker
 

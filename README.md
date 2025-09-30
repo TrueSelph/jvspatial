@@ -13,6 +13,7 @@
 ### Key Features
 
 - **Entity-Centric Design**: Clean, MongoDB-style query interface that works across different backends
+- **Pluggable Cache System**: In-memory, Redis, and layered caching strategies for high-performance deployments
 - **Object Pagination**: Efficient database-level pagination with `ObjectPager` for handling large datasets
 - **FastAPI Server Integration**: Built-in REST API endpoints with automatic OpenAPI documentation
 - **Enterprise Authentication**: JWT tokens, API keys, RBAC, and spatial permissions system
@@ -106,6 +107,10 @@ JVSPATIAL_MONGODB_DB_NAME=jvspatial_dev
 
 # Optional: JSON Database Path (if using JSON backend)
 JVSPATIAL_JSONDB_PATH=./jvdb
+
+# Caching Configuration (optional)
+JVSPATIAL_CACHE_BACKEND=memory
+JVSPATIAL_CACHE_SIZE=1000
 
 # Walker Protection Configuration
 JVSPATIAL_WALKER_PROTECTION_ENABLED=true
@@ -431,6 +436,7 @@ pip install jvspatial[scheduler]
 ### Advanced Topics
 - [GraphContext & Database Management](docs/md/graph-context.md)
 - [Environment Configuration](docs/md/environment-configuration.md)
+- [Caching System](docs/md/caching.md)
 - [Infinite Walk Protection](docs/md/infinite-walk-protection.md)
 - [REST API Integration](docs/md/rest-api.md)
 - [Scheduler Integration](docs/md/scheduler.md)

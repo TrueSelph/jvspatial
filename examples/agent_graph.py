@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import Field
 
 from jvspatial.api import Server, endpoint, walker_endpoint
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core import Node, Root, Walker, on_exit, on_visit
 
 # Configure environment for example
@@ -328,16 +328,15 @@ class InteractWalker(Walker):
         here.last_executed = datetime.now()
         await here.save()
 
-        # Store action info in response
-        if "executed_actions" not in self.response:
-            self.response["executed_actions"] = []
-
-        self.response["executed_actions"].append(
+        # Report action execution
+        self.report(
             {
-                "name": here.name,
-                "type": here.action_type,
-                "execution_count": here.execution_count,
-                "priority": getattr(here, "priority", 0),
+                "action_executed": {
+                    "name": here.name,
+                    "type": here.action_type,
+                    "execution_count": here.execution_count,
+                    "priority": getattr(here, "priority", 0),
+                }
             }
         )
 
@@ -380,15 +379,20 @@ class InteractWalker(Walker):
 
         Called when walker completes traversal.
         """
-        executed_count = len(self.response.get("executed_actions", []))
+        report = self.get_report()
+        executed_count = len(
+            [r for r in report if isinstance(r, dict) and "action_executed" in r]
+        )
         print(f"\n✅ Agent interaction completed!")
         print(f"📊 Summary: Executed {executed_count} actions")
 
-        self.response.update(
+        self.report(
             {
-                "status": "completed",
-                "message": f"Successfully processed agent hierarchy with {executed_count} actions",
-                "timestamp": datetime.now().isoformat(),
+                "interaction_summary": {
+                    "status": "completed",
+                    "message": f"Successfully processed agent hierarchy with {executed_count} actions",
+                    "timestamp": datetime.now().isoformat(),
+                }
             }
         )
 
@@ -660,7 +664,13 @@ async def main():
     )
 
     await walker.spawn(root)
-    print(f"Walker response: {walker.response}")
+    report = walker.get_report()
+    print(f"Walker report items: {len(report)}")
+
+    # Display summary from report
+    for item in report:
+        if isinstance(item, dict) and "interaction_summary" in item:
+            print(f"Interaction summary: {item['interaction_summary']}")
 
     print("\n✅ Example completed successfully!")
     print("Key takeaways:")

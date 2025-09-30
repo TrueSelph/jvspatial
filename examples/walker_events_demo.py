@@ -10,19 +10,17 @@ import asyncio
 from typing import Any, Dict, List
 
 from jvspatial.core import Root
+from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Edge, Node, Walker, on_exit, on_visit
 from jvspatial.core.events import on_emit
-from jvspatial.core.graph import GraphContext
 
 
 class AlertNode(Node):
     """A node that can trigger alerts."""
 
-    def __init__(self, name: str, severity: str = "info", message: str = "", **kwargs):
-        super().__init__(**kwargs)
-        self.name = name
-        self.severity = severity
-        self.message = message
+    name: str = ""
+    severity: str = "info"
+    message: str = ""
 
 
 class MonitoringWalker(Walker):
@@ -169,41 +167,40 @@ class ReportWalker(Walker):
 
 async def create_alert_graph() -> None:
     """Create a sample graph with alert nodes."""
-    async with GraphContext():
-        root = await Root.get("root")
-        if root is None:
-            raise RuntimeError("Could not get root node")
+    root = await Root.get()  # type: ignore[call-arg]
+    if root is None:
+        raise RuntimeError("Could not get root node")
 
-        # Create alert nodes with different severities
-        nodes = [
-            AlertNode(name="Server1", severity="info", message="Normal operation"),
-            AlertNode(name="Database", severity="warning", message="High CPU usage"),
-            AlertNode(name="Network", severity="info", message="Traffic normal"),
-            AlertNode(name="Storage", severity="critical", message="Disk space low"),
-            AlertNode(name="API", severity="warning", message="Slow response times"),
-            AlertNode(name="Cache", severity="info", message="Hit rate good"),
-            AlertNode(name="Queue", severity="critical", message="Backlog growing"),
-        ]
+    # Create alert nodes with different severities
+    nodes = [
+        AlertNode(name="Server1", severity="info", message="Normal operation"),
+        AlertNode(name="Database", severity="warning", message="High CPU usage"),
+        AlertNode(name="Network", severity="info", message="Traffic normal"),
+        AlertNode(name="Storage", severity="critical", message="Disk space low"),
+        AlertNode(name="API", severity="warning", message="Slow response times"),
+        AlertNode(name="Cache", severity="info", message="Hit rate good"),
+        AlertNode(name="Queue", severity="critical", message="Backlog growing"),
+    ]
 
-        # Save all nodes
-        for node in nodes:
-            await node.save()
+    # Save all nodes
+    for node in nodes:
+        await node.save()
 
-        # Connect nodes to root
-        for i, node in enumerate(nodes):
-            edge = Edge(
-                source_id=root.id,
-                target_id=node.id,
-                name=f"monitors_{node.name.lower()}",
+    # Connect nodes to root
+    for i, node in enumerate(nodes):
+        edge = Edge(
+            source_id=root.id,
+            target_id=node.id,
+            name=f"monitors_{node.name.lower()}",
+        )
+        await edge.save()
+
+        # Create some inter-node dependencies
+        if i < len(nodes) - 1:
+            dep_edge = Edge(
+                source_id=node.id, target_id=nodes[i + 1].id, name="depends_on"
             )
-            await edge.save()
-
-            # Create some inter-node dependencies
-            if i < len(nodes) - 1:
-                dep_edge = Edge(
-                    source_id=node.id, target_id=nodes[i + 1].id, name="depends_on"
-                )
-                await dep_edge.save()
+            await dep_edge.save()
 
 
 async def demonstrate_event_communication():

@@ -22,7 +22,7 @@ from typing import Dict, List, Optional
 from fastapi import HTTPException
 
 from jvspatial.api import create_server, endpoint, walker_endpoint
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core.entities import Node, Root, Walker, on_visit
 
 # ====================== DATA MODEL ======================
@@ -80,20 +80,21 @@ class CreateProduct(Walker):
 
             await here.connect(product)
 
-            self.response = {
-                "status": "success",
-                "product_id": product.id,
-                "name": product.name,
-                "price": product.price,
-                "category": product.category,
-                "quantity": product.quantity,
-            }
+            return self.endpoint.success(
+                data={
+                    "product_id": product.id,
+                    "name": product.name,
+                    "price": product.price,
+                    "category": product.category,
+                    "quantity": product.quantity,
+                },
+                message="Product created successfully",
+            )
 
         except Exception as e:
-            self.response = {
-                "status": "error",
-                "error": f"Failed to create product: {str(e)}",
-            }
+            return self.endpoint.error(
+                message="Failed to create product", details={"error": str(e)}
+            )
 
 
 @walker_endpoint("/products/search", methods=["POST"])
@@ -144,20 +145,24 @@ class SearchProducts(Walker):
                     }
                 )
 
-            self.response = {
-                "status": "success",
-                "products": filtered_products,
-                "count": len(filtered_products),
-                "filters": {
-                    "category": self.category,
-                    "min_price": self.min_price,
-                    "max_price": self.max_price,
-                    "in_stock_only": self.in_stock_only,
+            return self.endpoint.success(
+                data={
+                    "products": filtered_products,
+                    "count": len(filtered_products),
+                    "filters": {
+                        "category": self.category,
+                        "min_price": self.min_price,
+                        "max_price": self.max_price,
+                        "in_stock_only": self.in_stock_only,
+                    },
                 },
-            }
+                message="Search completed successfully",
+            )
 
         except Exception as e:
-            self.response = {"status": "error", "error": f"Search failed: {str(e)}"}
+            return self.endpoint.error(
+                message="Search failed", details={"error": str(e)}
+            )
 
 
 @walker_endpoint("/products/bulk-update", methods=["POST"], tags=["bulk"])
@@ -228,22 +233,48 @@ class BulkUpdateProducts(Walker):
                 except Exception as e:
                     failed_products.append({"id": product_id, "error": str(e)})
 
-            self.response = {
-                "status": "success" if not failed_products else "partial",
-                "updated_products": updated_products,
-                "failed_products": failed_products,
-                "summary": {
-                    "total": len(self.product_ids),
-                    "successful": len(updated_products),
-                    "failed": len(failed_products),
-                },
-            }
+            if failed_products and not updated_products:
+                return self.endpoint.error(
+                    message="Bulk update failed",
+                    details={
+                        "failed_products": failed_products,
+                        "summary": {
+                            "total": len(self.product_ids),
+                            "successful": 0,
+                            "failed": len(failed_products),
+                        },
+                    },
+                )
+            elif failed_products:
+                return self.endpoint.success(
+                    data={
+                        "updated_products": updated_products,
+                        "failed_products": failed_products,
+                        "summary": {
+                            "total": len(self.product_ids),
+                            "successful": len(updated_products),
+                            "failed": len(failed_products),
+                        },
+                    },
+                    message="Bulk update partially completed",
+                )
+            else:
+                return self.endpoint.success(
+                    data={
+                        "updated_products": updated_products,
+                        "summary": {
+                            "total": len(self.product_ids),
+                            "successful": len(updated_products),
+                            "failed": 0,
+                        },
+                    },
+                    message="Bulk update completed successfully",
+                )
 
         except Exception as e:
-            self.response = {
-                "status": "error",
-                "error": f"Bulk update failed: {str(e)}",
-            }
+            return self.endpoint.error(
+                message="Bulk update failed", details={"error": str(e)}
+            )
 
 
 # ====================== FUNCTION ENDPOINTS ======================

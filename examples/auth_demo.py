@@ -39,7 +39,7 @@ from jvspatial.api.auth import (
     configure_auth,
     get_current_user,
 )
-from jvspatial.api.endpoint_router import EndpointField
+from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core import Root
 from jvspatial.core.entities import Node, Walker, on_visit
 
