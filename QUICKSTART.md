@@ -142,6 +142,57 @@ users = await User.find({
 })
 ```
 
+## 🔒 Attribute Annotations (Protected & Transient)
+
+jvspatial provides `@protected` and `@transient` decorators for controlling attribute behavior:
+
+### Protected Attributes
+Protected attributes cannot be modified after initialization (ideal for IDs and immutable config):
+
+```python
+from pydantic import Field
+from jvspatial.core.annotations import protected
+
+class Entity(Node):
+    # id is already protected in Node
+    uuid: str = protected("", description="Immutable UUID")
+    created_at: datetime = protected(Field(default_factory=datetime.now))
+
+# ✓ Can set during initialization
+entity = await Entity.create(uuid="abc-123")
+
+# ✗ Cannot modify after creation
+entity.uuid = "new-uuid"  # Raises AttributeProtectionError
+```
+
+### Transient Attributes
+Transient attributes are excluded from database exports (ideal for runtime caches):
+
+```python
+from jvspatial.core.annotations import transient
+
+class Entity(Node):
+    data: str = ""
+    cache: dict = transient(Field(default_factory=dict))  # Not persisted
+    temp_count: int = transient(Field(default=0))         # Not persisted
+
+entity.cache["key"] = "value"  # Works at runtime
+data = entity.export()          # cache excluded from export
+```
+
+### Compound Decorators
+Combine both for internal state that's neither modifiable nor persisted:
+
+```python
+# Both protected AND transient
+_internal: dict = protected(transient(Field(default_factory=dict)))
+```
+
+**Key Points:**
+- All `id` fields in `Object`, `Node`, `Edge`, and `Walker` are automatically protected
+- Always use `Field(default_factory=dict)` syntax with `@transient`
+- See [Attribute Annotations](docs/md/attribute-annotations.md) for full documentation
+
 ## 🏢 Type Annotations & Error Handling
 
 ### Required Typing Pattern

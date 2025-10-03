@@ -35,6 +35,11 @@ from jvspatial.exceptions import (
     ValidationError,
 )
 
+from .annotations import (
+    ProtectedAttributeMixin,
+    is_transient,
+    protected,
+)
 from .events import event_bus
 
 # ----------------- HELPER FUNCTIONS -----------------
@@ -112,16 +117,18 @@ def find_subclass_by_name(base_class: Type, name: str) -> Optional[Type]:
 # ----------------- CORE CLASSES -----------------
 
 
-class Object(BaseModel):
+class Object(ProtectedAttributeMixin, BaseModel):
     """Base object with persistence capabilities.
 
     Attributes:
-        id: Unique identifier for the object
+        id: Unique identifier for the object (protected - cannot be modified after initialization)
         type_code: Type identifier for database partitioning
-        _graph_context: GraphContext instance for database operations
+        _graph_context: GraphContext instance for database operations (transient)
+        _data: Internal data storage (transient)
+        _initializing: Initialization flag (transient)
     """
 
-    id: str = Field(default="")
+    id: str = protected("", description="Unique identifier for the object")
     type_code: ClassVar[str] = "o"
     _initializing: bool = PrivateAttr(default=True)
     _data: dict = PrivateAttr(default_factory=dict)
@@ -173,18 +180,31 @@ class Object(BaseModel):
         await obj.save()
         return obj
 
-    def export(self: "Object") -> dict:
+    def export(
+        self: "Object", exclude_transient: bool = True, **kwargs: Any
+    ) -> Dict[str, Any]:
         """Export the object to a dictionary for persistence.
 
+        This method now automatically respects @transient annotations and
+        excludes transient fields from the exported data.
+
+        Args:
+            exclude_transient: Whether to exclude @transient fields (default: True)
+            **kwargs: Additional arguments passed to base export
+
         Returns:
-            Dictionary representation of the object
+            Dictionary representation of the object with transient fields excluded
         """
-        context = self.model_dump(
-            exclude={"id", "db", "_initializing"}, exclude_none=False
+        # Use the enhanced export from ProtectedAttributeMixin
+        context = super().export(
+            exclude_transient=exclude_transient, exclude_none=False, **kwargs
         )
 
-        # Include _data if it exists
-        if hasattr(self, "_data"):
+        # Remove id from context since we want it at the top level
+        context.pop("id", None)
+
+        # Include _data if it exists and is not transient
+        if hasattr(self, "_data") and not is_transient(self.__class__, "_data"):
             context["_data"] = self._data
 
         # Serialize datetime objects to ensure JSON compatibility
@@ -460,13 +480,14 @@ class Edge(Object):
     """Graph edge connecting two nodes.
 
     Attributes:
+        id: Unique identifier for the edge (protected - inherited from Object)
         source: Source node ID
         target: Target node ID
         bidirectional: Whether the edge is bidirectional
     """
 
     type_code: ClassVar[str] = "e"
-    id: str = Field(default="")
+    id: str = protected("", description="Unique identifier for the edge")
     source: str
     target: str
     bidirectional: bool = True
@@ -562,8 +583,14 @@ class Edge(Object):
         super().__init__(**kwargs)
         self._initializing = False
 
-    def export(self: "Edge") -> dict:
+    def export(
+        self: "Edge", exclude_transient: bool = True, **kwargs: Any
+    ) -> Dict[str, Any]:
         """Export edge to a dictionary for persistence.
+
+        Args:
+            exclude_transient: Whether to exclude @transient fields (default: True)
+            **kwargs: Additional arguments passed to base export
 
         Returns:
             Dictionary representation of the edge
@@ -699,14 +726,15 @@ class Node(Object):
     """Graph node with visitor tracking and connection capabilities.
 
     Attributes:
-        visitor: Current walker visiting the node
+        id: Unique identifier for the node (protected - inherited from Object)
+        visitor: Current walker visiting the node (transient - not persisted)
         is_root: Whether this is the root node
         edge_ids: List of connected edge IDs
     """
 
     type_code: ClassVar[str] = "n"
-    id: str = Field(default="")
-    _visitor_ref: Optional[weakref.ReferenceType] = None
+    id: str = protected("", description="Unique identifier for the node")
+    _visitor_ref: Optional[weakref.ReferenceType] = PrivateAttr(default=None)
     is_root: bool = False
     edge_ids: List[str] = Field(default_factory=list)
     _visit_hooks: ClassVar[dict] = {}
@@ -1470,8 +1498,14 @@ class Node(Object):
 
     # Spatial query methods removed - too specific for generic entities
 
-    def export(self: "Node") -> dict:
+    def export(
+        self: "Node", exclude_transient: bool = True, **kwargs: Any
+    ) -> Dict[str, Any]:
         """Export node to a dictionary for persistence.
+
+        Args:
+            exclude_transient: Whether to exclude @transient fields (default: True)
+            **kwargs: Additional arguments passed to base export
 
         Returns:
             Dictionary representation of the node
@@ -1579,11 +1613,11 @@ class Root(Node):
     """Singleton root node for the graph.
 
     Attributes:
-        id: Fixed ID for the root node
+        id: Fixed ID for the root node (protected)
         is_root: Flag indicating this is the root node
     """
 
-    id: str = "n:Root:root"
+    id: str = protected("n:Root:root", description="Fixed identifier for the root node")
     is_root: bool = True
     _lock: ClassVar[asyncio.Lock] = asyncio.Lock()
 
@@ -1611,7 +1645,7 @@ class Root(Node):
             return node
 
 
-class Walker(BaseModel):
+class Walker(ProtectedAttributeMixin, BaseModel):
     """Base class for graph walkers that traverse nodes along edges.
 
     Walkers are designed to traverse the graph by visiting nodes and following edges.
@@ -1623,19 +1657,19 @@ class Walker(BaseModel):
     through multiple configurable limits and automatic halting mechanisms.
 
     Attributes:
-        id: Unique walker ID
-        queue: Queue of nodes to visit
-        current_node: Currently visited node
-        paused: Whether traversal is paused
+        id: Unique walker ID (protected - cannot be modified after initialization)
+        queue: Queue of nodes to visit (transient - not persisted)
+        current_node: Currently visited node (transient - not persisted)
+        paused: Whether traversal is paused (transient - not persisted)
 
-        # Trail Tracking
+        # Trail Tracking (all transient - not persisted)
         trail: Trail of visited node IDs in order (read-only)
         trail_edges: Trail of edge IDs traversed between nodes (read-only)
         trail_metadata: Additional metadata for each trail step (read-only)
         trail_enabled: Whether trail tracking is enabled (configurable)
         max_trail_length: Maximum trail length (0 = unlimited, configurable)
 
-        # Infinite Walk Protection
+        # Infinite Walk Protection (all transient - runtime only)
         max_steps: Maximum number of steps before auto-halt (default: 10000)
         max_visits_per_node: Maximum visits per node before auto-halt (default: 100)
         max_execution_time: Maximum execution time in seconds (default: 300.0)
@@ -1651,7 +1685,7 @@ class Walker(BaseModel):
 
     model_config = ConfigDict(extra="allow")
     type_code: ClassVar[str] = "w"
-    id: str = Field(default="")
+    id: str = protected("", description="Unique identifier for the walker")
 
     # Reporting system
     _report: List[Any] = PrivateAttr(default_factory=list)

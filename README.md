@@ -13,6 +13,7 @@
 ### Key Features
 
 - **Entity-Centric Design**: Clean, MongoDB-style query interface that works across different backends
+- **Attribute Annotations**: `@protected` and `@transient` decorators for immutable fields and runtime-only data
 - **Pluggable Cache System**: In-memory, Redis, and layered caching strategies for high-performance deployments
 - **Object Pagination**: Efficient database-level pagination with `ObjectPager` for handling large datasets
 - **FastAPI Server Integration**: Built-in REST API endpoints with automatic OpenAPI documentation
