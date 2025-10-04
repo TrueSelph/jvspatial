@@ -627,7 +627,19 @@ class DataWalker(Walker):
 - ✅ Use `await Entity.find(query_dict)`
 - ✅ Use `await entity.save()` only after property modification
 - ✅ Use Objects for standalone data, Nodes for graph entities
+- ✅ Use `await node1.disconnect(node2)` to remove connections
 - ❌ Avoid direct GraphContext database calls
+
+### Disconnecting Nodes
+To remove connections between nodes, use the `disconnect()` method. This removes edges between nodes and deletes the edge objects.
+
+```python
+# Disconnect two nodes
+success = await node1.disconnect(node2)
+
+# Disconnect with specific edge type
+success = await node1.disconnect(node2, edge_type=SpecialEdge)
+```
 
 ### Query Patterns
 - ✅ Use `"context.field"` dot notation for nested fields
