@@ -4,24 +4,25 @@ This module provides a comprehensive system for annotating and protecting object
 
 1. @protected decorator: Prevents modification after initial assignment
 2. @transient decorator: Excludes from serialization/export operations
-3. Compound usage: @protected @transient for both behaviors
+3. @private decorator: Pydantic private attributes (underscore fields)
+4. Compound usage: @protected @transient for both behaviors
 
 The system integrates with Pydantic models and provides clear error messages
 when protection violations occur.
 
 Examples:
-    class Entity(BaseModel):
+    class Entity(ProtectedAttributeMixin, BaseModel):
         # Protected attribute - cannot be modified after initialization
         id: str = protected("", description="Unique identifier")
 
         # Transient attribute - excluded from exports
-        temp_data: dict = transient(default_factory=dict)
+        temp_data: dict = transient(Field(default_factory=dict))
+
+        # Private attribute - Pydantic private (underscore fields)
+        _internal_cache: dict = private(default_factory=dict)
 
         # Both protected and transient using compound decorators
-        _internal_cache: dict = protected(transient(default_factory=dict))
-
-        # Alternative compound syntax
-        _state: dict = transient(protected(default_factory=dict))
+        internal_state: dict = protected(transient(Field(default_factory=dict)))
 """
 
 from typing import Any, Dict, Set, Type
@@ -458,42 +459,35 @@ def export_with_transient_exclusion(
 # via __init_subclass__, making decoration unnecessary.
 
 
-# Convenience functions for common patterns
-def private_attr(default: Any = None, **kwargs: Any) -> Any:
-    """Convenience function for creating a private attribute (protected + transient).
+def private(default: Any = None, **kwargs: Any) -> Any:
+    """Decorator for Pydantic private attributes (fields with leading underscore).
 
-    This combines both behaviors for truly internal attributes that should not
-    be modified or exported. For fields with leading underscores, uses Pydantic's
-    PrivateAttr. For regular fields, creates a Field with both annotations.
+    This is a wrapper around Pydantic's PrivateAttr, designed for fields that start
+    with underscore (_). Private attributes are automatically excluded from serialization
+    and are not part of the model's public API.
 
-    Note: This function cannot determine at definition time whether the field name
-    starts with underscore. For underscore fields, it returns PrivateAttr.
-    For non-underscore fields that need both protected and transient behaviors,
-    use the compound syntax: protected(transient(Field(...)))
+    For regular fields that need both protected and transient behaviors, use the
+    compound syntax: protected(transient(Field(...)))
 
     Args:
-        default: Default value (ignored if default_factory is in kwargs)
-        **kwargs: Additional arguments (including default_factory)
+        default: Default value for the private attribute
+        **kwargs: Additional arguments, primarily 'default_factory' for callable defaults
 
     Returns:
-        PrivateAttr for underscore fields, or Field with both annotations
+        PrivateAttr configured with the provided default or factory
 
     Examples:
-        # For underscore fields (Pydantic PrivateAttr)
-        _internal_state: dict = private_attr(default_factory=dict)
-        _cache: dict = private_attr(default_factory=dict)
+        # Private attribute with default value
+        _counter: int = private(default=0)
 
-        # For regular fields needing both behaviors, use compound syntax instead:
+        # Private attribute with factory
+        _cache: dict = private(default_factory=dict)
+        _data: dict = private(default_factory=dict)
+
+        # For non-underscore fields, use compound decorators:
         internal: dict = protected(transient(Field(default_factory=dict)))
     """
-    # For underscore fields, return PrivateAttr (required by Pydantic v2)
-    # We can't determine the field name here, so we return PrivateAttr by default
-    # which is the most common use case for private_attr
     if "default_factory" in kwargs:
         return PrivateAttr(default_factory=kwargs["default_factory"])
     else:
         return PrivateAttr(default=default)
-
-
-# Alias for backward compatibility
-private = private_attr
