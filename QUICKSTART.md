@@ -191,6 +191,26 @@ _internal: dict = protected(transient(Field(default_factory=dict)))
 **Key Points:**
 - All `id` fields in `Object`, `Node`, `Edge`, and `Walker` are automatically protected
 - Always use `Field(default_factory=dict)` syntax with `@transient`
+### Private Attributes
+Private attributes are excluded from serialization and database operations (ideal for internal state):
+
+```python
+from jvspatial.core.annotations import private
+
+class Entity(Node):
+    _cache: dict = private(default_factory=dict)  # Not serialized
+    _internal_counter: int = private(default=0)   # Not serialized
+
+entity._cache["key"] = "value"  # Works at runtime
+data = entity.export()          # _cache excluded from export
+```
+
+### Compound Decorators
+Combine decorators for complex behaviors:
+```python
+# Private AND transient
+_internal: dict = private(transient(Field(default_factory=dict)))
+```
 - See [Attribute Annotations](docs/md/attribute-annotations.md) for full documentation
 
 ## 🏢 Type Annotations & Error Handling

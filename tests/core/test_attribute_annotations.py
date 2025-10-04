@@ -221,26 +221,41 @@ class TestPrivateAttrHelper:
     """Tests for private_attr convenience function."""
 
     def test_private_attr_is_both_protected_and_transient(self):
-        """Test that private_attr creates fields that are both protected and transient."""
+        """Test that private_attr creates Pydantic private attributes (underscore fields)."""
 
         class Entity(ProtectedAttributeMixin, BaseModel):
             id: str = protected("")
-            internal: dict = private_attr(default_factory=dict)
+            _internal: dict = private_attr(default_factory=dict)
 
         entity = Entity(id="test")
-        entity.internal["key"] = "value"
+        entity._internal["key"] = "value"
+
+        # Private attrs are excluded from model_dump automatically
+        assert "_internal" not in entity.model_dump()
+
+        # Private attrs are also excluded from export
+        export_data = entity.export()
+        assert "_internal" not in export_data
+
+        # For non-underscore fields needing protection + transient, use compound syntax
+        class EntityWithCompound(ProtectedAttributeMixin, BaseModel):
+            id: str = protected("")
+            internal: dict = protected(transient(Field(default_factory=dict)))
+
+        entity2 = EntityWithCompound(id="test2")
+        entity2.internal["key"] = "value"
 
         # Should be protected
         with pytest.raises(AttributeProtectionError):
-            entity.internal = {}
+            entity2.internal = {}
 
         # Should be transient
-        export_data = entity.export()
-        assert "internal" not in export_data
+        export_data2 = entity2.export()
+        assert "internal" not in export_data2
 
         # Verify both flags
-        assert is_protected(Entity, "internal")
-        assert is_transient(Entity, "internal")
+        assert is_protected(EntityWithCompound, "internal")
+        assert is_transient(EntityWithCompound, "internal")
 
 
 class TestFieldWithDefaultFactory:

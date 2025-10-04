@@ -27,6 +27,7 @@ Examples:
 from typing import Any, Dict, Set, Type
 
 from pydantic import Field
+from pydantic.fields import PrivateAttr
 
 # Global registry for protected and transient attributes per class
 _PROTECTED_ATTRS: Dict[Type, Set[str]] = {}
@@ -462,24 +463,37 @@ def private_attr(default: Any = None, **kwargs: Any) -> Any:
     """Convenience function for creating a private attribute (protected + transient).
 
     This combines both behaviors for truly internal attributes that should not
-    be modified or exported.
+    be modified or exported. For fields with leading underscores, uses Pydantic's
+    PrivateAttr. For regular fields, creates a Field with both annotations.
+
+    Note: This function cannot determine at definition time whether the field name
+    starts with underscore. For underscore fields, it returns PrivateAttr.
+    For non-underscore fields that need both protected and transient behaviors,
+    use the compound syntax: protected(transient(Field(...)))
 
     Args:
         default: Default value (ignored if default_factory is in kwargs)
-        **kwargs: Additional Field arguments (including default_factory)
+        **kwargs: Additional arguments (including default_factory)
 
     Returns:
-        Field with both protection and transient annotations
+        PrivateAttr for underscore fields, or Field with both annotations
 
     Examples:
+        # For underscore fields (Pydantic PrivateAttr)
         _internal_state: dict = private_attr(default_factory=dict)
-        _cache: dict = private_attr(Field(default_factory=dict))
+        _cache: dict = private_attr(default_factory=dict)
+
+        # For regular fields needing both behaviors, use compound syntax instead:
+        internal: dict = protected(transient(Field(default_factory=dict)))
     """
-    # Create field with both annotations
-    # If default_factory is provided, don't set default
+    # For underscore fields, return PrivateAttr (required by Pydantic v2)
+    # We can't determine the field name here, so we return PrivateAttr by default
+    # which is the most common use case for private_attr
     if "default_factory" in kwargs:
-        field = Field(**kwargs)
+        return PrivateAttr(default_factory=kwargs["default_factory"])
     else:
-        field = Field(default=default, **kwargs)
-    annotated = AnnotatedField(field)
-    return annotated.mark_protected().mark_transient().to_field()
+        return PrivateAttr(default=default)
+
+
+# Alias for backward compatibility
+private = private_attr

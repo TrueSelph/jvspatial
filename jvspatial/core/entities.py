@@ -25,7 +25,7 @@ from typing import (
     Union,
 )
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import override
 
 from jvspatial.core.context import GraphContext
@@ -38,6 +38,7 @@ from jvspatial.exceptions import (
 from .annotations import (
     ProtectedAttributeMixin,
     is_transient,
+    private,
     protected,
 )
 from .events import event_bus
@@ -130,9 +131,9 @@ class Object(ProtectedAttributeMixin, BaseModel):
 
     id: str = protected("", description="Unique identifier for the object")
     type_code: ClassVar[str] = "o"
-    _initializing: bool = PrivateAttr(default=True)
-    _data: dict = PrivateAttr(default_factory=dict)
-    _graph_context: Optional["GraphContext"] = PrivateAttr(default=None)
+    _initializing: bool = private(default=True)
+    _data: dict = private(default_factory=dict)
+    _graph_context: Optional["GraphContext"] = private(default=None)
 
     def set_context(self: "Object", context: "GraphContext") -> None:
         """Set the GraphContext for this object.
@@ -734,7 +735,7 @@ class Node(Object):
 
     type_code: ClassVar[str] = "n"
     id: str = protected("", description="Unique identifier for the node")
-    _visitor_ref: Optional[weakref.ReferenceType] = PrivateAttr(default=None)
+    _visitor_ref: Optional[weakref.ReferenceType] = private(default=None)
     is_root: bool = False
     edge_ids: List[str] = Field(default_factory=list)
     _visit_hooks: ClassVar[dict] = {}
@@ -1688,43 +1689,41 @@ class Walker(ProtectedAttributeMixin, BaseModel):
     id: str = protected("", description="Unique identifier for the walker")
 
     # Reporting system
-    _report: List[Any] = PrivateAttr(default_factory=list)
+    _report: List[Any] = private(default_factory=list)
 
     # Event system
-    _event_handlers: Dict[str, List[Callable]] = PrivateAttr(default_factory=dict)
+    _event_handlers: Dict[str, List[Callable]] = private(default_factory=dict)
 
     # Walker core attributes
-    _queue: deque = PrivateAttr(default_factory=deque)
-    _current_node: Optional[Node] = PrivateAttr(default=None)
+    _queue: deque = private(default_factory=deque)
+    _current_node: Optional[Node] = private(default=None)
     _visit_hooks: ClassVar[dict] = {}
-    _paused: bool = PrivateAttr(default=False)
+    _paused: bool = private(default=False)
 
     # Trail tracking attributes
-    _trail: List[str] = PrivateAttr(default_factory=list)  # Node IDs in visit order
-    _trail_edges: List[Optional[str]] = PrivateAttr(
+    _trail: List[str] = private(default_factory=list)  # Node IDs in visit order
+    _trail_edges: List[Optional[str]] = private(
         default_factory=list
     )  # Edge IDs between nodes
-    _trail_metadata: List[Dict[str, Any]] = PrivateAttr(
+    _trail_metadata: List[Dict[str, Any]] = private(
         default_factory=list
     )  # Metadata per step
-    _trail_enabled: bool = PrivateAttr(default=True)  # Whether to track trail
-    _max_trail_length: int = PrivateAttr(default=0)  # 0 = unlimited
+    _trail_enabled: bool = private(default=True)  # Whether to track trail
+    _max_trail_length: int = private(default=0)  # 0 = unlimited
 
     # Infinite walk protection attributes
-    _step_count: int = PrivateAttr(default=0)  # Current number of steps taken
-    _node_visit_counts: Dict[str, int] = PrivateAttr(
+    _step_count: int = private(default=0)  # Current number of steps taken
+    _node_visit_counts: Dict[str, int] = private(
         default_factory=dict
     )  # Per-node visit counts
-    _start_time: Optional[float] = PrivateAttr(default=None)  # Traversal start time
-    _max_steps: int = PrivateAttr(default=10000)  # Maximum steps before halting
-    _max_visits_per_node: int = PrivateAttr(default=100)  # Maximum visits per node
-    _max_execution_time: float = PrivateAttr(
+    _start_time: Optional[float] = private(default=None)  # Traversal start time
+    _max_steps: int = private(default=10000)  # Maximum steps before halting
+    _max_visits_per_node: int = private(default=100)  # Maximum visits per node
+    _max_execution_time: float = private(
         default=300.0
     )  # Maximum execution time in seconds
-    _max_queue_size: int = PrivateAttr(default=1000)  # Maximum queue size
-    _protection_enabled: bool = PrivateAttr(
-        default=True
-    )  # Whether protection is enabled
+    _max_queue_size: int = private(default=1000)  # Maximum queue size
+    _protection_enabled: bool = private(default=True)  # Whether protection is enabled
 
     def __init__(self: "Walker", **kwargs: Any) -> None:
         """Initialize a walker with auto-generated ID if not provided."""
