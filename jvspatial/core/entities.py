@@ -916,6 +916,57 @@ class Node(Object):
             context, direction, node, edge, limit, kwargs
         )
 
+    async def node(
+        self,
+        direction: str = "out",
+        node: Optional[Union[str, List[Union[str, Dict[str, Dict[str, Any]]]]]] = None,
+        edge: Optional[
+            Union[
+                str,
+                Type["Edge"],
+                List[Union[str, Type["Edge"], Dict[str, Dict[str, Any]]]],
+            ]
+        ] = None,
+        **kwargs: Any,
+    ) -> Optional["Node"]:
+        """Get a single node connected to this node.
+
+        This is a convenience method that returns the first node from nodes().
+        Primarily useful when you expect only one node and want to avoid list indexing.
+
+        Args:
+            direction: Connection direction ('out', 'in', 'both')
+            node: Node filtering - same formats as nodes() method
+            edge: Edge filtering - same formats as nodes() method
+            **kwargs: Simple property filters for connected nodes
+
+        Returns:
+            First connected node matching criteria, or None if no nodes found
+
+        Examples:
+            # Find a single memory node
+            memory = await agent.node(node='Memory')
+            if memory:
+                # Use the memory node
+                pass
+
+            # Find a specific city
+            ny_city = await state.node(node='City', name="New York")
+
+            # With complex filtering
+            large_city = await node.node(
+                node=[{'City': {"context.population": {"$gte": 500000}}}]
+            )
+        """
+        nodes = await self.nodes(
+            direction=direction,
+            node=node,
+            edge=edge,
+            limit=1,  # Optimize by limiting to 1 result
+            **kwargs,
+        )
+        return nodes[0] if nodes else None
+
     def _match_criteria(
         self, value: Any, criteria: Dict[str, Any], compiled_regex: Optional[Any] = None
     ) -> bool:

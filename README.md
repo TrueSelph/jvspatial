@@ -558,7 +558,7 @@ active_senior_engineers = await User.find({
 
 ## Walker Traversal Patterns
 
-Walkers implement graph traversal logic using the recommended `nodes()` method for semantic filtering:
+Walkers implement graph traversal logic using the `nodes()` and `node()` methods for semantic filtering:
 
 ```python
 from jvspatial.core import Walker, on_visit
@@ -573,13 +573,18 @@ class DataCollector(Walker):
         """Process user nodes with semantic filtering."""
         self.collected_data.append(here.name)
 
-        # RECOMMENDED: Use nodes() method for connected nodes
+        # Get multiple connected nodes
         engineering_users = await here.nodes(
             node=['User'],  # Only User nodes
             department="engineering",  # Simple filtering
             active=True  # Multiple filters
         )
         await self.visit(engineering_users)
+
+        # Get a single connected node (when you expect only one)
+        profile = await here.node(node='Profile')
+        if profile:
+            self.collected_data.append(profile.bio)
 
     @on_visit(City)
     async def process_city(self, here: City):

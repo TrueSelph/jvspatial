@@ -30,10 +30,18 @@ class Node(Object):
     async def connect(other: "Node", edge: Type["Edge"] = Edge,
                      direction: str = "out", **kwargs) -> "Edge"
     async def edges(direction: str = "") -> List["Edge"]
-    async def nodes(direction: str = "both") -> "NodeQuery"
+    async def nodes(direction: str = "both", node: Optional[...] = None,
+                   edge: Optional[...] = None, **kwargs) -> List["Node"]
+    async def node(direction: str = "out", node: Optional[...] = None,
+                  edge: Optional[...] = None, **kwargs) -> Optional["Node"]
     @classmethod
     async def all() -> List["Node"]
 ```
+
+**Key Methods:**
+
+- **`nodes()`**: Returns a list of connected nodes with filtering options
+- **`node()`**: Returns a single connected node (first match) or None - convenience method when you expect only one result
 
 #### `Edge(Object)`
 Represents connections between nodes.
