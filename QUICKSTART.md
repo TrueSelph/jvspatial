@@ -1334,6 +1334,253 @@ async def insecure_webhook(request: Request, endpoint):
 
 ---
 
+## 📁 File Storage Quickstart
+
+jvspatial includes a powerful file storage system with multi-backend support and URL proxy capabilities for secure file sharing.
+
+### Basic Setup
+
+```python
+from jvspatial.api import Server
+
+server = Server(
+    title="File Upload API",
+    file_storage_enabled=True,
+    file_storage_provider="local",
+    file_storage_root=".files",
+    proxy_enabled=True
+)
+
+if __name__ == "__main__":
+    server.run()
+```
+
+### Upload a File
+
+```bash
+curl -X POST -F "file=@document.pdf" \
+  http://localhost:8000/storage/upload
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "file_path": "2025/01/05/document-abc123.pdf",
+  "file_size": 102400,
+  "content_type": "application/pdf"
+}
+```
+
+### Create a Shareable Link
+
+```bash
+curl -X POST http://localhost:8000/storage/proxy \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file_path": "2025/01/05/document-abc123.pdf",
+    "expires_in": 3600
+  }'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "proxy_code": "a1b2c3d4",
+  "proxy_url": "http://localhost:8000/p/a1b2c3d4",
+  "expires_at": "2025-01-05T23:00:00Z"
+}
+```
+
+### Access via Short URL
+
+```bash
+curl http://localhost:8000/p/a1b2c3d4
+```
+
+The file is served directly with appropriate headers.
+
+### Use in Walkers
+
+```python
+from jvspatial.storage import get_file_interface
+from jvspatial.core import Walker, on_visit, Node
+
+@server.walker("/process-upload")
+class ProcessUpload(Walker):
+    file_path: str
+
+    @on_visit(Node)
+    async def process(self, here: Node):
+        # Get file storage interface
+        storage = get_file_interface(
+            provider="local",
+            root_dir=".files"
+        )
+
+        # Read file content
+        content = await storage.get_file(self.file_path)
+
+        # Process file content
+        self.report({
+            "processed_file": {
+                "path": self.file_path,
+                "size": len(content),
+                "status": "success"
+            }
+        })
+```
+
+### AWS S3 Configuration
+
+```python
+server = Server(
+    title="S3 File API",
+    file_storage_enabled=True,
+    file_storage_provider="s3",
+    file_storage_s3_bucket="my-bucket",
+    file_storage_s3_region="us-east-1",
+    proxy_enabled=True
+)
+```
+
+**Environment Variables:**
+```env
+JVSPATIAL_FILE_STORAGE_ENABLED=true
+JVSPATIAL_FILE_STORAGE_PROVIDER=s3
+JVSPATIAL_FILE_STORAGE_S3_BUCKET=my-bucket
+JVSPATIAL_FILE_STORAGE_S3_REGION=us-east-1
+AWS_ACCESS_KEY_ID=your-key-id
+AWS_SECRET_ACCESS_KEY=your-secret-key
+```
+
+### Advanced Usage: Custom Upload Path
+
+```bash
+curl -X POST -F "file=@image.jpg" \
+  -F "custom_path=avatars/user123.jpg" \
+  http://localhost:8000/storage/upload
+```
+
+### List Files
+
+```bash
+curl http://localhost:8000/storage/files?prefix=2025/01/
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "files": [
+    {
+      "path": "2025/01/05/document-abc123.pdf",
+      "size": 102400,
+      "modified": "2025-01-05T20:30:00Z"
+    },
+    {
+      "path": "2025/01/05/image-def456.jpg",
+      "size": 51200,
+      "modified": "2025-01-05T21:15:00Z"
+    }
+  ]
+}
+```
+
+### Security Features
+
+```python
+server = Server(
+    title="Secure File API",
+    file_storage_enabled=True,
+    file_storage_provider="local",
+    file_storage_root=".files",
+    file_storage_max_size=10485760,  # 10MB limit
+    file_storage_allowed_types=["image/jpeg", "image/png", "application/pdf"],
+    proxy_enabled=True,
+    proxy_default_ttl=3600  # 1 hour default expiration
+)
+```
+
+### Best Practices
+
+**✅ Recommended Patterns:**
+
+```python
+# Good: Use environment variables for configuration
+from dotenv import load_dotenv
+load_dotenv()
+
+server = Server(
+    title="Production File API",
+    file_storage_enabled=True,
+    # Provider configured via JVSPATIAL_FILE_STORAGE_PROVIDER
+    # Other settings loaded from environment
+)
+
+# Good: Validate files before processing
+@server.walker("/validate-upload")
+class ValidateUpload(Walker):
+    file_path: str
+
+    @on_visit(Node)
+    async def validate(self, here: Node):
+        storage = get_file_interface()
+
+        # Check file exists
+        if not await storage.file_exists(self.file_path):
+            self.report({"error": "File not found"})
+            return
+
+        # Get file metadata
+        metadata = await storage.get_metadata(self.file_path)
+
+        # Validate size
+        if metadata.get("size", 0) > 5242880:  # 5MB
+            self.report({"error": "File too large"})
+            return
+
+        self.report({"status": "valid", "metadata": metadata})
+
+# Good: Use proxy URLs for temporary access
+async def create_temp_link(file_path: str, hours: int = 1):
+    """Create temporary shareable link."""
+    response = await storage.create_proxy(
+        file_path=file_path,
+        expires_in=hours * 3600
+    )
+    return response["proxy_url"]
+```
+
+**❌ Avoided Patterns:**
+
+```python
+# Bad: Hardcoding credentials
+server = Server(
+    file_storage_s3_bucket="my-bucket",
+    file_storage_s3_access_key="AKIAIOSFODNN7EXAMPLE"  # Don't do this!
+)
+
+# Bad: No file validation
+@server.walker("/unsafe-upload")
+class UnsafeUpload(Walker):
+    file_path: str
+
+    @on_visit(Node)
+    async def process(self, here: Node):
+        # No validation - could process malicious files
+        content = await storage.get_file(self.file_path)
+        # Direct processing without checks
+
+# Bad: Permanent public URLs without expiration
+# Always use proxy URLs with expiration for security
+```
+
+See [File Storage Documentation](docs/md/file-storage-usage.md) for advanced usage and all configuration options.
+
+---
+
 ## 🌐 API Integration with FastAPI Server
 
 The **jvspatial API** provides seamless integration with FastAPI to expose your graph operations as REST endpoints. It supports flexible endpoint registration using decorators and automatic parameter model generation from Walker and function properties.

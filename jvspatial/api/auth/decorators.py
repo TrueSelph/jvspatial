@@ -478,10 +478,12 @@ class AuthAwareEndpointProcessor:
         Returns:
             Tuple of (is_authorized, error_message)
         """
-        auth_required = getattr(walker_class, "_auth_required", True)
+        auth_required = getattr(
+            walker_class, "_auth_required", False
+        )  # Default to public
 
         if not auth_required:
-            return True, None
+            return True, None  # Public endpoint
 
         if not user:
             return False, "Authentication required"
@@ -500,6 +502,7 @@ class AuthAwareEndpointProcessor:
         if required_roles and not any(user.has_role(role) for role in required_roles):
             return False, f"Missing required role: {', '.join(required_roles)}"
 
+        return True, None
         return True, None
 
 

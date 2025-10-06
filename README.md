@@ -27,6 +27,36 @@
 - **Infinite Walk Protection**: Comprehensive safeguards against infinite loops with configurable limits
 - **Type Safety**: Pydantic-based modeling for nodes, edges, and walkers
 
+## 📁 File Storage
+
+jvspatial includes a secure, production-ready file storage system with support for multiple backends and URL proxy functionality.
+
+```python
+from jvspatial.api import Server
+
+# Enable file storage with URL proxies
+server = Server(
+    title="My API",
+    file_storage_enabled=True,
+    file_storage_provider="local",  # or "s3"
+    proxy_enabled=True,
+    db_type="json"
+)
+
+# Files are automatically available at:
+# POST   /storage/upload
+# GET    /storage/files/{path}
+# GET    /p/{code}  (short URL proxy)
+```
+
+**Features:**
+- 🔒 **Secure**: Path traversal prevention, MIME validation, size limits
+- 🌐 **Multi-Backend**: Local filesystem, AWS S3 (Azure/GCP ready)
+- 🔗 **URL Proxy**: MongoDB-backed short URLs with expiration
+- ⚡ **Performance**: Async operations, streaming support
+- 🧩 **Extensible**: Easy to add custom storage providers
+
+See the [File Storage Guide](docs/md/file-storage-usage.md) for detailed documentation.
 
 ## Installation
 
@@ -60,6 +90,34 @@ jvspatial uses environment variables for database configuration and library setu
 | `JVSPATIAL_JSONDB_PATH` | Base path for JSON database files | `jvdb` | No |
 | `JVSPATIAL_MONGODB_URI` | MongoDB connection URI | `mongodb://localhost:27017` | No |
 | `JVSPATIAL_MONGODB_DB_NAME` | MongoDB database name | `jvdb` | No |
+
+### File Storage Configuration
+
+| Variable | Description | Default Value | Required |
+|----------|-------------|---------------|-----------|
+| `JVSPATIAL_FILE_STORAGE_ENABLED` | Enable/disable file storage | `false` | No |
+| `JVSPATIAL_FILE_STORAGE_PROVIDER` | File storage provider (`local` or `s3`) | `local` | No |
+| `JVSPATIAL_FILE_STORAGE_ROOT` | Root directory for local file storage | `.files` | No |
+| `JVSPATIAL_FILE_STORAGE_BASE_URL` | Base URL for file access | `http://localhost:8000` | No |
+| `JVSPATIAL_FILE_STORAGE_MAX_SIZE` | Maximum file size in bytes | `104857600` (100MB) | No |
+
+### S3 Storage Configuration
+
+| Variable | Description | Default Value | Required if using S3 |
+|----------|-------------|---------------|---------------------|
+| `JVSPATIAL_S3_BUCKET_NAME` | S3 bucket name | None | Yes |
+| `JVSPATIAL_S3_REGION` | S3 region | None | Yes |
+| `JVSPATIAL_S3_ACCESS_KEY` | AWS access key | None | Yes |
+| `JVSPATIAL_S3_SECRET_KEY` | AWS secret key | None | Yes |
+| `JVSPATIAL_S3_ENDPOINT_URL` | S3 endpoint URL | `https://s3.amazonaws.com` | No |
+
+### URL Proxy Configuration
+
+| Variable | Description | Default Value | Required |
+|----------|-------------|---------------|-----------|
+| `JVSPATIAL_PROXY_ENABLED` | Enable URL proxy system | `false` | No |
+| `JVSPATIAL_PROXY_DEFAULT_EXPIRATION` | Default proxy URL expiration (seconds) | `3600` | No |
+| `JVSPATIAL_PROXY_MAX_EXPIRATION` | Maximum proxy URL expiration (seconds) | `86400` | No |
 
 ### Walker Infinite Walk Protection
 

@@ -367,10 +367,14 @@ async def check_idempotency(
         )
 
         if existing:
+            # Treat as concrete type for type checker
+            from typing import cast as _cast
+
+            existing = _cast(WebhookIdempotencyKey, existing)
             # Update last accessed time
             existing.last_accessed_at = datetime.now()
             await existing.save()
-            return True, existing.cached_response
+            return True, _cast(Dict[str, Any], existing.cached_response)
 
         return False, None
 

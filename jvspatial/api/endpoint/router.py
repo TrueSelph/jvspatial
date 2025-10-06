@@ -548,6 +548,8 @@ class EndpointRouter:
             # Use enhanced parameter model factory
             param_model = ParameterModelFactory.create_model(cls)
 
+            # Do not set auth attributes for public walkers here
+
             # Check if this is a GET request
             is_get_request = "GET" in methods
 
@@ -941,7 +943,21 @@ class EndpointRouter:
         ) -> Union[Type[Walker], Callable]:
             if inspect.isclass(target) and issubclass(target, Walker):
                 # Use walker endpoint decorator
-                return self.walker_endpoint(path, methods, **kwargs)(target)
+                # Pass kwargs without auth attributes for public walkers
+                register_kwargs = kwargs.copy()
+                # Only remove auth attributes if none are already present
+                if not any(
+                    hasattr(target, attr)
+                    for attr in [
+                        "_auth_required",
+                        "_required_roles",
+                        "_required_permissions",
+                    ]
+                ):
+                    register_kwargs.pop("_auth_required", None)
+                    register_kwargs.pop("_required_roles", None)
+                    register_kwargs.pop("_required_permissions", None)
+                return self.walker_endpoint(path, methods, **register_kwargs)(target)
             else:
                 # Use function endpoint decorator
                 return self._function_endpoint_impl(path, methods, **kwargs)(target)

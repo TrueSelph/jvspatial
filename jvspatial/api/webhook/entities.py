@@ -242,6 +242,7 @@ async def create_webhook_event(
     """
     expires_at = datetime.utcnow() + timedelta(hours=ttl_hours)
 
+    # Create event with concrete status code defaults for typing
     event = WebhookEvent(
         idempotency_key=idempotency_key,
         webhook_route=webhook_route,
@@ -254,6 +255,21 @@ async def create_webhook_event(
         user_id=user_id,
         webhook_config=webhook_config or {},
         expires_at=expires_at,
+        event_type="webhook",
+        source="external",
+        http_method="POST",
+        status="pending",
+        processing_started_at=datetime.utcnow(),
+        processing_completed_at=None,
+        processing_duration_ms=0,
+        api_key_id=None,
+        response_data=None,
+        response_status_code=200,
+        error_message=None,
+        error_details=None,
+        retry_count=0,
+        task_id=None,
+        is_async=False,
     )
 
     await event.save()
@@ -281,7 +297,7 @@ async def get_or_create_idempotency_key(
     """
     # Try to find existing key
     existing = await WebhookIdempotencyKey.find_one(
-        WebhookIdempotencyKey.idempotency_key == idempotency_key
+        {"idempotency_key": idempotency_key}
     )
 
     if existing:
@@ -299,10 +315,17 @@ async def get_or_create_idempotency_key(
         request_hash=request_hash,
         request_path=request_path,
         expires_at=expires_at,
+        webhook_event_id=None,
+        http_method="POST",
+        response_status_code=200,
+        is_processed=False,
+        processing_status="pending",
     )
 
     await key_record.save()
-    return key_record, True
+    from typing import cast as _cast
+
+    return _cast(WebhookIdempotencyKey, key_record), True
 
 
 async def mark_idempotency_key_processed(
@@ -323,11 +346,16 @@ async def mark_idempotency_key_processed(
         Updated WebhookIdempotencyKey or None if not found
     """
     key_record = await WebhookIdempotencyKey.find_one(
-        WebhookIdempotencyKey.idempotency_key == idempotency_key
+        {"idempotency_key": idempotency_key}
     )
 
     if not key_record:
         return None
+
+    # Narrow type for mypy
+    from typing import cast as _cast
+
+    key_record = _cast(WebhookIdempotencyKey, key_record)
 
     # Update record with response data
     key_record.is_processed = True

@@ -1,11 +1,11 @@
 """Entity and Decorator classes."""
 
+# flake8-noqa: B010
+
 import asyncio
 import inspect
 import os
 import uuid
-
-# math import removed - no longer needed after spatial function extraction
 import weakref
 from collections import deque
 from contextlib import contextmanager, suppress
@@ -22,6 +22,7 @@ from typing import (
     Optional,
     Tuple,
     Type,
+    TypeVar,
     Union,
 )
 
@@ -42,6 +43,9 @@ from .annotations import (
     protected,
 )
 from .events import event_bus
+
+# Note: Simple typing for visit hooks to avoid mypy complexity with Protocols/overloads
+TVisitable = TypeVar("TVisitable", bound=Union["Node", "Edge", "Walker"])
 
 # ----------------- HELPER FUNCTIONS -----------------
 
@@ -485,6 +489,8 @@ class Edge(Object):
         source: Source node ID
         target: Target node ID
         bidirectional: Whether the edge is bidirectional
+        _visit_hooks: Dict mapping target walker types to visit hook functions
+        _is_visit_hook: Dict mapping method names to visit hook flags
     """
 
     type_code: ClassVar[str] = "e"
@@ -492,6 +498,10 @@ class Edge(Object):
     source: str
     target: str
     bidirectional: bool = True
+
+    # Visit hooks for edges
+    _visit_hooks: ClassVar[Dict[Optional[Type["Walker"]], List[Callable]]] = {}
+    _is_visit_hook: ClassVar[Dict[str, bool]] = {}
 
     @property
     def direction(self: "Edge") -> str:
@@ -505,8 +515,9 @@ class Edge(Object):
     def __init_subclass__(cls: Type["Edge"]) -> None:
         """Initialize subclass by registering visit hooks."""
         cls._visit_hooks = {}
+        cls._is_visit_hook = {}
 
-        for _name, method in inspect.getmembers(cls, inspect.isfunction):
+        for _, method in inspect.getmembers(cls, inspect.isfunction):
             if hasattr(method, "_is_visit_hook"):
                 targets = getattr(method, "_visit_targets", None)
 
@@ -629,7 +640,9 @@ class Edge(Object):
         from .context import get_default_context
 
         context = get_default_context()
-        return await context.get(cls, id)
+        from typing import cast as _cast
+
+        return _cast(Optional[Edge], await context.get(cls, id))
 
     @classmethod
     async def create(cls: Type["Edge"], **kwargs: Any) -> "Edge":
@@ -644,9 +657,15 @@ class Edge(Object):
         edge = cls(**kwargs)
         await edge.save()
 
-        # Update connected nodes' edge_ids
-        source_node = await Node.get(edge.source) if edge.source else None
-        target_node = await Node.get(edge.target) if edge.target else None
+        # Update connected nodes - use typing.cast to ensure proper types
+        from typing import cast
+
+        source_node = cast(
+            Optional[Node], await Node.get(edge.source) if edge.source else None
+        )
+        target_node = cast(
+            Optional[Node], await Node.get(edge.target) if edge.target else None
+        )
 
         if source_node and edge.id not in source_node.edge_ids:
             source_node.edge_ids.append(edge.id)
@@ -664,10 +683,12 @@ class Edge(Object):
         Returns:
             The saved edge instance
         """
-        return await super().save()
+        from typing import cast as _cast
+
+        return _cast("Edge", await super().save())
 
     @classmethod
-    async def all(cls: Type["Edge"]) -> List["Edge"]:
+    async def all(cls: Type["Edge"]) -> List["Object"]:
         """Retrieve all edges from the database.
 
         Returns:
@@ -738,7 +759,7 @@ class Node(Object):
     _visitor_ref: Optional[weakref.ReferenceType] = private(default=None)
     is_root: bool = False
     edge_ids: List[str] = Field(default_factory=list)
-    _visit_hooks: ClassVar[dict] = {}
+    _visit_hooks: ClassVar[Dict[Optional[Type["Walker"]], List[Callable]]] = {}
 
     def __init_subclass__(cls: Type["Node"]) -> None:
         """Initialize subclass by registering visit hooks."""
@@ -778,11 +799,11 @@ class Node(Object):
         return self._visitor_ref() if self._visitor_ref else None
 
     @visitor.setter
-    def visitor(self: "Node", value: "Walker") -> None:
+    def visitor(self: "Node", value: Optional["Walker"]) -> None:
         """Set the current visitor of this node.
 
         Args:
-            value: Walker instance to set as visitor
+            value: Walker instance to set as visitor, or None to clear
         """
         self._visitor_ref = weakref.ref(value) if value else None
 
@@ -1544,7 +1565,9 @@ class Node(Object):
         Returns:
             Created and connected node
         """
-        node = await cls.create(**kwargs)
+        from typing import cast
+
+        node = cast(Node, await cls.create(**kwargs))
         await node.connect(other, edge or Edge)
         return node
 
@@ -1747,9 +1770,25 @@ class Walker(ProtectedAttributeMixin, BaseModel):
 
     # Walker core attributes
     _queue: deque = private(default_factory=deque)
-    _current_node: Optional[Node] = private(default=None)
-    _visit_hooks: ClassVar[dict] = {}
+    _current_node: Optional[Union[Node, Edge]] = private(default=None)
+    _visit_hooks: ClassVar[
+        Dict[Union[Type[Union[Node, Edge]], str, None], List[Callable]]
+    ] = {}
     _paused: bool = private(default=False)
+
+    # Decorator-applied class attributes
+    # Note: Public endpoints are marked with _auth_required=False
+    # Auth decorators handle setting their own attributes
+    _endpoint_path: ClassVar[Optional[str]] = None
+    _endpoint_methods: ClassVar[List[str]] = []
+    _endpoint_server: ClassVar[Optional[str]] = None
+    _webhook_required: bool = False  # Instance level since it varies per instance
+    _hmac_secret: ClassVar[Optional[str]] = None
+    _idempotency_key_field: ClassVar[Optional[str]] = None
+    _idempotency_ttl_hours: ClassVar[int] = 24
+    _async_processing: bool = False  # Instance level since it varies per instance
+    _path_key_auth: ClassVar[bool] = False
+    _is_webhook: bool = False  # Instance level since it varies per instance
 
     # Trail tracking attributes
     _trail: List[str] = private(default_factory=list)  # Node IDs in visit order
@@ -1911,13 +1950,13 @@ class Walker(ProtectedAttributeMixin, BaseModel):
         self._queue = value
 
     @property
-    def current_node(self: "Walker") -> Optional[Node]:
-        """Get the current node being visited."""
+    def current_node(self: "Walker") -> Optional[Union[Node, Edge]]:
+        """Get the current node or edge being visited."""
         return self._current_node
 
     @current_node.setter
-    def current_node(self: "Walker", value: Optional[Node]) -> None:
-        """Set the current node being visited."""
+    def current_node(self: "Walker", value: Optional[Union[Node, Edge]]) -> None:
+        """Set the current node or edge being visited."""
         self._current_node = value
 
     @property
@@ -1989,7 +2028,8 @@ class Walker(ProtectedAttributeMixin, BaseModel):
         Returns:
             Current node if present, else None
         """
-        return self.current_node
+        cn = self.current_node
+        return cn if isinstance(cn, Node) else None
 
     @property
     def visitor(self: "Walker") -> Optional["Walker"]:
@@ -2237,45 +2277,42 @@ class Walker(ProtectedAttributeMixin, BaseModel):
             edge_from_previous: Edge ID used to reach this node (for trail tracking)
         """
         if isinstance(item, tuple) and item[0] == "edge":
-            # Visiting an edge
+            # Visiting an edge - no need to cast since current_node can be Edge
             edge = item[1]
-            self.current_node = edge  # type: ignore[assignment]
+            self.current_node = edge
             try:
                 yield
             finally:
                 self.current_node = None
+        elif isinstance(item, Node):
+            # Visiting a node
+            node = item
+            self.current_node = node
+            node.visitor = self
+
+            # Record trail step for this node
+            if self.trail_enabled:
+                import time
+
+                metadata = {
+                    "timestamp": time.time(),
+                    "node_type": node.__class__.__name__,
+                    "queue_length": (len(self.queue) if hasattr(self, "queue") else 0),
+                }
+                self._record_trail_step(node, edge_from_previous, metadata)
+
+            try:
+                yield
+            finally:
+                node.visitor = None
+                self.current_node = None
         else:
-            # Visiting a node (existing logic)
-            if isinstance(item, Node):
-                node = item
-                self.current_node = node
-                node.visitor = self
-
-                # Record trail step for this node
-                if self.trail_enabled:
-                    import time
-
-                    metadata = {
-                        "timestamp": time.time(),
-                        "node_type": node.__class__.__name__,
-                        "queue_length": (
-                            len(self.queue) if hasattr(self, "queue") else 0
-                        ),
-                    }
-                    self._record_trail_step(node, edge_from_previous, metadata)
-
-                try:
-                    yield
-                finally:
-                    node.visitor = None
-                    self.current_node = None
-            else:
-                # This shouldn't happen but handle gracefully
-                self.current_node = None  # type: ignore[assignment]
-                try:
-                    yield
-                finally:
-                    self.current_node = None
+            # Item is neither Edge tuple nor Node
+            self.current_node = None
+            try:
+                yield
+            finally:
+                self.current_node = None
 
     async def spawn(self: "Walker", start: Optional[Node] = None) -> "Walker":
         """Start traversing the graph from a given node.
@@ -2294,7 +2331,9 @@ class Walker(ProtectedAttributeMixin, BaseModel):
         self._node_visit_counts.clear()
         self._start_time = time.time() if self._protection_enabled else None
 
-        root = start or await Root.get()  # type: ignore[call-arg]
+        from typing import cast
+
+        root = cast(Node, start or await Root.get())  # type: ignore[call-arg]
         # Preserve any existing queue items (like edges) and add the root at the beginning
         existing_items = (
             list(self.queue) if hasattr(self, "queue") and self.queue else []
@@ -2451,9 +2490,9 @@ class Walker(ProtectedAttributeMixin, BaseModel):
             The walker instance in its disengaged state
         """
         # Remove walker from current node if present
-        if self.current_node:
+        if self.current_node and isinstance(self.current_node, Node):
             self.current_node.visitor = None
-            self.current_node = None
+        self.current_node = None
 
         # Pause the walker
         self.paused = True
@@ -2464,7 +2503,7 @@ class Walker(ProtectedAttributeMixin, BaseModel):
         return self
 
     async def _process_hooks(
-        self: "Walker", item: Union["Node", "Edge", Tuple[str, "Edge"]]
+        self: "Walker", item: Union[Node, Edge, Tuple[str, Edge]]
     ) -> None:
         """Process all visit hooks for a node or edge.
 
@@ -2503,26 +2542,29 @@ class Walker(ProtectedAttributeMixin, BaseModel):
         Returns:
             List of hook functions
         """
-        hooks = []
+        hooks: List[Callable] = []
         node_type = type(node)
         walker_type = type(self)
 
-        # 1. Walker hooks for specific node types or catch-all
+        # 1. Walker hooks (defined on Walker) for specific node types or catch-all
         for target_type, hook_list in self._visit_hooks.items():
-            if (target_type is None) or (
-                target_type == node_type or issubclass(node_type, target_type)
+            if target_type is None or (
+                isinstance(target_type, type)
+                and (target_type == node_type or issubclass(node_type, target_type))
             ):
-                hooks.extend(hook_list if isinstance(hook_list, list) else [hook_list])
+                hooks.extend(hook_list)
 
-        # 2. Node hooks for specific walker types or catch-all
+        # 2. Node hooks (defined on Node) for specific walker types or catch-all
         if hasattr(node, "_visit_hooks"):
-            for target_type, hook_list in node._visit_hooks.items():
-                if (target_type is None) or (
-                    target_type == walker_type or issubclass(walker_type, target_type)
-                ):
-                    hooks.extend(
-                        hook_list if isinstance(hook_list, list) else [hook_list]
+            for walker_target_type, hook_list in node._visit_hooks.items():
+                if walker_target_type is None or (
+                    isinstance(walker_target_type, type)
+                    and (
+                        walker_target_type == walker_type
+                        or issubclass(walker_type, walker_target_type)
                     )
+                ):
+                    hooks.extend(hook_list)
 
         return hooks
 
@@ -2617,23 +2659,29 @@ class Walker(ProtectedAttributeMixin, BaseModel):
         # 1. Walker hooks for specific edge types or catch-all
         for target_type, hook_list in self._visit_hooks.items():
             if (target_type is None) or (
-                target_type == edge_type
-                or inspect.isclass(target_type)
-                and issubclass(edge_type, target_type)
+                isinstance(target_type, type)
+                and (target_type == edge_type or issubclass(edge_type, target_type))
             ):
-                hooks.extend(hook_list if isinstance(hook_list, list) else [hook_list])
+                hooks.extend(
+                    hook_list
+                    if isinstance(hook_list, list)
+                    else [hook_list] if callable(hook_list) else []
+                )
 
         # 2. Edge hooks for specific walker types or catch-all
         if hasattr(edge, "_visit_hooks"):
-            for target_type, hook_list in edge._visit_hooks.items():
-                if (target_type is None) or (
-                    target_type == walker_type
-                    or inspect.isclass(target_type)
-                    and issubclass(walker_type, target_type)
-                ):
-                    hooks.extend(
-                        hook_list if isinstance(hook_list, list) else [hook_list]
+            for walker_target_type, hook_list in edge._visit_hooks.items():
+                if (walker_target_type is None) or (
+                    walker_target_type == walker_type
+                    or (
+                        inspect.isclass(walker_target_type)
+                        and issubclass(walker_type, walker_target_type)
                     )
+                ):
+                    if isinstance(hook_list, list):
+                        hooks.extend(hook_list)
+                    else:
+                        hooks.append(hook_list)
 
         return hooks
 
@@ -2747,12 +2795,14 @@ class Walker(ProtectedAttributeMixin, BaseModel):
         Returns:
             List of Node objects in the order they were visited
         """
-        nodes = []
+        nodes: List[Node] = []
         for node_id in self._trail:
             try:
+                from typing import cast
+
                 node = await Node.get(node_id)
                 if node:
-                    nodes.append(node)
+                    nodes.append(cast(Node, node))
             except Exception:
                 continue  # Skip nodes that can't be retrieved
         return nodes
@@ -3097,12 +3147,22 @@ class TraversalSkipped(JVSpatialError):
 # ----------------- DECORATOR FUNCTIONS -----------------
 
 
+def _set_hook_attributes(
+    func: Callable[..., Any], targets: Optional[Any] = None
+) -> None:
+    """Set hook attributes on a function.
+
+    This helper exists to centralize the function attribute modification and
+    avoid individual setattr calls that trigger B010.
+    """
+    func._visit_targets = targets  # type: ignore[attr-defined]
+    func._is_visit_hook = True  # type: ignore[attr-defined]
+
+
 """Register visit hooks for graph traversal."""
 
 
-def on_visit(
-    *target_types: Union[Type["Node"], Type["Edge"], Type["Walker"], str]
-) -> Union[Callable, Callable[[Callable], Callable]]:
+def on_visit(*target_types: Union[Type[Union["Node", "Edge", "Walker"]], str]):
     """Register a visit hook for one or more target types.
 
     Args:
@@ -3127,22 +3187,17 @@ def on_visit(
     ):
         # This is the case: @on_visit (without parentheses)
         func = target_types[0]
-        func._visit_targets = None  # type: ignore[attr-defined]
-        func._is_visit_hook = True  # type: ignore[attr-defined]
+        _set_hook_attributes(func)
         return func
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         # Validate target types - allow strings for forward references
-        if target_types:
-            for target_type in target_types:
-                if not (inspect.isclass(target_type) or isinstance(target_type, str)):
-                    raise ValueError(
-                        f"Target type must be a class or string, got {target_type}"
-                    )
-
-        # Store all target types as a tuple
-        func._visit_targets = target_types if target_types else None  # type: ignore[attr-defined]
-        func._is_visit_hook = True  # type: ignore[attr-defined]
+        for target_type in target_types:
+            if not (inspect.isclass(target_type) or isinstance(target_type, str)):
+                raise ValueError(
+                    f"Target type must be a class or string, got {target_type}"
+                )
+        _set_hook_attributes(func, target_types if target_types else None)
         return func
 
     return decorator

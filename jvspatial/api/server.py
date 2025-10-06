@@ -26,7 +26,7 @@ from typing import (
 )
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -36,6 +36,11 @@ from jvspatial.api.endpoint.router import EndpointRouter
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node, Root, Walker
 from jvspatial.db.factory import get_database
+from jvspatial.storage.exceptions import (
+    PathTraversalError,
+    StorageError,
+    ValidationError,
+)
 
 # Global server registry for runtime access
 _global_servers: Dict[str, "Server"] = {}
@@ -96,6 +101,52 @@ class ServerConfig(BaseModel):
     # Lifecycle Hooks
     startup_hooks: List[str] = Field(default_factory=list)
     shutdown_hooks: List[str] = Field(default_factory=list)
+
+    # File Storage Configuration
+    file_storage_enabled: bool = Field(
+        default=False, validation_alias="JVSPATIAL_FILE_STORAGE_ENABLED"
+    )
+    file_storage_provider: str = Field(
+        default="local", validation_alias="JVSPATIAL_FILE_STORAGE_PROVIDER"
+    )  # "local" or "s3"
+    file_storage_root: str = Field(
+        default=".files", validation_alias="JVSPATIAL_FILE_STORAGE_ROOT"
+    )
+    file_storage_base_url: str = Field(
+        default="http://localhost:8000",
+        validation_alias="JVSPATIAL_FILE_STORAGE_BASE_URL",
+    )
+    file_storage_max_size: int = Field(
+        default=100 * 1024 * 1024, validation_alias="JVSPATIAL_FILE_STORAGE_MAX_SIZE"
+    )  # 100MB default
+
+    # S3 Configuration (only used if provider is "s3")
+    s3_bucket_name: Optional[str] = Field(
+        default=None, validation_alias="JVSPATIAL_S3_BUCKET_NAME"
+    )
+    s3_region: Optional[str] = Field(
+        default=None, validation_alias="JVSPATIAL_S3_REGION"
+    )
+    s3_access_key: Optional[str] = Field(
+        default=None, validation_alias="JVSPATIAL_S3_ACCESS_KEY"
+    )
+    s3_secret_key: Optional[str] = Field(
+        default=None, validation_alias="JVSPATIAL_S3_SECRET_KEY"
+    )
+    s3_endpoint_url: Optional[str] = Field(
+        default=None, validation_alias="JVSPATIAL_S3_ENDPOINT_URL"
+    )
+
+    # URL Proxy Configuration
+    proxy_enabled: bool = Field(
+        default=False, validation_alias="JVSPATIAL_PROXY_ENABLED"
+    )
+    proxy_default_expiration: int = Field(
+        default=3600, validation_alias="JVSPATIAL_PROXY_DEFAULT_EXPIRATION"
+    )  # 1 hour
+    proxy_max_expiration: int = Field(
+        default=86400, validation_alias="JVSPATIAL_PROXY_MAX_EXPIRATION"
+    )  # 24 hours
 
 
 class Server:
@@ -174,6 +225,10 @@ class Server:
         self._logger = logging.getLogger(__name__)
         self._graph_context: Optional[GraphContext] = None
 
+        # File storage components
+        self._file_interface: Optional[Any] = None
+        self._proxy_manager: Optional[Any] = None
+
         # Dynamic registration support
         self._is_running = False
         self._registered_walker_classes: Set[Type[Walker]] = set()
@@ -202,6 +257,10 @@ class Server:
         # Initialize GraphContext if database configuration is provided
         if self.config.db_type:
             self._initialize_graph_context()
+
+        # Initialize file storage if enabled
+        if self.config.file_storage_enabled:
+            self._initialize_file_storage()
 
     def _initialize_graph_context(self: "Server") -> None:
         """Initialize GraphContext with current database configuration."""
@@ -232,6 +291,45 @@ class Server:
             self._logger.error(f"❌ Failed to initialize GraphContext: {e}")
             raise
 
+    def _initialize_file_storage(self: "Server") -> None:
+        """Initialize file storage interface and proxy manager."""
+        try:
+            from jvspatial.storage import get_file_interface, get_proxy_manager
+
+            # Initialize file interface
+            if self.config.file_storage_provider == "local":
+                self._file_interface = get_file_interface(
+                    provider="local",
+                    root_dir=self.config.file_storage_root,
+                    base_url=self.config.file_storage_base_url,
+                    max_file_size=self.config.file_storage_max_size,
+                )
+            elif self.config.file_storage_provider == "s3":
+                self._file_interface = get_file_interface(
+                    provider="s3",
+                    bucket_name=self.config.s3_bucket_name,
+                    region=self.config.s3_region,
+                    access_key=self.config.s3_access_key,
+                    secret_key=self.config.s3_secret_key,
+                    endpoint_url=self.config.s3_endpoint_url,
+                )
+            else:
+                raise ValueError(
+                    f"Unsupported file storage provider: {self.config.file_storage_provider}"
+                )
+
+            # Initialize proxy manager if enabled
+            if self.config.proxy_enabled:
+                self._proxy_manager = get_proxy_manager()
+
+            self._logger.info(
+                f"📁 File storage initialized: {self.config.file_storage_provider}"
+            )
+
+        except Exception as e:
+            self._logger.error(f"❌ Failed to initialize file storage: {e}")
+            raise
+
     def walker(
         self: "Server", path: str, methods: Optional[List[str]] = None, **kwargs: Any
     ) -> Callable[[Type[Walker]], Type[Walker]]:
@@ -249,10 +347,20 @@ class Server:
         def decorator(walker_class: Type[Walker]) -> Type[Walker]:
             # Track registered walker classes and their endpoint info
             self._registered_walker_classes.add(walker_class)
+
+            # For public walkers, do not set any auth attributes at all
+            # Auth decorators will set them when needed
+
+            # Remove auth-related kwargs (they should only be set by auth decorators)
+            endpoint_kwargs = kwargs.copy()
+            auth_attrs = ["_auth_required", "_required_roles", "_required_permissions"]
+            for attr in auth_attrs:
+                endpoint_kwargs.pop(attr, None)
+
             self._walker_endpoint_mapping[walker_class] = {
                 "path": path,
                 "methods": methods or ["POST"],
-                "kwargs": kwargs,
+                "kwargs": endpoint_kwargs,  # Use filtered kwargs
                 "router": self.endpoint_router,  # Main router
             }
 
@@ -261,10 +369,13 @@ class Server:
                 self._register_walker_dynamically(walker_class, path, methods, **kwargs)
 
             # Always register with the endpoint router
-            return cast(
-                Type[Walker],
-                self.endpoint_router.endpoint(path, methods, **kwargs)(walker_class),
-            )
+            # For public walkers, create a new kwargs dict without auth attributes
+            register_kwargs = kwargs.copy()
+            register_kwargs.pop("_auth_required", None)  # Remove auth attribute
+            decorated_walker = self.endpoint_router.endpoint(
+                path, methods, **register_kwargs
+            )(walker_class)
+            return cast(Type[Walker], decorated_walker)
 
         return decorator
 
@@ -438,6 +549,10 @@ class Server:
         # Add webhook middleware before other middleware
         self._add_webhook_middleware(app)
 
+        # Add file storage endpoints if enabled
+        if self.config.file_storage_enabled:
+            self._add_file_storage_endpoints(app)
+
         # Add custom middleware
         for middleware_config in self._middleware:
             app.middleware(middleware_config["middleware_type"])(
@@ -531,6 +646,166 @@ class Server:
             app.include_router(dynamic_router.router, prefix="/api")
 
         return app
+
+    def _add_file_storage_endpoints(self: "Server", app: FastAPI) -> None:
+        """Add file storage and proxy endpoints to the app."""
+
+        # File upload endpoint
+        @app.post("/api/storage/upload")
+        async def upload_file(
+            file: UploadFile,
+            path: str = "",
+            create_proxy: bool = False,
+            proxy_expires_in: int = 3600,
+            proxy_one_time: bool = False,
+        ):
+            """Upload a file with optional proxy URL creation."""
+            try:
+                # Read file content
+                content = await file.read()
+
+                # Determine file path
+                file_path = f"{path}/{file.filename}" if path else file.filename
+
+                # Save file
+                fi = self._file_interface
+                assert fi is not None
+                await fi.save_file(file_path, content)
+
+                result = {
+                    "success": True,
+                    "file_path": file_path,
+                    "file_size": len(content),
+                    "file_url": await fi.get_file_url(file_path),
+                }
+
+                # Create proxy if requested
+                if create_proxy and self._proxy_manager:
+                    proxy_url = await self._proxy_manager.create_proxy(
+                        file_path=file_path,
+                        expires_in=proxy_expires_in,
+                        one_time=proxy_one_time,
+                    )
+                    result["proxy_url"] = proxy_url
+                    result["proxy_code"] = proxy_url.split("/")[-1]
+
+                return result
+
+            except (PathTraversalError, ValidationError) as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except StorageError as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        # File download/serve endpoint
+        @app.get("/api/storage/files/{file_path:path}")
+        async def serve_file(file_path: str):
+            """Serve a file directly."""
+            try:
+                fi = self._file_interface
+                assert fi is not None
+                return await fi.serve_file(file_path)
+            except FileNotFoundError:
+                raise HTTPException(status_code=404, detail="File not found")
+            except StorageError as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        # File delete endpoint
+        @app.delete("/api/storage/files/{file_path:path}")
+        async def delete_file(file_path: str):
+            """Delete a file."""
+            try:
+                fi = self._file_interface
+                assert fi is not None
+                success = await fi.delete_file(file_path)
+                return {"success": success, "file_path": file_path}
+            except StorageError as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        # Proxy endpoints (if enabled)
+        if self.config.proxy_enabled and self._proxy_manager:
+
+            # Create proxy for existing file
+            @app.post("/api/storage/proxy")
+            async def create_proxy(
+                file_path: str,
+                expires_in: Optional[int] = None,
+                one_time: bool = False,
+                metadata: Optional[Dict[str, Any]] = None,
+            ):
+                """Create a proxy URL for a file."""
+                try:
+                    # Verify file exists
+                    fi = self._file_interface
+                    assert fi is not None
+                    if not await fi.file_exists(file_path):
+                        raise HTTPException(404, "File not found")
+
+                    pm = self._proxy_manager
+                    assert pm is not None
+                    proxy_url = await pm.create_proxy(
+                        file_path=file_path,
+                        expires_in=expires_in or self.config.proxy_default_expiration,
+                        one_time=one_time,
+                        metadata=metadata or {},
+                    )
+
+                    return {
+                        "proxy_url": proxy_url,
+                        "code": proxy_url.split("/")[-1],
+                        "file_path": file_path,
+                        "expires_in": expires_in
+                        or self.config.proxy_default_expiration,
+                    }
+                except StorageError as e:
+                    raise HTTPException(500, str(e))
+
+            # Access file via proxy
+            @app.get("/p/{code}")
+            async def serve_proxied_file(code: str):
+                """Serve file via proxy URL."""
+                try:
+                    # Resolve proxy to file path
+                    pm = self._proxy_manager
+                    assert pm is not None
+                    file_path, _metadata = await pm.resolve_proxy(code)
+
+                    fi = self._file_interface
+                    assert fi is not None
+                    # Serve the file
+                    return await fi.serve_file(file_path)
+
+                except FileNotFoundError:
+                    raise HTTPException(404, "Proxy not found or expired")
+                except StorageError as e:
+                    raise HTTPException(500, str(e))
+
+            # Revoke proxy
+            @app.delete("/api/storage/proxy/{code}")
+            async def revoke_proxy(code: str):
+                """Revoke a proxy URL."""
+                try:
+                    pm = self._proxy_manager
+                    assert pm is not None
+                    success = await pm.revoke_proxy(code)
+                    return {"success": success, "code": code}
+                except StorageError as e:
+                    raise HTTPException(500, str(e))
+
+            # Get proxy stats
+            @app.get("/api/storage/proxy/{code}/stats")
+            async def get_proxy_stats(code: str):
+                """Get statistics for a proxy URL."""
+                try:
+                    pm = self._proxy_manager
+                    assert pm is not None
+                    stats = await pm.get_stats(code)
+                    if not stats:
+                        raise HTTPException(404, "Proxy not found")
+                    return stats
+                except StorageError as e:
+                    raise HTTPException(500, str(e))
+
+        self._logger.info("📁 File storage endpoints registered")
 
     def _register_walker_dynamically(
         self: "Server",
@@ -1195,6 +1470,14 @@ class Server:
         except Exception as e:
             self._logger.error(f"❌ Database initialization failed: {e}")
             raise
+
+        # Verify file storage if enabled
+        if self.config.file_storage_enabled:
+            self._logger.info(
+                f"📁 File storage: {self.config.file_storage_provider} at {self.config.file_storage_root}"
+            )
+            if self.config.proxy_enabled:
+                self._logger.info("🔗 URL proxy enabled")
 
         # Discover and register packages after database is ready
         if self._package_discovery_enabled:

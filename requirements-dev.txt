@@ -7,6 +7,7 @@ pytest>=7.0
 pytest-asyncio>=0.21.0
 httpx>=0.24.0  # For testing FastAPI endpoints
 pytest-mock  # For mocking in tests
+pytest-cov  # Coverage reporting
 
 # Code quality and formatting
 pre-commit>=3.0.0
@@ -14,10 +15,7 @@ black  # Code formatter
 isort  # Import sorting
 flake8  # Linting
 mypy  # Type checking
-
-# Coverage reporting
-pytest-cov
-coverage
+coverage  # Coverage tool
 
 # Development utilities
-python-dotenv  # Environment variable management
+python-dotenv>=1.0.0  # Environment variable management

@@ -3,9 +3,13 @@
 import asyncio
 import contextlib
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
+from motor.motor_asyncio import (
+    AsyncIOMotorClient,
+    AsyncIOMotorCollection,
+    AsyncIOMotorDatabase,
+)
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
@@ -20,7 +24,7 @@ class MongoDB(Database):
     """
 
     _client: Optional[AsyncIOMotorClient] = None
-    _db = None
+    _db: Optional[AsyncIOMotorDatabase] = None
     _lock = asyncio.Lock()
     _query_cache: Dict[str, Tuple[List[Dict[str, Any]], float]] = {}
     _cache_ttl: float = 60.0  # Cache TTL in seconds
@@ -34,7 +38,7 @@ class MongoDB(Database):
         """
         self._connection_kwargs = kwargs
 
-    async def get_db(self) -> Any:
+    async def get_db(self) -> AsyncIOMotorDatabase:
         """Get database instance with thread-safe initialization.
 
         Returns:
@@ -80,6 +84,7 @@ class MongoDB(Database):
                         self._db = None
                         raise RuntimeError(f"Failed to connect to MongoDB: {e}") from e
 
+        assert self._db is not None
         return self._db
 
     async def _create_indexes(self) -> None:
@@ -104,14 +109,16 @@ class MongoDB(Database):
         except Exception as e:
             raise RuntimeError(f"Failed to create database indexes: {e}") from e
 
-    async def _get_collection(self, collection: str) -> AsyncIOMotorCollection:
+    async def _get_collection(
+        self, collection: str
+    ) -> AsyncIOMotorCollection[Dict[str, Any]]:
         """Get collection with connection pooling.
 
         Args:
             collection: Collection name
 
         Returns:
-            MongoDB collection instance
+            MongoDB collection instance with document type hint
 
         Raises:
             ValueError: If collection name is invalid
@@ -121,7 +128,7 @@ class MongoDB(Database):
             raise ValueError(f"Invalid collection name: {collection}")
 
         db = await self.get_db()
-        return db[collection]
+        return cast(AsyncIOMotorCollection[Dict[str, Any]], db[collection])
 
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Save document to MongoDB.
@@ -175,9 +182,9 @@ class MongoDB(Database):
                 data_to_save["_version"] = 1
 
                 try:
-                    result = await coll.insert_one(data_to_save)
+                    insert_result = await coll.insert_one(data_to_save)
                     if not data_to_save.get("id"):
-                        data_to_save["id"] = str(result.inserted_id)
+                        data_to_save["id"] = str(insert_result.inserted_id)
                     output = data_to_save
                 except DuplicateKeyError as e:
                     raise RuntimeError(f"Duplicate document ID in {collection}") from e
