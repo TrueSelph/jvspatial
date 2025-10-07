@@ -208,29 +208,135 @@ if __name__ == "__main__":
 
 ### Core Features
 
-- **Graph Processing**
-  - Entity-centric data modeling
-  - Powerful graph traversal
-  - Walker-based processing
-  - Event-driven communication
+#### Entity System
+- **Entity-Centric Design** - [docs/md/entity-reference.md](docs/md/entity-reference.md)
+  - MongoDB-style query interface across all backends
+  - Unified API for JSON and MongoDB storage
+  - Extensible database interface
+  - Consistent CRUD operations
 
-- **Database & Storage**
-  - JSON and MongoDB backends
-  - Local and S3 file storage
-  - Pagination and caching
-  - Semantic filtering
+- **Type Safety** - [docs/md/attribute-annotations.md](docs/md/attribute-annotations.md)
+  - Full Pydantic integration
+  - Runtime type validation
+  - Rich type hints and IDE support
+  - Custom type converters
 
-- **API & Integration**
-  - FastAPI endpoints
-  - OpenAPI documentation
-  - Webhook processing
-  - Background tasks
+- **Attribute Control** - [docs/md/attribute-annotations.md](docs/md/attribute-annotations.md)
+  - `@protected` decorator for immutable fields
+  - `@private` decorator for private properties
+  - `@transient` decorator for runtime-only data
+  - Computed properties
+  - Validation hooks
+  - Validation hooks
 
-- **Security**
-  - JWT and API key auth
-  - Role-based access (RBAC)
-  - Permission handling
+#### Graph Processing
+- **Graph Traversal** - [docs/md/node-operations.md](docs/md/node-operations.md)
+  - Walker-based graph processing
+  - Semantic path filtering
+  - Bidirectional traversal
+  - Custom traversal strategies
+
+- **Walker Features** - [docs/md/walker-reporting-events.md](docs/md/walker-reporting-events.md)
+  - Event-driven walker coordination
+  - Built-in reporting system
+  - Data collection and aggregation
+  - Inter-walker communication
+
+- **Safety Features** - [docs/md/infinite-walk-protection.md](docs/md/infinite-walk-protection.md)
+  - Infinite walk protection
+  - Configurable step limits
+  - Visit frequency control
+  - Execution time limits
+
+#### Data Management
+- **Database Operations** - [docs/md/mongodb-query-interface.md](docs/md/mongodb-query-interface.md)
+  - Multi-backend support (JSON, MongoDB)
+  - Atomic transactions
+  - Bulk operations
+  - Query optimization
+
+- **Caching System** - [docs/md/caching.md](docs/md/caching.md)
+  - Multi-level cache architecture
+  - In-memory caching
+  - Redis integration
+  - Cache invalidation strategies
+
+- **Pagination** - [docs/md/pagination.md](docs/md/pagination.md)
+  - Database-level pagination
+  - Efficient `ObjectPager`
+  - Cursor-based navigation
+  - Automatic count handling
+
+#### API & Integration
+- **FastAPI Integration** - [docs/md/rest-api.md](docs/md/rest-api.md)
+  - Built-in REST endpoints
+  - Automatic OpenAPI docs
+  - Request validation
+  - Response formatting
+
+- **Webhook System** - [docs/md/webhook-architecture.md](docs/md/webhook-architecture.md)
+  - HMAC signature verification
+  - Idempotency handling
+  - Path-based authentication
+  - Async webhook processing
+  - Automatic payload injection
+
+- **Background Tasks**
+  - Async task scheduling
+  - Task prioritization
+  - Error handling
+  - Task monitoring
+
+#### Security
+- **Authentication** - [docs/md/authentication.md](docs/md/authentication.md)
+  - JWT token support
+  - API key management
+  - Multi-scheme auth
+  - Token refresh handling
+
+- **Authorization**
+  - Role-based access control (RBAC)
+  - Spatial permissions system
+  - Granular access policies
+  - Permission inheritance
+
+- **Security Features**
   - Rate limiting
+  - Request validation
+  - CORS support
+  - SSL/TLS configuration
+
+#### Storage & Files
+- **File Storage** - [docs/md/file-storage-architecture.md](docs/md/file-storage-architecture.md)
+  - Local file system support
+  - S3 compatible storage
+  - File streaming
+  - Metadata management
+
+- **Storage Features**
+  - Automatic cleanup
+  - Version control
+  - Content validation
+  - Access control
+
+#### Development Tools
+- **Testing Support**
+  - Comprehensive test utilities
+  - Mock data generators
+  - Test fixtures
+  - Performance testing tools
+
+- **Debugging**
+  - Detailed logging
+  - Performance profiling
+  - Query analysis
+  - Error tracking
+
+- **Documentation**
+  - Extensive API docs
+  - Code examples
+  - Best practices
+  - Migration guides
 
 ## Examples
 
