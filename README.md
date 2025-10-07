@@ -2,7 +2,7 @@
 
 # jvspatial
 
-### Build powerful spatial applications with graph-based data processing and enterprise-grade security
+An async-first Python library for building graph-based spatial applications with FastAPI integration.
 
 [![GitHub release (latest by date)](https://img.shields.io/github/v/release/TrueSelph/jvspatial)](https://github.com/TrueSelph/jvspatial/releases)
 [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/TrueSelph/jvspatial/test-jvspatial.yaml)](https://github.com/TrueSelph/jvspatial/actions)
@@ -12,45 +12,59 @@
 
 </div>
 
-```python
-# Model your spatial data with intuitive graph relationships
-from jvspatial.core import Node, Edge, Walker
+## Table of Contents
 
-class City(Node):
-    name: str
-    coords: tuple[float, float]
+- [Overview](#overview)
+  - [Design Principles](#design-principles)
+  - [Use Cases](#use-cases)
+- [Features](#features)
+  - [Core Features](#core-features)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Key Concepts](#key-concepts)
+  - [Entity-Centric Design](#entity-centric-design)
+  - [Graph Traversal](#graph-traversal)
+  - [Entity Operations](#entity-operations)
+- [Examples](#examples)
+  - [Core Functionality](#core-functionality)
+  - [API & Integration](#api--integration)
+- [Configuration](#configuration)
+  - [Core Settings](#core-settings)
+  - [Auth Settings](#auth-settings)
+  - [Storage Settings](#storage-settings)
+  - [Walker Settings](#walker-settings)
+- [Documentation](#documentation)
+  - [Official Docs](#official-docs)
+  - [User Resources](#user-resources)
+  - [Developer Guides](#developer-guides)
+- [Project Structure](#project-structure)
+- [Contributing](#contributing)
+  - [Development Setup](#development-setup)
+  - [Development Workflow](#development-workflow)
+- [Contributors](#contributors)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
 
-class Road(Edge):
-    distance: float
+## Overview
 
-# Find cities within range using powerful graph traversal
-class NearbyFinder(Walker):
-    async def visit(self, city: City):
-        nearby = await city.nodes(
-            node=City,
-            edge=Road,
-            distance={'$lte': 100}
-        )
-        self.report({"near": [c.name for c in nearby]})
-```
+jvspatial combines graph databases with spatial processing for building complex applications. Inspired by Jaseci Labs' object-spatial paradigm, it provides an async-first API with enterprise-grade features for building spatial applications, middleware, and services.
 
-jvspatial is a Python library that combines graph databases with spatial processing. Inspired by Jaseci Labs object-spatial paradigm, it provides an async-first API for building complex spatial applications, with features like intelligent graph traversal, built-in REST APIs, and enterprise security.
+### Design Principles
 
-## Design Principles
+- **Simple APIs**: Clean, predictable interfaces for graph operations
+- **Type Safety**: Comprehensive validation with Pydantic
+- **Async First**: Native async/await for high performance
+- **Enterprise Ready**: Built-in security, storage, and caching
+- **Extensible**: Pluggable backends and custom behaviors
 
-- Simple and explicit APIs with predictable behavior
-- Type-safe with Pydantic validation
-- Async-first for high-performance operations
-- Extensible with pluggable backends and behaviors
-- Production-ready with enterprise features built-in
 
 ## Comparison
 
 How jvspatial compares to adjacent tools:
 
-- NetworkX: Great for in-memory graph algorithms; jvspatial focuses on async application development, persistence, and REST integration.
-- Neo4j drivers: Low-level graph database access; jvspatial provides a higher-level object-spatial model with walkers, endpoints, and auth.
-- Plain FastAPI + ORM: Excellent for CRUD; jvspatial adds graph traversal, node/edge relationships, and spatial patterns.
+- **NetworkX**: Great for in-memory graph algorithms; jvspatial focuses on async application development, persistence, and REST integration.
+- **Neo4j drivers**: Low-level graph database access; jvspatial provides a higher-level object-spatial model with walkers, endpoints, and auth.
+- **Plain FastAPI + ORM**: Excellent for CRUD; jvspatial adds graph traversal, node/edge relationships, and spatial patterns.
 
 ## Who is this for?
 
@@ -66,271 +80,80 @@ How jvspatial compares to adjacent tools:
 - You want REST endpoints backed by safe, async graph operations
 - You need enterprise features: authentication, storage, caching
 
-## Key Features
+### Use Cases
 
-<table>
-<tr>
-<td>
+- **Spatial Services**: Location-based APIs and analysis
+- **Graph Processing**: Complex relationship traversal
+- **Data APIs**: REST endpoints with built-in auth and storage
+- **ETL Pipelines**: Async data processing and transformation
+- **Middleware**: Secure integrations and event processing
+
+## Key Concepts
+
+jvspatial is built around three core concepts: Nodes, Edges, and Walkers. These provide the foundation for building complex spatial applications.
 
 ### Entity-Centric Design
 
 ```python
-class Store(Node):
-    name: str
-    location: tuple[float, float]
+from jvspatial.core import Node
 
-stores = await Store.find({
-    "location": {
-        "$near": [lat, lng],
-        "$maxDistance": 5.0
-    }
+class User(Node):
+    name: str
+    email: str
+    department: str
+
+# Create and query entities
+user = await User.create(name="Alice", email="alice@company.com")
+active_users = await User.find({"context.active": True})
+
+# Complex queries work across all backends
+senior_engineers = await User.find({
+    "$and": [
+        {"context.department": "engineering"},
+        {"context.years": {"$gte": 5}}
+    ]
 })
-```
-
-- Type-safe models with Pydantic
-- MongoDB-style query interface
-- Automatic schema validation
-
-</td>
-<td>
-
-### Intelligent Traversal
-
-```python
-class StockChecker(Walker):
-    @on_visit(Store)
-    async def check_stock(self, store):
-        if store.inventory > 0:
-            self.report({
-                "found_at": store.name
-            })
-```
-
-- Path-finding algorithms
-- Event-driven processing
-- Automatic cycle detection
-
-</td>
-</tr>
-<tr>
-<td>
-
-### REST API Integration
-
-```python
-@walker_endpoint("/api/nearby")
-class NearbyStores(Walker):
-    radius: float = 5.0
-
-    @on_visit(Store)
-    async def find(self, store):
-        if in_radius(store):
-            self.report(store)
-```
-
-- Automatic OpenAPI docs
-- Request validation
-- Built-in error handling
-
-</td>
-<td>
-
-### Enterprise Ready
-
-```python
-# Secure endpoints
-@auth_endpoint("/api/stores")
-class StoreManager(Walker):
-    @on_visit(Store)
-    async def manage(self, store):
-        if current_user.can_edit:
-            await process(store)
-```
-
-- JWT & API key auth
-- Role-based access
-- Multi-backend storage
-
-</td>
-</tr>
-</table>
-
-## Table of Contents
-
-- [Comparison](#comparison)
-
-- [Who is this for?](#who-is-this-for)
-- [When to use](#when-to-use)
-- [Key Features](#key-features)
-  - [Entity-Centric Design](#entity-centric-design)
-  - [Intelligent Traversal](#intelligent-traversal)
-  - [REST API Integration](#rest-api-integration)
-  - [Enterprise Ready](#enterprise-ready)
-- [Core Concepts](#core-concepts)
-  - [Nodes & Edges](#nodes--edges)
-  - [Graph Traversal](#graph-traversal)
-  - [Entity Operations](#entity-operations)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Feature Overview](#feature-overview)
-  - [FastAPI Integration](#fastapi-integration)
-  - [Authentication](#authentication)
-- [Documentation](#documentation)
-
-## Core Concepts
-
-jvspatial is built around three core concepts: Nodes, Edges, and Walkers. These provide the foundation for building complex spatial applications.
-
-### Nodes & Edges
-
-```python
-from jvspatial.core import Node, Edge
-
-# Define your entities
-class City(Node):
-    name: str
-    population: int
-    coordinates: tuple[float, float]
-
-class Highway(Edge):
-    name: str
-    distance: float
-    speed_limit: int
-
-# Create and connect entities
-async def create_cities():
-    # Create nodes
-    nyc = await City.create(
-        name="New York",
-        population=8_400_000,
-        coordinates=(40.7128, -74.0060)
-    )
-
-    boston = await City.create(
-        name="Boston",
-        population=675_000,
-        coordinates=(42.3601, -71.0589)
-    )
-
-    # Connect nodes with an edge
-    i95 = await Highway.create(
-        src=nyc,      # Source node
-        dst=boston,   # Destination node
-        name="I-95",
-        distance=215.0,
-        speed_limit=65
-    )
 ```
 
 ### Graph Traversal
 
-Walkers are agents that traverse and process your graph:
-
 ```python
 from jvspatial.core import Walker, on_visit
 
-class CityAnalyzer(Walker):
-    def __init__(self):
-        super().__init__()
-        self.total_population = 0
-
-    @on_visit(City)
-    async def analyze_city(self, here: City):
-        # Process each city node
-        self.total_population += here.population
-
-        # Find connected cities via highways
-        connected = await here.nodes(
-            node=City,        # Only City nodes
-            edge=Highway,     # Only Highway edges
-            direction="out"   # Outgoing connections
+class TeamAnalyzer(Walker):
+    @on_visit(User)
+    async def analyze_team(self, here: User):
+        # Find team members
+        team = await here.nodes(
+            node="User",
+            department=here.department,
+            active=True
         )
-
-        # Continue walking to connected cities
-        await self.visit(connected)
-
-    @on_exit
-    async def generate_report(self):
-        self.report({
-            "total_population": self.total_population,
-            "cities_visited": len(self.visited_nodes)
-        })
-
-# Use the walker
-walker = CityAnalyzer()
-result = await walker.spawn(start_city)  # Start traversal
-print(result.get_report())  # Get collected data
+        await self.visit(team)
 ```
 
 ### Entity Operations
 
-Powerful MongoDB-style query interface that works across all storage backends:
-
 ```python
-# Find cities by criteria
-big_cities = await City.find({
-    "context.population": {"$gte": 1_000_000},
-    "context.coordinates.0": {"$gte": 40.0}  # Latitude >= 40
-})
+# CRUD operations
+user = await User.get(user_id)
+user.name = "Alice Johnson"
+await user.save()
 
-# Update entities
-nyc.population = 8_500_000
-await nyc.save()
-
-# Batch operations
-await City.update_many(
-    {"context.population": {"$lt": 1_000_000}},
-    {"$set": {"context.category": "mid_size"}}
-)
-
-# Complex queries
-eastern_cities = await City.find({
-    "$and": [
-        {"context.coordinates.1": {"$gte": -85.0}},  # East of -85° longitude
-        {"context.population": {"$gte": 500_000}},
-        {"context.category": "major"}
-    ]
-})
+# Filtering and aggregation
+count = await User.count({"context.role": "engineer"})
+depts = await User.distinct("department")
 ```
-### Core Features
 
-#### Data & Entity Management
-- **Entity-Centric Design**: Clean, MongoDB-style query interface across all backends
-- **Multi-backend Persistence**: JSON and MongoDB backends with extensible interface
-- **Object Pagination**: Efficient database-level pagination with `ObjectPager`
-- **Type Safety**: Pydantic-based modeling for nodes, edges, and walkers
-- **Attribute Annotations**: `@protected` and `@transient` decorators for field control
-
-#### Graph Traversal & Processing
-- **Graph Traversal**: Walker-based traversal with semantic filtering
-- **Walker Reporting**: Direct data collection and aggregation during traversal
-- **Inter-Walker Communication**: Event-driven coordination between walkers
-- **Infinite Walk Protection**: Configurable safeguards against infinite loops
-
-#### API & Integration
-- **FastAPI Integration**: Built-in REST endpoints with OpenAPI documentation
-- **Enterprise Authentication**: JWT tokens, API keys, and RBAC
-- **Webhook System**: Secure endpoints with HMAC verification and idempotency
-- **File Storage**: Multi-backend file storage with URL proxy functionality
-
-#### Performance & Scalability
-- **Async/await Architecture**: Native async support throughout
-- **Pluggable Cache System**: In-memory, Redis, and layered caching
-- **Concurrency Support**: Event-driven coordination for parallel processing
-
-See the [File Storage Guide](docs/md/file-storage-usage.md) for detailed documentation about the file storage system.
 ## Installation
 
 ```bash
-# Basic installation
-pip install jvspatial
-
-# With additional features
-pip install jvspatial[all]      # All features
-pip install jvspatial[api]      # FastAPI integration
-pip install jvspatial[storage]  # S3 storage support
-pip install jvspatial[auth]     # Authentication features
-pip install jvspatial[cache]    # Redis caching support
+pip install jvspatial            # Basic installation
+pip install jvspatial[all]       # All features
+pip install jvspatial[api]       # FastAPI integration
+pip install jvspatial[storage]   # S3 storage support
+pip install jvspatial[auth]      # Authentication features
+pip install jvspatial[cache]     # Redis caching support
 ```
 
 Requirements:
@@ -339,1624 +162,279 @@ Requirements:
 - MongoDB 5.0+ (optional)
 - Redis (optional)
 
-
-## Environment Configuration
-
-jvspatial uses environment variables for database configuration and library setup. These variables provide flexible configuration without requiring code changes.
-
-## Configuration
-
-Configuration is managed through environment variables or `.env` files. Below are the available configuration options grouped by feature.
-
-### Database Configuration
-
-#### JSON Backend (Default)
-| Variable | Description | Default Value | Required |
-|----------|-------------|---------------|-----------|
-| `JVSPATIAL_DB_TYPE` | Set to `json` | `json` | No |
-| `JVSPATIAL_JSONDB_PATH` | Path for JSON database files | `jvdb` | No |
-
-#### MongoDB Backend
-| Variable | Description | Default Value | Required |
-|----------|-------------|---------------|-----------|
-| `JVSPATIAL_DB_TYPE` | Set to `mongodb` | `json` | Yes |
-| `JVSPATIAL_MONGODB_URI` | MongoDB connection URI | `mongodb://localhost:27017` | Yes |
-| `JVSPATIAL_MONGODB_DB_NAME` | Database name | `jvdb` | Yes |
-
-### File Storage Configuration
-
-#### Core Settings
-| Variable | Description | Default Value | Required |
-|----------|-------------|---------------|-----------|
-| `JVSPATIAL_FILE_STORAGE_ENABLED` | Enable file storage | `false` | No |
-| `JVSPATIAL_FILE_STORAGE_PROVIDER` | Storage provider (`local` or `s3`) | `local` | No |
-| `JVSPATIAL_FILE_STORAGE_MAX_SIZE` | Max file size in bytes | `104857600` (100MB) | No |
-
-#### Local Storage
-| Variable | Description | Default Value | Required |
-|----------|-------------|---------------|-----------|
-| `JVSPATIAL_FILE_STORAGE_ROOT` | Local storage directory | `.files` | Yes for local |
-| `JVSPATIAL_FILE_STORAGE_BASE_URL` | Base URL for files | `http://localhost:8000` | Yes for local |
-
-#### S3 Storage
-| Variable | Description | Default Value | Required |
-|----------|-------------|---------------|-----------|
-| `JVSPATIAL_S3_BUCKET_NAME` | S3 bucket name | None | Yes for S3 |
-| `JVSPATIAL_S3_REGION` | AWS region | None | Yes for S3 |
-| `JVSPATIAL_S3_ACCESS_KEY` | AWS access key | None | Yes for S3 |
-| `JVSPATIAL_S3_SECRET_KEY` | AWS secret key | None | Yes for S3 |
-| `JVSPATIAL_S3_ENDPOINT_URL` | Custom S3 endpoint | `https://s3.amazonaws.com` | No |
-
-#### URL Proxy Settings
-| Variable | Description | Default Value | Required |
-|----------|-------------|---------------|-----------|
-| `JVSPATIAL_PROXY_ENABLED` | Enable URL proxying | `false` | No |
-| `JVSPATIAL_PROXY_DEFAULT_EXPIRATION` | Default URL TTL (seconds) | `3600` | No |
-| `JVSPATIAL_PROXY_MAX_EXPIRATION` | Maximum URL TTL (seconds) | `86400` | No |
-
-### Walker Infinite Walk Protection
-
-| Variable | Description | Default Value | Required |
-|----------|-------------|---------------|-----------|
-| `JVSPATIAL_WALKER_PROTECTION_ENABLED` | Enable/disable walker protection mechanisms | `true` | No |
-| `JVSPATIAL_WALKER_MAX_STEPS` | Maximum steps before auto-halt | `10000` | No |
-| `JVSPATIAL_WALKER_MAX_VISITS_PER_NODE` | Maximum visits per node before auto-halt | `100` | No |
-| `JVSPATIAL_WALKER_MAX_EXECUTION_TIME` | Maximum execution time in seconds | `300.0` | No |
-| `JVSPATIAL_WALKER_MAX_QUEUE_SIZE` | Maximum queue size before limiting additions | `1000` | No |
-
-### Environment Setup Examples
-
-#### JSON Database (Default)
-```bash
-# Use default JSON database with custom path
-export JVSPATIAL_DB_TYPE=json
-export JVSPATIAL_JSONDB_PATH=/path/to/database
-```
-
-#### MongoDB Configuration
-```bash
-# Use MongoDB with custom connection
-export JVSPATIAL_DB_TYPE=mongodb
-export JVSPATIAL_MONGODB_URI=mongodb://user:password@localhost:27017
-export JVSPATIAL_MONGODB_DB_NAME=production_spatial_db
-```
-
-#### Production MongoDB with Authentication
-```bash
-# Production MongoDB setup with authentication
-export JVSPATIAL_DB_TYPE=mongodb
-export JVSPATIAL_MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/
-export JVSPATIAL_MONGODB_DB_NAME=jvspatial_production
-```
-
-### Using .env Files
-
-Create a `.env` file in your project root:
-
-```env
-# Database Configuration
-JVSPATIAL_DB_TYPE=mongodb
-JVSPATIAL_MONGODB_URI=mongodb://localhost:27017
-JVSPATIAL_MONGODB_DB_NAME=jvspatial_dev
-
-# Optional: JSON Database Path (if using JSON backend)
-JVSPATIAL_JSONDB_PATH=./jvdb
-
-# Caching Configuration (optional)
-JVSPATIAL_CACHE_BACKEND=memory
-JVSPATIAL_CACHE_SIZE=1000
-
-# Walker Protection Configuration
-JVSPATIAL_WALKER_PROTECTION_ENABLED=true
-JVSPATIAL_WALKER_MAX_STEPS=10000
-JVSPATIAL_WALKER_MAX_VISITS_PER_NODE=100
-JVSPATIAL_WALKER_MAX_EXECUTION_TIME=300.0
-JVSPATIAL_WALKER_MAX_QUEUE_SIZE=1000
-```
-
-Then load it in your application:
-
-```python
-from dotenv import load_dotenv
-load_dotenv()  # Load .env file
-
-# jvspatial will automatically use the environment variables
-from jvspatial.core import GraphContext
-ctx = GraphContext()  # Uses environment configuration
-```
-
-## Exception Handling
-
-jvspatial provides a comprehensive exception hierarchy for robust error handling and graceful degradation.
-
-### Exception Hierarchy
-
-All jvspatial exceptions inherit from `JVSpatialError`:
-
-```python
-from jvspatial.exceptions import (
-    JVSpatialError,         # Base exception
-    ValidationError,        # Data validation errors
-    EntityNotFoundError,    # Entity lookup failures
-    NodeNotFoundError,      # Node-specific not found
-    EdgeNotFoundError,      # Edge-specific not found
-    DatabaseError,          # Database operation failures
-    ConnectionError,        # Database connection issues
-    GraphError,             # Graph structure problems
-    WalkerExecutionError,   # Walker runtime errors
-    ConfigurationError,     # Configuration problems
-)
-```
-
-### Basic Exception Handling
-
-```python
-import asyncio
-from jvspatial.core import Node
-from jvspatial.exceptions import JVSpatialError, EntityNotFoundError, ValidationError
-
-class User(Node):
-    name: str = ""
-    email: str = ""
-
-async def handle_user_operations():
-    try:
-        # Entity operations that might fail
-        user = await User.create(name="Alice", email="alice@example.com")
-        retrieved = await User.get("invalid_id")
-
-    except EntityNotFoundError as e:
-        print(f"Entity not found: {e.message}")
-        print(f"Entity type: {e.entity_type}, ID: {e.entity_id}")
-
-    except ValidationError as e:
-        print(f"Validation failed: {e.message}")
-        if e.field_errors:
-            for field, error in e.field_errors.items():
-                print(f"  {field}: {error}")
-
-    except JVSpatialError as e:
-        # Catch-all for any jvspatial error
-        print(f"jvspatial error: {e.message}")
-        if e.details:
-            print(f"Details: {e.details}")
-
-    except Exception as e:
-        # Handle unexpected errors
-        print(f"Unexpected error: {e}")
-
-async def main():
-    await handle_user_operations()
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-### Database Exception Handling
-
-```python
-from jvspatial.exceptions import DatabaseError, ConnectionError, QueryError
-from jvspatial.core import GraphContext
-
-async def robust_database_operations():
-    try:
-        ctx = GraphContext()
-        users = await User.find({"context.active": True})
-
-    except ConnectionError as e:
-        print(f"Database connection failed: {e.message}")
-        print(f"Database type: {e.database_type}")
-        # Implement retry logic or fallback
-
-    except QueryError as e:
-        print(f"Query failed: {e.message}")
-        print(f"Query: {e.query}")
-        # Log query for debugging
-
-    except DatabaseError as e:
-        print(f"Database operation failed: {e.message}")
-        # Handle database-level errors
-```
-
-### Walker Exception Handling
-
-```python
-from jvspatial.exceptions import WalkerExecutionError, WalkerTimeoutError
-from jvspatial.core import Walker, on_visit
-
-class SafeWalker(Walker):
-    @on_visit(User)
-    async def process_user(self, here: User):
-        try:
-            # Potentially risky operations
-            result = await some_external_service(here)
-            self.report(result)
-        except Exception as e:
-            # Log error and continue traversal
-            self.report({"error": str(e), "user_id": here.id})
-
-async def safe_traversal():
-    try:
-        walker = SafeWalker()
-        result = await walker.spawn(start_node)
-
-    except WalkerTimeoutError as e:
-        print(f"Walker timed out after {e.timeout_seconds} seconds")
-        # Access partial results
-        partial_report = walker.get_report()
-
-    except WalkerExecutionError as e:
-        print(f"Walker execution failed: {e.message}")
-        print(f"Walker class: {e.walker_class}")
-```
-
-### Configuration Exception Handling
-
-```python
-from jvspatial.exceptions import ConfigurationError, InvalidConfigurationError
-from jvspatial.db.factory import get_database
-
-def setup_database_with_fallback():
-    try:
-        # Try preferred database
-        db = get_database("mongodb")
-
-    except InvalidConfigurationError as e:
-        print(f"MongoDB configuration invalid: {e.message}")
-        print(f"Config key: {e.config_key}, Value: {e.config_value}")
-
-        # Fall back to JSON database
-        try:
-            db = get_database("json")
-            print("Falling back to JSON database")
-        except ConfigurationError:
-            raise ConfigurationError("No database backend available")
-
-    return db
-```
-
 ## Quick Start
 
-Create a simple spatial application:
-
-```python
-from jvspatial.core import Node, Edge, Walker, on_visit
-
-class Location(Node):
-    name: str
-    latitude: float
-    longitude: float
-
-class Road(Edge):
-    distance: float
-
-# Create FastAPI server
-server = Server(
-    title="Spatial API",
-    description="Location analysis API"
-)
-
-@server.walker_endpoint("/api/analyze/{location_id}")
-class LocationAnalyzer(Walker):
-    @on_visit(Location)
-    async def analyze(self, here: Location):
-        nearby = await here.nodes(node=Location, edge=Road)
-        self.report({"location": here.name, "nearby_count": len(nearby)})
-
-# Usage
-root = await Location.create(name="HQ", latitude=0.0, longitude=0.0)
-walker = LocationAnalyzer()
-result = await walker.spawn(root)
-print(result.get_report())
-
-# Start the server
-server.run()  # API available at http://localhost:8000
+1. Create a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: .\venv\Scripts\activate
+pip install jvspatial
 ```
 
-## Feature Overview
+2. Create a `.env` file:
+```bash
+JVSPATIAL_DB_TYPE=json
+JVSPATIAL_JSONDB_PATH=./jvdb/dev
 
-### FastAPI Integration
+# Auth settings
+JVSPATIAL_JWT_SECRET=your-secret-key
+JVSPATIAL_JWT_ALGORITHM=HS256
+```
 
+3. Create a server:
 ```python
-from jvspatial.api import Server, walker_endpoint
+from jvspatial.api import Server
+from jvspatial.api.auth.decorators import auth_endpoint
 
 # Create server
 server = Server(
-    title="Spatial API",
-    description="Graph-based spatial data API"
+    title="My API",
+    description="First jvspatial API",
+    auth_enabled=True
 )
 
-@walker_endpoint("/api/locations/nearby")
-class NearbyFinder(Walker):
-    latitude: float
-    longitude: float
-    radius: float = 10.0
+# Add endpoint
+@auth_endpoint("/api/hello")
+async def hello(name: str = "World", endpoint=None):
+    return endpoint.success({
+        "message": f"Hello, {name}!"
+    })
 
-    @on_visit(Location)
-    async def find_nearby(self, here: Location):
-        if self.within_radius(here):
-            self.report({"found": here.name})
+if __name__ == "__main__":
+    server.run()
 ```
 
-### File Storage
+## Features
 
-```python
-# Enable file storage
-server = Server(
-    title="Storage API",
-    file_storage_enabled=True,
-    file_storage_provider="s3",
-    s3_bucket_name="my-bucket"
-)
+### Core Features
 
-# Upload and manage files
-response = await server.file_interface.save_file(
-    "reports/data.pdf",
-    pdf_content
-)
+- **Graph Processing**
+  - Entity-centric data modeling
+  - Powerful graph traversal
+  - Walker-based processing
+  - Event-driven communication
 
-# Create temporary URL
-url = await server.proxy_manager.create_proxy(
-    file_path="reports/data.pdf",
-    expires_in=3600  # 1 hour
-)
-```
+- **Database & Storage**
+  - JSON and MongoDB backends
+  - Local and S3 file storage
+  - Pagination and caching
+  - Semantic filtering
+
+- **API & Integration**
+  - FastAPI endpoints
+  - OpenAPI documentation
+  - Webhook processing
+  - Background tasks
+
+- **Security**
+  - JWT and API key auth
+  - Role-based access (RBAC)
+  - Permission handling
+  - Rate limiting
+
+## Examples
+
+Browse example categories in the `/examples` directory:
+
+### Core Functionality
+- [Core Examples](examples/core/) - Entity modeling and basic operations
+- [Database Examples](examples/database/) - Query and ORM features
+- [Walker Examples](examples/walkers/) - Graph traversal patterns
+
+### API & Integration
+- [API Examples](examples/api/) - Server and endpoint setup
+- [Auth Examples](examples/auth/) - Authentication and permissions
+- [Storage Examples](examples/storage/) - File storage features
+- [Integration Examples](examples/integrations/) - External system integrations
+
+## Configuration
+
+See [.env.example](.env.example) for all configuration options.
+
+### Core Settings
+
+- `JVSPATIAL_DB_TYPE`: Database backend (`json` or `mongodb`)
+- `JVSPATIAL_JSONDB_PATH`: Path for JSON database files
+- `JVSPATIAL_MONGODB_URI`: MongoDB connection URI
 
 ### Authentication
 
-```python
-from jvspatial.api.auth import configure_auth, auth_endpoint
+- `JVSPATIAL_JWT_SECRET`: JWT signing key
+- `JVSPATIAL_JWT_ALGORITHM`: JWT algorithm (default: HS256)
+- `JVSPATIAL_JWT_EXPIRATION_HOURS`: JWT token expiration
+- `JVSPATIAL_API_KEY_HEADER`: API key header name
+- `JVSPATIAL_API_KEY_PREFIX`: API key prefix
 
-# Configure authentication
-configure_auth(
-    jwt_secret_key="your-secret-key",
-    jwt_expiration_hours=24
-)
+### Storage
 
-# Protected endpoint
-@auth_endpoint("/api/data", permissions=["read_data"])
-async def get_data():
-    return {"data": "protected content"}
-```
+- `JVSPATIAL_FILE_STORAGE_ENABLED`: Enable file storage
+- `JVSPATIAL_FILE_STORAGE_PROVIDER`: Storage provider (`local` or `s3`)
+- `JVSPATIAL_FILE_STORAGE_ROOT`: Local storage directory
+- `JVSPATIAL_S3_*`: AWS S3 configuration
 
-### Basic Usage
-<details>
-<summary>Entity-Centric CRUD Operations</summary>
+### Walker Settings
 
-```python
-import asyncio
-from jvspatial.core import Node, Walker, on_visit
+- `JVSPATIAL_WALKER_PROTECTION_ENABLED`: Enable infinite walk protection
+- `JVSPATIAL_WALKER_MAX_STEPS`: Maximum steps before halting (default: 10000)
+- `JVSPATIAL_WALKER_MAX_VISITS_PER_NODE`: Maximum node revisits (default: 100)
+- `JVSPATIAL_WALKER_MAX_EXECUTION_TIME`: Maximum execution time in seconds
 
-class User(Node):
-    name: str = ""
-    email: str = ""
-    active: bool = True
+## Documentation
 
-class UserProcessor(Walker):
-    @on_visit(User)
-    async def process_user(self, here: User):
-        print(f"Processing user: {here.name} ({here.email})")
-
-        # Use the new reporting system to collect data
-        self.report({
-            "user_processed": {
-                "name": here.name,
-                "email": here.email,
-                "active": here.active
-            }
-        })
-
-        # Use MongoDB-style queries for connected users
-        active_users = await User.find({"context.active": True})
-        self.report(f"Found {len(active_users)} active users")
-
-async def main():
-    # Entity-centric CRUD (automatic database setup)
-    user = await User.create(name="Alice", email="alice@company.com")
-
-    # MongoDB-style queries work across all backends
-    users = await User.find({"context.active": True})
-    senior_users = await User.find({"context.name": {"$regex": "^A", "$options": "i"}})
-
-    # Walker traversal with new reporting system
-    walker = UserProcessor()
-    result_walker = await walker.spawn(user)  # spawn() returns the walker
-
-    # Get collected data as a simple list
-    report = result_walker.get_report()
-    print(f"Collected {len(report)} items:")
-    for item in report:
-        print(f"  - {item}")
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-</details>
-
-### File Storage Integration
-
-#### Local Storage
-```python
-from jvspatial.api import Server
-
-# Create server with local file storage
-server = Server(
-    title="File Storage API",
-    file_storage_enabled=True,
-    file_storage_provider="local",
-    file_storage_root=".files",
-    proxy_enabled=True  # Enable URL shortening
-)
-
-# Available endpoints:
-# POST /api/storage/upload - Upload files
-# GET  /api/storage/files/{path} - Access files
-# POST /api/storage/proxy - Create short URLs
-# GET  /p/{code} - Access via short URL
-
-# Example usage in a walker
-class FileProcessor(Walker):
-    @on_visit(Node)
-    async def process_files(self, here):
-        # Upload a file
-        file_response = await server.file_interface.save_file(
-            "reports/monthly.pdf",
-            pdf_content
-        )
-
-        # Create short URL (expires in 1 hour)
-        proxy_url = await server.proxy_manager.create_proxy(
-            file_path="reports/monthly.pdf",
-            expires_in=3600
-        )
-
-        self.report({
-            "file_url": file_response["url"],
-            "short_url": proxy_url
-        })
-```
-
-#### S3 Storage
-```python
-# Create server with S3 storage
-server = Server(
-    title="S3 Storage API",
-    file_storage_enabled=True,
-    file_storage_provider="s3",
-    s3_bucket_name="my-bucket",
-    s3_region="us-east-1",
-    s3_access_key="{{ACCESS_KEY}}",
-    s3_secret_key="{{SECRET_KEY}}",
-    proxy_enabled=True
-)
-
-# Usage remains the same - the interface automatically
-# handles local vs S3 storage differences
-```
-
-### FastAPI Server Integration
-<details>
-<summary>FastAPI Integration Example</summary>
-```python
-from jvspatial.api import Server, walker_endpoint
-from jvspatial.api.endpoint.router import EndpointField
-from jvspatial.core import Walker, Node, on_visit
-
-# Create server with automatic database setup
-server = Server(
-    title="My Spatial API",
-    description="Graph-based data management API",
-    version="1.0.0"
-)
-
-@walker_endpoint("/api/users/process", methods=["POST"])
-class ProcessUser(Walker):
-    user_name: str = EndpointField(
-        description="Name of user to process",
-        examples=["Alice", "Bob"],
-        min_length=2
-    )
-
-    @on_visit(Node)
-    async def process(self, here: Node):
-        users = await User.find({"context.name": self.user_name})
-        self.report({"found_users": len(users)})
-
-if __name__ == "__main__":
-    server.run()  # API available at http://localhost:8000/docs
-```
-
-### Scheduler Integration
-
-jvspatial includes optional scheduler support for background task automation using the `@on_schedule` decorator:
-
-```python
-from jvspatial.api import Server
-from jvspatial.api.scheduler import on_schedule
-from jvspatial.core import Object
-from datetime import datetime
-
-# Define entity for job tracking
-class ScheduledJob(Object):
-    job_name: str = ""
-    execution_time: datetime = datetime.now()
-    status: str = "pending"
-    duration_seconds: float = 0.0
-
-# Create scheduled function
-@on_schedule("every 30 minutes", description="System cleanup")
-async def cleanup_system():
-    """Automated cleanup with job tracking."""
-    start_time = datetime.now()
-
-    # Perform cleanup work
-    cleanup_count = perform_cleanup_work()
-
-    # Create job record
-    await ScheduledJob.create(
-        job_name="system_cleanup",
-        execution_time=start_time,
-        status="completed",
-        duration_seconds=(datetime.now() - start_time).total_seconds()
-    )
-print(f"Cleaned up {cleanup_count} items")
-
-# Create server with scheduler enabled
-server = Server(
-    title="Scheduled App",
-    scheduler_enabled=True,  # Enable scheduler
-    scheduler_interval=1,    # Check every second
-)
-
-if __name__ == "__main__":
-    server.run()  # Scheduler runs automatically
-```
-
-**Installation:**
-```bash
-pip install jvspatial[scheduler]
-```
-
-**For comprehensive scheduler documentation:** [Scheduler Integration Guide](docs/md/scheduler.md)
-
-## Table of Contents
-
-### Getting Started
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-
-### Core Features
-- [Entity-Centric CRUD Operations](#entity-centric-crud-operations)
-- [MongoDB-Style Query Interface](#mongodb-style-query-interface)
-- [Object Pagination](#object-pagination)
-- [Walker Traversal Patterns](#walker-traversal-patterns)
-- [Walker Trail Tracking](#walker-trail-tracking)
-- [FastAPI Server Integration](#fastapi-server-integration)
-- [Scheduler Integration](#scheduler-integration)
-- [Webhook Integration](#webhook-integration)
+### Core Documentation
+- [Authentication](docs/md/authentication.md) - Authentication and authorization
+- [Graph Context](docs/md/graph-context.md) - Understanding graph operations
+- [Node Operations](docs/md/node-operations.md) - Working with nodes
+- [Entity Reference](docs/md/entity-reference.md) - Entity types and usage
 
 ### Advanced Topics
-- [GraphContext & Database Management](docs/md/graph-context.md)
-- [Environment Configuration](docs/md/environment-configuration.md)
-- [Caching System](docs/md/caching.md)
-- [Infinite Walk Protection](docs/md/infinite-walk-protection.md)
-- [REST API Integration](docs/md/rest-api.md)
-- [Scheduler Integration](docs/md/scheduler.md)
-- [Webhook Architecture](docs/md/webhook-architecture.md)
-- [MongoDB-Style Query Interface](docs/md/mongodb-query-interface.md)
-- [Object Pagination Guide](docs/md/pagination.md)
-- [Entity Reference](docs/md/entity-reference.md)
-- [Walker Queue Operations](docs/md/walker-queue-operations.md)
-- [Walker Trail Tracking](docs/md/walker-trail-tracking.md)
-
-### Resources
-- [Examples](docs/md/examples.md)
-- [Troubleshooting](docs/md/troubleshooting.md)
-- [Contributing](docs/md/contributing.md)
-- [License](docs/md/license.md)
-- [Project Structure](#project-structure)
-
-## Core Concepts
-
-### Entity-Centric Architecture
-
-jvspatial follows an **entity-centric design** philosophy that emphasizes clean, intuitive APIs for working with graph data:
-
-```python
-# Entity creation - simple and direct
-user = await User.create(name="Alice", email="alice@company.com")
-
-# MongoDB-style queries - work across all database backends
-active_users = await User.find({"context.active": True})
-senior_users = await User.find({"context.age": {"$gte": 35}})
-
-# Semantic filtering during traversal
-engineering_colleagues = await user.nodes(
-    node=['User'],
-    department="engineering",
-    active=True
-)
-```
-
-### Key Entities
-
-1. **Node** - Graph nodes representing entities (users, cities, documents, etc.)
-2. **Edge** - Relationships between nodes with optional properties
-3. **Walker** - Graph traversal agents that implement business logic
-4. **ObjectPager** - Efficient pagination for large datasets
-5. **Server** - FastAPI integration for REST API endpoints
-
-## Entity-Centric CRUD Operations
-
-jvspatial's entity-centric design provides a clean, consistent interface for all database operations:
-
-```python
-from jvspatial.core import Node
-
-class User(Node):
-    name: str = ""
-    email: str = ""
-    department: str = ""
-    active: bool = True
-
-# Create entities
-user = await User.create(name="Alice", email="alice@company.com")
-
-# Retrieve by ID
-user = await User.get(user_id)
-
-# Simple filtering
-users = await User.find_by(active=True)
-
-# Update entities
-user.name = "Alice Johnson"
-await user.save()
-
-# Delete entities
-await user.delete()
-
-# Count and aggregation
-count = await User.count({"context.department": "engineering"})
-departments = await User.distinct("department")
-```
-
-## MongoDB-Style Query Interface
-
-jvspatial provides a unified MongoDB-style query interface that works across all database backends:
-
-```python
-# Comparison operators
-senior_users = await User.find({"context.age": {"$gte": 35}})
-young_users = await User.find({"context.age": {"$lt": 30}})
-non_admin_users = await User.find({"context.role": {"$ne": "admin"}})
-
-# Logical operators
-engineers = await User.find({
-    "$and": [
-        {"context.department": "engineering"},
-        {"context.active": True}
-    ]
-})
-
-# Array operations
-tech_users = await User.find({"context.skills": {"$in": ["python", "javascript"]}})
-
-# Regular expressions
-johnson_family = await User.find({
-    "context.name": {"$regex": "Johnson", "$options": "i"}
-})
-
-# Complex nested queries
-active_senior_engineers = await User.find({
-    "$and": [
-        {"context.department": "engineering"},
-        {"context.age": {"$gte": 35}},
-        {"context.active": True},
-        {"context.skills": {"$in": ["python", "go", "rust"]}}
-    ]
-})
-```
-
-## Walker Traversal Patterns
-
-Walkers implement graph traversal logic using the `nodes()` and `node()` methods for semantic filtering:
-
-```python
-from jvspatial.core import Walker, on_visit
-
-class DataCollector(Walker):
-    def __init__(self):
-        super().__init__()
-        self.collected_data = []
-
-    @on_visit(User)
-    async def collect_user_data(self, here: User):
-        """Process user nodes with semantic filtering."""
-        self.collected_data.append(here.name)
-
-        # Get multiple connected nodes
-        engineering_users = await here.nodes(
-            node=['User'],  # Only User nodes
-            department="engineering",  # Simple filtering
-            active=True  # Multiple filters
-        )
-        await self.visit(engineering_users)
-
-        # Get a single connected node (when you expect only one)
-        profile = await here.node(node='Profile')
-        if profile:
-            self.collected_data.append(profile.bio)
-
-    @on_visit(City)
-    async def process_city(self, here: City):
-        """Process city nodes with control flow."""
-        # Skip small cities
-        if here.population < 10000:
-            self.skip()  # Skip to next node
-            return
-
-        # Find large nearby cities
-        large_cities = await here.nodes(
-            node=[{'City': {"context.population": {"$gte": 500_000}}}],
-            direction="out"
-        )
-        await self.visit(large_cities)
-
-# Walker control methods
-# - skip(): Skip current node, continue to next
-# - pause()/resume(): Temporarily pause walker
-# - disengage(): Permanently halt walker
-```
-
-## Walker Trail Tracking
-
-jvspatial walkers include built-in trail tracking capabilities to monitor and record the path taken during graph traversal:
-
-```python
-from jvspatial.core import Walker, on_visit
-
-class TrackingWalker(Walker):
-    def __init__(self):
-        super().__init__()
-        # Enable trail tracking with maximum 50 steps
-        self.trail_enabled = True
-        self.max_trail_length = 50
-
-    @on_visit(User)
-    async def visit_user(self, here: User):
-        print(f"Visited user: {here.name}")
-
-        # Get current trail
-        trail = self.get_trail()  # List of node IDs
-        print(f"Current trail length: {len(trail)}")
-
-        # Get recent trail steps
-        recent_steps = self.get_recent_trail(count=3)
-        print(f"Recent steps: {recent_steps}")
-
-        # Continue traversal
-        colleagues = await here.nodes(node=['User'], department=here.department)
-        await self.visit(colleagues)
-
-    @on_exit
-    async def generate_trail_report(self):
-        """Generate a comprehensive trail report."""
-        # Get full trail with node objects
-        trail_nodes = await self.get_trail_nodes()
-
-        # Get trail with connecting edges
-        trail_path = await self.get_trail_path()
-
-        # Use report() method to collect trail data
-        self.report({
-            "trail_report": {
-                "total_steps": self.get_trail_length(),
-                "visited_nodes": [node.name for node in trail_nodes],
-                "path_details": [
-                    {
-                        "node": node.name,
-                        "edge": edge.edge_type if edge else "start"
-                    }
-                    for node, edge in trail_path
-                ]
-            }
-        })
-
-# Usage
-walker = TrackingWalker()
-root = await Root.get()
-await walker.spawn(root)
-
-# Access trail information from walker's report
-report = walker.get_report()
-trail_reports = [item for item in report if isinstance(item, dict) and 'trail_report' in item]
-trail_report = trail_reports[0]['trail_report'] if trail_reports else None
-print(f"Final trail: {trail_report}")
-```
-
-### Trail API Reference
-
-**Configuration (read/write):**
-- `trail_enabled` - Enable/disable trail tracking
-- `max_trail_length` - Maximum number of steps to retain (0 = unlimited)
-
-**Trail Data (read-only properties):**
-- `trail` - List of visited node IDs (returns copy to prevent modification)
-- `trail_edges` - List of edge IDs traversed between nodes (read-only)
-- `trail_metadata` - Metadata for each trail step (read-only)
-
-**Trail Access Methods:**
-- `get_trail()` - Get list of visited node IDs
-- `get_trail_nodes()` - Get actual Node objects from trail
-- `get_trail_path()` - Get trail with connecting edges
-- `get_trail_length()` - Get current trail length
-- `get_trail_metadata(step)` - Get metadata for specific step
-- `get_recent_trail(count)` - Get recent N steps
-- `clear_trail()` - Clear entire trail history (only way to modify trail)
-
-## FastAPI Server Integration
-
-The jvspatial Server class provides seamless FastAPI integration with automatic OpenAPI documentation:
-
-### Server Setup
-
-```python
-from jvspatial.api import Server, walker_endpoint
-from jvspatial.api.endpoint.router import EndpointField
-from jvspatial.core import Walker, Node, on_visit
-
-# Create server with automatic database setup
-server = Server(
-    title="Spatial Data API",
-    description="Graph-based data management",
-    version="1.0.0",
-    debug=True
-)
-
-@walker_endpoint("/api/users/analyze", methods=["POST"])
-class AnalyzeUser(Walker):
-    user_name: str = EndpointField(
-        description="Name of user to analyze",
-        examples=["Alice", "Bob"],
-        min_length=2,
-        max_length=100
-    )
-
-    department: str = EndpointField(
-        default="general",
-        description="User department filter",
-        examples=["engineering", "marketing"]
-    )
-
-    @on_visit(Node)
-    async def analyze_user(self, here: Node):
-        # Find user and analyze connections
-        users = await User.find({"context.name": self.user_name})
-
-        if users:
-            user = users[0]
-            colleagues = await user.nodes(
-                node=['User'],
-                department=self.department,
-                active=True
-            )
-
-            # Use report() method to collect analysis results
-            self.report({
-                "user_analysis": {
-                    "user": {"name": user.name, "email": user.email},
-                    "colleagues": len(colleagues),
-                    "department": self.department
-                }
-            })
-        else:
-            self.report({"error": "User not found"})
-
-if __name__ == "__main__":
-server.run()  # Available at http://localhost:8000/docs
-```
-</details>
-
-<details>
-<summary>Enhanced Response Handling</summary>
-
-The `@walker_endpoint` and `@endpoint` decorators now automatically inject semantic response helpers for clean, flexible HTTP responses:
-
-```python
-@walker_endpoint("/api/users/profile", methods=["POST"])
-class UserProfileWalker(Walker):
-    user_id: str = EndpointField(description="User ID to retrieve")
-
-    @on_visit(User)
-    async def get_profile(self, here: User):
-        if here.id != self.user_id:
-            return  # Continue traversal
-
-        # Clean, semantic error responses
-        if not here.data:
-            return self.endpoint.not_found(
-                message="User not found",
-                details={"user_id": self.user_id}
-            )
-
-        # Successful response with proper status
-        return self.endpoint.success(
-            data={"id": here.id, "name": here.name},
-            message="User profile retrieved"
-        )
-
-@endpoint("/api/health", methods=["GET"])
-async def health_check(endpoint):
-    """Function endpoint with semantic responses."""
-    return endpoint.success(
-        data={"status": "healthy", "version": "1.0.0"},
-        message="Service is running"
-    )
-```
-</details>
-
-**Available Response Methods:**
-- `endpoint.success()` - 200 OK responses
-- `endpoint.created()` - 201 Created responses
-- `endpoint.not_found()` - 404 Not Found errors
-- `endpoint.bad_request()` - 400 Bad Request errors
-- `endpoint.unauthorized()` - 401 Unauthorized errors
-- `endpoint.response()` - Flexible custom responses
-
-### API Usage Examples
-
-<details>
-<summary>API Endpoint Examples</summary>
-
-```bash
-# User Analysis
-curl -X POST "http://localhost:8000/api/users/analyze" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_name": "Alice",
-    "department": "engineering"
-  }'
-
-# File Upload
-curl -X POST "http://localhost:8000/api/storage/upload" \
-  -F "file=@/path/to/file.pdf" \
-  -F "create_proxy=true" \
-  -F "proxy_expires_in=3600"
-
-# Create Short URL
-curl -X POST "http://localhost:8000/api/storage/proxy" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "file_path": "reports/monthly.pdf",
-    "expires_in": 3600
-  }'
-```
-
-## Advanced Webhook System
-
-JVspatial provides a powerful, production-ready webhook system with enterprise-grade security, reliability, and developer experience features:
-
-### Modern Webhook Decorators
-
-```python
-from jvspatial.api.auth.decorators import webhook_endpoint, webhook_walker_endpoint
-from jvspatial.core.entities import Walker, Node, on_visit
-
-# Simple webhook with automatic payload injection
-@webhook_endpoint("/webhook/payment")
-async def payment_webhook(payload: dict, endpoint):
-    """Process payment webhooks with automatic JSON parsing."""
-    payment_id = payload.get("payment_id")
-    amount = payload.get("amount")
-
-    # Process payment...
-
-    return endpoint.response(
-        content={
-            "status": "processed",
-            "message": f"Payment {payment_id} processed: ${amount}"
-        }
-    )
-
-# Advanced webhook with security features
-@webhook_endpoint(
-    "/webhook/stripe/{key}",
-    path_key_auth=True,                    # API key in URL path
-    hmac_secret="stripe-webhook-secret",   # HMAC signature verification
-    idempotency_ttl_hours=48,              # Duplicate handling for 48h
-    permissions=["process_payments"]
-)
-async def stripe_webhook(raw_body: bytes, content_type: str, endpoint):
-    """Stripe webhook with path-based auth and HMAC verification."""
-    import json
-
-    if content_type == "application/json":
-        payload = json.loads(raw_body.decode('utf-8'))
-        event_type = payload.get("type", "unknown")
-
-        # Process different Stripe events
-        if event_type == "payment_intent.succeeded":
-            return endpoint.response(
-                content={
-                    "status": "processed",
-                    "event_type": event_type,
-                    "message": "Payment successful"
-                }
-            )
-
-    return endpoint.response(content={"status": "received"})
-
-# Walker-based webhook for graph operations
-@webhook_walker_endpoint("/webhook/location-update")
-class LocationUpdateWalker(Walker):
-    """Update spatial data based on webhook events."""
-
-    def __init__(self, payload: dict):
-        super().__init__()
-        self.payload = payload
-        # Use report() method for data collection during traversal
-
-    @on_visit(Node)
-    async def update_location_data(self, here: Node):
-        # Access webhook payload data
-        locations = self.payload.get("locations", [])
-
-        for location_data in locations:
-            # Update graph nodes with webhook data
-            location_id = location_data.get("id")
-            coordinates = location_data.get("coordinates")
-
-            if location_id and coordinates:
-                here.coordinates = coordinates
-                await here.save()
-
-                self.report({
-                    "location_updated": {
-                        "id": location_id,
-                        "coordinates": coordinates
-                    }
-                })
-```
-
-### Enterprise Security Features
-
-- Path-Based Authentication: API keys embedded in URLs for services that support it
-- HMAC Signature Verification: Per-endpoint secrets with automatic verification
-- Idempotency Protection: Database-backed duplicate request handling with configurable TTL
-- Asynchronous Processing: Queue webhooks for background processing
-- HTTPS Enforcement: Configurable HTTPS-only webhook processing
-- Payload Limits: Configurable size limits with support for raw/JSON/XML payloads
-- Permission-Based Access: Full RBAC integration
-- Event Tracking: Complete audit trail with GraphContext database entities
-
-### Automatic Server Integration
-
-```python
-from jvspatial.api import Server
-
-# Webhook middleware is automatically added when webhook endpoints are detected
-server = Server(
-    title="My Webhook API",
-    description="API with advanced webhook processing"
-)
-
-# Webhook endpoints registered via decorators are automatically discovered
-# Security middleware is automatically configured
-# Database entities for tracking are automatically created
-
-server.run()  # Webhooks ready at /webhook/* paths
-```
-
-### Environment Configuration
-
-```bash
-# Global webhook settings
-JVSPATIAL_WEBHOOK_HMAC_SECRET=your-global-hmac-secret
-JVSPATIAL_WEBHOOK_MAX_PAYLOAD_SIZE=5242880  # 5MB
-JVSPATIAL_WEBHOOK_IDEMPOTENCY_TTL=3600      # 1 hour
-JVSPATIAL_WEBHOOK_HTTPS_REQUIRED=true
-```
-
-### Testing & Development
-
-```bash
-# Simple webhook test
-curl -X POST "http://localhost:8000/webhook/payment" \
-  -H "Content-Type: application/json" \
-  -d '{"payment_id": "pay_123", "amount": 99.99}'
-
-# Webhook with path-based auth
-curl -X POST "http://localhost:8000/webhook/stripe/key123:secret456" \
-  -H "Content-Type: application/json" \
-  -H "X-Signature: sha256=abc123..." \
-  -d '{"type": "payment_intent.succeeded"}'
-
-# With idempotency key
-curl -X POST "http://localhost:8000/webhook/payment" \
-  -H "Content-Type: application/json" \
-  -H "X-Idempotency-Key: unique-123" \
-  -d '{"payment_id": "pay_124"}'
-```
-
-### Key Benefits
-
-1. Developer Experience: Automatic payload injection, standardized responses, comprehensive error handling
-2. Enterprise Ready: Database persistence, retry mechanisms, audit trails
-3. Security First: Multiple authentication methods, signature verification, HTTPS enforcement
-4. High Performance: Asynchronous processing, efficient idempotency checking
-5. Flexible: Support for JSON, XML, binary payloads and custom processing
-6. Scalable: Database-backed state management, configurable limits
-
-> **Complete webhook documentation:** [Webhook Architecture Guide](docs/md/webhook-architecture.md) | [Webhook Quickstart](docs/md/webhooks-quickstart.md)
-
-## Object Pagination
-
-Handle large datasets efficiently with built-in database-level pagination:
-
-### Simple Pagination
-
-```python
-from jvspatial.core.pager import paginate_objects, City
-
-# Get first page of cities (default: 20 per page)
-cities = await paginate_objects(City, page=1, page_size=20)
-
-# Paginate with filters
-large_cities = await paginate_objects(
-    City,
-    page=1,
-    page_size=10,
-    filters={"context.population": {"$gt": 1_000_000}}
-)
-```
-
-### Advanced Pagination with ObjectPager
-
-```python
-from jvspatial.core.pager import ObjectPager
-
-# Create pager with filters and ordering
-pager = ObjectPager(
-    City,
-    page_size=25,
-    filters={"context.population": {"$gte": 100_000}},
-    order_by="population",
-    order_direction="desc"
-)
-
-# Navigate through pages
-large_cities = await pager.get_page(1)
-if pager.has_next_page():
-    more_cities = await pager.next_page()
-
-# Process all pages efficiently
-while True:
-    cities = await pager.next_page()
-    if not cities:
-        break
-    # Process batch
-    await process_cities(cities)
-```
-
-## Complex Traversal Example
-````markdown
-```python
-# From traversal_demo.py (simplified)
-class DeliveryWalker(Walker):
-    @on_visit(City)
-    async def deliver_package(self, here: City):
-        # Highlight 1: Conditional delivery logic
-        if here.is_hub and random.random() < 0.75:
-            self.packages_delivered += 1
-
-        # Highlight 2: Probabilistic path selection
-        connections = await here.edges(edge_type=Highway)
-        if connections:
-            next_city = random.choice([c.target_node for c in connections])
-            await self.visit(next_city)
-
-    @on_exit
-    async def final_report(self):
-        # Highlight 3: Built-in metrics collection using report()
-        self.report({
-            "delivery_summary": {
-                "delivered": self.packages_delivered,
-                "visited": len(self.visited_nodes)
-            }
-        })
-```
-Key Features Demonstrated:
-- Conditional node processing
-- Edge-based traversal decisions
-- Automatic metric collection
-- Context-managed database sessions
-````
-
-## @on_visit Decorator
-
-**NEW**: The `@on_visit` decorator supports powerful multi-target and edge traversal capabilities:
-
-### Multi-Target Hooks
-Handle multiple entity types with a single hook function:
-
-```python
-class LogisticsWalker(Walker):
-    @on_visit(Warehouse, Port, Factory)  # Triggers for ANY of these types
-    async def handle_facility(self, here):
-        facility_type = here.__class__.__name__
-        print(f"Processing {facility_type}: {here.name}")
-
-        # Business logic that applies to all facility types
-        await self.process_inventory(here)
-```
-
-### Catch-All Hooks
-Create universal hooks that respond to any entity type:
-
-```python
-class InspectionWalker(Walker):
-    @on_visit()  # No parameters = catch-all
-    async def inspect_anything(self, here):
-        # This runs for EVERY node and edge visited
-        self.report({
-            "inspected_item": {
-                "type": here.__class__.__name__,
-                "id": here.id
-            }
-        })
-```
-
-### Transparent Edge Traversal
-Walkers automatically traverse edges when moving between connected nodes:
-
-```python
-class TransportWalker(Walker):
-    @on_visit(City)
-    async def visit_city(self, here):
-        print(f"Arrived in {here.name}")
-
-        # Find connected cities and queue them for visits
-        connected_cities = await (await here.nodes()).filter(node='City')
-        await self.visit(connected_cities)  # Edges will be traversed automatically!
-
-    @on_visit(Highway, Railroad)  # Handle different transport types
-    async def use_transport(self, here):
-        # This hook is triggered automatically during traversal between cities
-        transport_cost = self.calculate_cost(here)
-        print(f"Using {here.name}, cost: ${transport_cost}")
-        # Walker automatically moves to the connected city after processing
-```
-
-### Smart Entity Responses
-Nodes and Edges can respond differently to specific Walker types:
-
-```python
-# Smart node that responds to different walker types
-class SmartWarehouse(Warehouse):
-    @on_visit(LogisticsWalker, InspectionWalker)  # Multi-target response
-    async def handle_authorized_access(self, visitor):
-        if isinstance(visitor, LogisticsWalker):
-            visitor.report({"inventory_access": "GRANTED"})
-        elif isinstance(visitor, InspectionWalker):
-            visitor.report({"compliance_report": self.get_compliance_data()})
-
-# Smart edge with walker-specific behavior
-class SmartHighway(Highway):
-    @on_visit(LogisticsWalker)
-    async def commercial_vehicle_access(self, visitor):
-        # Give commercial vehicles priority lane access
-        visitor.report({"priority_lane": True})
-        visitor.report({"toll_discount": 0.15})
-```
-
-### Type Validation
-The decorator enforces proper targeting:
-- **Walkers** can only target `Node` and `Edge` types
-- **Nodes** and **Edges** can only target `Walker` types
-- Invalid targeting raises `TypeError` at class definition time
-
-```python
-# Valid - Walker targeting Node types
-class MyWalker(Walker):
-    @on_visit(City, Warehouse)  # Valid
-    async def handle_locations(self, here): pass
-
-# Invalid - Walker cannot target other Walkers
-class BadWalker(Walker):
-    @on_visit(LogisticsWalker)  # TypeError!
-    async def invalid_hook(self, here): pass
-```
-
-## Walker Reporting and Event Systems
-
-### Simple Data Collection with `report()`
-
-The reporting system allows walkers to collect any data during traversal using a simple, direct approach:
-
-```python
-from jvspatial.core import Walker, on_visit, on_exit
-
-class DataCollector(Walker):
-    @on_visit(User)
-    async def collect_user_data(self, here: User):
-        # Report any data - dicts, strings, numbers, lists
-        self.report({
-            "user": {
-                "id": here.id,
-                "name": here.name,
-                "department": here.department
-            }
-        })
-
-        # Report simple values
-        self.report(f"Processed: {here.name}")
-
-    @on_exit
-    async def generate_summary(self):
-        current_data = self.get_report()
-        self.report({"total_items": len(current_data)})
-
-# Usage - get data as a simple list
-walker = DataCollector()
-result_walker = await walker.spawn()
-report = result_walker.get_report()  # Direct list access
-
-for item in report:
-    print(f"Collected: {item}")
-```
-
-### Inter-Walker Communication with Events
-
-Walkers can communicate in real-time using the event system:
-
-```python
-from jvspatial.core.events import on_emit
-import asyncio
-
-class AlertWalker(Walker):
-    """Walker that detects issues and emits alerts."""
-
-    @on_visit('ServerNode')
-    async def monitor_server(self, here: Node):
-        if here.cpu_usage > 90:
-            # Emit event to other walkers
-            await self.emit("high_cpu_alert", {
-                "server_id": here.id,
-                "cpu_usage": here.cpu_usage,
-                "severity": "critical"
-            })
-            self.report({"alert_sent": here.id})
-
-class ResponseWalker(Walker):
-    """Walker that responds to alerts from other walkers."""
-
-    @on_emit("high_cpu_alert")
-    async def handle_cpu_alert(self, event_data):
-        server_id = event_data.get("server_id")
-        self.report({
-            "alert_handled": {
-                "server": server_id,
-                "action": "cleanup_initiated"
-            }
-        })
-
-# Run walkers concurrently - they'll communicate automatically
-alert_walker = AlertWalker()
-response_walker = ResponseWalker()
-
-# Both walkers run and communicate via events
-results = await asyncio.gather(
-    alert_walker.spawn(),
-    response_walker.spawn()
-)
-```
-
-### Key Benefits
-
-**Reporting System:**
-- **Simple**: `walker.report(any_data)` and `walker.get_report()`
-- **Direct Access**: No nested structures - get a plain list of your data
-- **Flexible**: Report strings, dicts, numbers, lists - any data type
-- **Aggregation**: Perfect for collecting analytics and generating summaries
-
-**Event System:**
-- **Real-time**: Walkers communicate during traversal
-- **Decoupled**: Walkers don't need to know about each other
-- **Concurrent**: Multiple walkers can run and coordinate simultaneously
-- **Event-Driven**: Build complex workflows with event chains
-
-**[Complete Guide: Walker Reporting & Events](./docs/md/walker-reporting-events.md)**
-
-## Advanced Features
-
-### Complex Node Filtering
-
-```python
-# Get nodes connected via specific edge types with properties
-connected = await (await node.nodes(direction="out")).filter(
-    node=['City', 'Town'],
-    edge=[Highway, Railroad],
-    speed_limit=65  # Filter by edge property
-)
-```
-
-### Walker Execution Flow
-
-```python
-class InventoryWalker(Walker):
-    def __init__(self):
-        self.found_items = []
-
-    @on_visit(Root)
-    async def start_inventory(self, here):
-        print("Starting inventory check")
-        # Find all storage rooms connected to root
-        storage_rooms = await (await here.nodes()).filter(node="StorageRoom")
-        if storage_rooms:
-            await self.visit(storage_rooms[0])
-        else:
-            print("No storage rooms found")
-            self.report({"error": "No storage facilities available"})
-
-    @on_visit("StorageRoom")
-    async def check_storage(self, here):
-        print(f"Checking storage room: {here.id}")
-        # Find all inventory items in this storage
-        items = await (await here.nodes()).filter(node="InventoryItem")
-        self.found_items.extend(items)
-
-        # Visit each item to scan details
-        await self.visit(items)
-
-    @on_visit("InventoryItem")
-    async def record_item(self, here):
-        print(f"Scanning item: {here.name} ({here.serial_number})")
-        self.report({
-            "inventory_item": {
-                "id": here.id,
-                "name": here.name,
-                "location": here.storage_location
-            }
-        })
-
-    @on_exit
-    async def final_report(self):
-        # Report final inventory summary
-        total_items = len(self.found_items)
-        unique_categories = len({item.category for item in self.found_items})
-
-        self.report({
-            "inventory_summary": {
-                "total_items": total_items,
-                "unique_categories": unique_categories
-            }
-        })
-        print(f"Inventory check complete. Found {total_items} items.")
-```
-
-### Pydantic Validation
-
-```python
-from pydantic import field_validator
-
-class Highway(Edge):
-    lanes: int
-    speed_limit: int
-    toll_road: bool = False
-
-    @field_validator('lanes')
-    @classmethod
-    def validate_lanes(cls, v):
-        if v < 1 or v > 12:
-            raise ValueError('Lanes must be between 1 and 12')
-        return v
-
-    @field_validator('speed_limit')
-    @classmethod
-    def validate_speed(cls, v):
-        if v < 25 or v > 85:
-            raise ValueError('Speed limit must be between 25 and 85 mph')
-        return v
-```
+- [MongoDB Query Interface](docs/md/mongodb-query-interface.md) - Query patterns
+- [Infinite Walk Protection](docs/md/infinite-walk-protection.md) - Safety features
+- [Caching System](docs/md/caching.md) - Performance optimization
+- [File Storage](docs/md/file-storage-architecture.md) - Storage architecture
+
+### Development Guides
+- [Error Handling](docs/md/error-handling.md) - Error management
+- [Optimization](docs/md/optimization.md) - Performance tuning
+- [Troubleshooting](docs/md/troubleshooting.md) - Common issues
+- [Webhooks](docs/md/webhook-architecture.md) - Event processing
+
+### User Resources
+- [GitHub Issues](https://github.com/TrueSelph/jvspatial/issues) - Bug reports and feature requests
+- [GitHub Discussions](https://github.com/TrueSelph/jvspatial/discussions) - Community discussions
+- [Stack Overflow](https://stackoverflow.com/questions/tagged/jvspatial) - Q&A
+
+### Developer Guides
+- [Contributing Guide](CONTRIBUTING.md) - Development setup
+- [Architecture Guide](docs/architecture.md) - System design
+- [Testing Guide](docs/testing.md) - Test patterns
 
 ## Project Structure
 
 ```
 jvspatial/
-├── jvspatial/           # Core library
-│   ├── __init__.py
-│   ├── api/             # REST API components
-│   │   ├── __init__.py
-│   │   └── endpoint_router.py  # EndpointRouter class
-│   ├── core/            # Core entities and logic
-│   │   ├── __init__.py
-│   │   ├── entities.py  # Node, Edge, Walker classes
-│   │   └── lib.py       # Utility functions
-│   └── db/              # Database backends
-│       ├── __init__.py
-│       ├── database.py  # Abstract Database class
-│       ├── factory.py   # Database factory
-│       ├── jsondb.py    # JSON database implementation
-│       └── mongodb.py   # MongoDB implementation
-├── examples/            # Working examples
-│   ├── agent_graph.py   # Agent management system
-│   ├── fastapi_server.py# FastAPI server example
-│   └── travel_graph.py  # Travel planning system
-├── tests/               # Test suite
-│   ├── api/             # API tests
-│   ├── database/        # Database tests
-│   ├── integration/     # Integration tests
-│   └── unit/            # Unit tests
-├── docs/                # Documentation
-│   └── md/              # Markdown documentation files
-├── setup.py             # Package setup
-├── LICENSE              # MIT License
-├── README.md            # This file
-└── .env.example         # Environment configuration template
+├── jvspatial/              # Core package
+│   ├── api/                # API components
+│   │   ├── auth/           # Authentication
+│   │   ├── endpoint/       # Endpoint routing
+│   │   └── storage/        # Storage backends
+│   ├── core/               # Core features
+│   │   ├── entities/       # Node, Edge, Walker
+│   │   ├── events/         # Event system
+│   │   └── query/          # Query engine
+│   └── db/                 # Database backends
+│       ├── json/           # JSON storage
+│       └── mongo/          # MongoDB integration
+│
+├── docs/                   # Documentation
+│   ├── guides/             # User guides
+│   ├── api/                # API reference
+│   └── examples/           # Example code
+│
+├── examples/               # Example projects
+│   ├── core/               # Core features
+│   ├── api/                # API servers
+│   ├── auth/               # Authentication
+│   ├── database/           # Database usage
+│   ├── storage/            # Storage examples
+│   └── walkers/            # Walker patterns
+│
+├── tests/                  # Test suite
+│   ├── unit/               # Unit tests
+│   ├── integration/        # Integration tests
+│   └── e2e/                # End-to-end tests
+│
+├── .env.example           # Environment template
+├── CHANGELOG.md           # Version history
+├── CONTRIBUTING.md        # Contribution guide
+├── LICENSE                # MIT license
+├── MANIFEST.in            # Package manifest
+├── README.md             # This file
+├── pyproject.toml        # Project metadata
+└── setup.py              # Package setup
 ```
 
-## Optimization Insights
+## Contributing
 
-### Database Performance Benchmarks
+### Development Setup
 
-| Feature              | JSONDB Implementation      | MongoDB Implementation     |
-|----------------------|----------------------------|----------------------------|
-| Version Storage      | `_version` field in docs   | Atomic `findOneAndUpdate`  |
-| Conflict Detection   | Pre-update version check   | Built-in atomic operations |
-| Performance (10k ops)| 2.1s ±0.3s                 | 1.4s ±0.2s                |
-| Best For             | Single-node deployments    | Distributed systems        |
-| Migration Strategy   | Batch version field adds   | Schema versioning          |
+1. Clone repository:
+```bash
+git clone https://github.com/user/jvspatial.git
+cd jvspatial
+```
 
-## License
+2. Set up environment:
+```bash
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: .\venv\Scripts\activate
 
-This project is licensed under the MIT License - see the [LICENSE](docs/md/license.md) file for details.
+# Install dependencies
+pip install -e ".[dev]"      # Development install
+pip install -e ".[test]"     # Test dependencies
+pip install -e ".[docs]"     # Documentation tools
+```
 
-## Acknowledgments
+3. Configure environment:
+```bash
+# Copy example config
+cp .env.example .env
 
-- Inspired by [Jaseci](https://github.com/Jaseci-Labs/jaseci) and its Object-Spatial paradigm
-- Built with [Pydantic](https://pydantic-docs.helpmanual.io/) for data validation
-- REST API powered by [FastAPI](https://fastapi.tiangolo.com/)
+# Edit configuration
+vim .env  # Or your preferred editor
+```
 
----
+4. Verify setup:
+```bash
+# Run tests
+pytest tests/
 
-## Documentation
+# Run linting
+flake8
+mypy .
 
-### Core Documentation
-- [Core Concepts](docs/md/core-concepts.md) - Fundamental concepts and patterns
-- [Entity Reference](docs/md/entity-reference.md) - Node and Edge operations
-- [Graph Traversal](docs/md/graph-traversal.md) - Walker patterns and algorithms
-- [Query Interface](docs/md/mongodb-query-interface.md) - MongoDB-style querying
+# Build docs
+mkdocs build
+```
 
-### Features & Integration
-- [REST API Guide](docs/md/rest-api.md) - FastAPI integration
-- [File Storage Guide](docs/md/file-storage-usage.md) - Multi-backend storage
-- [Authentication Guide](docs/md/auth-quickstart.md) - Security and authentication
-- [Webhooks Guide](docs/md/webhook-architecture.md) - Event handling
+### Development Workflow
 
-### Advanced Topics
-- [Design Decisions](docs/md/design-decisions.md) - Architectural choices and patterns
-- [Migration Guide](docs/md/migration.md) - Migrate from ORMs/graph DBs
-- [Performance Guide](docs/md/optimization.md) - Optimization techniques
-- [Error Handling](docs/md/error-handling.md) - Exception handling patterns
-- [Configuration Guide](docs/md/configuration.md) - Advanced setup
-- [Examples](docs/md/examples.md) - Working examples
+1. Create a feature branch:
+```bash
+git checkout -b feature/your-feature
+```
 
-### Support
-- [GitHub Issues](https://github.com/TrueSelph/jvspatial/issues)
-- [GitHub Discussions](https://github.com/TrueSelph/jvspatial/discussions)
+2. Make changes and run tests:
+```bash
+# Run specific test file
+pytest tests/test_your_feature.py -v
 
-## License
+# Run with coverage
+pytest --cov=jvspatial
+```
 
-This project is licensed under the MIT License - see the [LICENSE](docs/md/license.md) file for details.
+3. Update documentation:
+```bash
+# Live preview
+mkdocs serve
+```
 
-## Acknowledgments
+4. Submit changes:
+```bash
+# Format code
+black .
+isort .
 
-- Inspired by [Jaseci](https://github.com/Jaseci-Labs/jaseci) and its Object-Spatial paradigm
-- Built with [Pydantic](https://pydantic-docs.helpmanual.io/) for data validation
-- REST API powered by [FastAPI](https://fastapi.tiangolo.com/)
+# Run all checks
+pre-commit run --all-files
 
----
+# Commit and push
+git add .
+git commit -m "feat: your feature description"
+git push origin feature/your-feature
+```
+
 ## Contributors
 
 <p align="center">
@@ -1964,3 +442,13 @@ This project is licensed under the MIT License - see the [LICENSE](docs/md/licen
         <img src="https://contrib.rocks/image?repo=TrueSelph/jvspatial" />
     </a>
 </p>
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+## Acknowledgments
+
+- Inspired by [Jaseci](https://github.com/Jaseci-Labs/jaseci) and its Object-Spatial paradigm
+- Built with [Pydantic](https://pydantic-docs.helpmanual.io/) for data validation
+- REST API powered by [FastAPI](https://fastapi.tiangolo.com/)

@@ -290,7 +290,7 @@ class ParameterModelFactory:
             PydanticField(
                 default=None,
                 description="Starting node ID for graph traversal",
-                examples=["n:Node:123", "n:Root:root"],
+                examples=["n:Root:root"],
             ),
         )
 
