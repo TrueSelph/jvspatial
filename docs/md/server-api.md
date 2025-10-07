@@ -486,13 +486,13 @@ python -m pytest tests/api/ -v
 ```
 
 **Test Coverage:**
-- ✅ Static server unregistration
-- ✅ Running server simulation with app rebuilding
-- ✅ Package-style endpoint support
-- ✅ Error condition handling
-- ✅ Path-based comprehensive removal
-- ✅ Function endpoint removal by reference and path
-- ✅ Enhanced endpoint listing methods
+- Static server unregistration
+- Running server simulation with app rebuilding
+- Package-style endpoint support
+- Error condition handling
+- Path-based comprehensive removal
+- Function endpoint removal by reference and path
+- Enhanced endpoint listing methods
 
 **Live Demonstration:**
 

@@ -58,7 +58,7 @@ class TravelWalker(Walker):
 
     @on_visit(City)
     async def visit_city(self, here: City):
-        print(f"🚶 Visiting {here.name} (pop: {here.population:,})")
+print(f"Visiting {here.name} (pop: {here.population:,})")
         self.cities_visited.append(here.name)
         self.report({"city_visited": here.name})
 
@@ -594,7 +594,7 @@ good_free_roads = await new_york.nodes(
 
 The `examples/` directory contains many more specialized examples:
 
-### Core Examples (All Passing ✅)
+### Core Examples (All Passing)
 - **`crud_demo.py`** - Basic CRUD operations
 - **`orm_demo.py`** - ORM patterns and best practices
 - **`walker_traversal_demo.py`** - Walker traversal patterns
@@ -611,8 +611,8 @@ The `examples/` directory contains many more specialized examples:
 - **`exception_handling_demo.py`** - Error handling patterns
 
 ### Server Examples
-- **`simple_dynamic_example.py`** ✅ - Dynamic endpoint registration patterns
-- **`server_demo.py`** ✅ - Comprehensive server features
+- **`simple_dynamic_example.py`** - Dynamic endpoint registration patterns
+- **`server_demo.py`** - Comprehensive server features
 - **`auth_demo.py`** - JWT and API key authentication (runs indefinitely)
 - **`scheduler_example.py`** - Scheduled tasks (runs indefinitely)
 - **`dynamic_server_demo.py`** - Advanced dynamic endpoints

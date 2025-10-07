@@ -73,20 +73,20 @@ class ConfigurableWalker(Walker):
 The trail data itself (`trail`, `trail_edges`, `trail_metadata`) is **read-only** from external code to maintain the integrity of the traversal log:
 
 ```python
-# ✅ ALLOWED: Configure trail settings
+# ALLOWED: Configure trail settings
 walker.trail_enabled = True
 walker.max_trail_length = 100
 
-# ✅ ALLOWED: Read trail data
+# ALLOWED: Read trail data
 current_trail = walker.trail  # Returns a copy
 trail_length = walker.get_trail_length()
 
-# ❌ NOT ALLOWED: Direct modification of trail data
+# NOT ALLOWED: Direct modification of trail data
 # walker.trail = ['some', 'custom', 'trail']  # No setter available
 # walker.trail_edges = [None, 'edge1']        # No setter available
 # walker.trail_metadata = [{}]                # No setter available
 
-# ✅ ALLOWED: Clear trail through provided method
+# ALLOWED: Clear trail through provided method
 walker.clear_trail()  # Only way to modify trail externally
 ```
 

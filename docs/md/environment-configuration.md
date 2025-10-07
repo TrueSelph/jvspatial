@@ -417,7 +417,7 @@ def configure_production():
         db = get_database()
         # Perform a simple test operation
         test_ctx = GraphContext(database=db)
-        print("✅ Production database configuration successful")
+print("Production database configuration successful")
         return test_ctx
     except Exception as e:
         raise RuntimeError(f"Production database configuration failed: {e}")

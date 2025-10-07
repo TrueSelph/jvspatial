@@ -292,11 +292,11 @@ print(f"  Cache Size: {stats['cache_size']}")
 # Good performance indicators
 hit_rate = stats['hit_rate']
 if hit_rate > 0.80:
-    print("✅ Excellent cache performance!")
+    print("Excellent cache performance!")
 elif hit_rate > 0.50:
-    print("✓ Good cache performance")
+    print("Good cache performance")
 else:
-    print("⚠️  Consider increasing cache size")
+    print("Consider increasing cache size")
 ```
 
 ### Choosing the Right Cache Size
@@ -378,9 +378,9 @@ utilization = cache_size / max_size if max_size > 0 else 0
 print(f"Cache Utilization: {utilization:.1%}")
 
 if utilization > 0.90:
-    print("⚠️  Cache is full - consider increasing size")
+    print("Cache is full - consider increasing size")
 elif utilization < 0.30:
-    print("ℹ️  Cache is underutilized - size may be too large")
+    print("Cache is underutilized - size may be too large")
 ```
 
 ### Distributed Deployments
@@ -494,22 +494,22 @@ try:
     # If this works, Redis cache is functional
     entity = await TestEntity.create(value="test")
     retrieved = await TestEntity.get(entity.id)
-    print("✅ Redis cache working")
+    print("Redis cache working")
 except Exception as e:
-    print(f"❌ Cache issue: {e}")
+    print(f"Cache issue: {e}")
     # Check JVSPATIAL_REDIS_URL environment variable
 ```
 
 ## Best Practices
 
-1. **✅ Use environment configuration**: Configure via `.env` files
-2. **✅ Use entity-centric operations**: Let caching work transparently
-3. **✅ Access by ID when possible**: `Entity.get(id)` uses cache
-4. **✅ Monitor cache statistics**: Track hit rates in production
-5. **✅ Use layered caching**: Best for distributed systems
-6. **✅ Warm critical caches**: Pre-populate frequently accessed entities
-7. **❌ Don't bypass entities**: Avoid direct database calls
-8. **❌ Don't over-rely on find()**: Use `get()` for individual entities
+1. **Do**: Configure via `.env` files
+2. **Do**: Let caching work transparently with entity-centric operations
+3. **Do**: Use `Entity.get(id)` for cache efficiency
+4. **Do**: Track hit rates in production
+5. **Do**: Use layered caching for distributed systems
+6. **Do**: Pre-populate frequently accessed entities
+7. **Don't**: Avoid direct database calls (bypass entities)
+8. **Don't**: Over-rely on find() (use get() for individual entities)
 
 ## Configuration Reference
 

@@ -4,14 +4,14 @@ A lightweight, optional scheduler service for jvspatial that integrates seamless
 
 ## Features
 
-- 🕒 **Simple Scheduling**: Use `@on_schedule` decorator for intuitive task scheduling
-- 📊 **Entity-Centric**: Creates Node entities for job tracking and metrics
-- 🔍 **MongoDB Queries**: Full support for complex filtering and aggregation
-- 🚀 **FastAPI Integration**: Seamless integration with jvspatial Server
-- ⚡ **Background Execution**: Thread-based execution with concurrency control
-- 📈 **Rich Monitoring**: Built-in APIs for status, metrics, and job history
-- 🛡️ **Error Handling**: Comprehensive error tracking with retry mechanisms
-- 🔧 **Type Safe**: Full type annotations and Pydantic validation
+- **Simple Scheduling**: Use `@on_schedule` decorator for intuitive task scheduling
+- **Entity-Centric**: Creates Node entities for job tracking and metrics
+- **MongoDB Queries**: Full support for complex filtering and aggregation
+- **FastAPI Integration**: Seamless integration with jvspatial Server
+- **Background Execution**: Thread-based execution with concurrency control
+- **Rich Monitoring**: Built-in APIs for status, metrics, and job history
+- **Error Handling**: Comprehensive error tracking with retry mechanisms
+- **Type Safe**: Full type annotations and Pydantic validation
 
 ## Installation
 
@@ -71,7 +71,7 @@ async def cleanup_system() -> None:
             duration_seconds=(datetime.now() - start_time).total_seconds()
         )
 
-        print(f"✅ Cleanup completed: {cleanup_count} items processed")
+print(f"Cleanup completed: {cleanup_count} items processed")
 
     except Exception as e:
         # Create error record
@@ -107,7 +107,7 @@ async def collect_metrics() -> None:
         active_jobs=active_jobs
     )
 
-    print(f"📊 Metrics: CPU {cpu_percent:.1f}%, Memory {memory.percent:.1f}%")
+print(f"Metrics: CPU {cpu_percent:.1f}%, Memory {memory.percent:.1f}%")
 ```
 
 ### 3. Server Integration with Monitoring APIs
@@ -138,7 +138,7 @@ server = Server(
 # Register all decorated scheduled tasks
 if hasattr(server, 'scheduler_service') and server.scheduler_service:
     register_scheduled_tasks(server.scheduler_service)
-    print("✅ Scheduled tasks registered")
+print("Scheduled tasks registered")
 
 # Add monitoring endpoints following jvspatial patterns
 @endpoint("/api/scheduler/status", methods=["GET"])
@@ -481,7 +481,7 @@ async def resilient_data_sync():
     start_time = datetime.now()
 
     try:
-        logger.info(f"🔄 Starting data sync {sync_id}")
+logger.info(f"Starting data sync {sync_id}")
 
         # Check for existing sync operations
         existing_sync = await ScheduledJob.find_one({
@@ -493,7 +493,7 @@ async def resilient_data_sync():
         })
 
         if existing_sync:
-            logger.warning(f"⏸️ Sync already running, skipping {sync_id}")
+logger.warning(f"Sync already running, skipping {sync_id}")
             return
 
         # Create running job record
@@ -519,15 +519,15 @@ async def resilient_data_sync():
             }
         )
 
-        logger.info(f"✅ Data sync {sync_id} completed successfully")
+logger.info(f"Data sync {sync_id} completed successfully")
 
     except asyncio.TimeoutError:
-        logger.error(f"⏱️ Data sync {sync_id} timed out")
+logger.error(f"Data sync {sync_id} timed out")
         await update_job_status(job_record.id, "timeout", str(e))
         raise
 
     except Exception as e:
-        logger.error(f"❌ Data sync {sync_id} failed: {str(e)}")
+logger.error(f"Data sync {sync_id} failed: {str(e)}")
         await update_job_status(job_record.id, "failed", str(e))
 
         # Check failure patterns for circuit breaker
@@ -540,7 +540,7 @@ async def resilient_data_sync():
         })
 
         if recent_failures >= 3:
-            logger.critical("🔒 Circuit breaker activated for data sync")
+logger.critical("Circuit breaker activated for data sync")
             await create_alert(
                 "Data sync circuit breaker activated",
                 {"failure_count": recent_failures}
@@ -581,7 +581,7 @@ async def perform_data_sync() -> dict:
 Always leverage jvspatial's Node entities for structured data storage and retrieval:
 
 ```python
-# ✅ Good: Use entities for structured data
+# Good: Use entities for structured data
 class JobResult(Object):
     job_name: str
     execution_time: datetime
@@ -598,7 +598,7 @@ async def process_with_entities():
     )
     # Process and update...
 
-# ❌ Avoid: Direct database operations or unstructured storage
+# Bad: Direct database operations or unstructured storage
 ```
 
 ### 2. **Implement Proper Error Handling**
@@ -632,7 +632,7 @@ async def robust_task():
             {"$set": {"context.status": "completed", "context.result": result}}
         )
 
-        logger.info(f"✅ Task completed successfully")
+logger.info(f"Task completed successfully")
 
     except Exception as e:
         # Update failure record
@@ -642,7 +642,7 @@ async def robust_task():
                 {"$set": {"context.status": "failed", "context.error_message": str(e)}}
             )
 
-        logger.error(f"❌ Task failed: {str(e)}")
+logger.error(f"Task failed: {str(e)}")
         raise  # Re-raise for scheduler retry logic
 ```
 

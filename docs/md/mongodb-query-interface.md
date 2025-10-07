@@ -357,17 +357,17 @@ The MongoDB-style query interface works consistently across all backends:
 ### 1. Use Proper Field Prefixes
 
 ```python
-# ✅ Good: Use context prefix for entity fields
+# Good: Use context prefix for entity fields
 users = await User.find({"context.name": "Alice"})
 
-# ❌ Avoid: Direct field access (may not work consistently)
+# Bad: Direct field access (may not work consistently)
 users = await User.find({"name": "Alice"})
 ```
 
 ### 2. Leverage Database Indexes
 
 ```python
-# ✅ Good: Query commonly indexed fields
+# Good: Query commonly indexed fields
 users = await User.find({"context.email": "alice@company.com"})
 
 # Consider indexing strategies for frequently queried fields
@@ -376,14 +376,14 @@ users = await User.find({"context.email": "alice@company.com"})
 ### 3. Optimize Complex Queries
 
 ```python
-# ✅ Good: Specific conditions first
+# Good: Specific conditions first
 efficient_query = await User.find({
     "context.department": "engineering",  # Specific filter first
     "context.active": True,
     "context.skills": {"$in": ["python"]}
 })
 
-# ✅ Good: Use appropriate operators
+# Good: Use appropriate operators
 range_query = await User.find({
     "context.age": {"$gte": 25, "$lte": 65}
 })

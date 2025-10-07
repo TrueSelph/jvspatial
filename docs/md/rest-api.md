@@ -1060,7 +1060,7 @@ class UpdateUser(Walker):
 ### 1. Entity-Centric Design
 
 ```python
-# ✅ Good: Use entity-centric operations
+# Good: Use entity-centric operations
 @walker_endpoint("/api/users/search")
 class SearchUsers(Walker):
     @on_visit(Node)
@@ -1069,7 +1069,7 @@ class SearchUsers(Walker):
         users = await User.find({"context.active": True})
         total = await User.count()
 
-# ❌ Avoid: Direct database access
+# Bad: Direct database access
 class OldSearchUsers(Walker):
     @on_visit(Node)
     async def search(self, here: Node):
@@ -1081,7 +1081,7 @@ class OldSearchUsers(Walker):
 ### 2. MongoDB-Style Queries
 
 ```python
-# ✅ Good: Use MongoDB-style queries for complex filtering
+# Good: Use MongoDB-style queries for complex filtering
 @walker_endpoint("/api/products/advanced-search")
 class AdvancedSearch(Walker):
     @on_visit(Node)
@@ -1095,7 +1095,7 @@ class AdvancedSearch(Walker):
         }
         products = await Product.find(query)
 
-# ❌ Avoid: Python-level filtering
+# Bad: Python-level filtering
 class BadSearch(Walker):
     @on_visit(Node)
     async def search(self, here: Node):
@@ -1106,7 +1106,7 @@ class BadSearch(Walker):
 ### 3. Use Object Pagination for Large Datasets
 
 ```python
-# ✅ Good: Use ObjectPager for efficient pagination
+# Good: Use ObjectPager for efficient pagination
 @walker_endpoint("/api/users/list")
 class ListUsers(Walker):
     page: int = EndpointField(default=1, ge=1)
@@ -1135,7 +1135,7 @@ class ListUsers(Walker):
 ### 4. Semantic Filtering in Graph Traversal
 
 ```python
-# ✅ Good: Use semantic filtering with nodes() method
+# Good: Use semantic filtering with nodes() method
 @walker_endpoint("/api/users/connections")
 class UserConnections(Walker):
     user_id: str = EndpointField(description="User ID to analyze")
@@ -1170,7 +1170,7 @@ class UserConnections(Walker):
 ### 5. Error Handling and Validation
 
 ```python
-# ✅ Good: Comprehensive error handling
+# Good: Comprehensive error handling
 @walker_endpoint("/api/users/create")
 class CreateUser(Walker):
     name: str = EndpointField(min_length=1, max_length=100)
@@ -1221,7 +1221,7 @@ class CreateUser(Walker):
 ### 6. Proper API Documentation
 
 ```python
-# ✅ Good: Rich documentation with examples
+# Good: Rich documentation with examples
 @walker_endpoint("/api/products/search", methods=["POST"])
 class ProductSearch(Walker):
     """Search products with advanced filtering and pagination.

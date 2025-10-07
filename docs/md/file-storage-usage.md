@@ -29,25 +29,25 @@ The jvspatial file storage system provides secure, scalable file management with
 
 ### Key Features
 
-🔒 **Security First**
+Security First
 - Path traversal prevention
 - MIME type validation
 - File size limits
 - Content verification
 
-🌐 **Multi-Backend Support**
+Multi-Backend Support
 - Local filesystem storage
 - AWS S3 with signed URLs
 - Azure Blob Storage (coming soon)
 - Google Cloud Storage (coming soon)
 
-🔗 **URL Proxy System**
+URL Proxy System
 - Short URL generation
 - Expiration control
 - Access tracking
 - MongoDB persistence
 
-⚡ **Performance**
+Performance
 - Async/await operations
 - Streaming support for large files
 - Connection pooling
@@ -241,11 +241,11 @@ server = Server(
 
 #### Features
 
-- ✅ Simple setup, no external dependencies
-- ✅ Fast for small files
-- ✅ Good for development
-- ❌ Not suitable for distributed deployments
-- ❌ Limited scalability
+- Simple setup, no external dependencies
+- Fast for small files
+- Good for development
+- Not suitable for distributed deployments
+- Limited scalability
 
 #### Directory Structure
 
@@ -335,12 +335,12 @@ When running on AWS, credentials are automatically obtained from the instance IA
 
 #### Features
 
-- ✅ Highly scalable
-- ✅ Distributed and redundant
-- ✅ Signed URL support
-- ✅ Good for production
-- ❌ Requires AWS account
-- ❌ Additional costs
+- Highly scalable
+- Distributed and redundant
+- Signed URL support
+- Good for production
+- Requires AWS account
+- Additional costs
 
 #### S3 Bucket Configuration
 
@@ -772,12 +772,12 @@ http://localhost:8000/p/a1b2c3d4
 ```
 
 The proxy system:
-1. ✅ Validates the code
-2. ✅ Checks expiration
-3. ✅ Checks access limits
-4. ✅ Increments access counter
-5. ✅ Serves the file
-6. ✅ Automatically deletes expired/depleted proxies
+1. Validates the code
+2. Checks expiration
+3. Checks access limits
+4. Increments access counter
+5. Serves the file
+6. Automatically deletes expired/depleted proxies
 
 ### Managing Proxies
 
@@ -874,11 +874,11 @@ safe_paths = [
 ```
 
 **Security Measures:**
-- ✅ Removes `..` sequences
-- ✅ Blocks absolute paths
-- ✅ Validates each path component
-- ✅ Enforces base directory restrictions
-- ✅ Checks maximum path depth
+- Removes `..` sequences
+- Blocks absolute paths
+- Validates each path component
+- Enforces base directory restrictions
+- Checks maximum path depth
 
 ### MIME Type Validation
 
@@ -901,10 +901,10 @@ server = Server(
 ```
 
 **Validation Process:**
-1. ✅ Checks file extension
-2. ✅ Detects actual MIME type from content
-3. ✅ Compares against allowed/blocked lists
-4. ✅ Rejects mismatched files
+1. Checks file extension
+2. Detects actual MIME type from content
+3. Compares against allowed/blocked lists
+4. Rejects mismatched files
 
 ### File Size Limits
 
@@ -917,10 +917,10 @@ server = Server(
 ```
 
 **Enforcement:**
-- ✅ Checked before upload starts
-- ✅ Validated during upload
-- ✅ Rejected if exceeded
-- ✅ Per-file and cumulative limits
+- Checked before upload starts
+- Validated during upload
+- Rejected if exceeded
+- Per-file and cumulative limits
 
 ### Access Control
 
@@ -957,7 +957,7 @@ send_email(recipient, signed_url)
 
 ### 1. Use Environment Variables
 
-❌ **Bad:**
+Bad:
 ```python
 server = Server(
     file_storage_s3_access_key="AKIAIOSFODNN7EXAMPLE",
@@ -965,7 +965,7 @@ server = Server(
 )
 ```
 
-✅ **Good:**
+Good:
 ```python
 from dotenv import load_dotenv
 load_dotenv()
@@ -978,7 +978,7 @@ server = Server(
 
 ### 2. Validate Before Processing
 
-❌ **Bad:**
+Bad:
 ```python
 @server.walker("/process-file")
 class FileProcessor(Walker):
@@ -991,7 +991,7 @@ class FileProcessor(Walker):
         result = process_content(content)
 ```
 
-✅ **Good:**
+Good:
 ```python
 @server.walker("/process-file")
 class FileProcessor(Walker):
@@ -1017,14 +1017,14 @@ class FileProcessor(Walker):
 
 ### 3. Use Streaming for Large Files
 
-❌ **Bad:**
+**Bad:**
 ```python
 # Loads entire file into memory
 content = await storage.get_file("large-file.zip")
 process_file(content)
 ```
 
-✅ **Good:**
+**Good:**
 ```python
 # Streams file in chunks
 async for chunk in storage.stream_file("large-file.zip"):
@@ -1033,7 +1033,7 @@ async for chunk in storage.stream_file("large-file.zip"):
 
 ### 4. Set Appropriate Proxy Expiration
 
-❌ **Bad:**
+Bad:
 ```python
 # Never expires - security risk
 code = await proxy_manager.create_proxy(
@@ -1042,7 +1042,7 @@ code = await proxy_manager.create_proxy(
 )
 ```
 
-✅ **Good:**
+**Good:**
 ```python
 # Expires in 1 hour
 code = await proxy_manager.create_proxy(
@@ -1152,11 +1152,11 @@ await storage.save_file("../../../etc/passwd", content)
 
 **Correct Usage:**
 ```python
-# ✅ Good paths
+# Good paths
 await storage.save_file("documents/report.pdf", content)
 await storage.save_file("2025/01/data.csv", content)
 
-# ❌ Bad paths
+# Bad paths
 await storage.save_file("../data.csv", content)  # Error
 await storage.save_file("/etc/passwd", content)  # Error
 ```
@@ -1657,11 +1657,11 @@ async def upload_user_file(file: UploadFile, endpoint):
 
 The jvspatial file storage system provides:
 
-✅ **Multiple Storage Backends** - Local, S3, with more coming
-✅ **URL Proxy System** - Secure temporary file sharing
-✅ **Built-in Security** - Path validation, MIME checking, size limits
-✅ **Walker Integration** - Process files within graph traversal
-✅ **Production Ready** - Streaming, caching, error handling
+**Multiple Storage Backends** - Local, S3, with more coming
+**URL Proxy System** - Secure temporary file sharing
+**Built-in Security** - Path validation, MIME checking, size limits
+**Walker Integration** - Process files within graph traversal
+**Production Ready** - Streaming, caching, error handling
 
 **Next Steps:**
 

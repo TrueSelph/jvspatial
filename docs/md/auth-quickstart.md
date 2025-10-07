@@ -288,6 +288,6 @@ export JVSPATIAL_RATE_LIMIT_ENABLED=true
 
 ---
 
-**Total setup time: ~5 minutes** ⚡
+**Total setup time: ~5 minutes**
 
 Your jvspatial API is now secured with enterprise-grade authentication!

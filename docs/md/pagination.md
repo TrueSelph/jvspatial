@@ -351,13 +351,13 @@ async def export_customers_to_json(filename: str):
 Always use database filters rather than Python filtering:
 
 ```python
-# ✅ Good: Database-level filtering
+# Good: Database-level filtering
 large_cities = await paginate_objects(
     City,
     filters={"population": {"$gt": 1000000}}
 )
 
-# ❌ Bad: Python-level filtering (loads all data)
+# Bad: Python-level filtering (loads all data)
 all_cities = await City.all()
 large_cities = [c for c in all_cities if c.population > 1000000]
 ```

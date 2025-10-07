@@ -912,7 +912,7 @@ async def run_data_pipeline():
 
 ### 1. Reporting Best Practices
 
-**✅ DO:**
+**Good Practices:**
 
 ```python
 # Use clear, structured data
@@ -935,26 +935,26 @@ result_walker = await walker.spawn()
 report = result_walker.get_report()
 ```
 
-**❌ DON'T:**
+**Bad Practices:**
 
 ```python
-# Don't try to return values from decorated methods
+# Avoid returning values from decorated methods
 @on_visit('User')
 async def process_user(self, here: Node):
     result = {"processed": True}
-    return result  # ❌ This won't work
+return result  # This won't work
 
 # Don't try to modify the report list directly
-walker._report.append(data)  # ❌ Use walker.report() instead
+walker._report.append(data)  # Use walker.report() instead
 
 # Don't expect complex nested response structures
 report = walker.get_report()
-data = report["response"]["data"]  # ❌ report is just a list
+data = report["response"]["data"]  # Report is just a list
 ```
 
 ### 2. Event System Best Practices
 
-**✅ DO:**
+**Good Practices:**
 
 ```python
 # Use descriptive event names
@@ -978,7 +978,7 @@ async def handle_critical_alerts_only(self, event_data):
         self.report({"critical_alert_handled": event_data})
 ```
 
-**❌ DON'T:**
+**Bad Practices:**
 
 ```python
 # Don't use generic event names
