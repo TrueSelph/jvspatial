@@ -19,7 +19,6 @@ from pydantic import BaseModel
 from jvspatial.api import Server
 from jvspatial.api.auth.decorators import auth_endpoint, auth_walker_endpoint
 from jvspatial.api.endpoint.router import EndpointField
-from jvspatial.api.endpoint.types import APIResponse
 from jvspatial.core.entities import Node, Walker
 
 
@@ -65,7 +64,7 @@ class TaskFilter(BaseModel):
 @auth_endpoint("/api/tasks", methods=["POST"])
 async def create_task(
     title: str, description: str, priority: int = 0, tags: List[str] = [], endpoint=None
-) -> APIResponse:
+):
     """Create a new task.
 
     Args:
@@ -102,7 +101,7 @@ async def create_task(
 
 
 @auth_endpoint("/api/tasks/{task_id}", methods=["GET"])
-async def get_task(task_id: str, endpoint) -> APIResponse:
+async def get_task(task_id: str, endpoint):
     """Get task details.
 
     Args:
@@ -323,4 +322,27 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Setup and initialize the server
+    server = create_server()
+
+    # Create sample data synchronously using asyncio
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(cleanup_data())
+    loop.run_until_complete(create_sample_data())
+
+    print("\nServer configured with:")
+    print("- Custom error handling")
+    print("- Request logging middleware")
+    print("- API documentation")
+
+    print("\nAvailable endpoints:")
+    print("POST /api/tasks - Create task")
+    print("GET  /api/tasks/{id} - Get task")
+    print("POST /api/tasks/process - Process tasks")
+
+    print("\nAPI docs available at:")
+    print("http://localhost:8000/docs")
+
+    print("\nStarting server...")
+    # Run server directly
+    server.run(host="0.0.0.0", port=8000, reload=False)

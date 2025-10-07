@@ -92,52 +92,60 @@ def main():
 
     # Updated examples with new walker patterns (priority testing)
     updated_examples = [
-        "travel_graph.py",
-        "graphcontext_demo.py",
-        "testing_with_graphcontext.py",
-        "agent_graph.py",
-        "multi_target_hooks_demo.py",
+        "core/models/travel_graph.py",
+        "core/context/graphcontext_demo.py",
+        "testing/testing_with_graphcontext.py",
+        "core/models/agent_graph.py",
+        "walkers/multi_target_hooks_demo.py",
     ]
 
     # Other core examples to test
     core_examples = [
-        "crud_demo.py",
-        "orm_demo.py",
-        "walker_traversal_demo.py",
-        "enhanced_nodes_filtering.py",
-        "modern_query_interface.py",
-        "object_pagination_demo.py",
-        "traversal_demo.py",
-        "semantic_filtering.py",
-        "unified_query_interface_example.py",
-        "custom_database_example.py",
-        "custom_database_registry_example.py",
-        "database_switching_example.py",
-        "walker_events_demo.py",
-        "walker_reporting_demo.py",
-        "exception_handling_demo.py",
+        "database/crud_demo.py",
+        "database/orm_demo.py",
+        "walkers/walker_traversal_demo.py",
+        "database/filtering/enhanced_nodes_filtering.py",
+        "database/modern_query_interface.py",
+        "database/pagination/object_pagination_demo.py",
+        "walkers/traversal_demo.py",
+        "database/filtering/semantic_filtering.py",
+        "database/unified_query_interface_example.py",
+        "database/custom_database_example.py",
+        "database/custom_database_registry_example.py",
+        "database/database_switching_example.py",
+        "walkers/walker_events_demo.py",
+        "walkers/walker_reporting_demo.py",
+        "api/exception_handling_demo.py",
     ]
 
-    # Server examples that run indefinitely (skip for now)
+    # Server examples (in server/ directory)
+    server_examples = [
+        "server/comprehensive_server_example.py",  # Combined best practices
+        "server/server_example.py",  # Basic patterns
+        "server/server_demo.py",  # Advanced patterns
+        "server/fastapi_server.py",  # FastAPI integration
+        "server/dynamic_server_demo.py",  # Dynamic endpoint management
+        "server/dynamic_endpoint_removal.py",  # Dynamic endpoint lifecycle
+        "server/endpoint_decorator_demo.py",  # Decorator patterns
+        "server/endpoint_respond_demo.py",  # Response patterns
+        "server/exception_handling_demo.py",  # Error handling patterns
+        "server/webhook_examples.py",  # Webhook patterns
+    ]
+
+    # Scheduler examples (in scheduler/ directory)
+    scheduler_examples = [
+        "scheduler/scheduler_example.py"  # Complete scheduler patterns
+    ]
+
+    # Authentication examples (in auth/ directory)
+    auth_examples = [
+        "auth/auth_demo.py",  # Authentication patterns
+    ]
+
+    # Long-running examples to skip (servers that don't exit on their own)
     long_running_examples = [
-        "auth_demo.py",
-        "scheduler_example.py",
-    ]
-
-    # Updated server examples with new endpoint patterns
-    updated_server_examples = [
-        "simple_dynamic_example.py",
-        "server_demo.py",
-        "dynamic_server_demo.py",
-        "endpoint_decorator_demo.py",
-        "fastapi_server.py",
-        "dynamic_endpoint_removal.py",
-        "webhook_examples.py",
-    ]
-
-    # Server examples that still need updating
-    other_server_examples = [
-        "endpoint_respond_demo.py",
+        *auth_examples,
+        *scheduler_examples,
     ]
 
     passed = 0
@@ -174,12 +182,12 @@ def main():
             print(f"⏭️  {example_name} (not found)")
             skipped += 1
 
-    print(f"\n🌐 Updated Server Examples (New Endpoint Patterns):")
+    print(f"\n🌐 Server Examples:")
     print("-" * 50)
-    print("These use self.endpoint.success() and similar methods")
+    print("These start servers; we validate they start without errors")
     print()
 
-    for example_name in updated_server_examples:
+    for example_name in server_examples:
         example_path = examples_dir / example_name
         if example_path.exists():
             if test_server_example(example_path):
@@ -189,20 +197,6 @@ def main():
         else:
             print(f"❓ {example_name} (not found)")
             failed += 1
-
-    print(f"\n⏳ Other Server Examples (Still Need Update):")
-    print("-" * 50)
-    print("These still use old patterns and may need updates")
-    print()
-
-    for example_name in other_server_examples:
-        example_path = examples_dir / example_name
-        if example_path.exists():
-            print(f"⏭️  {example_name} (skipped - needs update)")
-            skipped += 1
-        else:
-            print(f"❓ {example_name} (not found)")
-            skipped += 1
 
     print(f"\n⏱️  Long Running Examples:")
     print("-" * 50)

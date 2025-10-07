@@ -647,7 +647,8 @@ class EndpointRouter:
                                 ):
                                     raise HTTPException(
                                         status_code=report["status"],
-                                        detail=report.get("detail", "Unknown error"),
+                                        detail=report.get("error")
+                                        or report.get("detail", "Unknown error"),
                                     )
                                 response_data.update(report)
                         return response_data
@@ -772,9 +773,8 @@ class EndpointRouter:
                                     ):
                                         raise HTTPException(
                                             status_code=report["status"],
-                                            detail=report.get(
-                                                "detail", "Unknown error"
-                                            ),
+                                            detail=report.get("error")
+                                            or report.get("detail", "Unknown error"),
                                         )
                                     response_data.update(report)
                             return response_data
@@ -899,7 +899,8 @@ class EndpointRouter:
                                 ):
                                     raise HTTPException(
                                         status_code=report["status"],
-                                        detail=report.get("detail", "Unknown error"),
+                                        detail=report.get("error")
+                                        or report.get("detail", "Unknown error"),
                                     )
                                 response_data.update(report)
                         return response_data

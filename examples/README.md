@@ -2,26 +2,61 @@
 
 This directory contains examples demonstrating various features of jvspatial.
 
-## Directory Structure
+## Example Categories
 
-- [api/](api/) - API server and endpoint examples
-- [auth/](auth/) - Authentication and authorization examples
-- [core/](core/) - Core features and basic usage
-- [database/](database/) - Database backend and ORM examples
-- [integrations/](integrations/) - External integrations (webhooks, scheduler)
-- [storage/](storage/) - File storage examples
-- [walkers/](walkers/) - Walker and traversal examples
+### ✨ Updated Examples (New Walker Patterns)
+These examples have been updated to use the report() pattern:
+
+- `travel_graph.py` - Travel planning with graph traversal
+- `graphcontext_demo.py` - Graph context management
+- `testing_with_graphcontext.py` - Testing with graph contexts
+- `agent_graph.py` - Hierarchical agent system
+- `multi_target_hooks_demo.py` - Multiple target hook handling
+
+### 📊 Core Examples
+- `crud_demo.py` - Basic CRUD operations
+- `orm_demo.py` - ORM functionality
+- `walker_traversal_demo.py` - Basic walker traversals
+- `enhanced_nodes_filtering.py` - Advanced node filtering
+- `modern_query_interface.py` - Modern query interface usage
+- `object_pagination_demo.py` - Object pagination
+- `traversal_demo.py` - Graph traversal patterns
+- `semantic_filtering.py` - Semantic-based filtering
+- `unified_query_interface_example.py` - Unified query interface
+- `custom_database_example.py` - Custom database integration
+- `custom_database_registry_example.py` - Database registry usage
+- `database_switching_example.py` - Dynamic database switching
+- `walker_events_demo.py` - Walker event handling
+- `walker_reporting_demo.py` - Walker reporting functionality
+
+### 🌐 Server Examples
+These examples demonstrate server functionality and validate server startup:
+
+- `comprehensive_server_example.py` - Complete server implementation
+- `server_example.py` - Basic server setup
+- `server_demo.py` - Server demonstrations
+- `fastapi_server.py` - FastAPI integration
+- `dynamic_server_demo.py` - Dynamic server configuration
+- `dynamic_endpoint_removal.py` - Dynamic endpoint management
+- `endpoint_decorator_demo.py` - Endpoint decorator usage
+- `endpoint_respond_demo.py` - Endpoint response handling
+- `exception_handling_demo.py` - Error handling
+- `webhook_examples.py` - Webhook integration
+
+### ⏱️ Long Running Examples
+These examples run indefinitely (servers, schedulers):
+
+- `auth/auth_demo.py` - Authentication demo (runs continuously)
+- `scheduler/scheduler_example.py` - Scheduler integration (runs continuously)
 
 ## Getting Started
 
-Each subdirectory contains a README with specific information about the examples in that category.
-
-1. Make sure you have jvspatial installed:
+1. Install jvspatial with all features:
 ```bash
-pip install jvspatial
+pip install jvspatial[all]
 ```
 
-2. Copy .env.example to .env and configure:
+2. Set up environment (if needed):
 ```bash
 cp .env.example .env
 # Edit .env with your settings
@@ -29,69 +64,18 @@ cp .env.example .env
 
 3. Run any example:
 ```bash
-python -m examples.api.server_example
+python examples/core/crud_demo.py
 ```
-
-## Example Categories
-
-### API Examples
-Complete API server implementations showing FastAPI integration, endpoint handling, error management, and dynamic configuration.
-
-### Auth Examples
-Authentication and authorization examples including JWT tokens, API keys, and permission-based access control.
-
-### Core Examples
-Basic usage examples showing entity modeling, graph operations, and spatial functionality.
-
-### Database Examples
-Database backend customization, ORM features, and query interface examples.
-
-### Integration Examples
-External service integration examples including webhooks and scheduled tasks.
-
-### Storage Examples
-File storage examples showing local and cloud (S3) storage integration.
-
-### Walker Examples
-Graph traversal examples showing Walker patterns, event handling, and data collection.
 
 ## Testing
 
-The examples include tests in test_examples.py. Run them with:
+Run all example tests with:
 
 ```bash
-pytest test_examples.py
+python examples/test_examples.py
 ```
 
-This directory contains working examples demonstrating different aspects of the jvspatial library.
-
-## Directory Structure
-
-- `core/` - Core functionality examples (Nodes, Edges, Walkers)
-- `api/` - FastAPI integration and endpoint examples
-- `storage/` - File storage and proxy functionality
-- `auth/` - Authentication and security features
-
-## Running Examples
-
-Each example can be run directly with Python after installing jvspatial:
-
-```bash
-# Install jvspatial with all features
-pip install jvspatial[all]
-
-# Run a specific example
-python examples/core/cities.py
-```
-
-## Environment Setup
-
-Some examples require environment variables to be set. You can use the `.env` file in each directory as a template:
-
-```bash
-# Copy the example env file
-cp examples/api/.env.example examples/api/.env
-
-# Edit with your settings
-vim examples/api/.env
-```
+This will validate all examples and provide a summary of:
+- ✅ Passed examples
+- ❌ Failed examples
+- ⏭️ Skipped examples (long-running or requiring updates)

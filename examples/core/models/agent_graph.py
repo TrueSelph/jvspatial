@@ -349,7 +349,7 @@ class InteractWalker(Walker):
         """
         print(f"🥇 Executing FirstAction: {here.name} (Priority: {here.priority})")
         # Simulate specific processing for first action type
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.01)
 
     @on_visit(SecondAction)
     async def visit_second_action(self, here: SecondAction):
@@ -360,7 +360,7 @@ class InteractWalker(Walker):
         """
         print(f"🥈 Executing SecondAction: {here.name} (Priority: {here.priority})")
         # Simulate specific processing for second action type
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.01)
 
     @on_visit(ThirdAction)
     async def visit_third_action(self, here: ThirdAction):
@@ -371,7 +371,7 @@ class InteractWalker(Walker):
         """
         print(f"🥉 Executing ThirdAction: {here.name} (Priority: {here.priority})")
         # Simulate specific processing for third action type
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.01)
 
     @on_exit
     async def finalize_interaction(self):
@@ -660,7 +660,7 @@ async def main():
     print("\n🚶 Running InteractWalker to traverse agent hierarchy")
     root = await Root.get()
     walker = InteractWalker(
-        target_agent_name="DataProcessor", include_inactive=False, max_actions=5
+        target_agent_name="DataProcessor", include_inactive=False, max_actions=3
     )
 
     await walker.spawn(root)
