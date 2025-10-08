@@ -29,9 +29,9 @@ from jvspatial.api import (
     Server,
     create_server,
     endpoint,
-    get_default_server,
     walker_endpoint,
 )
+from jvspatial.api.context import get_current_server
 from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core.entities import Node, Root, Walker, on_exit, on_visit
 
@@ -524,10 +524,10 @@ def start_background_monitoring():
         while True:
             time.sleep(30)  # Check every 30 seconds
             try:
-                if server._is_running:
-                    count = server.discover_and_register_packages()
-                    if count > 0:
-                        print(f"🔍 Background discovery: found {count} new endpoints")
+                # Use refresh_endpoints instead of accessing private _is_running
+                count = server.refresh_endpoints()
+                if count > 0:
+                    print(f"🔍 Background discovery: found {count} new endpoints")
             except Exception as e:
                 print(f"⚠️ Background monitoring error: {e}")
 
@@ -559,14 +559,13 @@ if __name__ == "__main__":
         # Register additional endpoints dynamically
         register_dynamic_endpoints()
 
-        # Show server info
+        # Show server info using public API methods
         print(f"\n📊 Server Info:")
-        print(f"  • Registered walkers: {len(server._registered_walker_classes)}")
-        print(f"  • Custom routes: {len(server._custom_routes)}")
-        print(
-            f"  • Package discovery: {'enabled' if server._package_discovery_enabled else 'disabled'}"
-        )
-        print(f"  • Discovery patterns: {server._discovery_patterns}")
+        walker_info = server.list_walker_endpoints()
+        function_info = server.list_function_endpoints()
+        print(f"  • Registered walkers: {len(walker_info)}")
+        print(f"  • Registered functions: {len(function_info)}")
+        print(f"  • Package discovery: enabled")
 
     # Add the scheduled task as a startup hook
     @server.on_startup

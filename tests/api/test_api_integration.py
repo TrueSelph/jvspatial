@@ -170,9 +170,8 @@ class TestWalkerEndpointDecorator:
         class TestAPIWalker(Walker):
             param: str = EndpointField(description="Test parameter")
 
-        # Check walker is registered
-        assert TestAPIWalker in test_server._registered_walker_classes
-        assert TestAPIWalker in test_server._walker_endpoint_mapping
+        # Check walker is registered using endpoint registry
+        assert test_server._endpoint_registry.has_walker(TestAPIWalker)
 
     def test_walker_endpoint_with_methods(self, test_server):
         """Test walker endpoint with specific HTTP methods."""
@@ -181,8 +180,8 @@ class TestWalkerEndpointDecorator:
         class MethodWalker(Walker):
             data: str = EndpointField(description="Input data")
 
-        mapping = test_server._walker_endpoint_mapping[MethodWalker]
-        assert mapping["methods"] == ["GET", "POST"]
+        endpoint_info = test_server._endpoint_registry.get_walker_info(MethodWalker)
+        assert endpoint_info.methods == ["GET", "POST"]
 
     def test_walker_endpoint_with_metadata(self, test_server):
         """Test walker endpoint with tags and summary."""
@@ -191,9 +190,9 @@ class TestWalkerEndpointDecorator:
         class MetaWalker(Walker):
             value: int = EndpointField(description="Test value")
 
-        mapping = test_server._walker_endpoint_mapping[MetaWalker]
-        assert mapping["kwargs"]["tags"] == ["testing"]
-        assert mapping["kwargs"]["summary"] == "Test endpoint"
+        endpoint_info = test_server._endpoint_registry.get_walker_info(MetaWalker)
+        assert endpoint_info.kwargs["tags"] == ["testing"]
+        assert endpoint_info.kwargs["summary"] == "Test endpoint"
 
     def test_multiple_walker_endpoints(self, test_server):
         """Test registering multiple walker endpoints."""
@@ -206,9 +205,10 @@ class TestWalkerEndpointDecorator:
         class Walker2(Walker):
             param2: int = EndpointField(description="Parameter 2")
 
-        assert len(test_server._registered_walker_classes) == 2
-        assert Walker1 in test_server._registered_walker_classes
-        assert Walker2 in test_server._registered_walker_classes
+        walkers = test_server._endpoint_registry.list_walkers()
+        assert len(walkers) == 2
+        assert test_server._endpoint_registry.has_walker(Walker1)
+        assert test_server._endpoint_registry.has_walker(Walker2)
 
 
 class TestEndpointDecorator:
@@ -222,7 +222,11 @@ class TestEndpointDecorator:
             """Test function endpoint."""
             return {"message": "Hello from function"}
 
-        assert test_function in test_server._function_endpoint_mapping
+        # Check function is registered using endpoint registry
+        assert test_function in test_server._custom_routes or any(
+            route.get("endpoint") == test_function
+            for route in test_server._custom_routes
+        )
 
     def test_function_endpoint_with_parameters(self, test_server):
         """Test function endpoint with parameters."""
@@ -232,8 +236,17 @@ class TestEndpointDecorator:
             """Function with parameters."""
             return {"name": name, "value": value}
 
-        mapping = test_server._function_endpoint_mapping[param_function]
-        assert mapping["methods"] == ["POST"]
+        # Check in custom routes
+        found_route = next(
+            (
+                route
+                for route in test_server._custom_routes
+                if route.get("endpoint") == param_function
+            ),
+            None,
+        )
+        assert found_route is not None
+        assert found_route["methods"] == ["POST"]
 
     def test_function_endpoint_with_metadata(self, test_server):
         """Test function endpoint with metadata."""
@@ -248,9 +261,18 @@ class TestEndpointDecorator:
             """Function with metadata."""
             return {"status": "ok"}
 
-        mapping = test_server._function_endpoint_mapping[meta_function]
-        assert mapping["kwargs"]["tags"] == ["functions"]
-        assert mapping["kwargs"]["summary"] == "Test function"
+        # Check in custom routes
+        found_route = next(
+            (
+                route
+                for route in test_server._custom_routes
+                if route.get("endpoint") == meta_function
+            ),
+            None,
+        )
+        assert found_route is not None
+        assert found_route.get("tags") == ["functions"]
+        assert found_route.get("summary") == "Test function"
 
 
 class TestParameterModels:
@@ -553,8 +575,8 @@ class TestLifecycleHooks:
         # Simulate startup
         app = test_server._create_app()
 
-        # Manually trigger startup events for testing
-        for task in test_server._startup_tasks:
+        # Manually trigger startup events for testing using lifecycle manager
+        for task in test_server._lifecycle_manager._startup_hooks:
             if asyncio.iscoroutinefunction(task):
                 await task()
             else:
@@ -579,8 +601,8 @@ class TestLifecycleHooks:
             """Second shutdown hook."""
             shutdown_called.append("hook2")
 
-        # Simulate shutdown
-        for task in test_server._shutdown_tasks:
+        # Simulate shutdown using lifecycle manager
+        for task in test_server._lifecycle_manager._shutdown_hooks:
             if asyncio.iscoroutinefunction(task):
                 await task()
             else:
@@ -600,10 +622,11 @@ class TestLifecycleHooks:
             response.headers["X-Custom-Header"] = "test-value"
             return response
 
-        # Verify middleware is registered
-        assert len(test_server._middleware) == 1
-        assert test_server._middleware[0]["func"] == custom_middleware
-        assert test_server._middleware[0]["middleware_type"] == "http"
+        # Verify middleware is registered using middleware manager
+        assert len(test_server._middleware_manager._custom_middleware) == 1
+        middleware_entry = test_server._middleware_manager._custom_middleware[0]
+        assert middleware_entry["func"] == custom_middleware
+        assert middleware_entry["middleware_type"] == "http"
 
 
 class TestOpenAPIDocumentation:
@@ -732,7 +755,7 @@ class TestDynamicEndpointManagement:
         class DynamicWalker(Walker):
             param: str = EndpointField(description="Dynamic parameter")
 
-        assert DynamicWalker in test_server._registered_walker_classes
+        assert test_server._endpoint_registry.has_walker(DynamicWalker)
 
         # Create app and test endpoint
         app = test_server._create_app()
@@ -750,14 +773,13 @@ class TestDynamicEndpointManagement:
         class RemovableWalker(Walker):
             param: str = EndpointField(description="Removable walker")
 
-        # Initially registered
-        assert RemovableWalker in test_server._registered_walker_classes
-        assert RemovableWalker in test_server._walker_endpoint_mapping
+        # Initially registered using endpoint registry
+        assert test_server._endpoint_registry.has_walker(RemovableWalker)
 
         # For now, just verify registration tracking works
         # TODO: Implement removal functionality
-        mapping = test_server._walker_endpoint_mapping[RemovableWalker]
-        assert mapping["path"] == "/removable-walker"
+        endpoint_info = test_server._endpoint_registry.get_walker_info(RemovableWalker)
+        assert endpoint_info.path == "/removable-walker"
 
     def test_multiple_endpoint_registration_removal(self, test_server):
         """Test registering multiple endpoints (removal not yet implemented)."""
@@ -770,12 +792,13 @@ class TestDynamicEndpointManagement:
         class WalkerB(Walker):
             param_b: str = EndpointField(description="Parameter B")
 
-        assert len(test_server._registered_walker_classes) == 2
-        assert WalkerA in test_server._registered_walker_classes
-        assert WalkerB in test_server._registered_walker_classes
+        walkers = test_server._endpoint_registry.list_walkers()
+        assert len(walkers) == 2
+        assert test_server._endpoint_registry.has_walker(WalkerA)
+        assert test_server._endpoint_registry.has_walker(WalkerB)
 
         # Verify both are properly mapped
-        assert WalkerA in test_server._walker_endpoint_mapping
-        assert WalkerB in test_server._walker_endpoint_mapping
-        assert test_server._walker_endpoint_mapping[WalkerA]["path"] == "/walker-a"
-        assert test_server._walker_endpoint_mapping[WalkerB]["path"] == "/walker-b"
+        endpoint_info_a = test_server._endpoint_registry.get_walker_info(WalkerA)
+        endpoint_info_b = test_server._endpoint_registry.get_walker_info(WalkerB)
+        assert endpoint_info_a.path == "/walker-a"
+        assert endpoint_info_b.path == "/walker-b"

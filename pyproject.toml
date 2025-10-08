@@ -73,6 +73,9 @@ minversion = "7.0"
 addopts = "-ra -q --strict-markers"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "asyncio: mark test as an asyncio test",
+]
 filterwarnings = [
     "ignore::DeprecationWarning:pydantic.*",
     "ignore::PendingDeprecationWarning",

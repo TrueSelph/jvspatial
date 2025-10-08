@@ -105,8 +105,8 @@ class TestAuthIntegration:
             async def process_data(self, here):
                 self.report({"data": f"Processed: {here.name} - {self.query}"})
 
-        # Check walker is registered with auth requirements
-        assert AuthDataWalker in server._registered_walker_classes
+        # Check walker is registered with auth requirements using endpoint registry
+        assert server._endpoint_registry.has_walker(AuthDataWalker)
         assert hasattr(AuthDataWalker, "_auth_required")
         assert AuthDataWalker._auth_required is True
         assert AuthDataWalker._required_permissions == ["read_data"]
@@ -120,7 +120,9 @@ class TestAuthIntegration:
             return {"message": "Authenticated info", "timestamp": datetime.now()}
 
         # Check function is registered
-        assert get_auth_info in server._function_endpoint_mapping
+        assert any(
+            route.get("endpoint") == get_auth_info for route in server._custom_routes
+        )
         assert hasattr(get_auth_info, "_auth_required")
         assert get_auth_info._auth_required is True
         assert get_auth_info._required_roles == ["user"]
@@ -331,11 +333,15 @@ class TestAuthIntegration:
         async def admin_control():
             return {"admin": True, "control": "active"}
 
-        # Verify all endpoints are registered
-        assert len(server._registered_walker_classes) == 2
-        assert PublicWalker in server._registered_walker_classes
-        assert AuthWalker in server._registered_walker_classes
-        assert admin_control in server._function_endpoint_mapping
+        # Verify all endpoints are registered using endpoint registry
+        walkers = server._endpoint_registry.list_walkers()
+        assert len(walkers) == 2
+        assert server._endpoint_registry.has_walker(PublicWalker)
+        assert server._endpoint_registry.has_walker(AuthWalker)
+        # Check admin function endpoint is in custom routes
+        assert any(
+            route.get("endpoint") == admin_control for route in server._custom_routes
+        )
 
     def test_auth_configuration_persistence(self):
         """Test that auth configuration persists across components."""

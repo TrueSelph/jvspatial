@@ -124,7 +124,7 @@ class TestWebhookEndpointDecorator:
     def test_webhook_endpoint_server_registration(self):
         """Test server registration when server is available."""
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server",
+            "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
@@ -139,7 +139,7 @@ class TestWebhookEndpointDecorator:
     def test_webhook_endpoint_no_server_deferred(self):
         """Test decorator works without server (deferred registration)."""
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server", return_value=None
+            "jvspatial.api.auth.decorators.get_current_server", return_value=None
         ):
 
             @webhook_endpoint("/webhook/deferred/{auth_token}")

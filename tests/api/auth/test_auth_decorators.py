@@ -44,7 +44,7 @@ class TestAuthWalkerEndpoint:
     def test_auth_walker_endpoint_basic(self):
         """Test basic auth walker endpoint decorator."""
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server",
+            "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
@@ -67,7 +67,7 @@ class TestAuthWalkerEndpoint:
     def test_auth_walker_endpoint_with_permissions(self):
         """Test auth walker endpoint with permissions."""
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server",
+            "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
@@ -92,7 +92,7 @@ class TestAuthWalkerEndpoint:
     def test_auth_walker_endpoint_with_roles(self):
         """Test auth walker endpoint with roles."""
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server",
+            "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
@@ -120,7 +120,7 @@ class TestAuthWalkerEndpoint:
     def test_auth_walker_endpoint_no_server(self):
         """Test auth walker endpoint when no server available."""
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server", return_value=None
+            "jvspatial.api.auth.decorators.get_current_server", return_value=None
         ):
             # With deferred registration, no exception should be raised during decoration
             @auth_walker_endpoint("/test/walker")
@@ -145,12 +145,13 @@ class TestAuthEndpoint:
         self.mock_server = MagicMock()
         self.mock_server.register_function_endpoint = MagicMock()
         self.mock_server._custom_routes = []
-        self.mock_server._function_endpoint_mapping = {}
+        self.mock_server._endpoint_registry = MagicMock()
+        self.mock_server._endpoint_registry.register_function = MagicMock()
 
     def test_auth_endpoint_basic(self):
         """Test basic auth endpoint decorator."""
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server",
+            "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
@@ -175,7 +176,7 @@ class TestAuthEndpoint:
     def test_auth_endpoint_with_permissions(self):
         """Test auth endpoint with permissions."""
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server",
+            "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
@@ -193,7 +194,7 @@ class TestAuthEndpoint:
     def test_auth_endpoint_with_roles(self):
         """Test auth endpoint with roles."""
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server",
+            "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
@@ -209,7 +210,7 @@ class TestAuthEndpoint:
     def test_auth_endpoint_no_server(self):
         """Test auth endpoint when no server available."""
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server", return_value=None
+            "jvspatial.api.auth.decorators.get_current_server", return_value=None
         ):
             # With deferred registration, no exception should be raised during decoration
             @auth_endpoint("/test/function")
@@ -234,12 +235,13 @@ class TestAdminDecorators:
         self.mock_server.register_walker_class = MagicMock()
         self.mock_server.register_function_endpoint = MagicMock()
         self.mock_server._custom_routes = []
-        self.mock_server._function_endpoint_mapping = {}
+        self.mock_server._endpoint_registry = MagicMock()
+        self.mock_server._endpoint_registry.register_function = MagicMock()
 
     def test_admin_walker_endpoint(self):
         """Test admin walker endpoint decorator."""
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server",
+            "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
@@ -260,7 +262,7 @@ class TestAdminDecorators:
     def test_admin_walker_endpoint_with_methods(self):
         """Test admin walker endpoint with custom methods."""
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server",
+            "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
@@ -276,7 +278,7 @@ class TestAdminDecorators:
     def test_admin_endpoint(self):
         """Test admin endpoint decorator."""
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server",
+            "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
@@ -292,7 +294,7 @@ class TestAdminDecorators:
     def test_admin_endpoint_with_methods(self):
         """Test admin endpoint with custom methods."""
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server",
+            "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
@@ -646,7 +648,7 @@ class TestDecoratorIntegration:
     def test_multiple_decorators_on_walker(self):
         """Test multiple auth-related decorators on a walker."""
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server",
+            "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
@@ -675,7 +677,7 @@ class TestDecoratorIntegration:
     def test_nested_decorator_functionality(self):
         """Test that decorators work properly when combined."""
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server",
+            "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
@@ -705,7 +707,7 @@ class TestDecoratorIntegration:
         """Test error handling in decorators."""
         # Test with no default server and no explicit server
         with patch(
-            "jvspatial.api.auth.decorators.get_default_server", return_value=None
+            "jvspatial.api.auth.decorators.get_current_server", return_value=None
         ):
 
             # With deferred registration, decorators should not raise errors during decoration

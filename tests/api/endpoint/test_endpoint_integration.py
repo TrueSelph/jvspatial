@@ -6,13 +6,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from jvspatial.api.context import (
+    get_current_server,
+    set_current_server,
+)
 from jvspatial.api.endpoint.response import EndpointResponseHelper
 from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.api.server import (
     Server,
     endpoint,
-    get_default_server,
-    set_default_server,
     walker_endpoint,
 )
 from jvspatial.core.entities import Node, Walker
@@ -29,10 +31,10 @@ class TestWalkerEndpointIntegration:
             description="Test server for endpoint integration tests",
             version="1.0.0",
         )
-        set_default_server(self.test_server)
+        set_current_server(self.test_server)
         yield
-        # Cleanup - reset default server
-        set_default_server(None)
+        # Cleanup - reset current server
+        set_current_server(None)
 
     def test_walker_endpoint_injection(self):
         """Test that @walker_endpoint injects endpoint helper into walker."""
@@ -203,10 +205,10 @@ class TestFunctionEndpointIntegration:
             description="Test server for endpoint integration tests",
             version="1.0.0",
         )
-        set_default_server(self.test_server)
+        set_current_server(self.test_server)
         yield
         # Cleanup
-        set_default_server(None)
+        set_current_server(None)
 
     def test_function_endpoint_injection_signature(self):
         """Test that @endpoint decorator modifies function signature to include endpoint parameter."""
@@ -334,9 +336,9 @@ class TestEndpointInjectionMechanism:
             description="Test server for injection mechanism tests",
             version="1.0.0",
         )
-        set_default_server(self.test_server)
+        set_current_server(self.test_server)
         yield
-        set_default_server(None)
+        set_current_server(None)
 
     def test_walker_endpoint_registration(self):
         """Test that walker endpoints are properly registered with server."""
@@ -348,14 +350,16 @@ class TestEndpointInjectionMechanism:
             async def visit_node(self, node):
                 return {"test": "registration"}
 
-        # Check that walker is registered with server
-        assert RegistrationTestWalker in self.test_server._registered_walker_classes
+        # Check that walker is registered with server using endpoint registry
+        assert self.test_server._endpoint_registry.has_walker(RegistrationTestWalker)
 
-        # Check endpoint mapping
-        mapping = self.test_server._walker_endpoint_mapping.get(RegistrationTestWalker)
-        assert mapping is not None
-        assert mapping["path"] == "/test/registration"
-        assert mapping["methods"] == ["POST"]  # Default for walker endpoints
+        # Check endpoint info
+        endpoint_info = self.test_server._endpoint_registry.get_walker_info(
+            RegistrationTestWalker
+        )
+        assert endpoint_info is not None
+        assert endpoint_info.path == "/test/registration"
+        assert endpoint_info.methods == ["POST"]  # Default for walker endpoints
 
     def test_function_endpoint_registration(self):
         """Test that function endpoints are properly registered with server."""
@@ -364,15 +368,18 @@ class TestEndpointInjectionMechanism:
         async def registration_test_function(endpoint) -> Any:
             return endpoint.success(data={"test": "registration"})
 
-        # Check that function is in custom routes
-        found_route = None
-        for route in self.test_server._custom_routes:
-            if route["path"] == "/test/function_registration":
-                found_route = route
-                break
+        # Check that function is registered using endpoint registry
+        assert self.test_server._endpoint_registry.has_function(
+            registration_test_function
+        )
 
-        assert found_route is not None
-        assert found_route["methods"] == ["GET"]  # Default for function endpoints
+        # Check endpoint info
+        endpoint_info = self.test_server._endpoint_registry.get_function_info(
+            registration_test_function
+        )
+        assert endpoint_info is not None
+        assert endpoint_info.path == "/test/function_registration"
+        assert endpoint_info.methods == ["GET"]  # Default for function endpoints
 
     def test_endpoint_helper_factory(self):
         """Test the endpoint helper factory function."""
@@ -395,9 +402,11 @@ class TestEndpointInjectionMechanism:
     def test_server_discovery_and_registration(self):
         """Test that server properly discovers and registers endpoints."""
 
-        # Test discovery count
-        initial_walker_count = len(self.test_server._registered_walker_classes)
-        initial_route_count = len(self.test_server._custom_routes)
+        # Test discovery count using endpoint registry
+        initial_walker_count = len(self.test_server._endpoint_registry.list_walkers())
+        initial_function_count = len(
+            self.test_server._endpoint_registry.list_functions()
+        )
 
         @walker_endpoint("/test/discovery/walker")
         class DiscoveryWalker(Walker):
@@ -409,22 +418,21 @@ class TestEndpointInjectionMechanism:
 
         # Check counts increased
         assert (
-            len(self.test_server._registered_walker_classes) == initial_walker_count + 1
+            len(self.test_server._endpoint_registry.list_walkers())
+            == initial_walker_count + 1
         )
-        assert len(self.test_server._custom_routes) == initial_route_count + 1
+        assert (
+            len(self.test_server._endpoint_registry.list_functions())
+            == initial_function_count + 1
+        )
 
         # Verify specific registrations
-        assert DiscoveryWalker in self.test_server._registered_walker_classes
+        assert self.test_server._endpoint_registry.has_walker(DiscoveryWalker)
+        assert self.test_server._endpoint_registry.has_function(discovery_function)
 
-        function_found = any(
-            route["path"] == "/test/discovery/function"
-            for route in self.test_server._custom_routes
-        )
-        assert function_found
-
-    @patch("jvspatial.api.server.get_default_server")
+    @patch("jvspatial.api.context.get_current_server")
     def test_no_server_available(self, mock_get_server):
-        """Test endpoint decoration when no default server is available."""
+        """Test endpoint decoration when no current server is available."""
         mock_get_server.return_value = None
 
         @walker_endpoint("/test/no_server")

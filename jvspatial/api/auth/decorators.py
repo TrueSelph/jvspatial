@@ -10,7 +10,7 @@ from typing import Any, Callable, List, Optional, Tuple, Type
 
 from fastapi import HTTPException, Request
 
-from jvspatial.api.server import get_default_server
+from jvspatial.api.context import get_current_server
 from jvspatial.core.entities import Walker
 
 
@@ -65,7 +65,7 @@ def auth_walker_endpoint(
 
         # Try to register with server if available, but don't fail if not
         try:
-            target_server = server or get_default_server()
+            target_server = server or get_current_server()
             if target_server:
                 # Register the walker with the server
                 target_server.register_walker_class(walker_class, path, methods)
@@ -141,18 +141,19 @@ def auth_endpoint(
 
         # Try to register with server if available, but don't fail if not
         try:
-            target_server = server or get_default_server()
+            target_server = server or get_current_server()
             if target_server:
                 # Register the function with the server using the route decorator pattern
                 target_server._custom_routes.append(auth_wrapper._route_config)  # type: ignore[attr-defined]
 
-                # Track function endpoint mapping
-                target_server._function_endpoint_mapping[auth_wrapper] = {
-                    "path": path,
-                    "methods": methods,
-                    "kwargs": {},
-                    "route_config": auth_wrapper._route_config,  # type: ignore[attr-defined]
-                }
+                # Register with endpoint registry if available
+                if hasattr(target_server, "_endpoint_registry"):
+                    target_server._endpoint_registry.register_function(
+                        auth_wrapper,
+                        path,
+                        methods,
+                        route_config=auth_wrapper._route_config,  # type: ignore[attr-defined]
+                    )
         except (RuntimeError, AttributeError):
             # Server not available during decoration (e.g., during test collection)
             # Registration will be deferred
@@ -267,18 +268,19 @@ def webhook_endpoint(
 
         # Try to register with server if available, but don't fail if not
         try:
-            target_server = server or get_default_server()
+            target_server = server or get_current_server()
             if target_server:
                 # Register the function with the server using the route decorator pattern
                 target_server._custom_routes.append(webhook_wrapper._route_config)  # type: ignore[attr-defined]
 
-                # Track function endpoint mapping
-                target_server._function_endpoint_mapping[webhook_wrapper] = {
-                    "path": path,
-                    "methods": methods,
-                    "kwargs": route_kwargs,
-                    "route_config": webhook_wrapper._route_config,  # type: ignore[attr-defined]
-                }
+                # Register with endpoint registry if available
+                if hasattr(target_server, "_endpoint_registry"):
+                    target_server._endpoint_registry.register_function(
+                        webhook_wrapper,
+                        path,
+                        methods,
+                        route_config=webhook_wrapper._route_config,  # type: ignore[attr-defined]
+                    )
         except (RuntimeError, AttributeError):
             # Server not available during decoration (e.g., during test collection)
             # Registration will be deferred
@@ -394,7 +396,7 @@ def webhook_walker_endpoint(
 
         # Try to register with server if available, but don't fail if not
         try:
-            target_server = server or get_default_server()
+            target_server = server or get_current_server()
             if target_server:
                 # Register the walker with the server
                 target_server.register_walker_class(

@@ -406,22 +406,19 @@ async def list_walker_endpoints():
 async def remove_walker(walker_name: str):
     """Remove a walker by name - demonstrates dynamic removal."""
     try:
-        # Find the walker class by name
-        walker_class = None
-        for wc in server._registered_walker_classes:
-            if wc.__name__ == walker_name:
-                walker_class = wc
-                break
+        # Get walker info using public API
+        walker_info = server.list_walker_endpoints()
 
-        if not walker_class:
+        if walker_name not in walker_info:
             raise HTTPException(
                 status_code=404, detail=f"Walker {walker_name} not found"
             )
 
-        # Remove the walker
-        success = server.unregister_walker_class(walker_class)
+        # Get the path from walker info and remove by path
+        walker_path = walker_info[walker_name]["path"]
+        removed = server.unregister_endpoint_by_path(walker_path)
 
-        if success:
+        if removed > 0:
             return {
                 "status": "success",
                 "message": f"Walker {walker_name} removed from registration",
@@ -485,17 +482,12 @@ async def demonstrate_walker_removal():
     for name, info in walker_info.items():
         print(f"  • {name}: {info['path']} {info['methods']}")
 
-    # Remove the bulk update walker
-    bulk_walker_class = None
-    for wc in server._registered_walker_classes:
-        if wc.__name__ == "BulkUpdateProducts":
-            bulk_walker_class = wc
-            break
-
-    if bulk_walker_class:
-        print(f"\n🗑️ Removing walker: {bulk_walker_class.__name__}")
-        success = server.unregister_walker_class(bulk_walker_class)
-        print(f"Removal {'successful' if success else 'failed'}")
+    # Remove the bulk update walker by name
+    if "BulkUpdateProducts" in walker_info:
+        bulk_walker_path = walker_info["BulkUpdateProducts"]["path"]
+        print(f"\n🗑️ Removing walker: BulkUpdateProducts at {bulk_walker_path}")
+        removed = server.unregister_endpoint_by_path(bulk_walker_path)
+        print(f"Removal {'successful' if removed > 0 else 'failed'}")
 
         # List walkers again
         walker_info = server.list_walker_endpoints()
