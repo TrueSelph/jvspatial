@@ -33,7 +33,7 @@ server = Server(
 
 
 # Walker endpoints to test removal
-@server.walker("/api/user-walker")
+@walker_endpoint("/api/user-walker")
 class UserWalker(Walker):
     username: str = "test_user"
 
@@ -45,7 +45,7 @@ class UserWalker(Walker):
         )
 
 
-@server.walker("/api/admin-walker")
+@walker_endpoint("/api/admin-walker")
 class AdminWalker(Walker):
     admin_action: str = "check_status"
 
@@ -58,14 +58,14 @@ class AdminWalker(Walker):
 
 
 # Function endpoints to test removal
-@server.route("/api/info")
-def get_info():
+@endpoint("/api/info")
+async def get_info():
     """Get server information."""
     return {"message": "Server info endpoint", "active": True}
 
 
-@server.route("/api/status")
-def get_status():
+@endpoint("/api/status")
+async def get_status():
     """Get server status."""
     return {"status": "running", "endpoints": "active"}
 
@@ -158,26 +158,27 @@ def main():
     print("⏹️  Press Ctrl+C to stop the server")
     print()
 
-    # Add an endpoint to stop the server programmatically
-    @server.route("/api/shutdown", methods=["POST"])
-    def shutdown_server():
-        """Shutdown the server."""
-        logger.info("🛑 Shutdown requested...")
-
-        # Schedule shutdown after responding
-        def delayed_shutdown():
-            time.sleep(1)
-            import os
-
-            os._exit(0)
-
-        threading.Thread(target=delayed_shutdown, daemon=True).start()
-        return {"message": "Server shutting down..."}
-
     try:
         server.run(host="0.0.0.0", port=8002, reload=False)
     except KeyboardInterrupt:
         logger.info("🛑 Server stopped by user")
+
+
+# Add an endpoint to stop the server programmatically
+@endpoint("/api/shutdown", methods=["POST"])
+async def shutdown_server():
+    """Shutdown the server."""
+    logger.info("🛑 Shutdown requested...")
+
+    # Schedule shutdown after responding
+    def delayed_shutdown():
+        time.sleep(1)
+        import os
+
+        os._exit(0)
+
+    threading.Thread(target=delayed_shutdown, daemon=True).start()
+    return {"message": "Server shutting down..."}
 
 
 if __name__ == "__main__":

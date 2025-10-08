@@ -4,6 +4,13 @@ This directory contains examples demonstrating various features of jvspatial.
 
 ## Example Categories
 
+### 🔰 Error Handling Examples
+Robust error handling patterns and best practices:
+
+- `error_handling/basic_error_handling.py` - Fundamental error patterns
+- `error_handling/database_error_handling.py` - Database error handling
+- `error_handling/walker_error_handling.py` - Walker error handling
+
 ### ✨ Updated Examples (New Walker Patterns)
 These examples have been updated to use the report() pattern:
 

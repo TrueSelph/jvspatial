@@ -55,7 +55,7 @@ print(f"📋 Server created: {server.config.title}")
 # ====================== WALKER ENDPOINTS ======================
 
 
-@server.walker("/products/create")
+@walker_endpoint("/products/create")
 class CreateProduct(Walker):
     """Create product using server instance decorator."""
 

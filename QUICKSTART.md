@@ -1520,7 +1520,7 @@ server = Server(
 )
 
 # Good: Validate files before processing
-@server.walker("/validate-upload")
+@walker_endpoint("/validate-upload")
 class ValidateUpload(Walker):
     file_path: str
 
@@ -1563,7 +1563,7 @@ server = Server(
 )
 
 # Bad: No file validation
-@server.walker("/unsafe-upload")
+@walker_endpoint("/unsafe-upload")
 class UnsafeUpload(Walker):
     file_path: str
 
@@ -1580,6 +1580,48 @@ class UnsafeUpload(Walker):
 See [File Storage Documentation](docs/md/file-storage-usage.md) for advanced usage and all configuration options.
 
 ---
+
+## 🔀 Router Decorators
+
+jvspatial provides four standard router decorators for API endpoints:
+
+1. `@endpoint` - For function-based endpoints
+2. `@walker_endpoint` - For walker-based endpoints
+3. `@auth_endpoint` - For authenticated function endpoints
+4. `@auth_walker_endpoint` - For authenticated walker endpoints
+
+```python
+from jvspatial.api import endpoint, walker_endpoint
+from jvspatial.api.auth import auth_endpoint, auth_walker_endpoint
+
+# Function endpoint
+@endpoint("/api/users", methods=["GET"])
+async def get_users() -> Dict[str, Any]:
+    users = await User.all()
+    return {"users": users}
+
+# Walker endpoint
+@walker_endpoint("/api/graph/traverse", methods=["POST"])
+class GraphTraversal(Walker):
+    pass
+
+# Authenticated function endpoint
+@auth_endpoint("/api/admin/stats", methods=["GET"], roles=["admin"])
+async def get_admin_stats() -> Dict[str, Any]:
+    return {"stats": "admin only"}
+
+# Authenticated walker endpoint
+@auth_walker_endpoint("/api/secure/process", methods=["POST"], permissions=["process_data"])
+class SecureProcessor(Walker):
+    pass
+```
+
+**❌ DO NOT USE alternative decorators like:**
+- `@route`
+- `@server.route`
+- `@server.walker`
+
+These are internal or deprecated.
 
 ## 🌐 API Integration with FastAPI Server
 
@@ -2337,6 +2379,40 @@ async def log_requests(request, call_next):
     print(f"{request.method} {request.url} - {response.status_code} ({process_time:.2f}s)")
     return response
 ```
+
+### Router Decorators
+
+jvspatial provides four standard router decorators for API endpoints. These are the ONLY decorators that should be used for routing:
+
+1. `@endpoint` - For function-based endpoints
+2. `@walker_endpoint` - For walker-based endpoints
+3. `@auth_endpoint` - For authenticated function endpoints
+4. `@auth_walker_endpoint` - For authenticated walker endpoints
+
+```python
+# Function endpoint
+@endpoint("/api/users", methods=["GET"])
+async def get_users() -> Dict[str, Any]:
+    users = await User.all()
+    return {"users": users}
+
+# Walker endpoint
+@walker_endpoint("/api/graph/traverse", methods=["POST"])
+class GraphTraversal(Walker):
+    pass
+
+# Authenticated function endpoint
+@auth_endpoint("/api/admin/stats", methods=["GET"], roles=["admin"])
+async def get_admin_stats() -> Dict[str, Any]:
+    return {"stats": "admin only"}
+
+# Authenticated walker endpoint
+@auth_walker_endpoint("/api/secure/process", methods=["POST"], permissions=["process_data"])
+class SecureProcessor(Walker):
+    pass
+```
+
+DO NOT use alternative decorators like `@route`, `@server.route`, or `@server.walker`. These are internal or deprecated.
 
 ### API Usage Examples
 

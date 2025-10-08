@@ -25,7 +25,13 @@ from typing import List, Optional
 
 from pydantic import Field
 
-from jvspatial.api import Server, create_server, get_default_server, walker_endpoint
+from jvspatial.api import (
+    Server,
+    create_server,
+    endpoint,
+    get_default_server,
+    walker_endpoint,
+)
 from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core.entities import Node, Root, Walker, on_exit, on_visit
 
@@ -137,7 +143,7 @@ async def initialize_sample_tasks():
 # ====================== INITIAL WALKER ENDPOINTS ======================
 
 
-@server.walker("/tasks/create")
+@walker_endpoint("/tasks/create")
 class CreateTask(Walker):
     """Create a new task."""
 
@@ -189,7 +195,7 @@ class CreateTask(Walker):
             )
 
 
-@server.walker("/tasks/search")
+@walker_endpoint("/tasks/search")
 class SearchTasks(Walker):
     """Search tasks with various filters."""
 
@@ -265,7 +271,7 @@ class SearchTasks(Walker):
 # ====================== CUSTOM ROUTES ======================
 
 
-@server.route("/dashboard", methods=["GET"])
+@endpoint("/dashboard", methods=["GET"])
 async def get_dashboard():
     """Get dashboard statistics."""
     try:
@@ -305,7 +311,7 @@ async def get_dashboard():
         return {"error": f"Dashboard failed: {str(e)}"}
 
 
-@server.route("/endpoints/refresh", methods=["POST"])
+@endpoint("/endpoints/refresh", methods=["POST"])
 async def refresh_endpoints():
     """Manually refresh and discover new endpoints."""
     try:

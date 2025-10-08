@@ -31,7 +31,7 @@ import asyncio
 import os
 from typing import Any, Dict, Optional
 
-from jvspatial.api import Server
+from jvspatial.api import Server, walker_endpoint
 from jvspatial.core.entities import Node, Root, Walker, on_visit
 
 
@@ -76,7 +76,7 @@ server = create_file_storage_server()
 
 
 # Example 2: Walker that Uploads Files
-@server.walker("/upload-document")
+@walker_endpoint("/upload-document")
 class UploadDocument(Walker):
     """Walker that handles document uploads with metadata."""
 
@@ -116,7 +116,7 @@ class UploadDocument(Walker):
 
 
 # Example 3: Walker that Creates Shareable Links
-@server.walker("/create-share-link")
+@walker_endpoint("/create-share-link")
 class CreateShareLink(Walker):
     """Create shareable links for existing files."""
 
@@ -156,7 +156,7 @@ class CreateShareLink(Walker):
 
 
 # Example 4: Walker that Processes Files
-@server.walker("/process-file")
+@walker_endpoint("/process-file")
 class ProcessFile(Walker):
     """Walker that retrieves and processes a file."""
 
@@ -198,7 +198,7 @@ class ProcessFile(Walker):
 
 
 # Example 5: Walker that Lists Files
-@server.walker("/list-files")
+@walker_endpoint("/list-files")
 class ListFiles(Walker):
     """Walker that lists files in a directory."""
 
@@ -223,7 +223,7 @@ class ListFiles(Walker):
 
 
 # Example 6: Walker that Manages File Lifecycle
-@server.walker("/file-lifecycle")
+@walker_endpoint("/file-lifecycle")
 class FileLifecycle(Walker):
     """Demonstrate complete file lifecycle: upload, share, access, delete."""
 

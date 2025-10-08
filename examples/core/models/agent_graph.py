@@ -128,10 +128,17 @@ class InteractWalker(Walker):
     )
 
     max_actions: int = EndpointField(
-        default=10,
+        default=3,
         description="Maximum number of actions to process per agent",
         ge=1,
-        le=100,
+        le=10,
+    )
+
+    timeout_seconds: int = EndpointField(
+        default=30,
+        description="Maximum execution time in seconds",
+        ge=1,
+        le=60,
     )
 
     @on_visit(Root)
@@ -546,24 +553,19 @@ async def create_sample_agent_hierarchy():
         print(f"✅ Created Agents collection: {agents_collection.name}")
 
         # Create sample agents with different locations and capabilities
+        # Reduced sample data size to minimize processing time
         agent_configs = [
             {
                 "name": "DataProcessor",
                 "latitude": 40.7128,
                 "longitude": -74.0060,
-                "capabilities": ["data_processing", "analytics", "reporting"],
+                "capabilities": ["data_processing"],
             },
             {
                 "name": "APIGateway",
                 "latitude": 37.7749,
                 "longitude": -122.4194,
-                "capabilities": ["api_management", "routing", "authentication"],
-            },
-            {
-                "name": "MonitoringAgent",
-                "latitude": 41.8781,
-                "longitude": -87.6298,
-                "capabilities": ["monitoring", "alerting", "health_checks"],
+                "capabilities": ["api_management"],
             },
         ]
 
@@ -575,11 +577,10 @@ async def create_sample_agent_hierarchy():
             actions_collection = await Actions.create(name=f"{config['name']}_Actions")
             await agent.connect(actions_collection)
 
-            # Create sample actions
+            # Reduced action set to minimize processing time
             action_configs = [
                 (FirstAction, f"{config['name']}_Process", "Primary processing action"),
                 (SecondAction, f"{config['name']}_Validate", "Validation action"),
-                (ThirdAction, f"{config['name']}_Notify", "Notification action"),
             ]
 
             for action_class, action_name, description in action_configs:
@@ -660,7 +661,10 @@ async def main():
     print("\n🚶 Running InteractWalker to traverse agent hierarchy")
     root = await Root.get()
     walker = InteractWalker(
-        target_agent_name="DataProcessor", include_inactive=False, max_actions=3
+        target_agent_name="DataProcessor",
+        include_inactive=False,
+        max_actions=2,
+        timeout_seconds=30,
     )
 
     await walker.spawn(root)

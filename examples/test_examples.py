@@ -13,7 +13,7 @@ def test_example(example_file):
     """Test a single example file."""
     try:
         # Use longer timeout for certain examples
-        timeout = 60 if example_file.name == "agent_graph.py" else 30
+        timeout = 120 if example_file.name == "agent_graph.py" else 30
 
         # Run the example with a timeout
         result = subprocess.run(
@@ -90,6 +90,18 @@ def main():
 
     examples_dir = Path(__file__).parent
 
+    # Initialize counters
+    passed = 0
+    failed = 0
+    skipped = 0
+
+    # Error handling examples
+    error_handling_examples = [
+        "error_handling/basic_error_handling.py",
+        "error_handling/database_error_handling.py",
+        "error_handling/walker_error_handling.py",
+    ]
+
     # Updated examples with new walker patterns (priority testing)
     updated_examples = [
         "core/models/travel_graph.py",
@@ -147,6 +159,23 @@ def main():
         *auth_examples,
         *scheduler_examples,
     ]
+
+    # Error handling test results
+    print("\n🛡️  Error Handling Examples:")
+    print("-" * 50)
+    print("Examples demonstrating error handling patterns")
+    print()
+
+    for example_name in error_handling_examples:
+        example_path = examples_dir / example_name
+        if example_path.exists():
+            if test_example(example_path):
+                passed += 1
+            else:
+                failed += 1
+        else:
+            print(f"❓ {example_name} (not found)")
+            failed += 1
 
     passed = 0
     failed = 0

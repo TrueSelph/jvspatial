@@ -17,7 +17,7 @@ import asyncio
 from datetime import datetime
 from typing import Optional
 
-from jvspatial.api import create_server, walker_endpoint
+from jvspatial.api import create_server, endpoint, walker_endpoint
 from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core.entities import Node, Root, Walker, on_visit
 
@@ -51,7 +51,7 @@ print(f"📋 Server created: {server.config.title}")
 # ====================== MAIN APPLICATION ENDPOINTS ======================
 
 
-@server.walker("/users/create")
+@walker_endpoint("/users/create")
 class CreateUser(Walker):
     """Create a new user - registered directly with server instance."""
 
@@ -283,7 +283,7 @@ def register_additional_endpoints():
 # ====================== CUSTOM ROUTES ======================
 
 
-@server.route("/info", methods=["GET"])
+@endpoint("/info", methods=["GET"])
 async def get_api_info():
     """Simple custom route for API information."""
     return {
@@ -347,7 +347,7 @@ if __name__ == "__main__":
     print("🌟 Simple Dynamic Registration Example")
     print("=" * 50)
     print("This example demonstrates common development patterns:")
-    print("• Server instance registration with @server.walker()")
+    print("• Server instance registration with @walker_endpoint")
     print("• Package-style registration with @register_walker_to_default()")
     print("• Runtime endpoint registration after server startup")
     print("• Shared server instances across modules")
