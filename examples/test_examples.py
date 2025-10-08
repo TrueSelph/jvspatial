@@ -1,12 +1,34 @@
 #!/usr/bin/env python3
-"""
-Test script to validate all example files are working correctly.
+"""Test script to validate all example files.
+
 This script runs each example and reports success/failure status.
 """
 
 import subprocess
 import sys
 from pathlib import Path
+
+
+def run_example_group(examples_dir, examples, title, description):
+    """Run a group of examples and return results."""
+    print(f"\n{title}")
+    print("-" * 50)
+    print(description)
+    print()
+
+    passed = failed = 0
+    for example_name in examples:
+        example_path = examples_dir / example_name
+        if example_path.exists():
+            if test_example(example_path):
+                passed += 1
+            else:
+                failed += 1
+        else:
+            print(f"❓ {example_name} (not found)")
+            failed += 1
+
+    return passed, failed
 
 
 def test_example(example_file):
@@ -84,16 +106,25 @@ def test_server_example(example_file):
 
 
 def main():
-    """Test all example files."""
+    """Test all example files.
+
+    The test runner will:
+    1. Run each example file and verify it executes without errors
+    2. Handle special cases like server examples that need early termination
+    3. Skip long-running examples that are meant to run indefinitely
+    4. Provide detailed reporting of test results
+
+    Return codes:
+    0 - All tests passed (some may be skipped)
+    1 - Some tests failed or no tests passed
+    """
     print("🧪 Testing jvspatial example files...")
     print("=" * 50)
 
     examples_dir = Path(__file__).parent
 
     # Initialize counters
-    passed = 0
-    failed = 0
-    skipped = 0
+    passed = failed = skipped = 0
 
     # Error handling examples
     error_handling_examples = [
@@ -102,16 +133,15 @@ def main():
         "error_handling/walker_error_handling.py",
     ]
 
-    # Updated examples with new walker patterns (priority testing)
+    # Updated examples with new walker patterns
     updated_examples = [
         "core/models/travel_graph.py",
         "core/context/graphcontext_demo.py",
-        "testing/testing_with_graphcontext.py",
         "core/models/agent_graph.py",
         "walkers/multi_target_hooks_demo.py",
     ]
 
-    # Other core examples to test
+    # Core examples
     core_examples = [
         "database/crud_demo.py",
         "database/orm_demo.py",
@@ -127,10 +157,9 @@ def main():
         "database/database_switching_example.py",
         "walkers/walker_events_demo.py",
         "walkers/walker_reporting_demo.py",
-        "api/exception_handling_demo.py",
     ]
 
-    # Server examples (in server/ directory)
+    # Server examples
     server_examples = [
         "server/comprehensive_server_example.py",  # Combined best practices
         "server/server_example.py",  # Basic patterns
@@ -144,74 +173,50 @@ def main():
         "server/webhook_examples.py",  # Webhook patterns
     ]
 
-    # Scheduler examples (in scheduler/ directory)
+    # Scheduler examples
     scheduler_examples = [
-        "scheduler/scheduler_example.py"  # Complete scheduler patterns
+        "scheduler/scheduler_example.py",  # Basic scheduler patterns
+        "scheduler/dynamic_scheduler_demo.py",  # Advanced scheduler features
     ]
 
-    # Authentication examples (in auth/ directory)
+    # Authentication examples
     auth_examples = [
         "auth/auth_demo.py",  # Authentication patterns
     ]
 
-    # Long-running examples to skip (servers that don't exit on their own)
+    # Long-running examples to skip
     long_running_examples = [
         *auth_examples,
         *scheduler_examples,
     ]
 
-    # Error handling test results
-    print("\n🛡️  Error Handling Examples:")
-    print("-" * 50)
-    print("Examples demonstrating error handling patterns")
-    print()
+    # Run test groups
+    group_passed, group_failed = run_example_group(
+        examples_dir,
+        error_handling_examples,
+        "🛡️  Error Handling Examples:",
+        "Examples demonstrating error handling patterns",
+    )
+    passed += group_passed
+    failed += group_failed
 
-    for example_name in error_handling_examples:
-        example_path = examples_dir / example_name
-        if example_path.exists():
-            if test_example(example_path):
-                passed += 1
-            else:
-                failed += 1
-        else:
-            print(f"❓ {example_name} (not found)")
-            failed += 1
+    group_passed, group_failed = run_example_group(
+        examples_dir,
+        updated_examples,
+        "✨ Updated Examples (New Walker Patterns):",
+        "These examples have been updated to use report() pattern",
+    )
+    passed += group_passed
+    failed += group_failed
 
-    passed = 0
-    failed = 0
-    skipped = 0
+    group_passed, group_failed = run_example_group(
+        examples_dir, core_examples, "📊 Core Examples:", "Core functionality examples"
+    )
+    passed += group_passed
+    failed += group_failed
 
-    print("\n✨ Updated Examples (New Walker Patterns):")
-    print("-" * 50)
-    print("These examples have been updated to use report() pattern")
-    print()
-
-    for example_name in updated_examples:
-        example_path = examples_dir / example_name
-        if example_path.exists():
-            if test_example(example_path):
-                passed += 1
-            else:
-                failed += 1
-        else:
-            print(f"❓ {example_name} (not found)")
-            failed += 1
-
-    print(f"\n📊 Core Examples:")
-    print("-" * 30)
-
-    for example_name in core_examples:
-        example_path = examples_dir / example_name
-        if example_path.exists():
-            if test_example(example_path):
-                passed += 1
-            else:
-                failed += 1
-        else:
-            print(f"⏭️  {example_name} (not found)")
-            skipped += 1
-
-    print(f"\n🌐 Server Examples:")
+    # Test server examples
+    print("\n🌐 Server Examples:")
     print("-" * 50)
     print("These start servers; we validate they start without errors")
     print()
@@ -227,7 +232,8 @@ def main():
             print(f"❓ {example_name} (not found)")
             failed += 1
 
-    print(f"\n⏱️  Long Running Examples:")
+    # Report long-running examples
+    print("\n⏱️  Long Running Examples:")
     print("-" * 50)
     print("These run indefinitely (servers, schedulers)")
     print()
@@ -241,9 +247,10 @@ def main():
             print(f"❓ {example_name} (not found)")
             skipped += 1
 
-    print(f"\n" + "=" * 50)
-    print(f"📈 Test Summary:")
-    print(f"=" * 50)
+    # Print summary
+    print("\n" + "=" * 50)
+    print("📈 Test Summary:")
+    print("=" * 50)
     print(f"✅ Passed: {passed}")
     print(f"❌ Failed: {failed}")
     print(f"⏭️  Skipped: {skipped}")
@@ -253,7 +260,7 @@ def main():
     if failed == 0 and passed > 0:
         print("\n🎉 All tested examples are working correctly!")
         if skipped > 0:
-            print(f"ℹ️  {skipped} examples were skipped (need updates or not found)")
+            print(f"ℹ️  {skipped} examples were skipped (long-running)")
         return 0
     elif passed == 0:
         print("\n⚠️  No examples were tested successfully")
