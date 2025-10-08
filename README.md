@@ -388,6 +388,7 @@ See [.env.example](.env.example) for all configuration options.
 ## Documentation
 
 ### Core Documentation
+- [API Architecture](docs/md/api-architecture.md) - API system design and components
 - [Authentication](docs/md/authentication.md) - Authentication and authorization
 - [Graph Context](docs/md/graph-context.md) - Understanding graph operations
 - [Node Operations](docs/md/node-operations.md) - Working with nodes
