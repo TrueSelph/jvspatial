@@ -11,6 +11,7 @@ from typing import Any, Callable, List, Optional, Tuple, Type
 from fastapi import HTTPException, Request
 
 from jvspatial.api.context import get_current_server
+from jvspatial.api.endpoint.response import create_endpoint_helper
 from jvspatial.core.entities import Walker
 
 
@@ -109,22 +110,45 @@ def auth_endpoint(
             methods=["GET", "POST"],
             roles=["admin"]
         )
-        async def manage_users():
+        async def manage_users(endpoint):
             # This endpoint requires admin role
-            pass
+            return endpoint.success(data={"users": []})
         ```
     """
     if methods is None:
         methods = ["GET"]
 
     def decorator(func: Callable) -> Callable:
-        # Create wrapped function with auth metadata
-        @wraps(func)
-        async def auth_wrapper(*args: tuple, **kwargs: dict):
-            # The middleware will handle authentication before this runs
-            return await func(*args, **kwargs)
+        # Get the original function signature
+        sig = inspect.signature(func)
+        params = list(sig.parameters.values())
 
-        # Store authentication metadata on the function
+        # Check if function expects 'endpoint' parameter
+        has_endpoint_param = any(p.name == "endpoint" for p in params)
+
+        # Filter out 'endpoint' parameter for signature (we'll inject it if needed)
+        filtered_params = [p for p in params if p.name != "endpoint"]
+
+        # Create wrapper that accepts both positional and keyword arguments
+        async def auth_wrapper(*args: Any, **kwargs_inner: Any) -> Any:
+            # Only inject endpoint helper if function expects it
+            if has_endpoint_param:
+                endpoint_helper = create_endpoint_helper(walker_instance=None)
+                kwargs_inner["endpoint"] = endpoint_helper
+
+            # Call original function with positional and keyword arguments
+            if inspect.iscoroutinefunction(func):
+                return await func(*args, **kwargs_inner)
+            else:
+                return func(*args, **kwargs_inner)
+
+        # Apply the filtered signature to the wrapper
+        auth_wrapper.__signature__ = sig.replace(parameters=filtered_params)  # type: ignore[attr-defined]
+        auth_wrapper.__name__ = func.__name__
+        auth_wrapper.__doc__ = func.__doc__
+        auth_wrapper.__module__ = func.__module__
+
+        # Store authentication metadata on the wrapper
         auth_wrapper._auth_required = True  # type: ignore[attr-defined]
         auth_wrapper._required_permissions = permissions or []  # type: ignore[attr-defined]
         auth_wrapper._required_roles = roles or []  # type: ignore[attr-defined]

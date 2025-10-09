@@ -558,7 +558,7 @@ class Server:
         """
         # Include the jvspatial endpoint router with webhook walker support
         self._setup_webhook_walker_endpoints()
-        app.include_router(self.endpoint_router.router, prefix="/api")
+        app.include_router(self.endpoint_router.router)
 
         # Include any dynamic routers from registry
         for endpoint_info in self._endpoint_registry.get_dynamic_endpoints():

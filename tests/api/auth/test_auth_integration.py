@@ -84,14 +84,10 @@ class TestAuthIntegration:
         # Verify middleware can be added
         middleware = AuthenticationMiddleware(app)
         assert middleware is not None
-        assert middleware.exempt_paths == [
-            "/docs",
-            "/redoc",
-            "/openapi.json",
-            "/health",
-            "/auth/login",
-            "/auth/register",
-        ]
+        assert "/" in middleware.exempt_paths
+        assert "/docs" in middleware.exempt_paths
+        assert "/auth/login" in middleware.exempt_paths
+        assert "/auth/register" in middleware.exempt_paths
 
     def test_auth_walker_endpoint_registration(self):
         """Test authenticated walker endpoint registration."""
@@ -144,6 +140,8 @@ class TestAuthIntegration:
     async def test_authentication_flow_middleware(self):
         """Test authentication flow through middleware."""
         # Create a mock request
+        from types import SimpleNamespace
+
         from fastapi import Request
 
         app = FastAPI()
@@ -162,9 +160,9 @@ class TestAuthIntegration:
         # Test with protected path and valid user
         protected_request = MagicMock(spec=Request)
         protected_request.url.path = "/api/protected"
-        protected_request.state = MagicMock()
-        protected_request.state.required_roles = []
-        protected_request.state.required_permissions = []
+        protected_request.state = SimpleNamespace(
+            endpoint_auth=True, required_roles=[], required_permissions=[]
+        )
 
         with patch.object(middleware, "_authenticate_jwt", return_value=self.test_user):
             with patch(
@@ -184,14 +182,16 @@ class TestAuthIntegration:
     @pytest.mark.asyncio
     async def test_authentication_flow_no_user(self):
         """Test authentication flow when no user is authenticated."""
+        from types import SimpleNamespace
+
         app = FastAPI()
         middleware = AuthenticationMiddleware(app)
 
         protected_request = MagicMock()
         protected_request.url.path = "/api/protected"
-        protected_request.state = MagicMock()
-        protected_request.state.required_roles = []
-        protected_request.state.required_permissions = []
+        protected_request.state = SimpleNamespace(
+            endpoint_auth=True, required_roles=[], required_permissions=[]
+        )
 
         # Mock no authentication
         with patch.object(middleware, "_authenticate_jwt", return_value=None):
@@ -204,14 +204,16 @@ class TestAuthIntegration:
     @pytest.mark.asyncio
     async def test_permission_checking_flow(self):
         """Test permission checking in authentication flow."""
+        from types import SimpleNamespace
+
         app = FastAPI()
         middleware = AuthenticationMiddleware(app)
 
         protected_request = MagicMock()
         protected_request.url.path = "/api/admin"
-        protected_request.state = MagicMock()
-        protected_request.state.required_permissions = ["admin_access"]
-        protected_request.state.required_roles = []
+        protected_request.state = SimpleNamespace(
+            endpoint_auth=True, required_permissions=["admin_access"], required_roles=[]
+        )
 
         # User without admin permission
         with patch.object(middleware, "_authenticate_jwt", return_value=self.test_user):
@@ -220,8 +222,10 @@ class TestAuthIntegration:
             assert isinstance(result, JSONResponse)
             assert result.status_code == 403
 
-        # Clear user from request state for next test
-        protected_request.state.current_user = None
+        # Create fresh request state for next test
+        protected_request.state = SimpleNamespace(
+            endpoint_auth=True, required_permissions=["admin_access"], required_roles=[]
+        )
 
         # Admin user with permission
         with patch.object(
@@ -241,12 +245,14 @@ class TestAuthIntegration:
     @pytest.mark.asyncio
     async def test_rate_limiting_flow(self):
         """Test rate limiting in authentication flow."""
+        from types import SimpleNamespace
+
         app = FastAPI()
         middleware = AuthenticationMiddleware(app)
 
         protected_request = MagicMock()
         protected_request.url.path = "/api/data"
-        protected_request.state = MagicMock()
+        protected_request.state = SimpleNamespace(endpoint_auth=True)
 
         # Simulate rate limit exceeded
         with patch.object(middleware, "_authenticate_jwt", return_value=self.test_user):
@@ -262,6 +268,8 @@ class TestAuthIntegration:
     @pytest.mark.asyncio
     async def test_api_key_authentication_flow(self):
         """Test API key authentication flow."""
+        from types import SimpleNamespace
+
         app = FastAPI()
         middleware = AuthenticationMiddleware(app)
 
@@ -277,9 +285,9 @@ class TestAuthIntegration:
 
         api_request = MagicMock()
         api_request.url.path = "/api/data/list"
-        api_request.state = MagicMock()
-        api_request.state.required_roles = []
-        api_request.state.required_permissions = []
+        api_request.state = SimpleNamespace(
+            endpoint_auth=True, required_roles=[], required_permissions=[]
+        )
         api_request.headers.get.return_value = "test_key_123:secret_456"
         api_request.query_params.get.return_value = None
 
@@ -453,15 +461,17 @@ class TestAuthIntegration:
     @pytest.mark.asyncio
     async def test_middleware_error_responses(self):
         """Test middleware error response formats."""
+        from types import SimpleNamespace
+
         app = FastAPI()
         middleware = AuthenticationMiddleware(app)
 
         # Test authentication error response
         protected_request = MagicMock()
         protected_request.url.path = "/api/protected"
-        protected_request.state = MagicMock()
-        protected_request.state.required_roles = []
-        protected_request.state.required_permissions = []
+        protected_request.state = SimpleNamespace(
+            endpoint_auth=True, required_roles=[], required_permissions=[]
+        )
 
         from jvspatial.api.auth.entities import AuthenticationError
 

@@ -101,15 +101,17 @@ class TestWebhookMiddleware:
     @pytest.mark.asyncio
     async def test_webhook_path_auth_invalid_key_id(self):
         """Test path-based auth failure with invalid key ID."""
+        from types import SimpleNamespace
+
         request = MagicMock(spec=Request)
         request.url.path = "/webhook/test/invalid_key:test_secret"
         request.body.return_value = b'{"test": "data"}'
         request.headers.get.side_effect = lambda k, default=None: (
             "application/json" if k == "content-type" else None
         )
-        request.state = MagicMock()
-        request.state.required_permissions = []
-        request.state.required_roles = []
+        request.state = SimpleNamespace(
+            endpoint_auth=True, required_permissions=[], required_roles=[]
+        )
 
         with patch(
             "jvspatial.api.auth.entities.APIKey.find_by_key_id",
@@ -127,15 +129,17 @@ class TestWebhookMiddleware:
     @pytest.mark.asyncio
     async def test_webhook_path_auth_invalid_secret(self):
         """Test path-based auth failure with invalid secret."""
+        from types import SimpleNamespace
+
         request = MagicMock(spec=Request)
         request.url.path = "/webhook/test/test_key_123:wrong_secret"
         request.body.return_value = b'{"test": "data"}'
         request.headers.get.side_effect = lambda k, default=None: (
             "application/json" if k == "content-type" else None
         )
-        request.state = MagicMock()
-        request.state.required_permissions = []
-        request.state.required_roles = []
+        request.state = SimpleNamespace(
+            endpoint_auth=True, required_permissions=[], required_roles=[]
+        )
 
         with patch(
             "jvspatial.api.auth.entities.APIKey.find_by_key_id",
@@ -154,6 +158,8 @@ class TestWebhookMiddleware:
     @pytest.mark.asyncio
     async def test_webhook_path_auth_inactive_key(self):
         """Test path-based auth with inactive API key."""
+        from types import SimpleNamespace
+
         inactive_key = MagicMock(spec=APIKey)
         inactive_key.is_active = False
         inactive_key.verify_secret.return_value = True
@@ -164,9 +170,9 @@ class TestWebhookMiddleware:
         request.headers.get.side_effect = lambda k, default=None: (
             "application/json" if k == "content-type" else None
         )
-        request.state = MagicMock()
-        request.state.required_permissions = []
-        request.state.required_roles = []
+        request.state = SimpleNamespace(
+            endpoint_auth=True, required_permissions=[], required_roles=[]
+        )
 
         with patch(
             "jvspatial.api.auth.entities.APIKey.find_by_key_id",
@@ -186,6 +192,8 @@ class TestWebhookMiddleware:
     @pytest.mark.asyncio
     async def test_webhook_path_auth_inactive_user(self):
         """Test path-based auth with inactive user."""
+        from types import SimpleNamespace
+
         inactive_user = MagicMock(spec=User)
         inactive_user.is_active = False
 
@@ -195,9 +203,9 @@ class TestWebhookMiddleware:
         request.headers.get.side_effect = lambda k, default=None: (
             "application/json" if k == "content-type" else None
         )
-        request.state = MagicMock()
-        request.state.required_permissions = []
-        request.state.required_roles = []
+        request.state = SimpleNamespace(
+            endpoint_auth=True, required_permissions=[], required_roles=[]
+        )
 
         with patch(
             "jvspatial.api.auth.entities.APIKey.find_by_key_id",
@@ -396,6 +404,8 @@ class TestWebhookMiddleware:
     @pytest.mark.asyncio
     async def test_webhook_fallback_to_header_auth(self):
         """Test fallback to header authentication when path auth fails."""
+        from types import SimpleNamespace
+
         # Invalid path auth, but valid header auth
         request = MagicMock(spec=Request)
         request.url.path = "/webhook/test/invalid_key:wrong_secret"
@@ -405,9 +415,9 @@ class TestWebhookMiddleware:
             if k == auth_config.api_key_header
             else "application/json"
         )
-        request.state = MagicMock()
-        request.state.required_permissions = []
-        request.state.required_roles = []
+        request.state = SimpleNamespace(
+            endpoint_auth=True, required_permissions=[], required_roles=[]
+        )
 
         # Path auth fails (no mock for invalid key)
         with patch(
@@ -467,12 +477,13 @@ class TestWebhookMiddleware:
     @pytest.mark.asyncio
     async def test_non_webhook_path_normal_behavior(self):
         """Test that non-webhook paths use normal authentication flow."""
+        from types import SimpleNamespace
+
         request = MagicMock(spec=Request)
         request.url.path = "/api/normal/endpoint"
-        request.state = MagicMock()
-        request.state.required_permissions = []
-        request.state.required_roles = []
-        request.state.required_permissions = []
+        request.state = SimpleNamespace(
+            endpoint_auth=True, required_permissions=[], required_roles=[]
+        )
 
         # Mock normal JWT auth success
         with patch.object(
@@ -527,15 +538,17 @@ class TestWebhookMiddleware:
     @pytest.mark.asyncio
     async def test_webhook_rate_limiting_api_key(self):
         """Test rate limiting using API key limits for webhook."""
+        from types import SimpleNamespace
+
         request = MagicMock(spec=Request)
         request.url.path = "/webhook/test/test_key_123:valid_secret"
         request.body.return_value = b'{"test": "data"}'
         request.headers.get.side_effect = lambda k, default=None: (
             "application/json" if k == "content-type" else None
         )
-        request.state = MagicMock()
-        request.state.required_permissions = []
-        request.state.required_roles = []
+        request.state = SimpleNamespace(
+            endpoint_auth=True, required_permissions=[], required_roles=[]
+        )
 
         with patch(
             "jvspatial.api.auth.entities.APIKey.find_by_key_id",

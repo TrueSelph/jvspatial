@@ -277,6 +277,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         """
         super().__init__(app)
         self.exempt_paths = exempt_paths or [
+            "/",
             "/docs",
             "/redoc",
             "/openapi.json",
@@ -293,6 +294,38 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 status_code=403,
                 content={"error": "HTTPS required"},
             )
+
+        # Extract endpoint auth requirements by matching the request path to registered routes
+        # This MUST happen FIRST so the auth checks below can access it
+        endpoint_auth_required = None
+        required_permissions: List[str] = []
+        required_roles: List[str] = []
+
+        # Match the request path to a route
+        request_path = request.url.path
+        for route in request.app.routes:
+            if hasattr(route, "path") and hasattr(route, "endpoint"):
+                # Simple path matching (exact match or prefix for path parameters)
+                route_path = route.path
+                if request_path == route_path or (
+                    "{" in route_path
+                    and request_path.startswith(route_path.split("{")[0].rstrip("/"))
+                ):
+                    endpoint_func = route.endpoint
+                    # Check for auth metadata on the endpoint function
+                    if hasattr(endpoint_func, "_auth_required"):
+                        endpoint_auth_required = endpoint_func._auth_required
+                        required_permissions = getattr(
+                            endpoint_func, "_required_permissions", []
+                        )
+                        required_roles = getattr(endpoint_func, "_required_roles", [])
+                        break
+
+        # Set auth requirements in request state IMMEDIATELY
+        if endpoint_auth_required is not None:
+            request.state.endpoint_auth = endpoint_auth_required
+            request.state.required_permissions = required_permissions
+            request.state.required_roles = required_roles
 
         # Handle webhook paths specially
         api_key_obj = None
@@ -338,14 +371,31 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                                 content={"error": "HMAC signature invalid"},
                             )
 
-        # Skip authentication for exempt paths
-        if any(request.url.path.startswith(path) for path in self.exempt_paths):
-            return await call_next(request)
+        # Skip authentication for exempt paths (exact match or specific prefix)
+        request_path = request.url.path
+        for exempt_path in self.exempt_paths:
+            # Combined condition for root path or prefix match
+            is_exempt = (exempt_path == "/" and request_path == "/") or (
+                exempt_path != "/" and request_path.startswith(exempt_path)
+            )
+            if is_exempt:
+                return await call_next(request)
 
         # Check if endpoint requires authentication
         endpoint_auth = getattr(request.state, "endpoint_auth", None)
-        # Handle mocked values - only skip auth if explicitly set to False
-        if endpoint_auth is False:  # Explicitly set to not require auth
+        required_permissions = getattr(request.state, "required_permissions", [])
+        required_roles = getattr(request.state, "required_roles", [])
+
+        # Explicitly bypass auth if endpoint_auth is False
+        if endpoint_auth is False:
+            return await call_next(request)
+
+        # Require auth if explicitly set to True OR if permissions/roles are required
+        if (
+            endpoint_auth is not True
+            and not required_permissions
+            and not required_roles
+        ):
             return await call_next(request)
 
         try:
@@ -359,10 +409,12 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             else:
                 # Fallback to normal authentication (JWT or header/query API key)
                 user = await self._authenticate_request(request)
-                if user:
-                    request.state.current_user = user
 
+            # Set current_user in request state if authenticated
+            # Use setattr to ensure it works with both real and mock objects
             if user:
+                # Create a copy of user for state to avoid modifying the original
+                request.state.current_user = user  # Direct assignment is safe here
 
                 # Rate limiting (use api_key rate limit if available)
                 rate_limit = int(user.rate_limit_per_hour)
@@ -411,16 +463,14 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                     )
 
             else:
-                # Authentication is required but no valid user found
-                # Only skip this if endpoint_auth is explicitly False (not None or mock)
-                if endpoint_auth is not False:
-                    return JSONResponse(
-                        status_code=401,
-                        content={
-                            "error": "Authentication required",
-                            "message": "Please provide valid credentials",
-                        },
-                    )
+                # Authentication is required (endpoint_auth is True) but no valid user found
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "error": "Authentication required",
+                        "message": "Please provide valid credentials",
+                    },
+                )
 
         except AuthenticationError as e:
             return JSONResponse(

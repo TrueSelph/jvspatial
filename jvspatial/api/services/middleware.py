@@ -60,14 +60,16 @@ class MiddlewareManager:
 
         This orchestrator method applies middleware in the correct order:
         1. CORS middleware (if enabled)
-        2. Webhook middleware (if webhook endpoints exist)
-        3. File storage endpoints (if enabled)
-        4. Custom user-defined middleware
+        2. Authentication middleware (if authenticated endpoints exist)
+        3. Webhook middleware (if webhook endpoints exist)
+        4. File storage endpoints (if enabled)
+        5. Custom user-defined middleware
 
         Args:
             app: FastAPI application instance to configure
         """
         self._configure_cors(app)
+        self._configure_auth_middleware(app)
         self._configure_webhook_middleware(app)
         self._configure_file_storage(app)
         self._configure_custom_middleware(app)
@@ -95,6 +97,55 @@ class MiddlewareManager:
         self._logger.info(
             f"{LogIcons.SUCCESS} CORS middleware configured with "
             f"origins: {self.server.config.cors_origins}"
+        )
+
+    def _configure_auth_middleware(self, app: FastAPI) -> None:
+        """Configure authentication middleware if authenticated endpoints exist.
+
+        Scans the endpoint registry for auth-enabled endpoints and
+        adds the authentication middleware if any are found.
+
+        Args:
+            app: FastAPI application instance
+        """
+        has_auth_endpoints = self._detect_auth_endpoints()
+
+        if not has_auth_endpoints:
+            self._logger.debug(
+                "No authenticated endpoints found, skipping auth middleware"
+            )
+            return
+
+        try:
+            from jvspatial.api.auth.middleware import AuthenticationMiddleware
+
+            app.add_middleware(AuthenticationMiddleware)
+            self._logger.info(
+                f"{LogIcons.SUCCESS} Authentication middleware added to server"
+            )
+        except ImportError as e:
+            self._logger.warning(
+                f"{LogIcons.WARNING} Could not add authentication middleware: {e}"
+            )
+
+    def _detect_auth_endpoints(self) -> bool:
+        """Detect if any registered endpoints require authentication.
+
+        Returns:
+            True if authenticated endpoints are found, False otherwise
+        """
+        # Check walker endpoints from registry
+        registry = self.server._endpoint_registry
+        if any(
+            getattr(walker_class, "_auth_required", False)
+            for walker_class in registry._walker_registry.keys()
+        ):
+            return True
+
+        # Check function endpoints from registry
+        return any(
+            getattr(func, "_auth_required", False)
+            for func in registry._function_registry.keys()
         )
 
     def _configure_webhook_middleware(self, app: FastAPI) -> None:

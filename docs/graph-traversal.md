@@ -39,7 +39,7 @@ await walker.walk(start_node)
 
 ```python
 from jvspatial.core import Walker
-from jvspatial.decorators import on_visit
+from jvspatial.core.entities import on_visit
 
 class UserWalker(Walker):
     @on_visit(User)

@@ -399,7 +399,7 @@ await scheduler.start()
 ### Walker-Based Scheduled Tasks
 ```python
 from jvspatial.core import Walker
-from jvspatial.decorators import on_visit
+from jvspatial.core.entities import on_visit
 
 @scheduler.walker_task(interval=timedelta(days=1))
 class DailyMaintenanceWalker(Walker):
@@ -449,7 +449,7 @@ if __name__ == "__main__":
 from jvspatial.api import walker_endpoint
 from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core import Walker, Node
-from jvspatial.decorators import on_visit
+from jvspatial.core.entities import on_visit
 
 @walker_endpoint("/api/users/process", methods=["POST"])
 class ProcessUser(Walker):
@@ -862,7 +862,7 @@ The architecture supports webhook processing through graph traversal using Walke
 
 # from jvspatial.api.auth.decorators import webhook_walker_endpoint
 # from jvspatial.core import Walker, Node
-# from jvspatial.decorators import on_visit
+# from jvspatial.core.entities import on_visit
 
 # @webhook_walker_endpoint("/webhook/process/{route}/{auth_token}", methods=["POST"])
 # class WebhookProcessingWalker(Walker):
@@ -1633,7 +1633,7 @@ The **jvspatial API** provides seamless integration with FastAPI to expose your 
 from jvspatial.api import Server, ServerConfig, endpoint, walker_endpoint
 from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core import Node, Walker
-from jvspatial.decorators import on_visit
+from jvspatial.core.entities import on_visit
 
 # Basic server setup
 server = Server(
@@ -1676,7 +1676,7 @@ The `@walker_endpoint` decorator automatically exposes Walker classes as API end
 from jvspatial.api import walker_endpoint
 from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core import Walker, Node
-from jvspatial.decorators import on_visit
+from jvspatial.core.entities import on_visit
 from typing import List, Optional
 
 # Define your node types
@@ -2583,7 +2583,7 @@ async def process_user(self, n: Node):     # Too abbreviated
 
 ```python
 from jvspatial.core import Walker, Node
-from jvspatial.decorators import on_visit, on_exit
+from jvspatial.core.entities import on_visit, on_exit
 
 class DataCollector(Walker):
     def __init__(self):
@@ -3671,7 +3671,7 @@ Walkers maintain an internal queue (deque) of nodes to visit during traversal. A
 
 ```python path=null start=null
 from jvspatial.core import Walker, Node
-from jvspatial.decorators import on_visit
+from jvspatial.core.entities import on_visit
 from typing import List, Optional
 
 class QueueMasterWalker(Walker):
@@ -4310,7 +4310,7 @@ tests/
 import pytest
 from typing import List
 from jvspatial.core import Node, Walker, Edge
-from jvspatial.decorators import on_visit
+from jvspatial.core.entities import on_visit
 from jvspatial.exceptions import NodeNotFoundError, ValidationError
 
 class TestUser(Node):

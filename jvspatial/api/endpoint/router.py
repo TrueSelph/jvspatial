@@ -523,7 +523,7 @@ class EndpointRouter:
 
     def __init__(self: "EndpointRouter") -> None:
         """Initialize the EndpointRouter with an APIRouter."""
-        self.router = APIRouter()
+        self.router = APIRouter(prefix="/api")
 
     def walker_endpoint(
         self: "EndpointRouter",
@@ -545,6 +545,9 @@ class EndpointRouter:
             methods = ["POST"]
 
         def decorator(cls: Type[Walker]) -> Type[Walker]:
+            # Filter out 'server' parameter - it's for registration, not FastAPI routing
+            route_kwargs = {k: v for k, v in kwargs.items() if k != "server"}
+
             # Use enhanced parameter model factory
             param_model = ParameterModelFactory.create_model(cls)
 
@@ -657,9 +660,21 @@ class EndpointRouter:
                 # Update the function signature with query parameters
                 get_handler.__signature__ = insp.Signature(parameters=list(query_params.values()))  # type: ignore
 
+                # Transfer auth metadata from walker class to GET handler
+                if hasattr(cls, "_auth_required"):
+                    get_handler._auth_required = cls._auth_required  # type: ignore[attr-defined]
+                if hasattr(cls, "_required_permissions"):
+                    get_handler._required_permissions = cls._required_permissions  # type: ignore[attr-defined]
+                if hasattr(cls, "_required_roles"):
+                    get_handler._required_roles = cls._required_roles  # type: ignore[attr-defined]
+
                 # Add the route
                 self.router.add_api_route(
-                    path, get_handler, methods=["GET"], response_model=dict, **kwargs
+                    path,
+                    get_handler,
+                    methods=["GET"],
+                    response_model=dict,
+                    **route_kwargs,
                 )
 
                 # If there are other methods besides GET, also create POST handler
@@ -783,6 +798,14 @@ class EndpointRouter:
                     # Update handler annotation
                     post_handler.__annotations__["params"] = param_model
 
+                    # Transfer auth metadata from walker class to POST handler
+                    if hasattr(cls, "_auth_required"):
+                        post_handler._auth_required = cls._auth_required  # type: ignore[attr-defined]
+                    if hasattr(cls, "_required_permissions"):
+                        post_handler._required_permissions = cls._required_permissions  # type: ignore[attr-defined]
+                    if hasattr(cls, "_required_roles"):
+                        post_handler._required_roles = cls._required_roles  # type: ignore[attr-defined]
+
                     # Add POST route
                     other_methods = [m for m in methods if m != "GET"]
                     self.router.add_api_route(
@@ -790,7 +813,7 @@ class EndpointRouter:
                         post_handler,
                         methods=other_methods,
                         response_model=dict,
-                        **kwargs,
+                        **route_kwargs,
                     )
             else:
                 # Only POST/PUT/etc methods - use the standard handler
@@ -909,8 +932,16 @@ class EndpointRouter:
                 # Update handler annotation to use the actual param_model
                 handler.__annotations__["params"] = param_model
 
+                # Transfer auth metadata from walker class to handler for middleware detection
+                if hasattr(cls, "_auth_required"):
+                    handler._auth_required = cls._auth_required  # type: ignore[attr-defined]
+                if hasattr(cls, "_required_permissions"):
+                    handler._required_permissions = cls._required_permissions  # type: ignore[attr-defined]
+                if hasattr(cls, "_required_roles"):
+                    handler._required_roles = cls._required_roles  # type: ignore[attr-defined]
+
                 self.router.add_api_route(
-                    path, handler, methods=methods, response_model=dict, **kwargs
+                    path, handler, methods=methods, response_model=dict, **route_kwargs
                 )
 
             return cls

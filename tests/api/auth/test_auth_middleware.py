@@ -337,11 +337,13 @@ class TestAuthenticationMiddleware:
     @pytest.mark.asyncio
     async def test_successful_jwt_authentication(self):
         """Test successful JWT authentication."""
+        from types import SimpleNamespace
+
         request = MagicMock(spec=Request)
         request.url.path = "/api/protected"
-        request.state = MagicMock()
-        request.state.required_roles = []
-        request.state.required_permissions = []
+        request.state = SimpleNamespace(
+            endpoint_auth=True, required_roles=[], required_permissions=[]
+        )
 
         # Mock JWT authentication
         with patch.object(
@@ -359,11 +361,13 @@ class TestAuthenticationMiddleware:
     @pytest.mark.asyncio
     async def test_successful_api_key_authentication(self):
         """Test successful API key authentication."""
+        from types import SimpleNamespace
+
         request = MagicMock(spec=Request)
         request.url.path = "/api/protected"
-        request.state = MagicMock()
-        request.state.required_roles = []
-        request.state.required_permissions = []
+        request.state = SimpleNamespace(
+            endpoint_auth=True, required_roles=[], required_permissions=[]
+        )
 
         # Mock API key authentication (JWT returns None, API key returns user)
         with patch.object(self.middleware, "_authenticate_jwt", return_value=None):
@@ -381,9 +385,11 @@ class TestAuthenticationMiddleware:
     @pytest.mark.asyncio
     async def test_rate_limiting(self):
         """Test rate limiting functionality."""
+        from types import SimpleNamespace
+
         request = MagicMock(spec=Request)
         request.url.path = "/api/protected"
-        request.state = MagicMock()
+        request.state = SimpleNamespace(endpoint_auth=True)
 
         # Mock authentication but fail rate limiting
         with patch.object(
@@ -401,10 +407,13 @@ class TestAuthenticationMiddleware:
     @pytest.mark.asyncio
     async def test_permission_checking(self):
         """Test permission checking."""
+        from types import SimpleNamespace
+
         request = MagicMock(spec=Request)
         request.url.path = "/api/protected"
-        request.state = MagicMock()
-        request.state.required_permissions = ["write_data"]  # User only has read_data
+        request.state = SimpleNamespace(
+            endpoint_auth=True, required_permissions=["write_data"]
+        )  # User only has read_data
 
         with patch.object(
             self.middleware, "_authenticate_jwt", return_value=self.test_user
@@ -417,10 +426,13 @@ class TestAuthenticationMiddleware:
     @pytest.mark.asyncio
     async def test_role_checking(self):
         """Test role checking."""
+        from types import SimpleNamespace
+
         request = MagicMock(spec=Request)
         request.url.path = "/api/protected"
-        request.state = MagicMock()
-        request.state.required_roles = ["admin"]  # User only has "user" role
+        request.state = SimpleNamespace(
+            endpoint_auth=True, required_roles=["admin"]
+        )  # User only has "user" role
 
         with patch.object(
             self.middleware, "_authenticate_jwt", return_value=self.test_user
@@ -433,9 +445,11 @@ class TestAuthenticationMiddleware:
     @pytest.mark.asyncio
     async def test_no_authentication_required(self):
         """Test endpoints that require authentication but user is not authenticated."""
+        from types import SimpleNamespace
+
         request = MagicMock(spec=Request)
         request.url.path = "/api/protected"
-        request.state = MagicMock()
+        request.state = SimpleNamespace(endpoint_auth=True)
 
         # Mock no authentication
         with patch.object(self.middleware, "_authenticate_jwt", return_value=None):
