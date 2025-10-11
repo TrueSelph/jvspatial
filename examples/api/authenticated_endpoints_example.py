@@ -9,15 +9,20 @@ The decorators automatically handle:
 - Role checking (user must have at least one required role)
 - Permission checking (user must have all required permissions)
 - Middleware integration
+- OpenAPI/Swagger security configuration (automatic "Authorize" button)
 
 Usage:
     python authenticated_endpoints_example.py
 
-Note: This is a minimal example focusing on decorator usage. For a complete
-working server, you would need to:
-1. Set up authentication middleware
-2. Create users with appropriate roles/permissions
-3. Configure JWT or API key authentication
+    Then visit http://localhost:8000/docs to see the Swagger UI with the
+    "Authorize" button enabled for testing authenticated endpoints.
+
+Note: The decorators AUTOMATICALLY configure OpenAPI security schemes,
+so Swagger UI will show an "Authorize" button where you can enter:
+- Bearer tokens (from /auth/login)
+- API keys (format: key_id:secret)
+
+For a complete working server with user management, see the auth setup notes below.
 """
 
 from typing import Any, Dict
@@ -46,7 +51,7 @@ server = Server(
 # =============================================================================
 
 
-@auth_endpoint("/api/profile", methods=["GET"])
+@auth_endpoint("/profile", methods=["GET"])
 async def get_user_profile(endpoint) -> Any:
     """Get current user's profile.
 
@@ -66,7 +71,7 @@ async def get_user_profile(endpoint) -> Any:
     )
 
 
-@auth_endpoint("/api/data/read", methods=["GET"], permissions=["read_data"])
+@auth_endpoint("/data/read", methods=["GET"], permissions=["read_data"])
 async def read_protected_data(endpoint) -> Any:
     """Read protected data.
 
@@ -79,9 +84,7 @@ async def read_protected_data(endpoint) -> Any:
     return endpoint.success(data={"message": "Protected data accessed successfully"})
 
 
-@auth_endpoint(
-    "/api/data/write", methods=["POST"], permissions=["read_data", "write_data"]
-)
+@auth_endpoint("/data/write", methods=["POST"], permissions=["read_data", "write_data"])
 async def write_protected_data(data: Dict[str, Any], endpoint) -> Any:
     """Write protected data.
 
@@ -97,7 +100,7 @@ async def write_protected_data(data: Dict[str, Any], endpoint) -> Any:
 
 
 @auth_endpoint(
-    "/api/reports/generate", methods=["POST"], roles=["analyst", "manager", "admin"]
+    "/reports/generate", methods=["POST"], roles=["analyst", "manager", "admin"]
 )
 async def generate_report(endpoint) -> Any:
     """Generate a report.
@@ -112,7 +115,7 @@ async def generate_report(endpoint) -> Any:
 
 
 @auth_endpoint(
-    "/api/data/admin",
+    "/data/admin",
     methods=["GET", "POST", "DELETE"],
     roles=["admin"],
     permissions=["admin_access", "manage_data"],
@@ -131,7 +134,7 @@ async def admin_data_management(endpoint) -> Any:
 
 
 # Convenience decorator for admin-only endpoints
-@admin_endpoint("/api/admin/settings", methods=["GET", "PUT"])
+@admin_endpoint("/admin/settings", methods=["GET", "PUT"])
 async def manage_settings(endpoint) -> Any:
     """Manage system settings (admin only).
 
@@ -148,9 +151,7 @@ async def manage_settings(endpoint) -> Any:
 # =============================================================================
 
 
-@auth_walker_endpoint(
-    "/api/users/analyze", methods=["POST"], permissions=["read_users"]
-)
+@auth_walker_endpoint("/users/analyze", methods=["POST"], permissions=["read_users"])
 class AnalyzeUsersWalker(Walker):
     """Analyze user data with graph traversal.
 
@@ -203,7 +204,7 @@ class AnalyzeUsersWalker(Walker):
 
 
 @auth_walker_endpoint(
-    "/api/graph/process",
+    "/graph/process",
     methods=["POST"],
     roles=["data_scientist", "analyst", "admin"],
     permissions=["process_graph_data"],

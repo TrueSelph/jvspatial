@@ -14,6 +14,11 @@ from jvspatial.api.context import get_current_server
 from jvspatial.api.endpoint.response import create_endpoint_helper
 from jvspatial.core.entities import Walker
 
+from .openapi_config import (
+    ensure_server_has_security_config,
+    get_endpoint_security_requirements,
+)
+
 
 def auth_walker_endpoint(
     path: str,
@@ -68,8 +73,24 @@ def auth_walker_endpoint(
         try:
             target_server = server or get_current_server()
             if target_server:
-                # Register the walker with the server
-                target_server.register_walker_class(walker_class, path, methods)
+                # Configure OpenAPI security schemes (automatic on first use)
+                ensure_server_has_security_config(target_server)
+
+                # Get security requirements for OpenAPI spec
+                security_requirements = get_endpoint_security_requirements(
+                    permissions, roles
+                )
+
+                # Mark that this server has auth endpoints
+                target_server._has_auth_endpoints = True
+
+                # Register the walker with the server, including OpenAPI security
+                target_server.register_walker_class(
+                    walker_class,
+                    path,
+                    methods,
+                    openapi_extra={"security": security_requirements},
+                )
         except (RuntimeError, AttributeError):
             # Server not available during decoration (e.g., during test collection)
             # Registration will be deferred
@@ -156,17 +177,27 @@ def auth_endpoint(
         auth_wrapper._endpoint_methods = methods  # type: ignore[attr-defined]
         auth_wrapper._endpoint_server = server  # type: ignore[attr-defined]
 
+        # Get security requirements for OpenAPI spec
+        security_requirements = get_endpoint_security_requirements(permissions, roles)
+
         # Store registration data for deferred registration
         auth_wrapper._route_config = {  # type: ignore[attr-defined]
             "path": path,
             "endpoint": auth_wrapper,
             "methods": methods,
+            "openapi_extra": {"security": security_requirements},
         }
 
         # Try to register with server if available, but don't fail if not
         try:
             target_server = server or get_current_server()
             if target_server:
+                # Mark that this server has auth endpoints
+                target_server._has_auth_endpoints = True
+
+                # Configure OpenAPI security schemes (automatic on first use)
+                ensure_server_has_security_config(target_server)
+
                 # Register the function with the server using the route decorator pattern
                 target_server._custom_routes.append(auth_wrapper._route_config)  # type: ignore[attr-defined]
 
@@ -178,6 +209,10 @@ def auth_endpoint(
                         methods,
                         route_config=auth_wrapper._route_config,  # type: ignore[attr-defined]
                     )
+
+                # If app already exists, add route dynamically to support decorators after get_app()
+                if target_server.app is not None:
+                    target_server.app.add_api_route(**auth_wrapper._route_config)  # type: ignore[attr-defined]
         except (RuntimeError, AttributeError):
             # Server not available during decoration (e.g., during test collection)
             # Registration will be deferred

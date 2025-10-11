@@ -17,6 +17,7 @@ from pydantic import (
 )
 from pydantic.fields import FieldInfo, PydanticUndefined
 
+from jvspatial.api.constants import APIRoutes
 from jvspatial.api.endpoint.response import create_endpoint_helper
 from jvspatial.core.entities import Node, Walker
 
@@ -523,7 +524,7 @@ class EndpointRouter:
 
     def __init__(self: "EndpointRouter") -> None:
         """Initialize the EndpointRouter with an APIRouter."""
-        self.router = APIRouter(prefix="/api")
+        self.router = APIRouter(prefix=APIRoutes.PREFIX)
 
     def walker_endpoint(
         self: "EndpointRouter",

@@ -134,19 +134,46 @@ class MiddlewareManager:
         Returns:
             True if authenticated endpoints are found, False otherwise
         """
-        # Check walker endpoints from registry
-        registry = self.server._endpoint_registry
-        if any(
-            getattr(walker_class, "_auth_required", False)
-            for walker_class in registry._walker_registry.keys()
-        ):
+        # First check the flag set by auth decorators (most reliable)
+        if getattr(self.server, "_has_auth_endpoints", False):
+            self._logger.debug("Auth endpoints flag is set")
             return True
 
-        # Check function endpoints from registry
-        return any(
-            getattr(func, "_auth_required", False)
-            for func in registry._function_registry.keys()
+        # Fallback: Check walker endpoints from registry
+        registry = self.server._endpoint_registry
+
+        self._logger.debug(
+            f"Checking {len(registry._walker_registry)} walker endpoints"
         )
+        for walker_class in registry._walker_registry.keys():
+            if getattr(walker_class, "_auth_required", False):
+                self._logger.debug(
+                    f"Found auth-required walker: {walker_class.__name__}"
+                )
+                return True
+
+        # Check function endpoints from registry
+        self._logger.debug(
+            f"Checking {len(registry._function_registry)} function endpoints"
+        )
+        for func in registry._function_registry.keys():
+            if getattr(func, "_auth_required", False):
+                self._logger.debug(f"Found auth-required function: {func.__name__}")
+                return True
+
+        # Also check custom routes (in case they haven't been registered yet)
+        self._logger.debug(f"Checking {len(self.server._custom_routes)} custom routes")
+        for route in self.server._custom_routes:
+            endpoint_func = route.get("endpoint")
+            has_auth = getattr(endpoint_func, "_auth_required", False)
+            self._logger.debug(
+                f"  Route {route.get('path')}: endpoint={endpoint_func.__name__ if endpoint_func else None}, _auth_required={has_auth}"
+            )
+            if has_auth:
+                self._logger.debug(f"Found auth-required route: {route.get('path')}")
+                return True
+
+        return False
 
     def _configure_webhook_middleware(self, app: FastAPI) -> None:
         """Configure webhook middleware if webhook endpoints exist.

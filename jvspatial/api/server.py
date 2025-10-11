@@ -19,10 +19,11 @@ from typing import (
 )
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from jvspatial.api.config import ServerConfig
+from jvspatial.api.constants import APIRoutes
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node, Root, Walker
 from jvspatial.db.factory import get_database
@@ -103,6 +104,9 @@ class Server:
         # Initialize components
         self.app: Optional[FastAPI] = None
         self.endpoint_router = EndpointRouter()
+        self._function_router = APIRouter(
+            prefix=APIRoutes.PREFIX
+        )  # Router for function endpoints
         self._custom_routes: List[Dict[str, Any]] = []
         self._exception_handlers: Dict[Union[int, Type[Exception]], Callable] = {}
         self._logger = logging.getLogger(__name__)
@@ -120,6 +124,7 @@ class Server:
         self._is_running = False
         self._dynamic_routes_registered = False
         self._app_needs_rebuild = False  # Flag to track when app needs rebuilding
+        self._has_auth_endpoints = False  # Flag to track if auth endpoints exist
 
         # Initialize lifecycle manager
         self._lifecycle_manager = LifecycleManager(self)
@@ -413,6 +418,7 @@ class Server:
         self._register_core_routes(app)
         self._register_custom_routes(app)
         self._include_routers(app)
+        self._configure_openapi_security(app)
         return app
 
     def _create_base_app(self: "Server") -> FastAPI:
@@ -548,7 +554,14 @@ class Server:
                 route_config = route_config.copy()
                 route_config["endpoint"] = wrapped_endpoint
 
-            app.add_api_route(**route_config)
+            # Register the route with the function router (has /api prefix)
+            try:
+                self._function_router.add_api_route(**route_config)
+            except Exception as e:
+                self._logger.error(
+                    f"Failed to register route {route_config.get('path')}: {e}",
+                    exc_info=True,
+                )
 
     def _include_routers(self: "Server", app: FastAPI) -> None:
         """Include endpoint routers and dynamic routers.
@@ -560,10 +573,26 @@ class Server:
         self._setup_webhook_walker_endpoints()
         app.include_router(self.endpoint_router.router)
 
+        # Include the function endpoint router (for @auth_endpoint and similar)
+        app.include_router(self._function_router)
+
         # Include any dynamic routers from registry
         for endpoint_info in self._endpoint_registry.get_dynamic_endpoints():
             if endpoint_info.router:
-                app.include_router(endpoint_info.router.router, prefix="/api")
+                app.include_router(endpoint_info.router.router, prefix=APIRoutes.PREFIX)
+
+    def _configure_openapi_security(self: "Server", app: FastAPI) -> None:
+        """Configure OpenAPI security schemes if auth endpoints exist.
+
+        Args:
+            app: FastAPI application instance to configure
+        """
+        # Check if server has any authenticated endpoints
+        if getattr(self, "_has_auth_endpoints", False):
+            from jvspatial.api.auth.openapi_config import configure_openapi_security
+
+            configure_openapi_security(app)
+            self._logger.debug("📄 OpenAPI security schemes configured")
 
     def _register_walker_dynamically(
         self: "Server",
@@ -595,7 +624,7 @@ class Server:
                 endpoint_info.router = dynamic_router
 
             # Include the new router in the existing app
-            self.app.include_router(dynamic_router.router, prefix="/api")
+            self.app.include_router(dynamic_router.router, prefix=APIRoutes.PREFIX)
 
             self._logger.info(
                 f"🔄 Dynamically registered walker: {walker_class.__name__} at {path}"

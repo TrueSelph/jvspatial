@@ -59,10 +59,14 @@ class TestAuthWalkerEndpoint:
             assert TestAuthWalker._required_roles == []
             assert TestAuthWalker._endpoint_path == "/test/protected"
 
-            # Check server registration was called
-            self.mock_server.register_walker_class.assert_called_once_with(
-                TestAuthWalker, "/test/protected", ["GET", "POST"]
-            )
+            # Check server registration was called (with openapi_extra parameter)
+            self.mock_server.register_walker_class.assert_called_once()
+            call_args = self.mock_server.register_walker_class.call_args
+            assert call_args[0][0] == TestAuthWalker
+            assert call_args[0][1] == "/test/protected"
+            assert call_args[0][2] == ["GET", "POST"]
+            # Check that openapi_extra was passed
+            assert "openapi_extra" in call_args[1]
 
     def test_auth_walker_endpoint_with_permissions(self):
         """Test auth walker endpoint with permissions."""
@@ -84,10 +88,12 @@ class TestAuthWalkerEndpoint:
             assert PermissionWalker._required_permissions == ["read_data", "write_data"]
             assert PermissionWalker._required_roles == []
 
-            # Check registration
-            self.mock_server.register_walker_class.assert_called_once_with(
-                PermissionWalker, "/test/permissions", ["POST"]
-            )
+            # Check registration (with openapi_extra parameter)
+            self.mock_server.register_walker_class.assert_called_once()
+            call_args = self.mock_server.register_walker_class.call_args
+            assert call_args[0][0] == PermissionWalker
+            assert call_args[0][1] == "/test/permissions"
+            assert call_args[0][2] == ["POST"]
 
     def test_auth_walker_endpoint_with_roles(self):
         """Test auth walker endpoint with roles."""
@@ -254,10 +260,12 @@ class TestAdminDecorators:
             assert AdminWalker._required_permissions == []
             assert AdminWalker._required_roles == ["admin"]
 
-            # Check registration
-            self.mock_server.register_walker_class.assert_called_once_with(
-                AdminWalker, "/admin/data", ["GET", "POST"]
-            )
+            # Check registration (with openapi_extra parameter)
+            self.mock_server.register_walker_class.assert_called_once()
+            call_args = self.mock_server.register_walker_class.call_args
+            assert call_args[0][0] == AdminWalker
+            assert call_args[0][1] == "/admin/data"
+            assert call_args[0][2] == ["GET", "POST"]
 
     def test_admin_walker_endpoint_with_methods(self):
         """Test admin walker endpoint with custom methods."""
@@ -270,10 +278,12 @@ class TestAdminDecorators:
             class AdminUserWalker(Walker):
                 pass
 
-            # Check registration with custom methods
-            self.mock_server.register_walker_class.assert_called_once_with(
-                AdminUserWalker, "/admin/users", ["PUT", "DELETE"]
-            )
+            # Check registration with custom methods (with openapi_extra parameter)
+            self.mock_server.register_walker_class.assert_called_once()
+            call_args = self.mock_server.register_walker_class.call_args
+            assert call_args[0][0] == AdminUserWalker
+            assert call_args[0][1] == "/admin/users"
+            assert call_args[0][2] == ["PUT", "DELETE"]
 
     def test_admin_endpoint(self):
         """Test admin endpoint decorator."""
@@ -669,10 +679,12 @@ class TestDecoratorIntegration:
             assert ComplexWalker._required_roles == ["analyst", "admin"]
             assert ComplexWalker._endpoint_path == "/complex/walker"
 
-            # Check server registration
-            self.mock_server.register_walker_class.assert_called_once_with(
-                ComplexWalker, "/complex/walker", ["POST", "PUT"]
-            )
+            # Check server registration (with openapi_extra parameter)
+            self.mock_server.register_walker_class.assert_called_once()
+            call_args = self.mock_server.register_walker_class.call_args
+            assert call_args[0][0] == ComplexWalker
+            assert call_args[0][1] == "/complex/walker"
+            assert call_args[0][2] == ["POST", "PUT"]
 
     def test_nested_decorator_functionality(self):
         """Test that decorators work properly when combined."""

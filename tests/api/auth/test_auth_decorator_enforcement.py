@@ -46,13 +46,13 @@ class TestAuthEndpointEnforcement:
         )
 
         # Create authenticated endpoints AFTER server creation
-        @auth_endpoint("/api/profile", methods=["GET"], server=self.server)
+        @auth_endpoint("/profile", methods=["GET"], server=self.server)
         async def get_profile(endpoint):
             """Get user profile - requires authentication."""
             return endpoint.success(data={"profile": "data"})
 
         @auth_endpoint(
-            "/api/data/read",
+            "/data/read",
             methods=["GET"],
             permissions=["read_data"],
             server=self.server,
@@ -62,7 +62,7 @@ class TestAuthEndpointEnforcement:
             return endpoint.success(data={"data": "protected"})
 
         @auth_endpoint(
-            "/api/reports",
+            "/reports",
             methods=["POST"],
             roles=["analyst", "admin"],
             server=self.server,
@@ -71,7 +71,7 @@ class TestAuthEndpointEnforcement:
             """Generate report - requires analyst or admin role."""
             return endpoint.success(data={"report": "generated"})
 
-        @admin_endpoint("/api/admin/settings", methods=["GET"], server=self.server)
+        @admin_endpoint("/admin/settings", methods=["GET"], server=self.server)
         async def admin_settings(endpoint):
             """Admin settings - requires admin role."""
             return endpoint.success(data={"settings": "admin"})
@@ -338,7 +338,7 @@ class TestMixedEndpointEnforcement:
 
     def test_public_function_endpoint_accessible(self):
         """Test that public function endpoints are accessible without auth."""
-        response = self.client.get("/public/info")
+        response = self.client.get("/api/public/info")
 
         # Should succeed without authentication
         assert response.status_code == 200
@@ -348,7 +348,7 @@ class TestMixedEndpointEnforcement:
 
     def test_private_function_endpoint_protected(self):
         """Test that private function endpoints require authentication."""
-        response = self.client.get("/private/info")
+        response = self.client.get("/api/private/info")
 
         assert response.status_code == 401
         assert "error" in response.json()
@@ -404,7 +404,7 @@ class TestAuthEnforcementWithMockedUser:
 
         # Create endpoint
         @auth_endpoint(
-            "/api/protected",
+            "/protected",
             methods=["GET"],
             permissions=["read_data"],  # pragma: allowlist secret
             server=self.server,
@@ -488,7 +488,7 @@ class TestCompleteAuthFlow:
         client = TestClient(app)
 
         # 6. Test enforcement
-        response = client.get("/test")
+        response = client.get("/api/test")
         assert response.status_code == 401
 
     def test_walker_decorator_to_handler_metadata_transfer(self):
@@ -650,7 +650,7 @@ class TestAuthDecoratorEdgeCases:
 
         # Verify endpoint requires auth
         client = TestClient(server.get_app())
-        response = client.get("/combined")
+        response = client.get("/api/combined")
         assert response.status_code == 401
 
 
@@ -677,5 +677,5 @@ async def test_auth_enforcement_integration():
     assert "AuthenticationMiddleware" in middleware_names  # 2 & 3. Middleware applied
 
     client = TestClient(app)
-    response = client.get("/integrated")
+    response = client.get("/api/integrated")
     assert response.status_code == 401  # 4. Request properly rejected

@@ -400,7 +400,7 @@ class TestAPIRoutes:
         app = test_server._create_app()
         client = TestClient(app)
 
-        response = client.get("/test-function?name=test")
+        response = client.get("/api/test-function?name=test")
         assert response.status_code == 200
         data = response.json()
         assert data["greeting"] == "Hello, test!"
@@ -538,12 +538,12 @@ class TestAPIErrorHandling:
         client = TestClient(app)
 
         # Test successful execution
-        response = client.get("/error-function?should_fail=false")
+        response = client.get("/api/error-function?should_fail=false")
         assert response.status_code == 200
 
         # Test error handling - should expect exception to be raised
         with pytest.raises(ValueError, match="Test function error"):
-            client.get("/error-function?should_fail=true")
+            client.get("/api/error-function?should_fail=true")
 
     def test_404_error_handling(self, test_server):
         """Test 404 error for non-existent endpoints."""
