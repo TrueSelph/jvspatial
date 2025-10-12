@@ -21,7 +21,6 @@ from typing import Dict, List, Optional
 from jvspatial.api import Server
 from jvspatial.api.auth.decorators import (
     auth_endpoint,
-    auth_walker_endpoint,
     require_authenticated_user,
 )
 from jvspatial.api.auth.middleware import get_current_user
@@ -62,7 +61,7 @@ class Document(Node):
 
 
 # Walker for document access
-@auth_walker_endpoint(
+@auth_endpoint(
     "/api/documents/process", methods=["POST"], permissions=["read_documents"]
 )
 class DocumentProcessor(Walker):

@@ -5,13 +5,13 @@ to support authentication requirements, permissions, and roles.
 """
 
 import inspect
-from functools import wraps
-from typing import Any, Callable, List, Optional, Tuple, Type
+import warnings
+from typing import Any, Callable, List, Optional, Tuple, Type, Union, cast
 
 from fastapi import HTTPException, Request
 
 from jvspatial.api.context import get_current_server
-from jvspatial.api.endpoint.response import create_endpoint_helper
+from jvspatial.api.response import create_endpoint_helper
 from jvspatial.core.entities import Walker
 
 from .openapi_config import (
@@ -20,18 +20,18 @@ from .openapi_config import (
 )
 
 
-def auth_walker_endpoint(
+def _auth_walker_endpoint(
     path: str,
     *,
     methods: Optional[List[str]] = None,
     permissions: Optional[List[str]] = None,
     roles: Optional[List[str]] = None,
     server=None,
-):
-    """Authenticated walker endpoint decorator.
+) -> Callable[[Type[Walker]], Type[Walker]]:
+    """Internal authenticated walker endpoint handler (use @auth_endpoint instead).
 
-    This decorator creates walker endpoints that require authentication,
-    with optional permission and role-based access control.
+    This is an internal implementation detail. Use the unified @auth_endpoint decorator
+    for both Walker classes and functions.
 
     Args:
         path: URL path for the endpoint
@@ -42,20 +42,6 @@ def auth_walker_endpoint(
 
     Returns:
         Decorator function
-
-    Example:
-        ```python
-        @auth_walker_endpoint(
-            "/protected/data",
-            permissions=["read_spatial_data"],
-            roles=["analyst", "admin"]
-        )
-        class ProtectedDataWalker(Walker):
-            @on_visit(Node)
-            async def process(self, here):
-                # This endpoint requires authentication and specific permissions
-                pass
-        ```
     """
     if methods is None:
         methods = ["GET", "POST"]
@@ -108,401 +94,281 @@ def auth_endpoint(
     permissions: Optional[List[str]] = None,
     roles: Optional[List[str]] = None,
     server=None,
-):
-    """Authenticated endpoint decorator.
+) -> Callable[
+    [Union[Type[Walker], Callable[..., Any]]], Union[Type[Walker], Callable[..., Any]]
+]:
+    """Unified authenticated endpoint decorator for both walkers and functions.
 
-    This decorator creates endpoints that require authentication,
-    with optional permission and role-based access control.
+    Automatically detects whether decorating a Walker class or function.
+    Requires authentication with optional permission and role-based access control.
 
     Args:
         path: URL path for the endpoint
-        methods: HTTP methods allowed (defaults to ["GET"])
+        methods: HTTP methods (default: ["POST"] for walkers, ["GET"] for functions)
         permissions: List of required permissions (all must be present)
         roles: List of required roles (user must have at least one)
         server: Server instance to register with (uses default if None)
 
     Returns:
-        Decorator function
+        Decorator function that works with both Walker classes and functions
 
-    Example:
-        ```python
-        @auth_endpoint(
-            "/admin/users",
-            methods=["GET", "POST"],
-            roles=["admin"]
-        )
+    Examples:
+        # Auth function endpoint (auto-detected)
+        @auth_endpoint("/admin/users", methods=["GET"], roles=["admin"])
         async def manage_users(endpoint):
-            # This endpoint requires admin role
             return endpoint.success(data={"users": []})
-        ```
-    """
-    if methods is None:
-        methods = ["GET"]
 
-    def decorator(func: Callable) -> Callable:
-        # Get the original function signature
-        sig = inspect.signature(func)
-        params = list(sig.parameters.values())
-
-        # Check if function expects 'endpoint' parameter
-        has_endpoint_param = any(p.name == "endpoint" for p in params)
-
-        # Filter out 'endpoint' parameter for signature (we'll inject it if needed)
-        filtered_params = [p for p in params if p.name != "endpoint"]
-
-        # Create wrapper that accepts both positional and keyword arguments
-        async def auth_wrapper(*args: Any, **kwargs_inner: Any) -> Any:
-            # Only inject endpoint helper if function expects it
-            if has_endpoint_param:
-                endpoint_helper = create_endpoint_helper(walker_instance=None)
-                kwargs_inner["endpoint"] = endpoint_helper
-
-            # Call original function with positional and keyword arguments
-            if inspect.iscoroutinefunction(func):
-                return await func(*args, **kwargs_inner)
-            else:
-                return func(*args, **kwargs_inner)
-
-        # Apply the filtered signature to the wrapper
-        auth_wrapper.__signature__ = sig.replace(parameters=filtered_params)  # type: ignore[attr-defined]
-        auth_wrapper.__name__ = func.__name__
-        auth_wrapper.__doc__ = func.__doc__
-        auth_wrapper.__module__ = func.__module__
-
-        # Store authentication metadata on the wrapper
-        auth_wrapper._auth_required = True  # type: ignore[attr-defined]
-        auth_wrapper._required_permissions = permissions or []  # type: ignore[attr-defined]
-        auth_wrapper._required_roles = roles or []  # type: ignore[attr-defined]
-        auth_wrapper._endpoint_path = path  # type: ignore[attr-defined]
-        auth_wrapper._endpoint_methods = methods  # type: ignore[attr-defined]
-        auth_wrapper._endpoint_server = server  # type: ignore[attr-defined]
-
-        # Get security requirements for OpenAPI spec
-        security_requirements = get_endpoint_security_requirements(permissions, roles)
-
-        # Store registration data for deferred registration
-        auth_wrapper._route_config = {  # type: ignore[attr-defined]
-            "path": path,
-            "endpoint": auth_wrapper,
-            "methods": methods,
-            "openapi_extra": {"security": security_requirements},
-        }
-
-        # Try to register with server if available, but don't fail if not
-        try:
-            target_server = server or get_current_server()
-            if target_server:
-                # Mark that this server has auth endpoints
-                target_server._has_auth_endpoints = True
-
-                # Configure OpenAPI security schemes (automatic on first use)
-                ensure_server_has_security_config(target_server)
-
-                # Register the function with the server using the route decorator pattern
-                target_server._custom_routes.append(auth_wrapper._route_config)  # type: ignore[attr-defined]
-
-                # Register with endpoint registry if available
-                if hasattr(target_server, "_endpoint_registry"):
-                    target_server._endpoint_registry.register_function(
-                        auth_wrapper,
-                        path,
-                        methods,
-                        route_config=auth_wrapper._route_config,  # type: ignore[attr-defined]
-                    )
-
-                # If app already exists, add route dynamically to support decorators after get_app()
-                if target_server.app is not None:
-                    target_server.app.add_api_route(**auth_wrapper._route_config)  # type: ignore[attr-defined]
-        except (RuntimeError, AttributeError):
-            # Server not available during decoration (e.g., during test collection)
-            # Registration will be deferred
+        # Auth Walker endpoint (auto-detected)
+        @auth_endpoint("/protected/data", permissions=["read_data"])
+        class ProtectedDataWalker(Walker):
             pass
-
-        return auth_wrapper
-
-    return decorator
-
-
-def webhook_endpoint(
-    path: str,
-    *,
-    methods: Optional[List[str]] = None,
-    permissions: Optional[List[str]] = None,
-    roles: Optional[List[str]] = None,
-    hmac_secret: Optional[str] = None,
-    idempotency_key_field: str = "X-Idempotency-Key",
-    idempotency_ttl_hours: int = 24,
-    async_processing: bool = False,
-    path_key_auth: bool = False,
-    server=None,
-    **route_kwargs: Any,
-):
-    """Webhook endpoint decorator.
-
-    This decorator creates webhook endpoints that support webhook-specific functionality
-    including HMAC verification, idempotency handling, and optional path-based authentication.
-
-    Args:
-        path: URL path for the endpoint (optionally with {key} for path-based auth)
-        methods: HTTP methods allowed (defaults to ["POST"])
-        permissions: List of required permissions (all must be present)
-        roles: List of required roles (user must have at least one)
-        hmac_secret: Shared secret for HMAC signature verification (overrides JVSPATIAL_WEBHOOK_HMAC_SECRET env var)
-        idempotency_key_field: Header field for idempotency key
-        idempotency_ttl_hours: TTL for idempotency records in hours
-        async_processing: Queue for async handling
-        path_key_auth: Enable path-based authentication with {key} parameter
-        server: Server instance to register with (uses default if None)
-        **route_kwargs: Additional FastAPI route parameters
-
-    Returns:
-        Decorator function
-
-    Examples:
-        ```python
-        @webhook_endpoint("/webhook/payment")
-        async def handle_payment_webhook(payload: dict, endpoint):
-            # payload is verified JSON from request.body
-            return endpoint.success(message="Payment processed")
-
-        @webhook_endpoint(
-            "/webhook/stripe/{key}",
-            path_key_auth=True,
-            hmac_secret="stripe-webhook-secret"  # pragma: allowlist secret
-        )
-        async def stripe_webhook_handler(raw_body: bytes, content_type: str, endpoint):
-            # Handle raw payload with path-based auth and HMAC verification
-            return endpoint.success(data={"processed": True})
-        ```
     """
-    if methods is None:
-        methods = ["POST"]
 
-    # Validate path pattern if path_key_auth is enabled
-    if path_key_auth and "{key}" not in path:
-        raise ValueError(
-            "Webhook endpoint with path_key_auth=True must include {key} parameter in path"
-        )
-
-    def decorator(func: Callable) -> Callable:
-        if inspect.isclass(func):
-            raise TypeError(
-                "@webhook_endpoint can only be used on functions, not classes"
-            )
-
-        @wraps(func)
-        async def webhook_wrapper(*args: tuple, **kwargs: dict):
-            # The middleware will handle webhook processing before this runs
-            return await func(*args, **kwargs)
-
-        # Store webhook metadata on the function
-        webhook_wrapper._webhook_required = True  # type: ignore[attr-defined]
-        webhook_wrapper._auth_required = bool(permissions or roles)  # type: ignore[attr-defined]
-        webhook_wrapper._required_permissions = permissions or []  # type: ignore[attr-defined]
-        webhook_wrapper._required_roles = roles or []  # type: ignore[attr-defined]
-        webhook_wrapper._endpoint_path = path  # type: ignore[attr-defined]
-        webhook_wrapper._endpoint_methods = methods  # type: ignore[attr-defined]
-        webhook_wrapper._endpoint_server = server  # type: ignore[attr-defined]
-
-        # Webhook-specific metadata with environment variable fallback
-        import os
-
-        effective_hmac_secret = hmac_secret or os.getenv(
-            "JVSPATIAL_WEBHOOK_HMAC_SECRET"
-        )
-        webhook_wrapper._hmac_secret = effective_hmac_secret  # type: ignore[attr-defined]
-        webhook_wrapper._idempotency_key_field = idempotency_key_field  # type: ignore[attr-defined]
-        webhook_wrapper._idempotency_ttl_hours = idempotency_ttl_hours  # type: ignore[attr-defined]
-        webhook_wrapper._async_processing = async_processing  # type: ignore[attr-defined]
-        webhook_wrapper._path_key_auth = path_key_auth  # type: ignore[attr-defined]
-        webhook_wrapper._is_webhook = True  # type: ignore[attr-defined]
-
-        # Store registration data for deferred registration
-        webhook_wrapper._route_config = {  # type: ignore[attr-defined]
-            "path": path,
-            "endpoint": webhook_wrapper,
-            "methods": methods,
-            **route_kwargs,
-        }
-
-        # Try to register with server if available, but don't fail if not
-        try:
-            target_server = server or get_current_server()
-            if target_server:
-                # Register the function with the server using the route decorator pattern
-                target_server._custom_routes.append(webhook_wrapper._route_config)  # type: ignore[attr-defined]
-
-                # Register with endpoint registry if available
-                if hasattr(target_server, "_endpoint_registry"):
-                    target_server._endpoint_registry.register_function(
-                        webhook_wrapper,
+    def decorator(
+        target: Union[Type[Walker], Callable[..., Any]]
+    ) -> Union[Type[Walker], Callable[..., Any]]:
+        # Detect if target is a Walker class
+        if inspect.isclass(target):
+            try:
+                if issubclass(target, Walker):
+                    # Handle as authenticated Walker endpoint
+                    default_methods = methods or ["POST"]
+                    return _auth_walker_endpoint(
                         path,
-                        methods,
-                        route_config=webhook_wrapper._route_config,  # type: ignore[attr-defined]
+                        methods=default_methods,
+                        permissions=permissions,
+                        roles=roles,
+                        server=server,
+                    )(target)
+                else:
+                    raise TypeError(
+                        f"@auth_endpoint can only decorate Walker classes or functions. "
+                        f"{target.__name__} is a class but not a Walker subclass. "
+                        f"Did you mean to use a function instead?"
                     )
-        except (RuntimeError, AttributeError):
-            # Server not available during decoration (e.g., during test collection)
-            # Registration will be deferred
-            pass
-
-        return webhook_wrapper
-
-    return decorator
-
-
-def webhook_walker_endpoint(
-    path: str,
-    *,
-    methods: Optional[List[str]] = None,
-    permissions: Optional[List[str]] = None,
-    roles: Optional[List[str]] = None,
-    hmac_secret: Optional[str] = None,
-    idempotency_key_field: str = "X-Idempotency-Key",
-    idempotency_ttl_hours: int = 24,
-    async_processing: bool = False,
-    path_key_auth: bool = False,
-    server=None,
-    **route_kwargs: Any,
-):
-    """Webhook walker endpoint decorator.
-
-    This decorator creates webhook endpoints that use Walker classes for processing,
-    with webhook-specific functionality including HMAC verification, idempotency handling,
-    and optional path-based authentication.
-
-    Args:
-        path: URL path for the endpoint (optionally with {key} for path-based auth)
-        methods: HTTP methods allowed (defaults to ["POST"])
-        permissions: List of required permissions (all must be present)
-        roles: List of required roles (user must have at least one)
-        hmac_secret: Shared secret for HMAC signature verification (overrides JVSPATIAL_WEBHOOK_HMAC_SECRET env var)
-        idempotency_key_field: Header field for idempotency key
-        idempotency_ttl_hours: TTL for idempotency records in hours
-        async_processing: Queue for async handling
-        path_key_auth: Enable path-based authentication with {key} parameter
-        server: Server instance to register with (uses default if None)
-        **route_kwargs: Additional FastAPI route parameters
-
-    Returns:
-        Decorator function
-
-    Examples:
-        ```python
-        @webhook_walker_endpoint("/webhook/location-update")
-        class LocationUpdateWalker(Walker):
-            def __init__(self, payload: dict):
-                self.payload = payload  # Webhook data available here
-
-            @on_visit(Node)
-            async def update_location(self, here: Node):
-                # Update node with location from self.payload
-                here.location = self.payload.get("coordinates")
-                await here.save()
-                self.response["updated"] = True
-
-        @webhook_walker_endpoint(
-            "/webhook/stripe/{key}",
-            path_key_auth=True,
-            hmac_secret="stripe-webhook-secret"  # pragma: allowlist secret
-        )
-        class StripeWebhookWalker(Walker):
-            def __init__(self, raw_body: bytes, content_type: str):
-                self.raw_body = raw_body
-                self.content_type = content_type
-        ```
-    """
-    if methods is None:
-        methods = ["POST"]
-
-    # Validate path pattern if path_key_auth is enabled
-    if path_key_auth and "{key}" not in path:
-        raise ValueError(
-            "Webhook walker endpoint with path_key_auth=True must include {key} parameter in path"
-        )
-
-    def decorator(walker_class: Type[Walker]) -> Type[Walker]:
-        if not inspect.isclass(walker_class):
-            raise TypeError(
-                "@webhook_walker_endpoint can only be used on Walker classes, not functions"
-            )
-
-        if not issubclass(walker_class, Walker):
-            raise TypeError(
-                "@webhook_walker_endpoint can only be used on Walker subclasses"
-            )
-
-        # Store webhook metadata on the walker class
-        walker_class._webhook_required = True
-        walker_class._auth_required = bool(permissions or roles)
-        walker_class._required_permissions = permissions or []
-        walker_class._required_roles = roles or []
-        walker_class._endpoint_path = path
-        walker_class._endpoint_methods = methods
-        walker_class._endpoint_server = server
-
-        # Webhook-specific metadata with environment variable fallback
-        import os
-
-        effective_hmac_secret = hmac_secret or os.getenv(
-            "JVSPATIAL_WEBHOOK_HMAC_SECRET"
-        )
-        walker_class._hmac_secret = effective_hmac_secret
-        walker_class._idempotency_key_field = idempotency_key_field
-        walker_class._idempotency_ttl_hours = idempotency_ttl_hours
-        walker_class._async_processing = async_processing
-        walker_class._path_key_auth = path_key_auth
-        walker_class._is_webhook = True
-
-        # Try to register with server if available, but don't fail if not
-        try:
-            target_server = server or get_current_server()
-            if target_server:
-                # Register the walker with the server
-                target_server.register_walker_class(
-                    walker_class, path, methods, **route_kwargs
+            except TypeError:
+                # issubclass raises TypeError if target is not a class
+                raise TypeError(
+                    f"@auth_endpoint can only decorate Walker classes or functions. "
+                    f"{target.__name__} is a class but not a Walker subclass. "
+                    f"Did you mean to use a function instead?"
                 )
-        except (RuntimeError, AttributeError):
-            # Server not available during decoration (e.g., during test collection)
-            # Registration will be deferred
-            pass
+        else:
+            # Handle as authenticated function endpoint
+            default_methods = methods or ["GET"]
+            func = target
+            # Get the original function signature
+            sig = inspect.signature(func)
+            params = list(sig.parameters.values())
 
-        return walker_class
+            # Check if function expects 'endpoint' parameter
+            has_endpoint_param = any(p.name == "endpoint" for p in params)
+
+            # Filter out 'endpoint' parameter for signature (we'll inject it if needed)
+            filtered_params = [p for p in params if p.name != "endpoint"]
+
+            # Create wrapper that accepts both positional and keyword arguments
+            async def auth_wrapper(*args: Any, **kwargs_inner: Any) -> Any:
+                # Only inject endpoint helper if function expects it
+                if has_endpoint_param:
+                    endpoint_helper = create_endpoint_helper(walker_instance=None)
+                    kwargs_inner["endpoint"] = endpoint_helper
+
+                # Call original function with positional and keyword arguments
+                if inspect.iscoroutinefunction(func):
+                    return await func(*args, **kwargs_inner)
+                else:
+                    return func(*args, **kwargs_inner)
+
+            # Apply the filtered signature to the wrapper
+            auth_wrapper.__signature__ = sig.replace(parameters=filtered_params)  # type: ignore[attr-defined]
+            auth_wrapper.__name__ = func.__name__
+            auth_wrapper.__doc__ = func.__doc__
+            auth_wrapper.__module__ = func.__module__
+
+            # Store authentication metadata on the wrapper
+            auth_wrapper._auth_required = True  # type: ignore[attr-defined]
+            auth_wrapper._required_permissions = permissions or []  # type: ignore[attr-defined]
+            auth_wrapper._required_roles = roles or []  # type: ignore[attr-defined]
+            auth_wrapper._endpoint_path = path  # type: ignore[attr-defined]
+            auth_wrapper._endpoint_methods = default_methods  # type: ignore[attr-defined]
+            auth_wrapper._endpoint_server = server  # type: ignore[attr-defined]
+
+            # Get security requirements for OpenAPI spec
+            security_requirements = get_endpoint_security_requirements(
+                permissions, roles
+            )
+
+            # Store registration data for deferred registration
+            auth_wrapper._route_config = {  # type: ignore[attr-defined]
+                "path": path,
+                "endpoint": auth_wrapper,
+                "methods": default_methods,
+                "openapi_extra": {"security": security_requirements},
+            }
+
+            # Try to register with server if available, but don't fail if not
+            try:
+                target_server = server or get_current_server()
+                if target_server:
+                    # Mark that this server has auth endpoints
+                    target_server._has_auth_endpoints = True
+
+                    # Configure OpenAPI security schemes (automatic on first use)
+                    ensure_server_has_security_config(target_server)
+
+                    # Register the function with the server using the route decorator pattern
+                    target_server._custom_routes.append(auth_wrapper._route_config)  # type: ignore[attr-defined]
+
+                    # Register with endpoint registry if available
+                    if hasattr(target_server, "_endpoint_registry"):
+                        target_server._endpoint_registry.register_function(
+                            auth_wrapper,
+                            path,
+                            default_methods,
+                            route_config=auth_wrapper._route_config,  # type: ignore[attr-defined]
+                        )
+
+                    # If app already exists, add route dynamically to support decorators after get_app()
+                    if target_server.app is not None:
+                        target_server.app.add_api_route(**auth_wrapper._route_config)  # type: ignore[attr-defined]
+            except (RuntimeError, AttributeError):
+                # Server not available during decoration (e.g., during test collection)
+                # Registration will be deferred
+                pass
+
+            return cast(Callable[..., Any], auth_wrapper)
 
     return decorator
+
+
+# Webhook decorators have been moved to jvspatial.api.webhook.decorators
+# This is a backward-compatibility shim. Remove in future versions.
+def webhook_endpoint(
+    *args: Any, **kwargs: Any
+) -> Union[Type[Walker], Callable[..., Any]]:
+    """Deprecated: Import webhook_endpoint from jvspatial.api.webhook.decorators instead."""
+    warnings.warn(
+        "Importing webhook_endpoint from auth.decorators is deprecated. "
+        "Use jvspatial.api.webhook.decorators instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    from jvspatial.api.webhook.decorators import (
+        webhook_endpoint as new_webhook_endpoint,
+    )
+
+    return cast(
+        Union[Type[Walker], Callable[..., Any]], new_webhook_endpoint(*args, **kwargs)
+    )
+
+
+def _webhook_walker_endpoint(
+    *args: Any, **kwargs: Any
+) -> Union[Type[Walker], Callable[..., Any]]:
+    """Deprecated: Import _webhook_walker_endpoint from jvspatial.api.webhook.decorators instead."""
+    warnings.warn(
+        "Importing _webhook_walker_endpoint from auth.decorators is deprecated. "
+        "Use jvspatial.api.webhook.decorators instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    from jvspatial.api.webhook.decorators import (
+        _webhook_walker_endpoint as new_webhook_walker_endpoint,
+    )
+
+    return cast(
+        Union[Type[Walker], Callable[..., Any]],
+        new_webhook_walker_endpoint(*args, **kwargs),
+    )
 
 
 # Note: Use @endpoint and @walker_endpoint from jvspatial.api for public endpoints
 # Use @auth_endpoint and @auth_walker_endpoint from this module for authenticated endpoints
 
 
-def admin_walker_endpoint(
+def _admin_walker_endpoint(
     path: str, *, methods: Optional[List[str]] = None, server=None
-):
-    """Walker endpoint decorator that requires admin role.
+) -> Callable[[Type[Walker]], Type[Walker]]:
+    """Internal admin walker endpoint handler (use @admin_endpoint instead).
+
+    This is an internal implementation detail. Use the unified @admin_endpoint decorator
+    for both Walker classes and functions.
 
     Args:
         path: URL path for the endpoint
-        methods: HTTP methods allowed (defaults to ["GET", "POST"])
+        methods: HTTP methods allowed (defaults to ["POST"])
         server: Server instance to register with (uses default if None)
 
     Returns:
         Decorator function
     """
-    return auth_walker_endpoint(path, methods=methods, roles=["admin"], server=server)
+    return _auth_walker_endpoint(path, methods=methods, roles=["admin"], server=server)
 
 
-def admin_endpoint(path: str, *, methods: Optional[List[str]] = None, server=None):
-    """Endpoint decorator that requires admin role.
+def admin_endpoint(
+    path: str, *, methods: Optional[List[str]] = None, server=None
+) -> Callable[
+    [Union[Type[Walker], Callable[..., Any]]], Union[Type[Walker], Callable[..., Any]]
+]:
+    """Unified admin endpoint decorator for both walkers and functions.
+
+    Automatically detects whether decorating a Walker class or function.
+    Requires admin role (equivalent to auth_endpoint with roles=["admin"]).
 
     Args:
         path: URL path for the endpoint
-        methods: HTTP methods allowed (defaults to ["GET"])
+        methods: HTTP methods (default: ["POST"] for walkers, ["GET"] for functions)
         server: Server instance to register with (uses default if None)
 
     Returns:
-        Decorator function
+        Decorator function that works with both Walker classes and functions
+
+    Examples:
+        # Admin function endpoint (auto-detected)
+        @admin_endpoint("/admin/users", methods=["GET"])
+        async def manage_users(endpoint):
+            return endpoint.success(data={"users": []})
+
+        # Admin Walker endpoint (auto-detected)
+        @admin_endpoint("/admin/process")
+        class AdminProcessor(Walker):
+            pass
     """
-    return auth_endpoint(path, methods=methods, roles=["admin"], server=server)
+
+    def decorator(
+        target: Union[Type[Walker], Callable[..., Any]]
+    ) -> Union[Type[Walker], Callable[..., Any]]:
+        # Detect if target is a Walker class
+        if inspect.isclass(target):
+            try:
+                if issubclass(target, Walker):
+                    # Handle as admin Walker endpoint
+                    default_methods = methods or ["POST"]
+                    return _admin_walker_endpoint(
+                        path, methods=default_methods, server=server
+                    )(target)
+                else:
+                    raise TypeError(
+                        f"@admin_endpoint can only decorate Walker classes or functions. "
+                        f"{target.__name__} is a class but not a Walker subclass. "
+                        f"Did you mean to use a function instead?"
+                    )
+            except TypeError:
+                # issubclass raises TypeError if target is not a class
+                raise TypeError(
+                    f"@admin_endpoint can only decorate Walker classes or functions. "
+                    f"{target.__name__} is a class but not a Walker subclass. "
+                    f"Did you mean to use a function instead?"
+                )
+        else:
+            # Handle as admin function endpoint
+            default_methods = methods or ["GET"]
+            return auth_endpoint(
+                path, methods=default_methods, roles=["admin"], server=server
+            )(target)
+
+    return decorator
 
 
 # Enhanced middleware integration
@@ -659,8 +525,7 @@ async def require_admin(request: Request):
     return user
 
 
-# Convenience aliases
-authenticated_walker_endpoint = auth_walker_endpoint  # For clarity
+# Convenience alias
 authenticated_endpoint = auth_endpoint  # For clarity
 
 # Note: walker_endpoint and endpoint remain public by default in the main API

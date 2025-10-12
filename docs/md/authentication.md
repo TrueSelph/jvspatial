@@ -43,8 +43,8 @@ server = create_server(
 server.app.add_middleware(AuthenticationMiddleware)
 
 # Create different types of endpoints
-from jvspatial.api import endpoint, walker_endpoint  # Public
-from jvspatial.api.auth import auth_endpoint, auth_walker_endpoint, admin_endpoint
+from jvspatial.api import endpoint  # Public
+from jvspatial.api.auth import auth_endpoint, admin_endpoint
 
 @endpoint("/public/info")  # No authentication required
 async def public_info():
@@ -57,6 +57,11 @@ async def protected_data():
 @admin_endpoint("/admin/users")
 async def admin_users():
     return {"message": "Admin only"}
+
+# Unified decorators work with Walker classes too
+@admin_endpoint("/admin/process")
+class AdminProcessor(Walker):
+    pass
 
 if __name__ == "__main__":
     server.run()
@@ -375,7 +380,7 @@ admin_user = await User.create(
 user.allowed_regions = ["north_america", "europe"]
 
 # In spatial queries, check region access
-@auth_walker_endpoint("/spatial/query", permissions=["read_spatial_data"])
+@auth_endpoint("/spatial/query", permissions=["read_spatial_data"])
 class SpatialQuery(Walker):
     region: str = EndpointField(description="Target region")
 
@@ -396,7 +401,7 @@ class SpatialQuery(Walker):
 user.allowed_node_types = ["City", "Highway", "POI"]
 
 # Validate node type access in walkers
-@auth_walker_endpoint("/nodes/process")
+@auth_endpoint("/nodes/process")
 class ProcessNodes(Walker):
     @on_visit(Node)
     async def process(self, here: Node):
@@ -413,7 +418,7 @@ class ProcessNodes(Walker):
 
 ```python
 # Limit graph traversal depth for users
-@auth_walker_endpoint("/graph/traverse")
+@auth_endpoint("/graph/traverse")
 class GraphTraversal(Walker):
     max_depth: int = EndpointField(default=5)
 
@@ -437,37 +442,41 @@ class GraphTraversal(Walker):
 async def public_info():
     return {"message": "Anyone can access this"}
 
-@walker_endpoint("/public/search")
+@endpoint("/public/search")
 class PublicSearch(Walker):
     pass
 
-# 2. Authenticated endpoints (login required)
+# 2. Authenticated endpoints (login required, auto-detects functions/walkers)
 @auth_endpoint("/user/profile")
 async def user_profile():
     return {"message": "Must be logged in"}
 
-@auth_walker_endpoint("/user/data")
+@auth_endpoint("/user/data")
 class UserData(Walker):
     pass
 
-# 3. Permission-based endpoints
+# 3. Permission-based endpoints (auto-detects functions/walkers)
 @auth_endpoint("/reports/generate", permissions=["generate_reports"])
 async def generate_report():
     return {"message": "Must have generate_reports permission"}
 
-@auth_walker_endpoint("/spatial/analysis", permissions=["analyze_spatial_data"])
+@auth_endpoint("/spatial/analysis", permissions=["analyze_spatial_data"])
 class SpatialAnalysis(Walker):
     pass
 
-# 4. Role-based endpoints
+# 4. Role-based endpoints (auto-detects functions/walkers)
 @auth_endpoint("/admin/settings", roles=["admin"])
 async def admin_settings():
     return {"message": "Must be admin"}
 
-# 5. Admin-only endpoints (shortcut)
+# 5. Admin-only endpoints (shortcut, auto-detects functions/walkers)
 @admin_endpoint("/admin/users")
 async def manage_users():
     return {"message": "Admin access required"}
+
+@admin_endpoint("/admin/process")
+class AdminProcessor(Walker):
+    pass
 ```
 
 ### Multiple Requirements
@@ -502,7 +511,7 @@ async def user_dashboard(request: Request):
         }
     }
 
-@auth_walker_endpoint("/user/spatial-data")
+@auth_endpoint("/user/spatial-data")
 class UserSpatialData(Walker):
     @on_visit(Node)
     async def process(self, here: Node):
@@ -642,17 +651,27 @@ All authentication endpoints are automatically registered:
 ```python
 # Import decorators
 from jvspatial.api.auth import (
-    auth_endpoint,          # Authenticated function endpoint
-    auth_walker_endpoint,   # Authenticated walker endpoint
-    admin_endpoint,         # Admin function endpoint
-    admin_walker_endpoint   # Admin walker endpoint
+    auth_endpoint,          # Unified authenticated endpoint (auto-detects functions/walkers)
+    admin_endpoint,         # Unified admin endpoint (auto-detects functions/walkers)
+    webhook_endpoint        # Unified webhook endpoint (auto-detects functions/walkers)
 )
 
-# Usage patterns
+# Usage patterns - work with both functions and Walker classes
 @auth_endpoint("/path", methods=["GET"], permissions=["perm"], roles=["role"])
-@auth_walker_endpoint("/path", methods=["POST"], permissions=["perm"], roles=["role"])
+async def auth_function():
+    pass
+
+@auth_endpoint("/path", permissions=["perm"], roles=["role"])
+class AuthWalker(Walker):
+    pass
+
 @admin_endpoint("/admin/path", methods=["GET"])
-@admin_walker_endpoint("/admin/path", methods=["POST"])
+async def admin_function():
+    pass
+
+@admin_endpoint("/admin/path")
+class AdminWalker(Walker):
+    pass
 ```
 
 ### Utility Functions
@@ -707,9 +726,9 @@ configure_auth(jwt_secret_key="your-secret-key")
 server.app.add_middleware(AuthenticationMiddleware)
 
 # Step 3: Update endpoint decorators as needed
-# Public endpoints: Keep @endpoint and @walker_endpoint
-# Protected endpoints: Change to @auth_endpoint and @auth_walker_endpoint
-# Admin endpoints: Change to @admin_endpoint and @admin_walker_endpoint
+# Public endpoints: Keep @endpoint (works with both functions and walkers)
+# Protected endpoints: Change to @auth_endpoint (works with both functions and walkers)
+# Admin endpoints: Change to @admin_endpoint (works with both functions and walkers)
 ```
 
 ## See Also

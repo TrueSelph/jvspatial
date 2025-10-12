@@ -121,11 +121,11 @@ posts = await user.nodes(
 ### REST API Integration
 
 ```python
-from jvspatial.api import Server, walker_endpoint
+from jvspatial.api import Server, endpoint
 
 server = Server(title="My API")
 
-@walker_endpoint("/api/users/{user_id}/posts")
+@endpoint("/api/users/{user_id}/posts")
 class UserPostsWalker(Walker):
     @on_visit(User)
     async def get_posts(self, here: User):

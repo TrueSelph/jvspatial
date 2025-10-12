@@ -12,8 +12,8 @@ Both approaches leverage the current **entity-centric design** with MongoDB-styl
 The recommended approach uses the modern `Server` class with entity-centric operations:
 
 ```python
-from jvspatial.api import Server, walker_endpoint
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api import Server, endpoint
+from jvspatial.api.endpoint.decorators import EndpointField
 from jvspatial.core import Walker, Node, on_visit
 
 # Define your entity
@@ -31,7 +31,7 @@ server = Server(
     debug=True
 )
 
-@walker_endpoint("/api/users/search", methods=["POST"])
+@endpoint("/api/users/search", methods=["POST"])
 class SearchUsers(Walker):
     """Search users with MongoDB-style queries and semantic filtering."""
 
@@ -101,7 +101,7 @@ if __name__ == "__main__":
 
 ## Walker Endpoint Decorators
 
-For maximum flexibility, use the modern `@walker_endpoint` and `@endpoint` decorators:
+For maximum flexibility, use the modern `@endpoint` decorator (works for both functions and Walker classes):
 
 ### Walker Endpoints with Entity Operations
 
@@ -119,7 +119,7 @@ class Product(Node):
     in_stock: bool = True
     description: str = ""
 
-@walker_endpoint("/api/products/create", methods=["POST"])
+@endpoint("/api/products/create", methods=["POST"])
 class CreateProduct(Walker):
     """Create a new product with entity-centric operations."""
 
@@ -189,7 +189,7 @@ The `@walker_endpoint` and `@endpoint` decorators now automatically inject seman
 ### Walker Endpoints with Semantic Responses
 
 ```python
-@walker_endpoint("/api/products/details", methods=["POST"])
+@endpoint("/api/products/details", methods=["POST"])
 class ProductDetails(Walker):
     """Get product details with enhanced response handling."""
 
@@ -253,7 +253,7 @@ class ProductDetails(Walker):
             headers={"X-Product-Category": here.category}
         )
 
-@walker_endpoint("/api/products/create-advanced", methods=["POST"])
+@endpoint("/api/products/create-advanced", methods=["POST"])
 class CreateProductAdvanced(Walker):
     """Create product with comprehensive validation and response handling."""
 
@@ -429,7 +429,7 @@ All methods support:
 
 **Before (manual response building):**
 ```python
-@walker_endpoint("/api/example")
+@endpoint("/api/example")
 class ExampleWalker(Walker):
     async def process(self, here):
         if error_condition:
@@ -446,7 +446,7 @@ class ExampleWalker(Walker):
 
 **After (semantic responses):**
 ```python
-@walker_endpoint("/api/example")
+@endpoint("/api/example")
 class ExampleWalker(Walker):
     async def process(self, here):
         if error_condition:
@@ -511,7 +511,7 @@ async def delete_product(product_id: str):
 ## Advanced MongoDB-Style Query Endpoints
 
 ```python
-@walker_endpoint("/api/products/advanced-search", methods=["POST"])
+@endpoint("/api/products/advanced-search", methods=["POST"])
 class AdvancedProductSearch(Walker):
     """Advanced product search with MongoDB-style queries and pagination."""
 
@@ -672,7 +672,7 @@ server = Server(
     version="2.0.0"
 )
 
-@walker_endpoint("/api/users/network-analysis", methods=["POST"])
+@endpoint("/api/users/network-analysis", methods=["POST"])
 class NetworkAnalysis(Walker):
     """Analyze user collaboration networks using graph traversal."""
 
@@ -754,7 +754,7 @@ class NetworkAnalysis(Walker):
                 "department": here.department
             })
 
-@walker_endpoint("/api/users/skill-matching", methods=["POST"])
+@endpoint("/api/users/skill-matching", methods=["POST"])
 class SkillMatching(Walker):
     """Find users with matching skills using MongoDB-style queries."""
 
@@ -1002,7 +1002,7 @@ async def cleanup():
 ```python
 from fastapi import HTTPException
 
-@walker_endpoint("/api/users/update", methods=["PUT"])
+@endpoint("/api/users/update", methods=["PUT"])
 class UpdateUser(Walker):
     user_id: str = EndpointField(description="User ID to update")
     name: Optional[str] = EndpointField(default=None, min_length=1, max_length=100)
@@ -1061,7 +1061,7 @@ class UpdateUser(Walker):
 
 ```python
 # Good: Use entity-centric operations
-@walker_endpoint("/api/users/search")
+@endpoint("/api/users/search")
 class SearchUsers(Walker):
     @on_visit(Node)
     async def search(self, here: Node):
@@ -1082,7 +1082,7 @@ class OldSearchUsers(Walker):
 
 ```python
 # Good: Use MongoDB-style queries for complex filtering
-@walker_endpoint("/api/products/advanced-search")
+@endpoint("/api/products/advanced-search")
 class AdvancedSearch(Walker):
     @on_visit(Node)
     async def search(self, here: Node):
@@ -1107,7 +1107,7 @@ class BadSearch(Walker):
 
 ```python
 # Good: Use ObjectPager for efficient pagination
-@walker_endpoint("/api/users/list")
+@endpoint("/api/users/list")
 class ListUsers(Walker):
     page: int = EndpointField(default=1, ge=1)
     page_size: int = EndpointField(default=20, ge=1, le=100)
@@ -1136,7 +1136,7 @@ class ListUsers(Walker):
 
 ```python
 # Good: Use semantic filtering with nodes() method
-@walker_endpoint("/api/users/connections")
+@endpoint("/api/users/connections")
 class UserConnections(Walker):
     user_id: str = EndpointField(description="User ID to analyze")
 
@@ -1171,7 +1171,7 @@ class UserConnections(Walker):
 
 ```python
 # Good: Comprehensive error handling
-@walker_endpoint("/api/users/create")
+@endpoint("/api/users/create")
 class CreateUser(Walker):
     name: str = EndpointField(min_length=1, max_length=100)
     email: str = EndpointField(pattern=r'^[^@]+@[^@]+\.[^@]+$')
@@ -1222,7 +1222,7 @@ class CreateUser(Walker):
 
 ```python
 # Good: Rich documentation with examples
-@walker_endpoint("/api/products/search", methods=["POST"])
+@endpoint("/api/products/search", methods=["POST"])
 class ProductSearch(Walker):
     """Search products with advanced filtering and pagination.
 
@@ -1276,15 +1276,15 @@ server.app.add_middleware(AuthenticationMiddleware)
 ### Endpoint Protection Levels
 
 ```python
-from jvspatial.api import endpoint, walker_endpoint  # Public endpoints
-from jvspatial.api.auth import auth_endpoint, auth_walker_endpoint, admin_endpoint
+from jvspatial.api import endpoint  # Public endpoints
+from jvspatial.api.auth import auth_endpoint, admin_endpoint
 
 # 1. Public endpoints - no authentication required
 @endpoint("/public/data")
 async def public_data():
     return {"message": "Anyone can access"}
 
-@walker_endpoint("/public/search")
+@endpoint("/public/search")
 class PublicSearch(Walker):
     @on_visit(Node)
     async def search(self, here: Node):
@@ -1296,7 +1296,7 @@ class PublicSearch(Walker):
 async def user_data():
     return {"message": "Must be logged in"}
 
-@auth_walker_endpoint("/protected/spatial-query")
+@auth_endpoint("/protected/spatial-query")
 class ProtectedSpatialQuery(Walker):
     @on_visit(Node)
     async def query(self, here: Node):
@@ -1324,7 +1324,7 @@ async def manage_users():
 ```python
 from jvspatial.api.auth import auth_walker_endpoint, get_current_user
 
-@auth_walker_endpoint(
+@auth_endpoint(
     "/spatial/analysis",
     permissions=["analyze_spatial_data"],
     roles=["analyst", "admin"]
@@ -1408,7 +1408,7 @@ async def create_service_key(request: Request):
 Users can be restricted to specific regions and node types:
 
 ```python
-@auth_walker_endpoint("/geo/query", permissions=["read_spatial"])
+@auth_endpoint("/geo/query", permissions=["read_spatial"])
 class GeoQuery(Walker):
     target_region: str = EndpointField(examples=["north_america", "europe"])
 
@@ -1453,7 +1453,7 @@ await user.save()
 ### Enhanced Response Handling with Authentication
 
 ```python
-@auth_walker_endpoint("/secure/process", permissions=["process_data"])
+@auth_endpoint("/secure/process", permissions=["process_data"])
 class SecureProcessor(Walker):
     @on_visit(Node)
     async def secure_process(self, here: Node):
@@ -1520,11 +1520,11 @@ async def search_products(query: str):
 ### After (Current)
 ```python
 # New pattern - entity-centric with server class
-from jvspatial.api import Server, walker_endpoint
+from jvspatial.api import Server, endpoint
 
 server = Server(title="Product API")
 
-@walker_endpoint("/api/products/search")
+@endpoint("/api/products/search")
 class SearchProducts(Walker):
     query: str = EndpointField(description="Search query")
 

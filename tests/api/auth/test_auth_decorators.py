@@ -1,7 +1,7 @@
 """
 Test suite for authentication decorators.
 
-This module tests the auth decorators including auth_walker_endpoint, auth_endpoint,
+This module tests the auth decorators including auth_endpoint,
 admin decorators, and authentication/authorization checking functionality.
 """
 
@@ -13,11 +13,8 @@ from fastapi import HTTPException, Request
 from jvspatial.api.auth.decorators import (
     AuthAwareEndpointProcessor,
     admin_endpoint,
-    admin_walker_endpoint,
     auth_endpoint,
-    auth_walker_endpoint,
     authenticated_endpoint,
-    authenticated_walker_endpoint,
     require_admin,
     require_authenticated_user,
     require_permissions,
@@ -33,22 +30,22 @@ class MockWalker(Walker):
     pass
 
 
-class TestAuthWalkerEndpoint:
-    """Test auth_walker_endpoint decorator functionality."""
+class TestWalkerEndpointAuth:
+    """Test auth_endpoint decorator functionality with Walker classes."""
 
     def setup_method(self):
         """Set up test data."""
         self.mock_server = MagicMock()
         self.mock_server.register_walker_class = MagicMock()
 
-    def test_auth_walker_endpoint_basic(self):
-        """Test basic auth walker endpoint decorator."""
+    def test_auth_endpoint_basic(self):
+        """Test basic auth endpoint decorator."""
         with patch(
             "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
-            @auth_walker_endpoint("/test/protected")
+            @auth_endpoint("/test/protected")
             class TestAuthWalker(Walker):
                 pass
 
@@ -64,18 +61,18 @@ class TestAuthWalkerEndpoint:
             call_args = self.mock_server.register_walker_class.call_args
             assert call_args[0][0] == TestAuthWalker
             assert call_args[0][1] == "/test/protected"
-            assert call_args[0][2] == ["GET", "POST"]
+            assert call_args[0][2] == ["POST"]
             # Check that openapi_extra was passed
             assert "openapi_extra" in call_args[1]
 
-    def test_auth_walker_endpoint_with_permissions(self):
-        """Test auth walker endpoint with permissions."""
+    def test_auth_endpoint_with_permissions(self):
+        """Test auth endpoint with permissions on Walker class."""
         with patch(
             "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
-            @auth_walker_endpoint(
+            @auth_endpoint(
                 "/test/permissions",
                 permissions=["read_data", "write_data"],
                 methods=["POST"],
@@ -95,14 +92,14 @@ class TestAuthWalkerEndpoint:
             assert call_args[0][1] == "/test/permissions"
             assert call_args[0][2] == ["POST"]
 
-    def test_auth_walker_endpoint_with_roles(self):
-        """Test auth walker endpoint with roles."""
+    def test_auth_endpoint_with_roles(self):
+        """Test auth endpoint with roles on Walker class."""
         with patch(
             "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
-            @auth_walker_endpoint("/test/roles", roles=["analyst", "admin"])
+            @auth_endpoint("/test/roles", roles=["analyst", "admin"])
             class RoleWalker(Walker):
                 pass
 
@@ -111,25 +108,25 @@ class TestAuthWalkerEndpoint:
             assert RoleWalker._required_permissions == []
             assert RoleWalker._required_roles == ["analyst", "admin"]
 
-    def test_auth_walker_endpoint_with_custom_server(self):
-        """Test auth walker endpoint with custom server."""
+    def test_auth_endpoint_with_custom_server(self):
+        """Test auth endpoint with custom server on Walker class."""
         custom_server = MagicMock()
         custom_server.register_walker_class = MagicMock()
 
-        @auth_walker_endpoint("/test/custom", server=custom_server)
+        @auth_endpoint("/test/custom", server=custom_server)
         class CustomServerWalker(Walker):
             pass
 
         # Should use custom server, not default
         custom_server.register_walker_class.assert_called_once()
 
-    def test_auth_walker_endpoint_no_server(self):
-        """Test auth walker endpoint when no server available."""
+    def test_auth_endpoint_no_server(self):
+        """Test auth endpoint when no server available with Walker class."""
         with patch(
             "jvspatial.api.auth.decorators.get_current_server", return_value=None
         ):
             # With deferred registration, no exception should be raised during decoration
-            @auth_walker_endpoint("/test/walker")
+            @auth_endpoint("/test/walker")
             class NoServerWalker(Walker):
                 async def test_func(self):
                     return {"message": "authenticated"}
@@ -138,9 +135,9 @@ class TestAuthWalkerEndpoint:
             assert NoServerWalker._auth_required is True
             assert NoServerWalker._endpoint_path == "/test/walker"
 
-    def test_authenticated_walker_endpoint_alias(self):
-        """Test that authenticated_walker_endpoint is an alias."""
-        assert authenticated_walker_endpoint == auth_walker_endpoint
+    def test_authenticated_endpoint_alias(self):
+        """Test that authenticated_endpoint is an alias for auth_endpoint."""
+        assert authenticated_endpoint == auth_endpoint
 
 
 class TestAuthEndpoint:
@@ -244,14 +241,14 @@ class TestAdminDecorators:
         self.mock_server._endpoint_registry = MagicMock()
         self.mock_server._endpoint_registry.register_function = MagicMock()
 
-    def test_admin_walker_endpoint(self):
-        """Test admin walker endpoint decorator."""
+    def test_admin_endpoint_with_walker(self):
+        """Test admin endpoint decorator with Walker class (auto-detected)."""
         with patch(
             "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
-            @admin_walker_endpoint("/admin/data")
+            @admin_endpoint("/admin/data")
             class AdminWalker(Walker):
                 pass
 
@@ -265,16 +262,16 @@ class TestAdminDecorators:
             call_args = self.mock_server.register_walker_class.call_args
             assert call_args[0][0] == AdminWalker
             assert call_args[0][1] == "/admin/data"
-            assert call_args[0][2] == ["GET", "POST"]
+            assert call_args[0][2] == ["POST"]
 
-    def test_admin_walker_endpoint_with_methods(self):
-        """Test admin walker endpoint with custom methods."""
+    def test_admin_endpoint_with_walker_and_methods(self):
+        """Test admin endpoint with Walker class and custom methods (auto-detected)."""
         with patch(
             "jvspatial.api.auth.decorators.get_current_server",
             return_value=self.mock_server,
         ):
 
-            @admin_walker_endpoint("/admin/users", methods=["PUT", "DELETE"])
+            @admin_endpoint("/admin/users", methods=["PUT", "DELETE"])
             class AdminUserWalker(Walker):
                 pass
 
@@ -662,7 +659,7 @@ class TestDecoratorIntegration:
             return_value=self.mock_server,
         ):
 
-            @auth_walker_endpoint(
+            @auth_endpoint(
                 "/complex/walker",
                 methods=["POST", "PUT"],
                 permissions=["read_data", "write_data"],
@@ -723,7 +720,7 @@ class TestDecoratorIntegration:
         ):
 
             # With deferred registration, decorators should not raise errors during decoration
-            @auth_walker_endpoint("/test/error")
+            @auth_endpoint("/test/error")
             class ErrorWalker(Walker):
                 pass
 

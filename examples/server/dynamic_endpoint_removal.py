@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 
-from jvspatial.api.server import Server, endpoint, walker_endpoint
+from jvspatial.api.server import Server, endpoint
 from jvspatial.core.entities import Node, Walker, on_visit
 
 # Set up logging
@@ -33,7 +33,7 @@ server = Server(
 
 
 # Walker endpoints to test removal
-@walker_endpoint("/api/user-walker")
+@endpoint("/api/user-walker")
 class UserWalker(Walker):
     username: str = "test_user"
 
@@ -45,7 +45,7 @@ class UserWalker(Walker):
         )
 
 
-@walker_endpoint("/api/admin-walker")
+@endpoint("/api/admin-walker")
 class AdminWalker(Walker):
     admin_action: str = "check_status"
 

@@ -1,8 +1,11 @@
 """Authenticated Endpoints Example
 
-This example demonstrates how to use @auth_endpoint and @auth_walker_endpoint
+This example demonstrates how to use @auth_endpoint and @admin_endpoint
 decorators to create authenticated API endpoints with role-based and
 permission-based access control.
+
+Note: @auth_endpoint and @admin_endpoint are unified decorators that work
+with both functions and Walker classes (auto-detection).
 
 The decorators automatically handle:
 - Authentication validation
@@ -28,8 +31,8 @@ For a complete working server with user management, see the auth setup notes bel
 from typing import Any, Dict
 
 from jvspatial.api import Server
-from jvspatial.api.auth import admin_endpoint, auth_endpoint, auth_walker_endpoint
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api.auth import admin_endpoint, auth_endpoint
+from jvspatial.api.endpoint.decorators import EndpointField
 from jvspatial.core import Node, Walker, on_visit
 
 # =============================================================================
@@ -151,7 +154,7 @@ async def manage_settings(endpoint) -> Any:
 # =============================================================================
 
 
-@auth_walker_endpoint("/users/analyze", methods=["POST"], permissions=["read_users"])
+@auth_endpoint("/users/analyze", methods=["POST"], permissions=["read_users"])
 class AnalyzeUsersWalker(Walker):
     """Analyze user data with graph traversal.
 
@@ -203,7 +206,7 @@ class AnalyzeUsersWalker(Walker):
             await self.visit(connected)
 
 
-@auth_walker_endpoint(
+@auth_endpoint(
     "/graph/process",
     methods=["POST"],
     roles=["data_scientist", "analyst", "admin"],
@@ -279,21 +282,17 @@ For a fully functional authenticated server, you need to:
 """
 Authentication Decorator Summary:
 
-1. @auth_endpoint - Authenticated function endpoint
+1. @auth_endpoint - Unified authenticated endpoint (auto-detects functions/walkers)
    - Requires authentication by default
    - Optional: permissions (list of required permissions - ALL must be present)
    - Optional: roles (list of required roles - user must have AT LEAST ONE)
-   - Optional: methods (HTTP methods, default: ["GET"])
+   - Optional: methods (HTTP methods, default: ["GET"] for functions, ["POST"] for walkers)
+   - Works with both function endpoints and Walker classes (automatically detected)
 
-2. @auth_walker_endpoint - Authenticated walker endpoint
-   - Same as @auth_endpoint but for Walker classes
-   - Optional: methods (HTTP methods, default: ["GET", "POST"])
-
-3. @admin_endpoint - Admin-only function endpoint
+2. @admin_endpoint - Unified admin-only endpoint (auto-detects functions/walkers)
    - Convenience decorator equivalent to @auth_endpoint(roles=["admin"])
-
-4. @admin_walker_endpoint - Admin-only walker endpoint
-   - Convenience decorator equivalent to @auth_walker_endpoint(roles=["admin"])
+   - Works with both function endpoints and Walker classes (automatically detected)
+   - Optional: methods (HTTP methods, default: ["GET"] for functions, ["POST"] for walkers)
 
 Authentication Flow:
 1. Request arrives at authenticated endpoint
@@ -314,12 +313,11 @@ Middleware Integration:
 - Use get_current_user(request) to access authenticated user
 
 Best Practices:
-✅ Use @auth_endpoint for simple authenticated function endpoints
-✅ Use @auth_walker_endpoint for graph traversal operations
+✅ Use @auth_endpoint for authenticated endpoints (functions or walkers)
 ✅ Specify permissions for granular access control
 ✅ Specify roles for role-based access control
 ✅ Combine permissions and roles when both are needed
-✅ Use @admin_endpoint/@admin_walker_endpoint for admin-only features
+✅ Use @admin_endpoint for admin-only features (functions or walkers)
 ✅ Follow 'here' naming convention in walker @on_visit methods
 
 ❌ Don't use regular @endpoint for endpoints that need authentication
@@ -333,8 +331,9 @@ if __name__ == "__main__":
     print("Authenticated Endpoints Example")
     print("=" * 70)
     print()
-    print("This example demonstrates @auth_endpoint and @auth_walker_endpoint")
-    print("decorator usage for creating authenticated API endpoints.")
+    print("This example demonstrates @auth_endpoint and @admin_endpoint")
+    print("unified decorators for creating authenticated API endpoints.")
+    print("These decorators work with both functions and Walker classes.")
     print()
     print("Endpoints registered:")
     print("  - GET  /api/profile               (authenticated)")

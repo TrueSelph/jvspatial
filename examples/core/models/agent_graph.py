@@ -20,8 +20,9 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import Field
 
-from jvspatial.api import Server, endpoint, walker_endpoint
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api import Server, endpoint
+from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api.routing.endpoint import EndpointRouter
 from jvspatial.core import Node, Root, Walker, on_exit, on_visit
 
 # Configure environment for example
@@ -113,7 +114,7 @@ server = Server(
 )
 
 
-@walker_endpoint("/api/agents/interact", methods=["POST"])
+@endpoint("/api/agents/interact", methods=["POST"])
 class InteractWalker(Walker):
     """Walker to interact with the agent hierarchy and demonstrate traversal patterns."""
 

@@ -7,13 +7,14 @@ an 'endpoint' helper for flexible HTTP response creation.
 
 from typing import Any, Dict, Optional
 
-from jvspatial.api.endpoint.router import EndpointField
-from jvspatial.api.server import create_server, endpoint, walker_endpoint
+from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api.routing.endpoint import EndpointRouter
+from jvspatial.api.server import create_server, endpoint
 from jvspatial.core.entities import Node, Walker
 
 
 # Walker endpoint examples using @walker_endpoint with endpoint.response()
-@walker_endpoint("/walker/users")
+@endpoint("/walker/users")
 class UserWalker(Walker):
     """Example walker demonstrating the endpoint.response() pattern.
 
@@ -77,7 +78,7 @@ class UserWalker(Walker):
         )
 
 
-@walker_endpoint("/walker/users/create", methods=["POST"])
+@endpoint("/walker/users/create", methods=["POST"])
 class CreateUserWalker(Walker):
     """Walker for creating new users using self.endpoint.created()."""
 
@@ -221,7 +222,7 @@ async def clear_cache(endpoint) -> Any:
 
 
 # Example of a mixed walker that shows different response patterns
-@walker_endpoint("/walker/analytics")
+@endpoint("/walker/analytics")
 class AnalyticsWalker(Walker):
     """Walker showing various endpoint response patterns."""
 

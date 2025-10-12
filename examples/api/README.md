@@ -18,10 +18,8 @@ Please refer to `examples/server/README.md` for detailed API examples, including
 Demonstrates how to use authentication decorators to create secure API endpoints:
 
 **Decorators covered:**
-- `@auth_endpoint` - Authenticated function endpoints
-- `@auth_walker_endpoint` - Authenticated walker endpoints
-- `@admin_endpoint` - Admin-only function endpoints
-- `@admin_walker_endpoint` - Admin-only walker endpoints
+- `@auth_endpoint` - Authenticated endpoints (for both functions and Walker classes)
+- `@admin_endpoint` - Admin-only endpoints (for both functions and Walker classes)
 
 **Features demonstrated:**
 - Role-based access control (RBAC)
@@ -40,7 +38,7 @@ Demonstrates how to use authentication decorators to create secure API endpoints
 
 **Usage:**
 ```python
-from jvspatial.api.auth import auth_endpoint, auth_walker_endpoint
+from jvspatial.api.auth import auth_endpoint
 
 # Simple authenticated endpoint
 @auth_endpoint("/api/profile", methods=["GET"])
@@ -58,7 +56,7 @@ async def generate_report(endpoint):
     return endpoint.success(data={"report": "generated"})
 
 # Walker endpoint with authentication
-@auth_walker_endpoint("/api/analyze", permissions=["analyze_data"])
+@auth_endpoint("/api/analyze", permissions=["analyze_data"])
 class AnalyzeWalker(Walker):
     @on_visit(Node)
     async def analyze(self, here: Node):

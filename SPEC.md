@@ -446,12 +446,12 @@ if __name__ == "__main__":
 
 ### Walker Endpoints
 ```python
-from jvspatial.api import walker_endpoint
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api import endpoint
+from jvspatial.api.endpoint.decorators import EndpointField
 from jvspatial.core import Walker, Node
 from jvspatial.core.entities import on_visit
 
-@walker_endpoint("/api/users/process", methods=["POST"])
+@endpoint("/api/users/process", methods=["POST"])
 class ProcessUser(Walker):
     """Process user data with graph traversal."""
 
@@ -547,7 +547,7 @@ if __name__ == "__main__":
 
 ### Basic Webhook Handler
 ```python
-from jvspatial.api.auth.decorators import webhook_endpoint
+from jvspatial.api.webhook.decorators import webhook_endpoint
 from fastapi import Request
 
 @webhook_endpoint("/webhook/{service}/{auth_token}", methods=["POST"])
@@ -675,8 +675,7 @@ success = await node1.disconnect(node2, edge_type=SpecialEdge)
 - ✅ Use `self.pause()` for temporary suspension
 
 ### API Patterns
-- ✅ Use `@walker_endpoint` for graph processing
-- ✅ Use `@endpoint` for simple functions
+- ✅ Use `@endpoint` for both graph processing and simple functions
 - ✅ Use `EndpointField` for parameter configuration
 - ✅ Use `endpoint.success()`, `endpoint.not_found()` for responses
 - ✅ Always return 200 for webhooks with try/catch
@@ -704,7 +703,7 @@ Webhooks in jvspatial are designed for:
 
 ```python path=null start=null
 from fastapi import Request
-from jvspatial.api.auth.decorators import webhook_endpoint
+from jvspatial.api.webhook.decorators import webhook_endpoint
 from jvspatial.api.auth.middleware import get_current_user
 from typing import Dict, Any
 import json
@@ -860,11 +859,11 @@ The architecture supports webhook processing through graph traversal using Walke
 
 ```python path=null start=null
 
-# from jvspatial.api.auth.decorators import webhook_walker_endpoint
+# from jvspatial.api.auth.decorators import webhook_endpoint
 # from jvspatial.core import Walker, Node
 # from jvspatial.core.entities import on_visit
 
-# @webhook_walker_endpoint("/webhook/process/{route}/{auth_token}", methods=["POST"])
+# @webhook_endpoint("/webhook/process/{route}/{auth_token}", methods=["POST"])
 # class WebhookProcessingWalker(Walker):
 #     """Walker-based webhook processing with graph traversal."""
 #
@@ -1111,7 +1110,7 @@ JVspatial provides an advanced webhook system for handling external service inte
 ### Quick Webhook Setup
 
 ```python path=null start=null
-from jvspatial.api.auth.decorators import webhook_endpoint
+from jvspatial.api.webhook.decorators import webhook_endpoint
 from jvspatial.api import Server
 
 # Simple webhook handler
@@ -1520,7 +1519,7 @@ server = Server(
 )
 
 # Good: Validate files before processing
-@walker_endpoint("/validate-upload")
+@endpoint("/validate-upload")
 class ValidateUpload(Walker):
     file_path: str
 
@@ -1563,7 +1562,7 @@ server = Server(
 )
 
 # Bad: No file validation
-@walker_endpoint("/unsafe-upload")
+@endpoint("/unsafe-upload")
 class UnsafeUpload(Walker):
     file_path: str
 
@@ -1585,10 +1584,9 @@ See [File Storage Documentation](docs/md/file-storage-usage.md) for advanced usa
 
 jvspatial provides four standard router decorators for API endpoints:
 
-1. `@endpoint` - For function-based endpoints
-2. `@walker_endpoint` - For walker-based endpoints
-3. `@auth_endpoint` - For authenticated function endpoints
-4. `@auth_walker_endpoint` - For authenticated walker endpoints
+1. `@endpoint` - For endpoints (both functions and Walker classes)
+2. `@auth_endpoint` - For authenticated endpoints (both functions and Walker classes)
+3. `@webhook_endpoint` - For webhook endpoints (both functions and Walker classes)
 
 ```python
 from jvspatial.api import endpoint, walker_endpoint
@@ -1601,7 +1599,7 @@ async def get_users() -> Dict[str, Any]:
     return {"users": users}
 
 # Walker endpoint
-@walker_endpoint("/api/graph/traverse", methods=["POST"])
+@endpoint("/api/graph/traverse", methods=["POST"])
 class GraphTraversal(Walker):
     pass
 
@@ -1610,8 +1608,8 @@ class GraphTraversal(Walker):
 async def get_admin_stats() -> Dict[str, Any]:
     return {"stats": "admin only"}
 
-# Authenticated walker endpoint
-@auth_walker_endpoint("/api/secure/process", methods=["POST"], permissions=["process_data"])
+# Authenticated walker endpoint (uses same decorator)
+@auth_endpoint("/api/secure/process", methods=["POST"], permissions=["process_data"])
 class SecureProcessor(Walker):
     pass
 ```
@@ -1673,7 +1671,7 @@ production_server = Server(config=advanced_config)
 The `@walker_endpoint` decorator automatically exposes Walker classes as API endpoints:
 
 ```python path=null start=null
-from jvspatial.api import walker_endpoint
+from jvspatial.api import endpoint
 from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core import Walker, Node
 from jvspatial.core.entities import on_visit
@@ -1692,7 +1690,7 @@ class City(Node):
     state: str = ""
 
 # Walker with endpoint configuration using EndpointField
-@walker_endpoint("/api/users/process", methods=["POST"])
+@endpoint("/api/users/process", methods=["POST"])
 class ProcessUser(Walker):
     """Process user data with graph traversal."""
 
@@ -1777,7 +1775,7 @@ class ProcessUser(Walker):
         })
 
 # Advanced walker with field grouping
-@walker_endpoint("/api/analytics/user-report", methods=["POST"])
+@endpoint("/api/analytics/user-report", methods=["POST"])
 class UserAnalytics(Walker):
     """Generate user analytics reports."""
 
@@ -1842,7 +1840,7 @@ The `@walker_endpoint` and `@endpoint` decorators now automatically inject seman
 **Walker Endpoints with self.endpoint:**
 
 ```python path=null start=null
-@walker_endpoint("/api/users/profile", methods=["POST"])
+@endpoint("/api/users/profile", methods=["POST"])
 class UserProfileWalker(Walker):
     """Walker demonstrating semantic response patterns."""
 
@@ -1888,7 +1886,7 @@ class UserProfileWalker(Walker):
             message="User profile retrieved successfully"
         )
 
-@walker_endpoint("/api/users/create", methods=["POST"])
+@endpoint("/api/users/create", methods=["POST"])
 class CreateUserWalker(Walker):
     """Walker for creating users with proper HTTP status codes."""
 
@@ -2226,7 +2224,7 @@ The `EndpointField` provides extensive configuration for API parameters:
 from jvspatial.api.endpoint.router import EndpointField
 from typing import List, Optional
 
-@walker_endpoint("/api/advanced-example", methods=["POST"])
+@endpoint("/api/advanced-example", methods=["POST"])
 class AdvancedEndpointExample(Walker):
     """Demonstrate all EndpointField configuration options."""
 
@@ -2384,10 +2382,9 @@ async def log_requests(request, call_next):
 
 jvspatial provides four standard router decorators for API endpoints. These are the ONLY decorators that should be used for routing:
 
-1. `@endpoint` - For function-based endpoints
-2. `@walker_endpoint` - For walker-based endpoints
-3. `@auth_endpoint` - For authenticated function endpoints
-4. `@auth_walker_endpoint` - For authenticated walker endpoints
+1. `@endpoint` - For endpoints (both functions and Walker classes)
+2. `@auth_endpoint` - For authenticated endpoints (both functions and Walker classes)
+3. `@webhook_endpoint` - For webhook endpoints (both functions and Walker classes)
 
 ```python
 # Function endpoint
@@ -2397,7 +2394,7 @@ async def get_users() -> Dict[str, Any]:
     return {"users": users}
 
 # Walker endpoint
-@walker_endpoint("/api/graph/traverse", methods=["POST"])
+@endpoint("/api/graph/traverse", methods=["POST"])
 class GraphTraversal(Walker):
     pass
 
@@ -2406,8 +2403,8 @@ class GraphTraversal(Walker):
 async def get_admin_stats() -> Dict[str, Any]:
     return {"stats": "admin only"}
 
-# Authenticated walker endpoint
-@auth_walker_endpoint("/api/secure/process", methods=["POST"], permissions=["process_data"])
+# Authenticated walker endpoint (uses same decorator)
+@auth_endpoint("/api/secure/process", methods=["POST"], permissions=["process_data"])
 class SecureProcessor(Walker):
     pass
 ```
@@ -2450,7 +2447,7 @@ curl "http://localhost:8000/api/users/paginated?page=1&page_size=10&department=e
 
 ```python path=null start=null
 # Good: Use descriptive endpoint paths
-@walker_endpoint("/api/users/analyze-connections", methods=["POST"])
+@endpoint("/api/users/analyze-connections", methods=["POST"])
 class AnalyzeUserConnections(Walker):
     pass
 
@@ -2465,7 +2462,7 @@ field_name: str = EndpointField(
 # Good: Use appropriate HTTP methods
 @endpoint("/api/users", methods=["GET"])     # Retrieve data
 @endpoint("/api/users", methods=["POST"])    # Create data
-@walker_endpoint("/api/process", methods=["POST"])  # Process/execute
+@endpoint("/api/process", methods=["POST"])  # Process/execute
 
 # Good: Group related fields
 config_field: str = EndpointField(
@@ -2487,8 +2484,8 @@ async def get_data():
 
 ```python path=null start=null
 # Bad: Vague endpoint paths
-@walker_endpoint("/process")  # Too generic
-@walker_endpoint("/api/thing")  # Unclear purpose
+@endpoint("/process")  # Too generic
+@endpoint("/api/thing")  # Unclear purpose
 
 # Bad: Missing field documentation
 field_name: str = EndpointField()  # No description or examples
@@ -2504,7 +2501,7 @@ async def get_data():
 
 # Bad: Using wrong HTTP methods
 @endpoint("/api/users/delete", methods=["GET"])  # Should be DELETE
-@walker_endpoint("/api/data/get", methods=["POST"])  # Should be GET for retrieval
+@endpoint("/api/data/get", methods=["POST"])  # Should be GET for retrieval
 ```
 
 ---

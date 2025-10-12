@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Optional
 
 from jvspatial.api import Server
-from jvspatial.api.auth.decorators import auth_endpoint, auth_walker_endpoint
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api.auth.decorators import auth_endpoint
+from jvspatial.api.endpoint.decorators import EndpointField
 from jvspatial.core.entities import Node, Walker
 from jvspatial.core.storage import StorageManager
 from jvspatial.core.storage.backends import LocalStorage, S3Storage
@@ -82,7 +82,7 @@ class FileWalker(Walker):
         return stored_file
 
 
-@auth_walker_endpoint("/api/files/upload", methods=["POST"])
+@auth_endpoint("/api/files/upload", methods=["POST"])
 class FileUploader(FileWalker):
     """Upload files to storage."""
 
@@ -143,7 +143,7 @@ class FileUploader(FileWalker):
             os.unlink(temp_path)
 
 
-@auth_walker_endpoint("/api/files/list", methods=["GET"])
+@auth_endpoint("/api/files/list", methods=["GET"])
 class FileList(FileWalker):
     """List stored files."""
 
@@ -181,7 +181,7 @@ class FileList(FileWalker):
         )
 
 
-@auth_walker_endpoint("/api/files/{file_id}/download")
+@auth_endpoint("/api/files/{file_id}/download")
 class FileDownloader(FileWalker):
     """Download stored files."""
 

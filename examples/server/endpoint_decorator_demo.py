@@ -21,8 +21,9 @@ from typing import Dict, List, Optional
 
 from fastapi import HTTPException
 
-from jvspatial.api import create_server, endpoint, walker_endpoint
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api import create_server, endpoint
+from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api.routing.endpoint import EndpointRouter
 from jvspatial.core.entities import Node, Root, Walker, on_visit
 
 # ====================== DATA MODEL ======================
@@ -55,7 +56,7 @@ print(f"📋 Server created: {server.config.title}")
 # ====================== WALKER ENDPOINTS ======================
 
 
-@walker_endpoint("/products/create")
+@endpoint("/products/create")
 class CreateProduct(Walker):
     """Create product using server instance decorator."""
 
@@ -97,7 +98,7 @@ class CreateProduct(Walker):
             )
 
 
-@walker_endpoint("/products/search", methods=["POST"])
+@endpoint("/products/search", methods=["POST"])
 class SearchProducts(Walker):
     """Search products using @walker_endpoint decorator."""
 
@@ -165,7 +166,7 @@ class SearchProducts(Walker):
             )
 
 
-@walker_endpoint("/products/bulk-update", methods=["POST"], tags=["bulk"])
+@endpoint("/products/bulk-update", methods=["POST"], tags=["bulk"])
 class BulkUpdateProducts(Walker):
     """Bulk update products - demonstrates additional parameters."""
 

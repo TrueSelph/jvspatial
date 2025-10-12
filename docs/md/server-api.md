@@ -23,7 +23,7 @@ The jvspatial Server class provides a powerful, object-oriented abstraction for 
 ```python
 from jvspatial.api.server import Server, create_server
 from jvspatial.core.entities import Walker, Node, on_visit
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api.endpoint.decorators import EndpointField
 
 # Create a server instance
 server = create_server(

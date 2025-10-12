@@ -29,10 +29,10 @@ from jvspatial.api import (
     Server,
     create_server,
     endpoint,
-    walker_endpoint,
 )
 from jvspatial.api.context import get_current_server
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api.routing.endpoint import EndpointRouter
 from jvspatial.core.entities import Node, Root, Walker, on_exit, on_visit
 
 # ====================== NODE TYPES ======================
@@ -143,7 +143,7 @@ async def initialize_sample_tasks():
 # ====================== INITIAL WALKER ENDPOINTS ======================
 
 
-@walker_endpoint("/tasks/create")
+@endpoint("/tasks/create")
 class CreateTask(Walker):
     """Create a new task."""
 
@@ -195,7 +195,7 @@ class CreateTask(Walker):
             )
 
 
-@walker_endpoint("/tasks/search")
+@endpoint("/tasks/search")
 class SearchTasks(Walker):
     """Search tasks with various filters."""
 
@@ -439,7 +439,7 @@ def register_dynamic_endpoints():
 
 
 # This simulates what a package developer would do
-@walker_endpoint("/tasks/analytics")
+@endpoint("/tasks/analytics")
 class TaskAnalytics(Walker):
     """Analyze task patterns and provide insights."""
 

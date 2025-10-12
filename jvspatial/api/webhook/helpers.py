@@ -10,12 +10,15 @@ from typing import Any, Callable, Dict, Optional
 
 from fastapi import Request
 
-from jvspatial.api.endpoint.response import EndpointResponseHelper
+from jvspatial.api.response import ResponseHelper as EndpointResponseHelper
 from jvspatial.core.entities import Walker
 
 
 class WebhookEndpointResponseHelper(EndpointResponseHelper):
     webhook_data: Dict[str, Any]
+
+    def __init__(self, *, walker_instance: Optional[Walker] = None) -> None:
+        super().__init__(walker_instance=walker_instance)
 
 
 def create_webhook_endpoint_helper(
@@ -30,7 +33,7 @@ def create_webhook_endpoint_helper(
     Returns:
         EndpointResponseHelper instance with webhook_data attribute
     """
-    helper = WebhookEndpointResponseHelper(walker_instance)
+    helper = WebhookEndpointResponseHelper(walker_instance=walker_instance)
     helper.webhook_data = {}  # Initialize webhook_data as an empty dictionary
 
     # Attach webhook-specific data as an attribute

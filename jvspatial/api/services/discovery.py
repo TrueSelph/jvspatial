@@ -12,7 +12,7 @@ import pkgutil
 from typing import TYPE_CHECKING, Any, List, Optional
 
 from jvspatial.api.constants import LogIcons
-from jvspatial.api.endpoint.response import create_endpoint_helper
+from jvspatial.api.response.helpers import create_endpoint_helper
 from jvspatial.core.entities import Walker
 
 if TYPE_CHECKING:

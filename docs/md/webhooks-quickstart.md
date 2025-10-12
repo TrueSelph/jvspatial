@@ -1,6 +1,6 @@
 # JVspatial Webhooks Quickstart
 
-JVspatial provides powerful webhook functionality through the `@webhook_endpoint` and `@webhook_walker_endpoint` decorators, enabling secure, reliable webhook processing with features like HMAC verification, idempotency handling, and asynchronous processing.
+JVspatial provides powerful webhook functionality through the `@webhook_endpoint` decorator, enabling secure, reliable webhook processing with features like HMAC verification, idempotency handling, and asynchronous processing.
 
 ## Simplified Response Handling
 
@@ -11,7 +11,7 @@ Webhook endpoints use the standard endpoint response methods (`endpoint.success(
 ### Simple Webhook Endpoint
 
 ```python
-from jvspatial.api.auth.decorators import webhook_endpoint
+from jvspatial.api.webhook.decorators import webhook_endpoint
 
 @webhook_endpoint("/webhook/simple")
 async def simple_webhook(payload: dict, endpoint):
@@ -31,10 +31,10 @@ async def simple_webhook(payload: dict, endpoint):
 ### Walker-Based Webhook
 
 ```python
-from jvspatial.api.auth.decorators import webhook_walker_endpoint
+from jvspatial.api.webhook.decorators import webhook_endpoint
 from jvspatial.core.entities import Walker, Node, on_visit
 
-@webhook_walker_endpoint("/webhook/data-update")
+@webhook_endpoint("/webhook/data-update")
 class DataUpdateWalker(Walker):
     """Walker that updates graph data based on webhook events."""
 

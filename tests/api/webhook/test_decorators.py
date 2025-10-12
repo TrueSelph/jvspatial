@@ -11,8 +11,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jvspatial.api.auth.decorators import webhook_endpoint
 from jvspatial.api.server import Server
+from jvspatial.api.webhook.decorators import webhook_endpoint
 from jvspatial.core.entities import Walker
 
 
@@ -124,7 +124,7 @@ class TestWebhookEndpointDecorator:
     def test_webhook_endpoint_server_registration(self):
         """Test server registration when server is available."""
         with patch(
-            "jvspatial.api.auth.decorators.get_current_server",
+            "jvspatial.api.context.get_current_server",
             return_value=self.mock_server,
         ):
 
@@ -229,18 +229,46 @@ class TestWebhookEndpointDecorator:
         assert noauth_webhook._required_permissions == []
         assert noauth_webhook._required_roles == []
 
-    def test_webhook_endpoint_walker_integration(self):
-        """Test @webhook_endpoint with a walker class (if applicable)."""
-        # Note: webhook_endpoint is for functions, not walkers, but test compatibility
+    def test_webhook_endpoint_walker_class(self):
+        """Test @webhook_endpoint with a Walker class (unified decorator)."""
 
-        with pytest.raises(TypeError):
-            # Should not work with classes (walker_endpoint would be used)
-            @webhook_endpoint("/webhook/walker/{auth_token}")
-            class WalkerWebhook(Walker):
+        @webhook_endpoint("/webhook/walker")
+        class WebhookWalker(Walker):
+            payload: dict
+
+        # Verify Walker class metadata is set correctly
+        assert hasattr(WebhookWalker, "_webhook_required")
+        assert WebhookWalker._webhook_required is True
+        assert WebhookWalker._auth_required is False  # No permissions/roles specified
+        assert WebhookWalker._required_permissions == []
+        assert WebhookWalker._required_roles == []
+        assert WebhookWalker._endpoint_path == "/webhook/walker"
+        assert WebhookWalker._endpoint_methods == ["POST"]
+        assert WebhookWalker._is_webhook is True
+
+    def test_webhook_endpoint_walker_with_permissions(self):
+        """Test @webhook_endpoint on Walker with permissions."""
+
+        @webhook_endpoint(
+            "/webhook/secure-walker", permissions=["webhook_access"], roles=["admin"]
+        )
+        class SecureWebhookWalker(Walker):
+            payload: dict
+
+        # Verify auth is enabled when permissions/roles specified
+        assert SecureWebhookWalker._auth_required is True
+        assert SecureWebhookWalker._required_permissions == ["webhook_access"]
+        assert SecureWebhookWalker._required_roles == ["admin"]
+        assert SecureWebhookWalker._is_webhook is True
+
+    def test_webhook_endpoint_non_walker_class_fails(self):
+        """Test that @webhook_endpoint rejects non-Walker classes."""
+
+        with pytest.raises(TypeError, match="not a Walker subclass"):
+
+            @webhook_endpoint("/webhook/invalid")
+            class NotAWalker:
                 pass
-
-        # Verify it's function-only
-        assert True  # Decorator expects function, not class
 
 
 # Note: Additional integration tests with full server setup would go in test_endpoints.py

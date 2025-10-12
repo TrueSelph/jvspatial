@@ -57,7 +57,7 @@ python endpoint_decorator_demo.py
 
 ## Best Practices
 
-1. Use standard decorators (@endpoint, @walker_endpoint) consistently
+1. Use standard decorators (@endpoint, @auth_endpoint, @webhook_endpoint) consistently
 2. Implement proper error handling
 3. Use type hints for better code clarity
 4. Document API endpoints

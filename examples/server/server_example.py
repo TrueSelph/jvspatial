@@ -17,8 +17,9 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel
 
 from jvspatial.api import Server
-from jvspatial.api.auth.decorators import auth_endpoint, auth_walker_endpoint
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api.auth.decorators import auth_endpoint
+from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api.routing.endpoint import EndpointRouter
 from jvspatial.core.entities import Node, Walker
 
 
@@ -129,7 +130,7 @@ async def get_task(task_id: str, endpoint):
 
 
 # Walker for task management
-@auth_walker_endpoint("/api/tasks/process", methods=["POST"])
+@auth_endpoint("/api/tasks/process", methods=["POST"])
 class TaskProcessor(Walker):
     """Process tasks based on criteria."""
 

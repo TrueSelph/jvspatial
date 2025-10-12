@@ -10,18 +10,18 @@ from jvspatial.api.context import (
     get_current_server,
     set_current_server,
 )
-from jvspatial.api.endpoint.response import EndpointResponseHelper
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api.response.helpers import ResponseHelper as EndpointResponseHelper
+from jvspatial.api.routing.endpoint import EndpointRouter
 from jvspatial.api.server import (
     Server,
     endpoint,
-    walker_endpoint,
 )
 from jvspatial.core.entities import Node, Walker
 
 
 class TestWalkerEndpointIntegration:
-    """Integration tests for @walker_endpoint decorator with response injection."""
+    """Integration tests for @endpoint decorator with response injection."""
 
     @pytest.fixture(autouse=True)
     def setup_server(self):
@@ -37,9 +37,9 @@ class TestWalkerEndpointIntegration:
         set_current_server(None)
 
     def test_walker_endpoint_injection(self):
-        """Test that @walker_endpoint injects endpoint helper into walker."""
+        """Test that @endpoint injects endpoint helper into walker."""
 
-        @walker_endpoint("/test/walker")
+        @endpoint("/test/walker")
         class TestWalker(Walker):
             test_param: str = EndpointField(description="Test parameter")
 
@@ -58,9 +58,9 @@ class TestWalkerEndpointIntegration:
         assert not hasattr(walker, "endpoint")
 
     def test_walker_endpoint_response_methods(self):
-        """Test that walker endpoint response methods work correctly."""
+        """Test that endpoint response methods work correctly."""
 
-        @walker_endpoint("/test/responses")
+        @endpoint("/test/responses")
         class ResponseTestWalker(Walker):
             response_type: str = EndpointField(
                 description="Type of response to test",
@@ -69,7 +69,7 @@ class TestWalkerEndpointIntegration:
 
             async def visit_node(self, node):
                 # Simulate endpoint injection (normally done by router)
-                from jvspatial.api.endpoint.response import create_endpoint_helper
+                from jvspatial.api.response.helpers import create_endpoint_helper
 
                 self.endpoint = create_endpoint_helper(walker_instance=self)
 
@@ -152,9 +152,9 @@ class TestWalkerEndpointIntegration:
         assert response_data["headers"]["Location"] == "/resources/123"
 
     def test_walker_endpoint_custom_response(self):
-        """Test walker endpoint with custom response formatting."""
+        """Test endpoint with custom response formatting."""
 
-        @walker_endpoint("/test/custom")
+        @endpoint("/test/custom")
         class CustomResponseWalker(Walker):
             status_code: int = EndpointField(
                 description="Custom status code", examples=[202, 206, 418]
@@ -162,7 +162,7 @@ class TestWalkerEndpointIntegration:
 
             async def visit_node(self, node):
                 # Simulate endpoint injection
-                from jvspatial.api.endpoint.response import create_endpoint_helper
+                from jvspatial.api.response.helpers import create_endpoint_helper
 
                 self.endpoint = create_endpoint_helper(walker_instance=self)
 
@@ -341,9 +341,9 @@ class TestEndpointInjectionMechanism:
         set_current_server(None)
 
     def test_walker_endpoint_registration(self):
-        """Test that walker endpoints are properly registered with server."""
+        """Test that endpoints are properly registered with server."""
 
-        @walker_endpoint("/test/registration")
+        @endpoint("/test/registration")
         class RegistrationTestWalker(Walker):
             param: str = EndpointField(description="Test parameter")
 
@@ -383,8 +383,8 @@ class TestEndpointInjectionMechanism:
 
     def test_endpoint_helper_factory(self):
         """Test the endpoint helper factory function."""
-        from jvspatial.api.endpoint.response import (
-            EndpointResponseHelper,
+        from jvspatial.api.response import ResponseHelper as EndpointResponseHelper
+        from jvspatial.api.response import (
             create_endpoint_helper,
         )
 
@@ -408,7 +408,7 @@ class TestEndpointInjectionMechanism:
             self.test_server._endpoint_registry.list_functions()
         )
 
-        @walker_endpoint("/test/discovery/walker")
+        @endpoint("/test/discovery/walker")
         class DiscoveryWalker(Walker):
             param: str = EndpointField(description="Discovery test")
 
@@ -435,7 +435,7 @@ class TestEndpointInjectionMechanism:
         """Test endpoint decoration when no current server is available."""
         mock_get_server.return_value = None
 
-        @walker_endpoint("/test/no_server")
+        @endpoint("/test/no_server")
         class NoServerWalker(Walker):
             param: str = EndpointField(description="No server test")
 
@@ -457,7 +457,7 @@ class TestEndpointInjectionMechanism:
     def test_endpoint_configuration_preservation(self):
         """Test that endpoint configuration is properly preserved on classes/functions."""
 
-        @walker_endpoint("/test/config", methods=["POST", "PUT"], tags=["test"])
+        @endpoint("/test/config", methods=["POST", "PUT"], tags=["test"])
         class ConfigWalker(Walker):
             param: str = EndpointField(description="Config test")
 

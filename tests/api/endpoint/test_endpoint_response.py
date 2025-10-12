@@ -3,11 +3,9 @@
 import pytest
 from fastapi.responses import JSONResponse
 
-from jvspatial.api.endpoint.response import (
-    EndpointResponse,
-    EndpointResponseHelper,
-    create_endpoint_helper,
-)
+from jvspatial.api.response.helpers import ResponseHelper as EndpointResponseHelper
+from jvspatial.api.response.helpers import create_endpoint_helper
+from jvspatial.api.response.response import EndpointResponse
 
 
 class TestEndpointResponse:

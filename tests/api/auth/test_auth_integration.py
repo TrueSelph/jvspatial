@@ -20,7 +20,6 @@ from jvspatial.api.auth import (
     User,
     admin_endpoint,
     auth_endpoint,
-    auth_walker_endpoint,
     configure_auth,
 )
 from jvspatial.api.auth.middleware import auth_config
@@ -89,11 +88,11 @@ class TestAuthIntegration:
         assert "/auth/login" in middleware.exempt_paths
         assert "/auth/register" in middleware.exempt_paths
 
-    def test_auth_walker_endpoint_registration(self):
-        """Test authenticated walker endpoint registration."""
+    def test_auth_endpoint_walker_registration(self):
+        """Test auth_endpoint registration with Walker class."""
         server = Server(title="Auth Walker Test")
 
-        @auth_walker_endpoint("/auth/data", permissions=["read_data"], server=server)
+        @auth_endpoint("/auth/data", permissions=["read_data"], server=server)
         class AuthDataWalker(Walker):
             query: str = ""
 
@@ -328,7 +327,7 @@ class TestAuthIntegration:
                 self.report({"public": True})
 
         # Add authenticated walker
-        @auth_walker_endpoint("/auth/data", permissions=["read_data"], server=server)
+        @auth_endpoint("/auth/data", permissions=["read_data"], server=server)
         class AuthWalker(Walker):
             query: str = ""
 
@@ -409,11 +408,11 @@ class TestAuthIntegration:
         class PublicWalker(Walker):
             pass
 
-        @auth_walker_endpoint("/user", roles=["user"], server=server)
+        @auth_endpoint("/user", roles=["user"], server=server)
         class UserWalker(Walker):
             pass
 
-        @auth_walker_endpoint(
+        @auth_endpoint(
             "/manager", roles=["manager"], permissions=["manage_data"], server=server
         )
         class ManagerWalker(Walker):
@@ -499,9 +498,7 @@ class TestAuthIntegration:
         )
 
         # Create authenticated endpoints
-        @auth_walker_endpoint(
-            "/integrated/walker", permissions=["read_data"], server=server
-        )
+        @auth_endpoint("/integrated/walker", permissions=["read_data"], server=server)
         class IntegratedWalker(Walker):
             @on_visit(MockNode)
             async def process(self, here):
@@ -585,7 +582,7 @@ class TestAuthSystemScenarios:
             return {"docs": "public", "version": "1.0"}
 
         # Protected API endpoints
-        @auth_walker_endpoint("/api/v1/data", permissions=["api_access"])
+        @auth_endpoint("/api/v1/data", permissions=["api_access"])
         class APIDataWalker(Walker):
             filter: str = ""
             limit: int = 10
@@ -612,7 +609,7 @@ class TestAuthSystemScenarios:
         """Test multi-tenant application with role-based access."""
 
         # Tenant admin endpoints
-        @auth_walker_endpoint("/tenant/admin", roles=["tenant_admin"])
+        @auth_endpoint("/tenant/admin", roles=["tenant_admin"])
         class TenantAdminWalker(Walker):
             tenant_id: str = ""
             action: str = ""
@@ -622,7 +619,7 @@ class TestAuthSystemScenarios:
                 self.report({"tenant_action": f"{self.action} for {self.tenant_id}"})
 
         # User data endpoints with tenant isolation
-        @auth_walker_endpoint("/tenant/data", permissions=["read_tenant_data"])
+        @auth_endpoint("/tenant/data", permissions=["read_tenant_data"])
         class TenantDataWalker(Walker):
             tenant_id: str = ""
 
@@ -650,7 +647,7 @@ class TestAuthSystemScenarios:
             return {"version": "1.0", "message": "simple auth"}
 
         # V2 API - enhanced auth with permissions
-        @auth_walker_endpoint(
+        @auth_endpoint(
             "/api/v2/enhanced", roles=["user"], permissions=["api_v2_access"]
         )
         class V2EnhancedWalker(Walker):
@@ -680,7 +677,7 @@ class TestAuthSystemScenarios:
         """Test microservice integration with API key authentication."""
 
         # Service-to-service endpoints (API key auth)
-        @auth_walker_endpoint("/internal/sync", permissions=["service_sync"])
+        @auth_endpoint("/internal/sync", permissions=["service_sync"])
         class ServiceSyncWalker(Walker):
             service_name: str = ""
             data_type: str = ""

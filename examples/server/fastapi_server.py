@@ -21,7 +21,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from jvspatial.api.endpoint.router import EndpointField, EndpointRouter
+from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api.routing.endpoint import EndpointRouter
 from jvspatial.core.entities import Node, Root, Walker, on_exit, on_visit
 
 

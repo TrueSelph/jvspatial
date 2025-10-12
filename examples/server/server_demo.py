@@ -25,8 +25,9 @@ from typing import List, Optional
 from fastapi.responses import JSONResponse
 from pydantic import Field
 
-from jvspatial.api import endpoint, walker_endpoint
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api import endpoint
+from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api.routing.endpoint import EndpointRouter
 
 # Import the new Server class
 from jvspatial.api.server import Server, create_server
@@ -236,7 +237,7 @@ async def log_requests(request, call_next):
 # ====================== WALKER ENDPOINTS ======================
 
 
-@walker_endpoint("/locations/create")
+@endpoint("/locations/create")
 class CreateLocation(Walker):
     """Create a new location with spatial properties."""
 
@@ -309,7 +310,7 @@ class CreateLocation(Walker):
             )
 
 
-@walker_endpoint("/agents/nearby")
+@endpoint("/agents/nearby")
 class FindNearbyAgents(Walker):
     """Find agents within a specified radius of coordinates."""
 
@@ -399,7 +400,7 @@ class FindNearbyAgents(Walker):
             )
 
 
-@walker_endpoint("/missions/assign")
+@endpoint("/missions/assign")
 class AssignMission(Walker):
     """Assign agents to a mission based on proximity and capabilities."""
 

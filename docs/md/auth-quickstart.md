@@ -52,7 +52,7 @@ if __name__ == "__main__":
 ## Step 2: Create Protected Endpoints (1 minute)
 
 ```python
-from jvspatial.api import endpoint, walker_endpoint  # Public endpoints
+from jvspatial.api import endpoint  # Public endpoints
 from jvspatial.api.auth import auth_endpoint, admin_endpoint  # Protected endpoints
 
 # Public endpoint - no authentication
@@ -199,10 +199,10 @@ async def advanced_ops():
 ### Spatial Permissions
 
 ```python
-from jvspatial.api.auth import auth_walker_endpoint, get_current_user
+from jvspatial.api.auth import auth_endpoint, get_current_user
 from jvspatial.core.entities import Walker, Node, on_visit
 
-@auth_walker_endpoint("/spatial/query", permissions=["read_spatial"])
+@auth_endpoint("/spatial/query", permissions=["read_spatial"])
 class SpatialQuery(Walker):
     region: str = "north_america"
 

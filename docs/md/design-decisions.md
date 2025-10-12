@@ -197,7 +197,7 @@ FastAPI was chosen for:
 The Walker endpoint pattern combines REST APIs with graph traversal:
 
 ```python
-@walker_endpoint("/api/cities/nearby")
+@endpoint("/api/cities/nearby")
 class NearbyCities(Walker):
     latitude: float
     longitude: float

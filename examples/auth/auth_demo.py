@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, Field
 
-from jvspatial.api import create_server, endpoint, walker_endpoint
+from jvspatial.api import create_server, endpoint
 from jvspatial.api.auth import (
     APIKey,
     AuthenticationMiddleware,
@@ -35,11 +35,10 @@ from jvspatial.api.auth import (
     User,
     admin_endpoint,
     auth_endpoint,
-    auth_walker_endpoint,
     configure_auth,
     get_current_user,
 )
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api.endpoint.decorators import EndpointField
 from jvspatial.core import Root
 from jvspatial.core.entities import Node, Walker, on_visit
 
@@ -415,7 +414,7 @@ async def public_cities_list():
         return {"error": f"Failed to fetch cities: {e}"}
 
 
-@walker_endpoint("/public/search", methods=["POST"])
+@endpoint("/public/search", methods=["POST"])
 class PublicSearch(Walker):
     """Public search walker - no authentication required."""
 
@@ -493,7 +492,7 @@ async def protected_reports(request: Request):
     }
 
 
-@auth_walker_endpoint(
+@auth_endpoint(
     "/protected/spatial-query", methods=["POST"], permissions=["read_spatial_data"]
 )
 class ProtectedSpatialQuery(Walker):
@@ -606,7 +605,7 @@ class ProtectedSpatialQuery(Walker):
                 pass  # Skip if city not found
 
 
-@auth_walker_endpoint(
+@auth_endpoint(
     "/protected/analysis",
     methods=["POST"],
     permissions=["analyze_data"],

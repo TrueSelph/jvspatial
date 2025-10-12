@@ -31,42 +31,43 @@ Usage:
     server.app.add_middleware(AuthenticationMiddleware)
 
     # Use decorators for different access levels
-    from jvspatial.api import endpoint, walker_endpoint  # Public endpoints
-    from jvspatial.api.auth import auth_endpoint, auth_walker_endpoint, admin_endpoint
+    from jvspatial.api import endpoint  # Public endpoints
+    from jvspatial.api.auth import auth_endpoint, admin_endpoint
 
     @endpoint("/public/info")  # Public function endpoint
     async def public_info():
         pass
 
-    @walker_endpoint("/public/data")  # Public walker endpoint
+    @endpoint("/public/data")  # Public walker endpoint
     class PublicWalker(Walker):
         pass
 
-    @auth_endpoint("/protected/info", permissions=["read_data"])  # Authenticated
+    @auth_endpoint("/protected/info", permissions=["read_data"])  # Authenticated function
     async def protected_info():
         pass
 
-    @auth_walker_endpoint("/protected/data", permissions=["read_data"])
+    @auth_endpoint("/protected/data", permissions=["read_data"])  # Authenticated walker
     class ProtectedWalker(Walker):
         pass
 
-    @admin_endpoint("/admin/users")
+    @admin_endpoint("/admin/users")  # Admin function endpoint
     async def manage_users():
+        pass
+
+    @admin_endpoint("/admin/process")  # Admin walker endpoint
+    class AdminProcessor(Walker):
         pass
 """
 
-from .decorators import authenticated_endpoint  # Aliases
 from .decorators import (
     AuthAwareEndpointProcessor,
     admin_endpoint,
-    admin_walker_endpoint,
     auth_endpoint,
-    auth_walker_endpoint,
-    authenticated_walker_endpoint,
     require_admin,
     require_authenticated_user,
     require_permissions,
     require_roles,
+    webhook_endpoint,
 )
 from .entities import (
     APIKey,
@@ -127,13 +128,10 @@ __all__ = [
     "get_current_user_dependency",
     "get_current_active_user",
     "get_admin_user",
-    # Decorators
-    "auth_walker_endpoint",
-    "auth_endpoint",
-    "authenticated_walker_endpoint",
-    "authenticated_endpoint",  # Aliases
-    "admin_walker_endpoint",
-    "admin_endpoint",
+    # Decorators - Unified decorators work with both functions and Walker classes
+    "auth_endpoint",  # Unified authenticated endpoint (auto-detects functions/walkers)
+    "webhook_endpoint",  # Unified webhook endpoint (auto-detects functions/walkers)
+    "admin_endpoint",  # Convenience decorator for admin-only endpoints
     "AuthAwareEndpointProcessor",
     # Utility functions
     "require_authenticated_user",

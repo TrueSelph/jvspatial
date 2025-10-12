@@ -17,8 +17,8 @@ import asyncio
 from datetime import datetime
 from typing import Optional
 
-from jvspatial.api import create_server, endpoint, walker_endpoint
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api import create_server, endpoint
+from jvspatial.api.endpoint.decorators import EndpointField
 from jvspatial.core.entities import Node, Root, Walker, on_visit
 
 # ====================== DATA MODELS ======================
@@ -51,7 +51,7 @@ print(f"📋 Server created: {server.config.title}")
 # ====================== MAIN APPLICATION ENDPOINTS ======================
 
 
-@walker_endpoint("/users/create")
+@endpoint("/users/create")
 class CreateUser(Walker):
     """Create a new user - registered directly with server instance."""
 
@@ -97,7 +97,7 @@ class CreateUser(Walker):
 # These would typically be in separate files/packages
 
 
-@walker_endpoint("/users/search")
+@endpoint("/users/search")
 class SearchUsers(Walker):
     """Search users - registered to default server from package."""
 
@@ -149,7 +149,7 @@ class SearchUsers(Walker):
             )
 
 
-@walker_endpoint("/users/update")
+@endpoint("/users/update")
 class UpdateUser(Walker):
     """Update user information - another package-style endpoint."""
 

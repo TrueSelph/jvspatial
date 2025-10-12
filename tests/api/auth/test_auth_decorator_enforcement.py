@@ -1,8 +1,8 @@
 """
 Test suite for authentication decorator enforcement.
 
-This module tests that @auth_endpoint and @auth_walker_endpoint decorators
-properly enforce authentication, permissions, and roles when integrated
+This module tests that @auth_endpoint decorator
+properly enforces authentication, permissions, and roles when integrated
 with the server and middleware.
 """
 
@@ -12,9 +12,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from jvspatial.api import Server
-from jvspatial.api.auth import admin_endpoint, auth_endpoint, auth_walker_endpoint
+from jvspatial.api.auth import admin_endpoint, auth_endpoint
 from jvspatial.api.auth.entities import User
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api.endpoint.decorators import EndpointField
 from jvspatial.core.entities import Node, Walker, on_visit
 
 
@@ -171,7 +171,7 @@ class TestAuthEndpointEnforcement:
 
 
 class TestAuthWalkerEndpointEnforcement:
-    """Test that @auth_walker_endpoint decorator properly enforces authentication."""
+    """Test that @auth_endpoint decorator properly enforces authentication."""
 
     def setup_method(self):
         """Set up test server with authenticated walker endpoints."""
@@ -184,7 +184,7 @@ class TestAuthWalkerEndpointEnforcement:
         )
 
         # Create authenticated walker endpoints
-        @auth_walker_endpoint(
+        @auth_endpoint(
             "/analyze",
             methods=["POST"],
             permissions=["analyze_data"],
@@ -199,7 +199,7 @@ class TestAuthWalkerEndpointEnforcement:
             async def analyze(self, here: Node):
                 self.report({"analyzed": here.name})
 
-        @auth_walker_endpoint(
+        @auth_endpoint(
             "/process",
             methods=["POST"],
             roles=["processor", "admin"],
@@ -224,7 +224,7 @@ class TestAuthWalkerEndpointEnforcement:
         self.client = TestClient(app)
 
     def test_walker_endpoints_registered(self):
-        """Test that walker endpoints are registered."""
+        """Test that endpoints are registered."""
         walkers = self.server.list_walker_endpoints()
 
         assert "AnalyzeWalker" in walkers
@@ -277,7 +277,7 @@ class TestMixedEndpointEnforcement:
         # Create a simple function and manually register it
         async def public_info_func():
             """Public endpoint - no auth required."""
-            from jvspatial.api.endpoint.response import create_endpoint_helper
+            from jvspatial.api.response.helpers import create_endpoint_helper
 
             endpoint = create_endpoint_helper(walker_instance=None)
             return endpoint.success(data={"info": "public"})
@@ -310,7 +310,7 @@ class TestMixedEndpointEnforcement:
                 self.report({"result": here.name})
 
         # Authenticated walker endpoint
-        @auth_walker_endpoint(
+        @auth_endpoint(
             "/private/search",
             methods=["POST"],
             permissions=["search_data"],
@@ -354,14 +354,14 @@ class TestMixedEndpointEnforcement:
         assert "error" in response.json()
 
     def test_public_walker_endpoint_accessible(self):
-        """Test that public walker endpoints are accessible without auth."""
+        """Test that public endpoints are accessible without auth."""
         response = self.client.post("/api/public/search", json={"term": "test"})
 
         # Should succeed without authentication
         assert response.status_code == 200
 
     def test_private_walker_endpoint_protected(self):
-        """Test that private walker endpoints require authentication."""
+        """Test that private endpoints require authentication."""
         response = self.client.post("/api/private/search", json={"term": "test"})
 
         assert response.status_code == 401
@@ -495,7 +495,7 @@ class TestCompleteAuthFlow:
         """Test that walker auth metadata is transferred to FastAPI handlers."""
         server = Server(title="Walker Metadata Test")
 
-        @auth_walker_endpoint(
+        @auth_endpoint(
             "/walker/test", methods=["POST"], permissions=["walker_perm"], server=server
         )
         class TestAuthWalker(Walker):

@@ -70,7 +70,7 @@ The endpoint system consists of two main files:
 **Walker Endpoints** - Graph traversal via HTTP:
 ```python
 from jvspatial.api import walker_endpoint
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api.endpoint.decorators import EndpointField
 
 @walker_endpoint("/process", methods=["POST"])
 class DataProcessor(Walker):
@@ -134,21 +134,20 @@ async def get_user_count(endpoint) -> Dict[str, Any]:
 - [`RateLimiter`](../../jvspatial/api/auth/middleware.py:1) - Rate limiting
 
 **Decorators** ([`auth/decorators.py`](../../jvspatial/api/auth/decorators.py:1)):
-- `@auth_endpoint` - Authenticated function endpoints
-- `@auth_walker_endpoint` - Authenticated walker endpoints
-- `@admin_endpoint` - Admin-only function endpoints
-- `@admin_walker_endpoint` - Admin-only walker endpoints
+- `@auth_endpoint` - Unified authenticated endpoint (auto-detects functions/walkers)
+- `@admin_endpoint` - Unified admin-only endpoint (auto-detects functions/walkers)
+- `@webhook_endpoint` - Unified webhook endpoint (auto-detects functions/walkers)
 - `@require_permissions` - Permission-based access control
 - `@require_roles` - Role-based access control
 
 ```python
-from jvspatial.api.auth import auth_endpoint, admin_walker_endpoint
+from jvspatial.api.auth import auth_endpoint, admin_endpoint
 
 @auth_endpoint("/protected/data", permissions=["read_data"])
 async def get_protected_data(endpoint):
     return endpoint.success(data={"secret": "info"})
 
-@admin_walker_endpoint("/admin/process")
+@admin_endpoint("/admin/process")
 class AdminProcessor(Walker):
     pass
 ```

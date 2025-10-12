@@ -2,7 +2,7 @@
 Test suite for API Integration functionality.
 
 This module implements comprehensive tests for:
-- Endpoint decorators (@walker_endpoint, @endpoint)
+- Endpoint decorators (@endpoint)
 - Parameter models generated from Walker fields and EndpointField configurations
 - API routes and JSON responses
 - Error handling in API endpoints (validation, not found, exceptions)
@@ -20,7 +20,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
-from jvspatial.api.endpoint.router import EndpointField, EndpointRouter
+from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api.routing import EndpointRouter
 from jvspatial.api.server import Server, ServerConfig
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node, Walker, on_exit, on_visit
@@ -161,10 +162,10 @@ class TestServerInitialization:
 
 
 class TestWalkerEndpointDecorator:
-    """Test @walker_endpoint decorator functionality."""
+    """Test @endpoint decorator functionality."""
 
     def test_walker_endpoint_registration(self, test_server):
-        """Test walker endpoint registration."""
+        """Test endpoint registration."""
 
         @test_server.walker("/test-walker")
         class TestAPIWalker(Walker):
@@ -174,7 +175,7 @@ class TestWalkerEndpointDecorator:
         assert test_server._endpoint_registry.has_walker(TestAPIWalker)
 
     def test_walker_endpoint_with_methods(self, test_server):
-        """Test walker endpoint with specific HTTP methods."""
+        """Test endpoint with specific HTTP methods."""
 
         @test_server.walker("/test-methods", methods=["GET", "POST"])
         class MethodWalker(Walker):
@@ -184,7 +185,7 @@ class TestWalkerEndpointDecorator:
         assert endpoint_info.methods == ["GET", "POST"]
 
     def test_walker_endpoint_with_metadata(self, test_server):
-        """Test walker endpoint with tags and summary."""
+        """Test endpoint with tags and summary."""
 
         @test_server.walker("/test-meta", tags=["testing"], summary="Test endpoint")
         class MetaWalker(Walker):
@@ -195,7 +196,7 @@ class TestWalkerEndpointDecorator:
         assert endpoint_info.kwargs["summary"] == "Test endpoint"
 
     def test_multiple_walker_endpoints(self, test_server):
-        """Test registering multiple walker endpoints."""
+        """Test registering multiple endpoints."""
 
         @test_server.walker("/walker1")
         class Walker1(Walker):
@@ -338,7 +339,7 @@ class TestAPIRoutes:
 
     @pytest.mark.asyncio
     async def test_walker_endpoint_basic_request(self, test_server):
-        """Test basic walker endpoint request."""
+        """Test basic endpoint request."""
 
         @test_server.walker("/basic-walker")
         class BasicWalker(Walker):
@@ -358,12 +359,12 @@ class TestAPIRoutes:
             response = client.post("/api/basic-walker", json={"message": "hello world"})
             assert response.status_code == 200
             data = response.json()
-            assert "processed_message" in data
-            assert data["processed_message"] == "HELLO WORLD"
+            assert "processed_message" in data["data"]
+            assert data["data"]["processed_message"] == "HELLO WORLD"
 
     @pytest.mark.asyncio
     async def test_walker_endpoint_get_request(self, test_server):
-        """Test walker endpoint with GET request."""
+        """Test endpoint with GET request."""
 
         @test_server.walker("/get-walker", methods=["GET"])
         class GetWalker(Walker):
@@ -376,17 +377,20 @@ class TestAPIRoutes:
         app = test_server._create_app()
         client = TestClient(app)
 
-        with patch("jvspatial.core.entities.Root.get") as mock_root:
+        with patch("jvspatial.core.entities.Root.get") as mock_root, patch(
+            "jvspatial.core.entities.Node.get"
+        ) as mock_node:
             root_node = ApiTestNode(name="root")
             mock_root.return_value = root_node
+            mock_node.return_value = root_node
 
-            response = client.get("/api/get-walker?param=test_value")
+            response = client.get("/api/get-walker?param=test_value&start_node=root")
             if response.status_code != 200:
                 print(f"Response status: {response.status_code}")
                 print(f"Response body: {response.text}")
             assert response.status_code == 200
             data = response.json()
-            assert data["param_received"] == "test_value"
+            assert data["data"]["param_received"] == "test_value"
 
     @pytest.mark.asyncio
     async def test_function_endpoint_response(self, test_server):
@@ -458,8 +462,8 @@ class TestAPIRoutes:
 
             assert response.status_code == 200
             data = response.json()
-            assert "results" in data
-            assert "count" in data
+            assert "results" in data["data"]
+            assert "count" in data["data"]
 
 
 class TestAPIErrorHandling:
@@ -518,10 +522,10 @@ class TestAPIErrorHandling:
             response = client.post("/api/error-walker", json={"should_fail": True})
             assert response.status_code == 200
             data = response.json()
-            assert "hook_error" in data
-            assert "hook_name" in data
-            assert data["hook_error"] == "Test runtime error"
-            assert data["hook_name"] == "process_with_error"
+            assert "hook_error" in data["data"]
+            assert "hook_name" in data["data"]
+            assert data["data"]["hook_error"] == "Test runtime error"
+            assert data["data"]["hook_name"] == "process_with_error"
 
     @pytest.mark.asyncio
     async def test_function_error_handling(self, test_server):

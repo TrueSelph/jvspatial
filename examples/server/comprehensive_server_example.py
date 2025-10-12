@@ -39,10 +39,10 @@ from pydantic import BaseModel, Field
 from jvspatial.api import Server
 from jvspatial.api.auth.decorators import (
     auth_endpoint,
-    auth_walker_endpoint,
     webhook_endpoint,
 )
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api.routing.endpoint import EndpointRouter
 from jvspatial.core.entities import Node, Root, Walker, on_exit, on_visit
 
 # ====================== DATA MODELS ======================
@@ -178,7 +178,7 @@ def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
 # ====================== WALKER ENDPOINTS ======================
 
 
-@auth_walker_endpoint("/api/tasks/create", methods=["POST"])
+@auth_endpoint("/api/tasks/create", methods=["POST"])
 class CreateTask(Walker):
     """Create a new task with optional agent assignments."""
 
@@ -362,7 +362,7 @@ class CreateTask(Walker):
             )
 
 
-@auth_walker_endpoint("/api/agents/nearby", methods=["POST"])
+@auth_endpoint("/api/agents/nearby", methods=["POST"])
 class FindNearbyAgents(Walker):
     """Find agents within a specified radius."""
 
@@ -498,7 +498,7 @@ class FindNearbyAgents(Walker):
             )
 
 
-@auth_walker_endpoint("/api/analytics/overview", methods=["POST"])
+@auth_endpoint("/api/analytics/overview", methods=["POST"])
 class SystemOverview(Walker):
     """Generate system overview and analytics."""
 
@@ -663,15 +663,21 @@ class SystemOverview(Walker):
 # ====================== WEBHOOK ENDPOINTS ======================
 
 
-@webhook_endpoint(
-    "/webhook/agent-update/{key}",
-    path_key_auth=True,
-    hmac_secret="agent-update-secret",  # pragma: allowlist secret
-    idempotency_ttl_hours=24,
+from typing import Any, cast
+
+
+@cast(
+    Any,
+    webhook_endpoint(
+        "/webhook/agent-update/{key}",
+        path_key_auth=True,
+        hmac_secret="agent-update-secret",  # pragma: allowlist secret
+        idempotency_ttl_hours=24,
+    ),
 )
 async def agent_location_webhook(
     payload: dict, endpoint
-) -> Union[JSONResponse, Dict[str, Any]]:
+) -> Union[JSONResponse, Dict[str, Any]]:  # type: ignore[call-arg,misc]
     """Process agent location and status updates.
 
     Webhook for receiving real-time agent updates from the field.

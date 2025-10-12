@@ -9,8 +9,8 @@ from typing import Any, Dict, List
 
 from fastapi import Request
 
-from jvspatial.api.auth.decorators import webhook_endpoint, webhook_walker_endpoint
 from jvspatial.api.server import Server
+from jvspatial.api.webhook.decorators import webhook_endpoint
 from jvspatial.core.entities import Node, Walker, on_visit
 
 
@@ -191,7 +191,7 @@ async def bulk_data_webhook(payload: dict, endpoint):
 
 
 # Example 5: Walker-based webhook for graph updates
-@webhook_walker_endpoint("/webhook/location-update", roles=["location_manager"])
+@webhook_endpoint("/webhook/location-update", roles=["location_manager"])
 class LocationUpdateWalker(Walker):
     """Walker that updates location data in the graph based on webhook events.
 
@@ -344,8 +344,8 @@ def create_server():
 
     # Re-register with explicit server to ensure proper registration
     @webhook_endpoint("/webhook/simple", server=server)
-    async def simple_webhook_registered(payload: dict, endpoint):
-        return simple_webhook(payload, endpoint)
+    async def simple_webhook_registered(payload: dict, endpoint) -> Dict[str, Any]:  # type: ignore[call-arg,misc]
+        return simple_webhook(payload, endpoint)  # type: ignore[call-arg]
 
     @webhook_endpoint(
         "/webhook/payment",
@@ -353,8 +353,8 @@ def create_server():
         idempotency_ttl_hours=48,
         server=server,
     )
-    async def payment_webhook_registered(payload: dict, endpoint):
-        return payment_webhook(payload, endpoint)
+    async def payment_webhook_registered(payload: dict, endpoint) -> Dict[str, Any]:  # type: ignore[call-arg,misc]
+        return payment_webhook(payload, endpoint)  # type: ignore[call-arg]
 
     @webhook_endpoint(
         "/webhook/stripe/{key}",
@@ -362,8 +362,8 @@ def create_server():
         hmac_secret="stripe-webhook-secret",  # pragma: allowlist secret
         server=server,
     )
-    async def stripe_webhook_registered(raw_body: bytes, content_type: str, endpoint):
-        return stripe_webhook(raw_body, content_type, endpoint)
+    async def stripe_webhook_registered(raw_body: bytes, content_type: str, endpoint) -> Dict[str, Any]:  # type: ignore[call-arg,misc]
+        return stripe_webhook(raw_body, content_type, endpoint)  # type: ignore[call-arg]
 
     @webhook_endpoint(
         "/webhook/bulk-data",
@@ -371,8 +371,8 @@ def create_server():
         permissions=["process_bulk_data"],
         server=server,
     )
-    async def bulk_data_webhook_registered(payload: dict, endpoint):
-        return bulk_data_webhook(payload, endpoint)
+    async def bulk_data_webhook_registered(payload: dict, endpoint) -> Dict[str, Any]:  # type: ignore[call-arg,misc]
+        return bulk_data_webhook(payload, endpoint)  # type: ignore[call-arg]
 
     @webhook_endpoint(
         "/webhook/inventory",
@@ -381,11 +381,11 @@ def create_server():
         idempotency_ttl_hours=72,
         server=server,
     )
-    async def inventory_webhook_registered(payload: dict, endpoint, request: Request):
-        return inventory_webhook(payload, endpoint, request)
+    async def inventory_webhook_registered(payload: dict, endpoint, request: Request) -> Dict[str, Any]:  # type: ignore[call-arg,misc]
+        return inventory_webhook(payload, endpoint, request)  # type: ignore[call-arg]
 
     # Register the walker endpoint
-    @webhook_walker_endpoint(
+    @webhook_endpoint(
         "/webhook/location-update", roles=["location_manager"], server=server
     )
     class LocationUpdateWalkerRegistered(Walker):

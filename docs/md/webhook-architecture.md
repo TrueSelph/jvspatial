@@ -2,13 +2,15 @@
 
 ## Overview
 
-This document outlines the architecture for the webhook endpoint system in jvspatial built around decorators `@webhook_endpoint` and `@webhook_walker_endpoint`. These decorators extend the existing `@endpoint` and `@walker_endpoint` patterns to support webhook-specific functionality while maintaining consistency in registration, metadata-driven authentication, and server integration.
+This document outlines the architecture for the webhook endpoint system in jvspatial built around the unified `@webhook_endpoint` decorator. This decorator automatically detects whether it's decorating a function or Walker class, extending the existing `@endpoint` pattern to support webhook-specific functionality while maintaining consistency in registration, metadata-driven authentication, and server integration.
 
 The system registers GET/POST routes for incoming webhook payloads, supports optional authentication via permissions and roles (checked by existing middleware), and incorporates webhook standards compliance including HTTPS enforcement, HMAC signature verification, idempotency keys, asynchronous processing, robust error handling (always acknowledging receipt with HTTP 200), and retry mechanisms.
 
-### @webhook_endpoint
+### @webhook_endpoint (Unified Decorator)
 
-For simple function-based webhook handlers (non-graph traversal).
+The `@webhook_endpoint` decorator works with both function-based webhook handlers and Walker classes for graph traversal. It automatically detects the target type and applies the appropriate configuration.
+
+**For Function-Based Handlers:**
 
 **Signature:**
 ```python
@@ -35,7 +37,7 @@ For simple function-based webhook handlers (non-graph traversal).
 
 **Example:**
 ```python
-from jvspatial.api.server import webhook_endpoint
+from jvspatial.api.webhook.decorators import webhook_endpoint
 
 @webhook_endpoint(
     "/webhook/payment",
@@ -52,45 +54,27 @@ async def handle_payment_webhook(payload: dict, endpoint):
     )
 ```
 
-### @webhook_walker_endpoint
+**For Walker-Based Handlers (Graph Traversal):**
 
-For graph-walking webhook handlers (e.g., updating spatial data via events).
-
-**Signature:**
-```python
-@webhook_walker_endpoint(
-    path: str,
-    *,
-    methods: List[str] = ["POST"],
-    permissions: Optional[List[str]] = None,
-    roles: Optional[List[str]] = None,
-    hmac_secret: Optional[str] = None,
-    idempotency_key_field: str = "X-Idempotency-Key",
-    idempotency_ttl_hours: int = 24,
-    async_processing: bool = False,
-    server: Optional[Server] = None,
-    **route_kwargs: Any
-)
-```
+The same `@webhook_endpoint` decorator detects Walker classes automatically. The signature and parameters are identical.
 
 **Behavior:**
-- Stores metadata on the Walker class: `_webhook_required=True`, plus webhook and auth fields as above.
-- Registers via `server.register_walker_class(walker_class, path, methods)`, with webhook wrapper.
-- Walker instances receive `payload` in their context (e.g., `self.payload`), enabling graph updates based on webhook data.
+- Stores metadata on the Walker class: `_webhook_required=True`, `_is_webhook=True`, plus webhook and auth fields
+- Registers via `server.register_walker_class(walker_class, path, methods)`, with webhook wrapper
+- Walker instances receive `payload` in their context (e.g., `self.payload`), enabling graph updates based on webhook data
 
 **Example:**
 ```python
-from jvspatial.core.entities import Walker, on_visit
-from jvspatial.api.server import webhook_walker_endpoint
+from jvspatial.core.entities import Walker, on_visit, Node
+from jvspatial.api.webhook.decorators import webhook_endpoint
 
-@webhook_walker_endpoint(
+@webhook_endpoint(
     "/webhook/location-update",
     roles=["user"],
     hmac_secret="location-secret"
 )
 class LocationUpdateWalker(Walker):
-    def __init__(self, payload: dict):
-        self.payload = payload  # Webhook data available here
+    payload: dict  # Webhook data injected here
 
     @on_visit(Node)
     async def update_location(self, here: Node):
@@ -99,6 +83,8 @@ class LocationUpdateWalker(Walker):
         await here.save()
         self.response["updated"] = True
 ```
+
+**Note:** The decorator automatically detects if the target is a Walker class (using `inspect.isclass()` and `issubclass(target, Walker)`) and applies the appropriate handler logic. No need for separate decorators!
 
 ## Server Integration
 
@@ -194,7 +180,7 @@ QUICKSTART.md provides general library context (entity-centric design, MongoDB-s
 #### 1. Simplicity (Minimal Components, Easy to Implement/Maintain)
 **Status: Confirmed**
 
-- Leverages existing decorator patterns (`@endpoint`, `@walker_endpoint`) with new `@webhook_endpoint` and `@webhook_walker_endpoint`, adding only webhook-specific params (e.g., `hmac_secret`, `async_processing`).
+- Leverages existing decorator patterns with unified `@webhook_endpoint` that auto-detects functions vs Walker classes, adding only webhook-specific params (e.g., `hmac_secret`, `async_processing`)
 - Single `WebhookMiddleware` handles preprocessing (HTTPS, HMAC, idempotency), integrating with existing auth middleware and server registration.
 - Metadata-driven (e.g., `_webhook_required=True`) enables deferred, automatic route setup without manual configuration.
 - Utilities like `verify_hmac` and `check_idempotency` are lightweight, using GraphContext for storage.
