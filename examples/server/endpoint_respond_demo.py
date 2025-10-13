@@ -13,7 +13,7 @@ from jvspatial.api.server import create_server, endpoint
 from jvspatial.core.entities import Node, Walker
 
 
-# Walker endpoint examples using @walker_endpoint with endpoint.response()
+# Walker endpoint examples using @endpoint with endpoint.response()
 @endpoint("/walker/users")
 class UserWalker(Walker):
     """Example walker demonstrating the endpoint.response() pattern.

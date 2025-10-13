@@ -15,6 +15,7 @@ from jvspatial.api import Server
 from jvspatial.api.auth import admin_endpoint, auth_endpoint
 from jvspatial.api.auth.entities import User
 from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api.server import endpoint
 from jvspatial.core.entities import Node, Walker, on_visit
 
 
@@ -85,6 +86,12 @@ class TestAuthEndpointEnforcement:
         # Create test client
         app = self.server.get_app()
         self.client = TestClient(app)
+
+    def teardown_method(self):
+        """Clean up after each test."""
+        from jvspatial.api.context import set_current_server
+
+        set_current_server(None)
 
     def test_endpoints_registered(self):
         """Test that decorated endpoints are registered."""
@@ -223,6 +230,12 @@ class TestAuthWalkerEndpointEnforcement:
         self.server._is_running = True  # Required for proper endpoint registration
         self.client = TestClient(app)
 
+    def teardown_method(self):
+        """Clean up after each test."""
+        from jvspatial.api.context import set_current_server
+
+        set_current_server(None)
+
     def test_walker_endpoints_registered(self):
         """Test that endpoints are registered."""
         walkers = self.server.list_walker_endpoints()
@@ -282,13 +295,11 @@ class TestMixedEndpointEnforcement:
             endpoint = create_endpoint_helper(walker_instance=None)
             return endpoint.success(data={"info": "public"})
 
-        # Manually add to custom routes
-        self.server._custom_routes.append(
-            {
-                "path": "/public/info",
-                "endpoint": public_info_func,
-                "methods": ["GET"],
-            }
+        # Manually register with endpoint router
+        self.server.endpoint_router.router.add_api_route(
+            path="/public/info",
+            endpoint=public_info_func,
+            methods=["GET"],
         )
         public_info = public_info_func
 
@@ -298,8 +309,8 @@ class TestMixedEndpointEnforcement:
             """Private endpoint - auth required."""
             return endpoint.success(data={"info": "private"})
 
-        # Public walker endpoint (using server.walker)
-        @self.server.walker("/public/search", methods=["POST"])
+        # Public walker endpoint (using endpoint decorator)
+        @endpoint("/public/search", methods=["POST"], server=self.server)
         class PublicSearchWalker(Walker):
             """Public search - no auth required."""
 
@@ -335,6 +346,12 @@ class TestMixedEndpointEnforcement:
         app = self.server.get_app()
         self.server._is_running = True  # Required for proper endpoint registration
         self.client = TestClient(app)
+
+    def teardown_method(self):
+        """Clean up after each test."""
+        from jvspatial.api.context import set_current_server
+
+        set_current_server(None)
 
     def test_public_function_endpoint_accessible(self):
         """Test that public function endpoints are accessible without auth."""
@@ -418,6 +435,12 @@ class TestAuthEnforcementWithMockedUser:
         # Get app
         self.app = self.server.get_app()
 
+    def teardown_method(self):
+        """Clean up after each test."""
+        from jvspatial.api.context import set_current_server
+
+        set_current_server(None)
+
     @pytest.mark.asyncio
     async def test_request_with_mocked_user(self):
         """Test that middleware properly checks user permissions."""
@@ -478,10 +501,8 @@ class TestCompleteAuthFlow:
         assert test_endpoint._required_permissions == ["test_perm"]
         assert test_endpoint._required_roles == ["tester"]
 
-        # 4. Verify registered in server
-        assert any(
-            route["endpoint"] == test_endpoint for route in server._custom_routes
-        )
+        # 4. Verify registered in server endpoint registry
+        assert server._endpoint_registry.has_function(test_endpoint)
 
         # 5. Verify middleware can detect requirements
         app = server.get_app()

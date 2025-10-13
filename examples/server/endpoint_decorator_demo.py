@@ -2,13 +2,13 @@
 Endpoint Decorator Demo
 
 This example demonstrates the new decorator functionality:
-1. @walker_endpoint - Register Walker classes to default server
-2. @endpoint - Register regular functions to default server
+1. @endpoint - Universal decorator for both Walker classes and functions
+2. Dynamic registration and removal capabilities
 3. Dynamic walker removal capabilities
 
 Features demonstrated:
-- @walker_endpoint decorator usage
-- @endpoint decorator for simple function routes
+- @endpoint decorator for both Walkers and functions
+- Unified decorator pattern
 - Walker removal and cleanup
 - Mixed Walker and function endpoints
 
@@ -508,9 +508,9 @@ async def schedule_walker_removal():
 if __name__ == "__main__":
     print("🌟 Endpoint Decorator Demo")
     print("=" * 50)
-    print("This demo shows the new decorator functionality:")
-    print("• @walker_endpoint - Register Walker classes")
-    print("• @endpoint - Register regular functions")
+    print("This demo shows the unified decorator functionality:")
+    print("• @endpoint - Register both Walker classes and functions")
+    print("• Automatic detection of target type (Walker/function)")
     print("• Dynamic walker removal")
     print("• Mixed endpoint types in one API")
     print()
@@ -518,8 +518,8 @@ if __name__ == "__main__":
     print("📋 Available endpoints:")
     print("  Walker endpoints:")
     print("    • POST /api/products/create - Create product (server decorator)")
-    print("    • POST /api/products/search - Search products (@walker_endpoint)")
-    print("    • POST /api/products/bulk-update - Bulk update (@walker_endpoint)")
+    print("    • POST /api/products/search - Search products (@endpoint)")
+    print("    • POST /api/products/bulk-update - Bulk update (@endpoint)")
     print("  Function endpoints:")
     print("    • GET /products - List products (@endpoint)")
     print("    • GET /products/categories - Get categories (@endpoint)")

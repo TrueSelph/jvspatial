@@ -144,7 +144,7 @@ class FreightTrain(Walker):
 ```python path=examples/agent_graph.py start=116
 from jvspatial.api.endpoint.router import EndpointField
 
-@walker_endpoint("/api/agents/interact", methods=["POST"])
+@endpoint("/api/agents/interact", methods=["POST"])
 class InteractWalker(Walker):
     target_agent_name: str = EndpointField(
         default="",
@@ -289,7 +289,7 @@ async def admin_list_users(request: Request):
 
 **Spatial Access Control in Walker Endpoints**:
 ```python path=examples/auth_demo.py start=483
-@auth_walker_endpoint(
+@auth_endpoint(
     "/protected/spatial-query",
     methods=["POST"],
     permissions=["read_spatial_data"]
@@ -481,7 +481,7 @@ async def initialize_sample_tasks():
 
 **Dynamic Walker Registration**:
 ```python path=examples/dynamic_server_demo.py start=140
-@server.walker("/tasks/create")
+@endpoint("/tasks/create")
 class CreateTask(Walker):
     title: str = EndpointField(
         description="Task title",

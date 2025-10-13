@@ -1587,10 +1587,11 @@ jvspatial provides four standard router decorators for API endpoints:
 1. `@endpoint` - For endpoints (both functions and Walker classes)
 2. `@auth_endpoint` - For authenticated endpoints (both functions and Walker classes)
 3. `@webhook_endpoint` - For webhook endpoints (both functions and Walker classes)
+4. `@admin_endpoint` - For admin-only endpoints (convenience wrapper for `@auth_endpoint` with `roles=["admin"]`)
 
 ```python
-from jvspatial.api import endpoint, walker_endpoint
-from jvspatial.api.auth import auth_endpoint, auth_walker_endpoint
+from jvspatial.api import endpoint
+from jvspatial.api.auth import auth_endpoint, admin_endpoint
 
 # Function endpoint
 @endpoint("/api/users", methods=["GET"])
@@ -1612,14 +1613,172 @@ async def get_admin_stats() -> Dict[str, Any]:
 @auth_endpoint("/api/secure/process", methods=["POST"], permissions=["process_data"])
 class SecureProcessor(Walker):
     pass
+
+# Admin-only endpoint (convenience wrapper)
+@admin_endpoint("/api/admin/users", methods=["GET"])
+async def manage_users() -> Dict[str, Any]:
+    return {"users": "admin access"}
 ```
 
 **❌ DO NOT USE alternative decorators like:**
 - `@route`
 - `@server.route`
 - `@server.walker`
+- `@walker_endpoint` (deprecated - use `@endpoint` instead)
+- `@auth_walker_endpoint` (deprecated - use `@auth_endpoint` instead)
 
 These are internal or deprecated.
+
+## 📌 Consolidated Endpoint System
+
+jvspatial uses a **unified endpoint registration system** where all endpoints (walkers and functions) are registered through a single consolidated mechanism. This ensures clean, maintainable code without backward compatibility cruft.
+
+### Key Architecture
+
+All decorators follow the same registration path:
+
+1. **Decorator** → Attaches metadata to function/walker
+2. **Server Detection** → Gets current server from context
+3. **Registration** → Registers with `server.endpoint_router`
+4. **Tracking** → Tracked by `server._endpoint_registry`
+
+### Important: Decorator Order
+
+Always create the server **before** decorating endpoints:
+
+```python
+# ✅ CORRECT
+server = Server(title="My API")
+
+@endpoint("/test")
+class TestWalker(Walker):
+    pass
+
+# ✗ INCORRECT - endpoint will not be registered
+@endpoint("/test")
+class TestWalker(Walker):
+    pass
+
+server = Server(title="My API")  # Created too late
+```
+
+### Default HTTP Methods
+
+- **Walkers**: Default to `["POST"]`
+- **Functions**: Default to `["GET"]`
+
+Override with the `methods` parameter:
+```python
+@endpoint("/data", methods=["GET", "POST"])
+class DataWalker(Walker):
+    pass
+```
+
+### Available Response Methods
+
+Function endpoints can receive an `endpoint` parameter for response formatting:
+
+```python
+@endpoint("/info")
+async def get_info(endpoint):
+    # Use endpoint.success(), endpoint.error(), etc.
+    return endpoint.success(data={"info": "value"})
+```
+
+Walkers automatically have `self.endpoint` available:
+
+```python
+@endpoint("/process")
+class ProcessWalker(Walker):
+    async def process(self):
+        self.response = self.endpoint.success(data={"result": "done"})
+```
+
+**Response Methods:**
+
+```python
+# Success responses
+endpoint.success(data=result, message="Success")           # 200 OK
+endpoint.created(data=new_item, message="Created")         # 201 Created
+endpoint.no_content()                                      # 204 No Content
+
+# Error responses
+endpoint.bad_request(message="Invalid input")              # 400 Bad Request
+endpoint.unauthorized(message="Auth required")             # 401 Unauthorized
+endpoint.forbidden(message="Access denied")                # 403 Forbidden
+endpoint.not_found(message="Resource not found")           # 404 Not Found
+endpoint.conflict(message="Resource exists")               # 409 Conflict
+endpoint.unprocessable_entity(message="Validation failed") # 422 Unprocessable Entity
+
+# Flexible custom response
+endpoint.response(
+    content={"custom": "data"},
+    status_code=202,
+    headers={"X-Custom": "value"}
+)
+
+# Generic error with custom status code
+endpoint.error(
+    message="Custom error",
+    status_code=418,
+    details={"reason": "custom"}
+)
+```
+
+### Querying Registered Endpoints
+
+```python
+server = Server(title="My API")
+
+# ... register some endpoints ...
+
+# List all endpoints
+all_endpoints = server.list_all_endpoints()
+print(f"Walkers: {len(all_endpoints['walkers'])}")
+print(f"Functions: {len(all_endpoints['functions'])}")
+
+# List just walkers
+walkers = server.list_walker_endpoints()
+
+# List just functions
+functions = server.list_function_endpoints()
+
+# Get registry stats
+registry = server._endpoint_registry
+counts = registry.count_endpoints()
+print(f"Total: {counts['total']}")
+```
+
+### Unified Registration Benefits
+
+1. **Single Source of Truth**: All endpoints are registered through `EndpointRouter`
+2. **Cleaner Code**: No backward compatibility cruft or deprecated methods
+3. **Consistent API**: All decorators follow the same pattern
+4. **Better Maintainability**: Future endpoint features only need to be added once
+5. **Auto-Detection**: Decorators automatically detect walker vs function
+
+### Migration from Deprecated Patterns
+
+If you have code using removed patterns:
+
+**❌ Old Pattern (Removed)**
+```python
+# These no longer exist
+server._custom_routes.append(...)
+server._register_custom_routes(app)
+server._setup_webhook_walker_endpoints()
+```
+
+**✅ New Pattern (Current)**
+```python
+# Use the decorators - they handle registration automatically
+@endpoint("/my-route")
+def my_handler():
+    pass
+
+# Or register programmatically
+server.register_walker_class(MyWalker, "/my-route", methods=["POST"])
+```
 
 ## 🌐 API Integration with FastAPI Server
 

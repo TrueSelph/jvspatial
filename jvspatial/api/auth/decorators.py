@@ -217,10 +217,7 @@ def auth_endpoint(
                     # Configure OpenAPI security schemes (automatic on first use)
                     ensure_server_has_security_config(target_server)
 
-                    # Register the function with the server using the route decorator pattern
-                    target_server._custom_routes.append(auth_wrapper._route_config)  # type: ignore[attr-defined]
-
-                    # Register with endpoint registry if available
+                    # Register with endpoint registry
                     if hasattr(target_server, "_endpoint_registry"):
                         target_server._endpoint_registry.register_function(
                             auth_wrapper,
@@ -229,9 +226,19 @@ def auth_endpoint(
                             route_config=auth_wrapper._route_config,  # type: ignore[attr-defined]
                         )
 
-                    # If app already exists, add route dynamically to support decorators after get_app()
-                    if target_server.app is not None:
-                        target_server.app.add_api_route(**auth_wrapper._route_config)  # type: ignore[attr-defined]
+                    # Register with the unified endpoint router
+                    target_server.endpoint_router.router.add_api_route(
+                        path=path,
+                        endpoint=auth_wrapper,
+                        methods=default_methods,
+                        openapi_extra={"security": security_requirements},
+                    )
+
+                    target_server._logger.info(
+                        f"{'🔄' if target_server._is_running else '📝'} "
+                        f"{'Dynamically registered' if target_server._is_running else 'Registered'} "
+                        f"auth function endpoint: {func.__name__} at {path}"
+                    )
             except (RuntimeError, AttributeError):
                 # Server not available during decoration (e.g., during test collection)
                 # Registration will be deferred

@@ -161,18 +161,6 @@ class MiddlewareManager:
                 self._logger.debug(f"Found auth-required function: {func.__name__}")
                 return True
 
-        # Also check custom routes (in case they haven't been registered yet)
-        self._logger.debug(f"Checking {len(self.server._custom_routes)} custom routes")
-        for route in self.server._custom_routes:
-            endpoint_func = route.get("endpoint")
-            has_auth = getattr(endpoint_func, "_auth_required", False)
-            self._logger.debug(
-                f"  Route {route.get('path')}: endpoint={endpoint_func.__name__ if endpoint_func else None}, _auth_required={has_auth}"
-            )
-            if has_auth:
-                self._logger.debug(f"Found auth-required route: {route.get('path')}")
-                return True
-
         return False
 
     def _configure_webhook_middleware(self, app: FastAPI) -> None:

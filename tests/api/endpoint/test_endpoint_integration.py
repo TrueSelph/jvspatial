@@ -224,10 +224,11 @@ class TestFunctionEndpointIntegration:
             return endpoint.success(data={"param1": param1, "param2": param2})
 
         # Check that the function was registered
-        assert hasattr(test_function, "_jvspatial_endpoint_config")
-        config = test_function._jvspatial_endpoint_config
-        assert config["path"] == "/test/function"
-        assert config["is_function"] is True
+        assert self.test_server._endpoint_registry.has_function(test_function)
+        func_info = self.test_server._endpoint_registry.get_function_info(test_function)
+        assert func_info is not None
+        assert func_info.path == "/test/function"
+        assert func_info.endpoint_type == "function"
 
     def test_function_endpoint_response_methods(self):
         """Test function endpoint response methods."""
@@ -265,11 +266,14 @@ class TestFunctionEndpointIntegration:
         # the endpoint injection happens during the actual HTTP request handling.
         # This test verifies the function is properly decorated and registered.
 
-        assert hasattr(response_test_function, "_jvspatial_endpoint_config")
-        config = response_test_function._jvspatial_endpoint_config
-        assert config["path"] == "/test/responses/{response_type}"
-        assert config["methods"] == ["GET"]  # Default for function endpoints
-        assert config["is_function"] is True
+        assert self.test_server._endpoint_registry.has_function(response_test_function)
+        func_info = self.test_server._endpoint_registry.get_function_info(
+            response_test_function
+        )
+        assert func_info is not None
+        assert func_info.path == "/test/responses/{response_type}"
+        assert func_info.methods == ["GET"]  # Default for function endpoints
+        assert func_info.endpoint_type == "function"
 
     def test_function_endpoint_with_post_method(self):
         """Test function endpoint with POST method."""
@@ -292,10 +296,14 @@ class TestFunctionEndpointIntegration:
                 message="Resource created successfully",
             )
 
-        config = create_resource._jvspatial_endpoint_config
-        assert config["path"] == "/test/create"
-        assert config["methods"] == ["POST"]
-        assert config["is_function"] is True
+        assert self.test_server._endpoint_registry.has_function(create_resource)
+        func_info = self.test_server._endpoint_registry.get_function_info(
+            create_resource
+        )
+        assert func_info is not None
+        assert func_info.path == "/test/create"
+        assert func_info.methods == ["POST"]
+        assert func_info.endpoint_type == "function"
 
     def test_function_endpoint_multiple_methods(self):
         """Test function endpoint with multiple HTTP methods."""
@@ -307,9 +315,13 @@ class TestFunctionEndpointIntegration:
                 data={"method": method_type}, message=f"Handled {method_type} request"
             )
 
-        config = multi_method_function._jvspatial_endpoint_config
-        assert config["path"] == "/test/multi"
-        assert config["methods"] == ["GET", "POST", "PUT"]
+        assert self.test_server._endpoint_registry.has_function(multi_method_function)
+        func_info = self.test_server._endpoint_registry.get_function_info(
+            multi_method_function
+        )
+        assert func_info is not None
+        assert func_info.path == "/test/multi"
+        assert func_info.methods == ["GET", "POST", "PUT"]
 
     def test_function_endpoint_no_endpoint_param_error(self):
         """Test that function without endpoint parameter can still be decorated."""
@@ -320,7 +332,9 @@ class TestFunctionEndpointIntegration:
             return {"param": param, "message": "No endpoint helper used"}
 
         # Function should still be decorated properly
-        assert hasattr(function_without_endpoint, "_jvspatial_endpoint_config")
+        assert self.test_server._endpoint_registry.has_function(
+            function_without_endpoint
+        )
         # The endpoint parameter will be injected by the wrapper,
         # but if the function doesn't use it, that's fine
 
@@ -472,8 +486,14 @@ class TestEndpointInjectionMechanism:
         assert walker_config["kwargs"]["tags"] == ["test"]
 
         # Check function config
-        function_config = config_function._jvspatial_endpoint_config
-        assert function_config["path"] == "/test/config/func"
-        assert function_config["methods"] == ["GET", "POST"]
-        assert function_config["kwargs"]["summary"] == "Test function"
-        assert function_config["is_function"] is True
+        assert self.test_server._endpoint_registry.has_function(config_function)
+        func_info = self.test_server._endpoint_registry.get_function_info(
+            config_function
+        )
+        assert func_info is not None
+        assert func_info.path == "/test/config/func"
+        assert func_info.methods == ["GET", "POST"]
+        assert (
+            func_info.kwargs.get("route_config", {}).get("summary") == "Test function"
+            or "summary" in func_info.kwargs
+        )

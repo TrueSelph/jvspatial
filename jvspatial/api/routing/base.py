@@ -4,8 +4,6 @@ from typing import Any, Callable, List, Optional, Protocol, TypeVar, runtime_che
 
 from fastapi import APIRouter
 
-from jvspatial.api.constants import APIRoutes
-
 T = TypeVar("T")
 
 
@@ -24,7 +22,7 @@ class BaseRouter:
 
     def __init__(self) -> None:
         """Initialize the router with an APIRouter."""
-        self.router = APIRouter(prefix=APIRoutes.PREFIX)
+        self.router = APIRouter()
 
     def add_route(
         self,

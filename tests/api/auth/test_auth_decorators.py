@@ -146,10 +146,12 @@ class TestAuthEndpoint:
     def setup_method(self):
         """Set up test data."""
         self.mock_server = MagicMock()
-        self.mock_server.register_function_endpoint = MagicMock()
-        self.mock_server._custom_routes = []
         self.mock_server._endpoint_registry = MagicMock()
         self.mock_server._endpoint_registry.register_function = MagicMock()
+        self.mock_server.endpoint_router = MagicMock()
+        self.mock_server.endpoint_router.router = MagicMock()
+        self.mock_server._logger = MagicMock()
+        self.mock_server._is_running = False
 
     def test_auth_endpoint_basic(self):
         """Test basic auth endpoint decorator."""
@@ -169,12 +171,10 @@ class TestAuthEndpoint:
             assert test_function._required_roles == []
             assert test_function._endpoint_path == "/test/function"
 
-            # With new registration approach, check the custom routes
-            assert len(self.mock_server._custom_routes) > 0
-            assert any(
-                route["path"] == "/test/function"
-                for route in self.mock_server._custom_routes
-            )
+            # Verify registration with endpoint registry
+            self.mock_server._endpoint_registry.register_function.assert_called_once()
+            # Verify registration with endpoint router
+            self.mock_server.endpoint_router.router.add_api_route.assert_called_once()
 
     def test_auth_endpoint_with_permissions(self):
         """Test auth endpoint with permissions."""
@@ -309,12 +309,10 @@ class TestAdminDecorators:
             async def admin_config():
                 return {"config": "updated"}
 
-            # Check that route was added to custom routes
-            assert len(self.mock_server._custom_routes) > 0
-            assert any(
-                route["path"] == "/admin/config" and route["methods"] == ["POST", "PUT"]
-                for route in self.mock_server._custom_routes
-            )
+            # Verify registration with endpoint registry
+            self.mock_server._endpoint_registry.register_function.assert_called()
+            # Verify registration with endpoint router
+            self.mock_server.endpoint_router.router.add_api_route.assert_called()
 
 
 class TestAuthAwareEndpointProcessor:

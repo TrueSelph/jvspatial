@@ -140,10 +140,7 @@ def webhook_endpoint(
             try:
                 target_server = server or context.get_current_server()
                 if target_server:
-                    # Register the function with the server using the route decorator pattern
-                    target_server._custom_routes.append(webhook_wrapper._route_config)  # type: ignore[attr-defined]
-
-                    # Register with endpoint registry if available
+                    # Register with endpoint registry
                     if hasattr(target_server, "_endpoint_registry"):
                         target_server._endpoint_registry.register_function(
                             webhook_wrapper,
@@ -151,6 +148,20 @@ def webhook_endpoint(
                             methods,
                             route_config=webhook_wrapper._route_config,  # type: ignore[attr-defined]
                         )
+
+                    # Register with the unified endpoint router
+                    target_server.endpoint_router.router.add_api_route(
+                        path=path,
+                        endpoint=webhook_wrapper,
+                        methods=methods,
+                        **route_kwargs,
+                    )
+
+                    target_server._logger.info(
+                        f"{'🔄' if target_server._is_running else '📝'} "
+                        f"{'Dynamically registered' if target_server._is_running else 'Registered'} "
+                        f"webhook function endpoint: {func.__name__} at {path}"
+                    )
             except (RuntimeError, AttributeError):
                 # Server not available during decoration (e.g., during test collection)
                 # Registration will be deferred

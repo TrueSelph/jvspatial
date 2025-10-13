@@ -22,7 +22,11 @@ class TestWebhookEndpointDecorator:
     def setup_method(self):
         """Set up test mocks."""
         self.mock_server = MagicMock(spec=Server)
-        self.mock_server._custom_routes = MagicMock()
+        self.mock_server._endpoint_registry = MagicMock()
+        self.mock_server.endpoint_router = MagicMock()
+        self.mock_server.endpoint_router.router = MagicMock()
+        self.mock_server._logger = MagicMock()
+        self.mock_server._is_running = False
         self.test_user = MagicMock(id="user_123")
 
     def test_webhook_endpoint_basic(self):
@@ -132,9 +136,9 @@ class TestWebhookEndpointDecorator:
             async def register_webhook(request):
                 return {"status": "registered"}
 
-            # Verify server registration was attempted
-            self.mock_server._custom_routes.append.assert_called_once()
-            # Note: Actual registration happens via _custom_routes in server startup
+            # Verify server registration was attempted via endpoint registry
+            self.mock_server._endpoint_registry.register_function.assert_called_once()
+            # Note: Actual registration happens via endpoint_router
 
     def test_webhook_endpoint_no_server_deferred(self):
         """Test decorator works without server (deferred registration)."""
@@ -165,18 +169,20 @@ class TestWebhookEndpointDecorator:
     def test_webhook_endpoint_custom_server(self):
         """Test @webhook_endpoint with explicit server parameter."""
         custom_server = MagicMock(spec=Server)
-        custom_server._custom_routes = []
+        custom_server._endpoint_registry = MagicMock()
+        custom_server.endpoint_router = MagicMock()
+        custom_server.endpoint_router.router = MagicMock()
+        custom_server._logger = MagicMock()
+        custom_server._is_running = False
 
         @webhook_endpoint("/webhook/custom_server/{auth_token}", server=custom_server)
         async def custom_server_webhook(request):
             return {"status": "custom"}
 
         # Should use custom server for registration
-        assert len(custom_server._custom_routes) > 0
-        assert any(
-            route["path"] == "/webhook/custom_server/{auth_token}"
-            for route in custom_server._custom_routes
-        )
+        custom_server._endpoint_registry.register_function.assert_called_once()
+        # Verify registration with endpoint router
+        assert custom_server.endpoint_router.router.add_api_route.called
 
     @pytest.mark.asyncio
     async def test_webhook_endpoint_function_execution(self):

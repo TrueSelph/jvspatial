@@ -20,9 +20,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
+from jvspatial.api.context import set_current_server
 from jvspatial.api.endpoint.decorators import EndpointField
 from jvspatial.api.routing import EndpointRouter
-from jvspatial.api.server import Server, ServerConfig
+from jvspatial.api.server import Server, ServerConfig, endpoint
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node, Walker, on_exit, on_visit
 
@@ -104,8 +105,10 @@ def server_config():
 
 @pytest.fixture
 def test_server(server_config):
-    """Create test server instance."""
-    return Server(config=server_config)
+    """Create test server instance with active context."""
+    server = Server(config=server_config)
+    set_current_server(server)
+    return server
 
 
 @pytest.fixture
@@ -167,7 +170,7 @@ class TestWalkerEndpointDecorator:
     def test_walker_endpoint_registration(self, test_server):
         """Test endpoint registration."""
 
-        @test_server.walker("/test-walker")
+        @endpoint("/test-walker")
         class TestAPIWalker(Walker):
             param: str = EndpointField(description="Test parameter")
 
@@ -177,7 +180,7 @@ class TestWalkerEndpointDecorator:
     def test_walker_endpoint_with_methods(self, test_server):
         """Test endpoint with specific HTTP methods."""
 
-        @test_server.walker("/test-methods", methods=["GET", "POST"])
+        @endpoint("/test-methods", methods=["GET", "POST"])
         class MethodWalker(Walker):
             data: str = EndpointField(description="Input data")
 
@@ -187,7 +190,7 @@ class TestWalkerEndpointDecorator:
     def test_walker_endpoint_with_metadata(self, test_server):
         """Test endpoint with tags and summary."""
 
-        @test_server.walker("/test-meta", tags=["testing"], summary="Test endpoint")
+        @endpoint("/test-meta", tags=["testing"], summary="Test endpoint")
         class MetaWalker(Walker):
             value: int = EndpointField(description="Test value")
 
@@ -198,11 +201,11 @@ class TestWalkerEndpointDecorator:
     def test_multiple_walker_endpoints(self, test_server):
         """Test registering multiple endpoints."""
 
-        @test_server.walker("/walker1")
+        @endpoint("/walker1")
         class Walker1(Walker):
             param1: str = EndpointField(description="Parameter 1")
 
-        @test_server.walker("/walker2")
+        @endpoint("/walker2")
         class Walker2(Walker):
             param2: int = EndpointField(description="Parameter 2")
 
@@ -218,41 +221,31 @@ class TestEndpointDecorator:
     def test_function_endpoint_registration(self, test_server):
         """Test function endpoint registration."""
 
-        @test_server.route("/test-function")
+        @endpoint("/test-function")
         async def test_function():
             """Test function endpoint."""
             return {"message": "Hello from function"}
 
         # Check function is registered using endpoint registry
-        assert test_function in test_server._custom_routes or any(
-            route.get("endpoint") == test_function
-            for route in test_server._custom_routes
-        )
+        assert test_server._endpoint_registry.has_function(test_function)
 
     def test_function_endpoint_with_parameters(self, test_server):
         """Test function endpoint with parameters."""
 
-        @test_server.route("/test-params", methods=["POST"])
+        @endpoint("/test-params", methods=["POST"])
         async def param_function(name: str, value: int = 10):
             """Function with parameters."""
             return {"name": name, "value": value}
 
-        # Check in custom routes
-        found_route = next(
-            (
-                route
-                for route in test_server._custom_routes
-                if route.get("endpoint") == param_function
-            ),
-            None,
-        )
-        assert found_route is not None
-        assert found_route["methods"] == ["POST"]
+        # Check endpoint info
+        endpoint_info = test_server._endpoint_registry.get_function_info(param_function)
+        assert endpoint_info is not None
+        assert endpoint_info.methods == ["POST"]
 
     def test_function_endpoint_with_metadata(self, test_server):
         """Test function endpoint with metadata."""
 
-        @test_server.route(
+        @endpoint(
             "/test-function-meta",
             tags=["functions"],
             summary="Test function",
@@ -262,18 +255,11 @@ class TestEndpointDecorator:
             """Function with metadata."""
             return {"status": "ok"}
 
-        # Check in custom routes
-        found_route = next(
-            (
-                route
-                for route in test_server._custom_routes
-                if route.get("endpoint") == meta_function
-            ),
-            None,
-        )
-        assert found_route is not None
-        assert found_route.get("tags") == ["functions"]
-        assert found_route.get("summary") == "Test function"
+        # Check endpoint info
+        endpoint_info = test_server._endpoint_registry.get_function_info(meta_function)
+        assert endpoint_info is not None
+        assert endpoint_info.kwargs.get("tags") == ["functions"]
+        assert endpoint_info.kwargs.get("summary") == "Test function"
 
 
 class TestParameterModels:
@@ -282,7 +268,7 @@ class TestParameterModels:
     def test_endpoint_field_parameter_extraction(self, test_server):
         """Test EndpointField parameter extraction."""
 
-        @test_server.walker("/param-test")
+        @endpoint("/param-test")
         class ParamWalker(Walker):
             required_field: str = EndpointField(description="Required parameter")
             optional_field: int = EndpointField(
@@ -302,7 +288,7 @@ class TestParameterModels:
     def test_parameter_validation_types(self, test_server):
         """Test parameter validation with various types."""
 
-        @test_server.walker("/validation-test")
+        @endpoint("/validation-test")
         class ValidationTestWalker(Walker):
             string_param: str = EndpointField(description="String parameter")
             int_param: int = EndpointField(ge=0, description="Non-negative integer")
@@ -320,7 +306,7 @@ class TestParameterModels:
     def test_parameter_with_pydantic_constraints(self, test_server):
         """Test parameters with Pydantic validation constraints."""
 
-        @test_server.walker("/constraints-test")
+        @endpoint("/constraints-test")
         class ConstraintsWalker(Walker):
             email: str = EndpointField(
                 pattern=r"^[^@]+@[^@]+\.[^@]+$", description="Email address"
@@ -341,7 +327,7 @@ class TestAPIRoutes:
     async def test_walker_endpoint_basic_request(self, test_server):
         """Test basic endpoint request."""
 
-        @test_server.walker("/basic-walker")
+        @endpoint("/basic-walker")
         class BasicWalker(Walker):
             message: str = EndpointField(description="Message to process")
 
@@ -366,7 +352,7 @@ class TestAPIRoutes:
     async def test_walker_endpoint_get_request(self, test_server):
         """Test endpoint with GET request."""
 
-        @test_server.walker("/get-walker", methods=["GET"])
+        @endpoint("/get-walker", methods=["GET"])
         class GetWalker(Walker):
             param: str = EndpointField(default="default", description="Query parameter")
 
@@ -396,7 +382,7 @@ class TestAPIRoutes:
     async def test_function_endpoint_response(self, test_server):
         """Test function endpoint response."""
 
-        @test_server.route("/test-function")
+        @endpoint("/test-function")
         async def test_function(name: str = "world"):
             """Test function."""
             return {"greeting": f"Hello, {name}!"}
@@ -413,7 +399,7 @@ class TestAPIRoutes:
     async def test_complex_walker_response(self, test_server):
         """Test complex walker with node processing."""
 
-        @test_server.walker("/complex-walker")
+        @endpoint("/complex-walker")
         class ComplexWalker(Walker):
             filter_category: Optional[str] = EndpointField(
                 default=None, description="Category filter"
@@ -473,7 +459,7 @@ class TestAPIErrorHandling:
     async def test_validation_error_handling(self, test_server):
         """Test parameter validation error handling."""
 
-        @test_server.walker("/validation-test")
+        @endpoint("/validation-test")
         class ValidationWalker(Walker):
             required_param: str = EndpointField(description="Required parameter")
             positive_int: int = EndpointField(gt=0, description="Positive integer")
@@ -495,7 +481,7 @@ class TestAPIErrorHandling:
     async def test_walker_runtime_error_handling(self, test_server):
         """Test walker runtime error handling."""
 
-        @test_server.walker("/error-walker")
+        @endpoint("/error-walker")
         class ErrorWalker(Walker):
             should_fail: bool = EndpointField(
                 default=False, description="Trigger error"
@@ -531,7 +517,7 @@ class TestAPIErrorHandling:
     async def test_function_error_handling(self, test_server):
         """Test function endpoint error handling."""
 
-        @test_server.route("/error-function")
+        @endpoint("/error-function")
         async def error_function(should_fail: bool = False):
             """Function that can fail."""
             if should_fail:
@@ -639,7 +625,7 @@ class TestOpenAPIDocumentation:
     def test_openapi_schema_generation(self, test_server):
         """Test OpenAPI schema is generated."""
 
-        @test_server.walker(
+        @endpoint(
             "/documented-walker",
             summary="Test Walker",
             description="A walker for testing documentation",
@@ -683,14 +669,16 @@ class TestOpenAPIDocumentation:
     def test_endpoint_documentation_metadata(self, test_server):
         """Test endpoint documentation includes metadata."""
 
-        @test_server.walker(
+        @endpoint(
             "/meta-walker",
             tags=["testing"],
             summary="Metadata Walker",
             description="Walker with rich metadata",
         )
         class MetaWalker(Walker):
-            query: str = EndpointField(description="Search query", example="test query")
+            query: str = EndpointField(
+                description="Search query", examples=["test query"]
+            )
             limit: int = EndpointField(
                 default=10, ge=1, le=100, description="Result limit"
             )
@@ -755,7 +743,7 @@ class TestDynamicEndpointManagement:
         """Test dynamic walker registration after server creation."""
 
         # Register walker dynamically
-        @test_server.walker("/dynamic-walker")
+        @endpoint("/dynamic-walker")
         class DynamicWalker(Walker):
             param: str = EndpointField(description="Dynamic parameter")
 
@@ -773,7 +761,7 @@ class TestDynamicEndpointManagement:
     def test_endpoint_removal(self, test_server):
         """Test endpoint registration tracking (removal not yet implemented)."""
 
-        @test_server.walker("/removable-walker")
+        @endpoint("/removable-walker")
         class RemovableWalker(Walker):
             param: str = EndpointField(description="Removable walker")
 
@@ -788,11 +776,11 @@ class TestDynamicEndpointManagement:
     def test_multiple_endpoint_registration_removal(self, test_server):
         """Test registering multiple endpoints (removal not yet implemented)."""
 
-        @test_server.walker("/walker-a")
+        @endpoint("/walker-a")
         class WalkerA(Walker):
             param_a: str = EndpointField(description="Parameter A")
 
-        @test_server.walker("/walker-b")
+        @endpoint("/walker-b")
         class WalkerB(Walker):
             param_b: str = EndpointField(description="Parameter B")
 

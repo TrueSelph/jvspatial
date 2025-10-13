@@ -7,7 +7,7 @@ These are lightweight Pydantic models for configuration and execution tracking.
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SchedulerConfig(BaseModel):
@@ -91,10 +91,7 @@ class ScheduledTask(BaseModel):
     success_count: int = 0
     failure_count: int = 0
 
-    class Config:
-        """Pydantic configuration for ScheduledTask."""
-
-        arbitrary_types_allowed = True  # Allow Callable type
+    model_config = ConfigDict(arbitrary_types_allowed=True)  # Allow Callable type
 
     def get_success_rate(self) -> float:
         """Calculate success rate as a percentage."""

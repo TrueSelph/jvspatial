@@ -36,7 +36,7 @@ server = create_server(
 )
 
 # Define a Walker endpoint
-@server.walker("/process")
+@endpoint("/process")
 class ProcessData(Walker):
     data: str = EndpointField(description="Data to process")
 
@@ -151,9 +151,9 @@ Walker endpoints are the primary way to define business logic in jvspatial APIs.
 ### Basic Walker
 
 ```python
-@server.walker("/users/create")
-class CreateUser(Walker):
-    name: str = EndpointField(description="User name", min_length=2)
+@endpoint("/tasks/create")
+class CreateTask(Walker):
+ame: str = EndpointField(description="User name", min_length=2)
     email: str = EndpointField(description="User email")
 
     @on_visit(Root)
@@ -166,7 +166,7 @@ class CreateUser(Walker):
 ### Advanced Walker with Field Groups
 
 ```python
-@server.walker("/locations/search")
+@endpoint("/locations/search")
 class SearchLocations(Walker):
     # Search center coordinates (grouped)
     latitude: float = EndpointField(
@@ -205,17 +205,17 @@ Walker endpoints support all standard HTTP methods:
 
 ```python
 # POST (default)
-@server.walker("/data", methods=["POST"])
+@endpoint("/data", methods=["POST"])
 class ProcessData(Walker):
     pass
 
 # GET endpoint
-@server.walker("/status", methods=["GET"])
+@endpoint("/status", methods=["GET"])
 class GetStatus(Walker):
     pass
 
 # Multiple methods
-@server.walker("/resource", methods=["GET", "POST", "PUT"])
+@endpoint("/resource", methods=["GET", "POST", "PUT"])
 class ResourceEndpoint(Walker):
     pass
 ```
@@ -562,17 +562,17 @@ async def global_function():
 For simple endpoints that don't require graph traversal, use custom routes:
 
 ```python
-@server.route("/health", methods=["GET"])
+@endpoint("/health", methods=["GET"])
 async def health_check():
     return {"status": "healthy"}
 
-@server.route("/stats", methods=["GET"])
+@endpoint("/stats", methods=["GET"])
 async def get_stats():
     users = await User.all()
     return {"user_count": len(users)}
 
 # Route with parameters
-@server.route("/users/{user_id}", methods=["GET"])
+@endpoint("/users/{user_id}", methods=["GET"])
 async def get_user(user_id: str):
     user = await User.get(user_id)
     if not user:

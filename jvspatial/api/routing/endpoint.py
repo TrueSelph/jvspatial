@@ -56,62 +56,6 @@ class EndpointRouter(BaseRouter):
         resp_dict = resp.model_dump() if hasattr(resp, "model_dump") else dict(resp)
         return cast(Dict[str, Any], resp_dict)
 
-    def walker_endpoint(
-        self,
-        path: str,
-        methods: Optional[List[str]] = None,
-        **kwargs: Any,
-    ) -> Callable[[Type[Walker]], Type[Walker]]:
-        """Register a Walker class as an endpoint.
-
-        Args:
-            path: URL path
-            methods: HTTP methods (default: ["POST"])
-            **kwargs: Additional route parameters
-
-        Returns:
-            Decorator for registering Walker endpoints
-        """
-        if methods is None:
-            methods = ["POST"]
-
-        def decorator(walker_cls: Type[Walker]) -> Type[Walker]:
-            # Generate parameter model
-            param_model = ParameterModelFactory.create_model(walker_cls)
-
-            # Handle GET requests differently
-            is_get_request = "GET" in methods
-
-            if is_get_request:
-                self._register_get_handler(
-                    path=path,
-                    walker_cls=walker_cls,
-                    param_model=param_model,
-                    **kwargs,
-                )
-
-                # Also register POST handler if there are other methods
-                if len(methods) > 1:
-                    self._register_post_handler(
-                        path=path,
-                        walker_cls=walker_cls,
-                        param_model=param_model,
-                        methods=[m for m in methods if m != "GET"],
-                        **kwargs,
-                    )
-            else:
-                self._register_post_handler(
-                    path=path,
-                    walker_cls=walker_cls,
-                    param_model=param_model,
-                    methods=methods,
-                    **kwargs,
-                )
-
-            return walker_cls
-
-        return decorator
-
     def endpoint(
         self,
         path: str,
@@ -122,7 +66,7 @@ class EndpointRouter(BaseRouter):
 
         Args:
             path: URL path
-            methods: HTTP methods (default: ["POST"])
+            methods: HTTP methods (default: ["POST"] for walkers, ["GET"] for functions)
             **kwargs: Additional route parameters
 
         Returns:
@@ -134,7 +78,42 @@ class EndpointRouter(BaseRouter):
         ) -> Union[Type[Walker], Callable]:
             if isinstance(target, type) and issubclass(target, Walker):
                 # Handle Walker class
-                return self.walker_endpoint(path, methods=methods, **kwargs)(target)
+                walker_cls = target
+                walker_methods = methods or ["POST"]
+
+                # Generate parameter model
+                param_model = ParameterModelFactory.create_model(walker_cls)
+
+                # Handle GET requests differently
+                is_get_request = "GET" in walker_methods
+
+                if is_get_request:
+                    self._register_get_handler(
+                        path=path,
+                        walker_cls=walker_cls,
+                        param_model=param_model,
+                        **kwargs,
+                    )
+
+                    # Also register POST handler if there are other methods
+                    if len(walker_methods) > 1:
+                        self._register_post_handler(
+                            path=path,
+                            walker_cls=walker_cls,
+                            param_model=param_model,
+                            methods=[m for m in walker_methods if m != "GET"],
+                            **kwargs,
+                        )
+                else:
+                    self._register_post_handler(
+                        path=path,
+                        walker_cls=walker_cls,
+                        param_model=param_model,
+                        methods=walker_methods,
+                        **kwargs,
+                    )
+
+                return walker_cls
             else:
                 # Handle function
                 return self._register_function(
@@ -384,15 +363,23 @@ class EndpointRouter(BaseRouter):
 
         # Create wrapper with response helper
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # Inject response helper
-            kwargs["endpoint"] = ResponseHelper()
+            # Inject response helper only if the function accepts it
+            func_params = inspect.signature(func).parameters
+            if "endpoint" in func_params:
+                kwargs["endpoint"] = ResponseHelper()
 
             if inspect.iscoroutinefunction(func):
                 return await func(*args, **kwargs)
             else:
                 return func(*args, **kwargs)
 
-        # Preserve metadata
+        # Choose the endpoint to register based on signature
+        func_params = inspect.signature(func).parameters
+        selected_endpoint: Callable[..., Any] = (
+            wrapper if "endpoint" in func_params else func
+        )
+
+        # Preserve metadata on wrapper
         wrapper.__name__ = func.__name__
         wrapper.__doc__ = func.__doc__
         wrapper.__module__ = func.__module__
@@ -400,7 +387,7 @@ class EndpointRouter(BaseRouter):
         # Add route
         self.add_route(
             path=path,
-            endpoint=wrapper,
+            endpoint=selected_endpoint,
             methods=methods,
             source_obj=func,
             **kwargs,

@@ -322,7 +322,7 @@ Best Practices:
 
 ❌ Don't use regular @endpoint for endpoints that need authentication
 ❌ Don't manually check authentication in endpoint logic (middleware handles it)
-❌ Don't use @route or @server.route (use standard decorators)
+❌ Don't use regular @endpoint for endpoints that need authentication
 """
 
 

@@ -23,7 +23,7 @@ from jvspatial.api.auth import (
     configure_auth,
 )
 from jvspatial.api.auth.middleware import auth_config
-from jvspatial.api.server import Server, ServerConfig
+from jvspatial.api.server import Server, ServerConfig, endpoint
 from jvspatial.core.entities import Node, Walker, on_visit
 
 
@@ -114,10 +114,8 @@ class TestAuthIntegration:
         async def get_auth_info():
             return {"message": "Authenticated info", "timestamp": datetime.now()}
 
-        # Check function is registered
-        assert any(
-            route.get("endpoint") == get_auth_info for route in server._custom_routes
-        )
+        # Check function is registered using endpoint registry
+        assert server._endpoint_registry.has_function(get_auth_info)
         assert hasattr(get_auth_info, "_auth_required")
         assert get_auth_info._auth_required is True
         assert get_auth_info._required_roles == ["user"]
@@ -315,10 +313,13 @@ class TestAuthIntegration:
 
     def test_complete_server_with_auth_endpoints(self):
         """Test complete server setup with authentication endpoints."""
+        from jvspatial.api.context import set_current_server
+
         server = Server(title="Complete Auth Test", debug=True)
+        set_current_server(server)  # Ensure this server is current for decorators
 
         # Add public walker
-        @server.walker("/public/data")
+        @endpoint("/public/data", server=server)
         class PublicWalker(Walker):
             query: str = ""
 
@@ -345,10 +346,8 @@ class TestAuthIntegration:
         assert len(walkers) == 2
         assert server._endpoint_registry.has_walker(PublicWalker)
         assert server._endpoint_registry.has_walker(AuthWalker)
-        # Check admin function endpoint is in custom routes
-        assert any(
-            route.get("endpoint") == admin_control for route in server._custom_routes
-        )
+        # Check admin function endpoint is registered
+        assert server._endpoint_registry.has_function(admin_control)
 
     def test_auth_configuration_persistence(self):
         """Test that auth configuration persists across components."""
@@ -404,7 +403,7 @@ class TestAuthIntegration:
         server = Server(title="Decorator Integration Test")
 
         # Test different permission levels
-        @server.walker("/public")
+        @endpoint("/public", server=server)
         class PublicWalker(Walker):
             pass
 
@@ -549,6 +548,8 @@ class TestAuthIntegration:
 
     def teardown_method(self):
         """Clean up after tests."""
+        from jvspatial.api.context import set_current_server
+
         # Reset auth configuration to defaults
         configure_auth(
             jwt_secret_key="your-secret-key-change-in-production",  # pragma: allowlist secret
@@ -556,6 +557,7 @@ class TestAuthIntegration:
             rate_limit_enabled=True,
             default_rate_limit_per_hour=1000,
         )
+        set_current_server(None)
 
 
 class TestAuthSystemScenarios:
@@ -563,7 +565,10 @@ class TestAuthSystemScenarios:
 
     def setup_method(self):
         """Set up realistic test scenario."""
+        from jvspatial.api.context import set_current_server
+
         self.server = Server(title="Auth Scenario Test", debug=True)
+        set_current_server(self.server)  # Ensure this server is current for decorators
 
         # Configure auth for scenario testing
         configure_auth(
@@ -577,7 +582,7 @@ class TestAuthSystemScenarios:
         """Test API with public documentation but protected endpoints."""
 
         # Public documentation endpoints (should not require auth)
-        @self.server.route("/public/docs")
+        @endpoint("/public/docs", server=self.server)
         async def public_docs():
             return {"docs": "public", "version": "1.0"}
 
@@ -597,10 +602,7 @@ class TestAuthSystemScenarios:
             return {"requests": 1000, "users": 50, "uptime": "99.9%"}
 
         # Verify endpoint configuration
-        public_endpoints = [
-            r for r in self.server._custom_routes if "/public/" in r["path"]
-        ]
-        assert len(public_endpoints) == 1
+        assert self.server._endpoint_registry.has_function(public_docs)
 
         assert APIDataWalker._auth_required is True
         assert api_stats._required_roles == ["admin"]
@@ -700,7 +702,7 @@ class TestAuthSystemScenarios:
             return {"webhook": "processed", "timestamp": datetime.now().isoformat()}
 
         # Health check for services (no auth)
-        @self.server.route("/internal/health")
+        @endpoint("/internal/health", server=self.server)
         async def service_health():
             return {"status": "healthy", "service": "auth-system"}
 
@@ -709,15 +711,15 @@ class TestAuthSystemScenarios:
         assert external_webhook._required_permissions == ["webhook_access"]
 
         # Health check should not require auth
-        health_routes = [
-            r for r in self.server._custom_routes if "/health" in r["path"]
-        ]
-        assert len(health_routes) == 1
+        assert self.server._endpoint_registry.has_function(service_health)
 
     def teardown_method(self):
         """Clean up scenario test."""
+        from jvspatial.api.context import set_current_server
+
         configure_auth(
             jwt_secret_key="your-secret-key-change-in-production",  # pragma: allowlist secret
             jwt_expiration_hours=24,
             rate_limit_enabled=True,
         )
+        set_current_server(None)
