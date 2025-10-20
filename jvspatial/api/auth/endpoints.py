@@ -12,7 +12,7 @@ from typing import List, Optional, cast
 from fastapi import Request
 from pydantic import BaseModel, EmailStr, Field
 
-from jvspatial.api import endpoint  # For public endpoints
+from jvspatial.api.decorators.shortcuts import endpoint  # For public endpoints
 
 from .decorators import (
     admin_endpoint,

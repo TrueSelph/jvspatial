@@ -10,9 +10,16 @@ import asyncio
 import tempfile
 from typing import List
 
-from jvspatial.core.context import GraphContext, get_default_context
-from jvspatial.core.entities import Edge, Node, Walker, on_exit, on_visit
-from jvspatial.db.factory import get_database
+from jvspatial.core import (
+    Edge,
+    GraphContext,
+    Node,
+    Walker,
+    get_default_context,
+    on_exit,
+    on_visit,
+)
+from jvspatial.db import get_database
 
 
 # Entity definitions

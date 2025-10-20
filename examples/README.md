@@ -12,11 +12,10 @@ Robust error handling patterns and best practices:
 - `error_handling/walker_error_handling.py` - Walker error handling
 
 ### ✨ Updated Examples (New Walker Patterns)
-These examples have been updated to use the report() pattern:
+These examples have been updated to use the report() pattern and current import structure:
 
 - `travel_graph.py` - Travel planning with graph traversal
 - `graphcontext_demo.py` - Graph context management
-- `testing_with_graphcontext.py` - Testing with graph contexts
 - `agent_graph.py` - Hierarchical agent system
 - `multi_target_hooks_demo.py` - Multiple target hook handling
 

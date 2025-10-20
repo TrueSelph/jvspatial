@@ -11,9 +11,7 @@ This example shows:
 import asyncio
 from typing import List, Optional
 
-from jvspatial.core import on_visit
-from jvspatial.core.entities import Edge, Node, Walker
-from jvspatial.core.pager import ObjectPager, paginate_objects
+from jvspatial.core import Edge, Node, ObjectPager, Walker, on_visit, paginate_objects
 
 
 class Location(Node):

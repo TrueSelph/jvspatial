@@ -208,6 +208,36 @@ class LocalFileInterface(FileStorageInterface):
                 )
             raise
 
+    async def write_file(
+        self, file_path: str, content: bytes, metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Write file to local filesystem (alias for save_file).
+
+        This method provides compatibility with tests that expect write_file.
+
+        Args:
+            file_path: Relative file path
+            content: File content as bytes
+            metadata: Optional metadata
+
+        Returns:
+            Dict with file information
+        """
+        return await self.save_file(file_path, content, metadata)
+
+    async def read_file(self, file_path: str) -> Optional[bytes]:
+        """Read file from local filesystem (alias for get_file).
+
+        This method provides compatibility with tests that expect read_file.
+
+        Args:
+            file_path: Relative file path
+
+        Returns:
+            File content as bytes, or None if not found
+        """
+        return await self.get_file(file_path)
+
     async def get_file(self, file_path: str) -> Optional[bytes]:
         """Retrieve file content.
 

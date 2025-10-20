@@ -22,7 +22,7 @@ The jvspatial authentication system provides comprehensive user management, JWT-
 Set up authentication in minutes:
 
 ```python
-from jvspatial.api import create_server
+from jvspatial.api import create_server, endpoint, auth_endpoint, admin_endpoint
 from jvspatial.api.auth import configure_auth, AuthenticationMiddleware
 
 # Configure authentication
@@ -41,10 +41,6 @@ server = create_server(
 
 # Add authentication middleware
 server.app.add_middleware(AuthenticationMiddleware)
-
-# Create different types of endpoints
-from jvspatial.api import endpoint  # Public
-from jvspatial.api.auth import auth_endpoint, admin_endpoint
 
 @endpoint("/public/info")  # No authentication required
 async def public_info():

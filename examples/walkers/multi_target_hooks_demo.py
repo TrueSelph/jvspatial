@@ -12,7 +12,7 @@ This example demonstrates the new multi-target @on_visit decorator features:
 import asyncio
 from typing import List
 
-from jvspatial.core.entities import Edge, Node, Walker, on_exit, on_visit
+from jvspatial.core import Edge, Node, Walker, on_exit, on_visit
 
 # =============================================================================
 # NODE TYPES

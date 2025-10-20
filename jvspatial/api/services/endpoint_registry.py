@@ -494,6 +494,53 @@ class EndpointRegistryService:
 
         return dynamic_endpoints
 
+    def search_endpoints(
+        self,
+        path_pattern: Optional[str] = None,
+        method_pattern: Optional[str] = None,
+        endpoint_type: Optional[EndpointType] = None,
+    ) -> List[EndpointInfo]:
+        """Search endpoints by pattern matching.
+
+        Args:
+            path_pattern: Path pattern to match (supports wildcards)
+            method_pattern: HTTP method pattern to match
+            endpoint_type: Type of endpoint to filter by
+
+        Returns:
+            List of matching EndpointInfo objects
+        """
+        import fnmatch
+
+        results = []
+
+        # Get all endpoints
+        all_endpoints: list[Any] = []
+        all_endpoints.extend(self._walker_registry.values())
+        all_endpoints.extend(self._function_registry.values())
+        for route_list in self._custom_routes.values():
+            all_endpoints.extend(route_list)
+
+        for endpoint_info in all_endpoints:
+            # Filter by endpoint type
+            if endpoint_type and endpoint_info.endpoint_type != endpoint_type:
+                continue
+
+            # Filter by path pattern
+            if path_pattern and not fnmatch.fnmatch(endpoint_info.path, path_pattern):
+                continue
+
+            # Filter by method pattern
+            if method_pattern and not any(
+                fnmatch.fnmatch(method, method_pattern)
+                for method in endpoint_info.methods
+            ):
+                continue
+
+            results.append(endpoint_info)
+
+        return results
+
     def count_endpoints(self) -> Dict[str, int]:
         """Get count of registered endpoints by type.
 

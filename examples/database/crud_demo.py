@@ -6,8 +6,7 @@ Shows how to use the unified query interface across different database backends.
 import asyncio
 import os
 
-from jvspatial.core.context import GraphContext
-from jvspatial.core.entities import Edge, Node
+from jvspatial.core import Edge, GraphContext, Node
 from jvspatial.db import get_database
 
 

@@ -13,7 +13,7 @@ The recommended approach uses the modern `Server` class with entity-centric oper
 
 ```python
 from jvspatial.api import Server, endpoint
-from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api.endpoint import EndpointField
 from jvspatial.core import Walker, Node, on_visit
 
 # Define your entity

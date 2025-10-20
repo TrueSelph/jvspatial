@@ -30,9 +30,8 @@ For a complete working server with user management, see the auth setup notes bel
 
 from typing import Any, Dict
 
-from jvspatial.api import Server
-from jvspatial.api.auth import admin_endpoint, auth_endpoint
-from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api import Server, admin_endpoint, auth_endpoint, create_server, endpoint
+from jvspatial.api.endpoint import EndpointField
 from jvspatial.core import Node, Walker, on_visit
 
 # =============================================================================
@@ -40,7 +39,7 @@ from jvspatial.core import Node, Walker, on_visit
 # =============================================================================
 
 # Create server instance first so decorators can register endpoints
-server = Server(
+server = create_server(
     title="Authenticated API Example",
     description="Example demonstrating auth decorators",
     version="1.0.0",

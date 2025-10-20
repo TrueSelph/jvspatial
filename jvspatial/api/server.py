@@ -908,6 +908,17 @@ class Server:
         """
         return self._graph_context
 
+    def has_endpoint(self, path: str) -> bool:
+        """Check if server has any endpoints at the given path.
+
+        Args:
+            path: URL path to check
+
+        Returns:
+            True if any endpoints exist at the path, False otherwise
+        """
+        return self._endpoint_registry.has_path(path)
+
     def set_graph_context(self: "Server", context: GraphContext) -> None:
         """Set a custom GraphContext for the server.
 
@@ -916,6 +927,88 @@ class Server:
         """
         self._graph_context = context
         self._logger.info("🎯 Custom GraphContext set for server")
+
+    def endpoint(
+        self, path: str, methods: Optional[List[str]] = None, **kwargs: Any
+    ) -> Callable:
+        """Endpoint decorator for the server instance.
+
+        Args:
+            path: URL path for the endpoint
+            methods: HTTP methods (default: ["POST"] for walkers, ["GET"] for functions)
+            **kwargs: Additional route parameters
+
+        Returns:
+            Decorator function for endpoints
+        """
+
+        def decorator(
+            target: Union[Type[Walker], Callable]
+        ) -> Union[Type[Walker], Callable]:
+            # Handle Walker class
+            if inspect.isclass(target) and issubclass(target, Walker):
+                self.register_walker_class(
+                    target, path, methods=methods or ["POST"], **kwargs
+                )
+                return target
+
+            # Handle function endpoint
+            func = target
+
+            # Create wrapper if endpoint helper is needed
+            if "endpoint" in inspect.signature(func).parameters:
+
+                async def func_wrapper(*args: Any, **kwargs_inner: Any) -> Any:
+                    endpoint_helper = create_endpoint_helper(walker_instance=None)
+                    kwargs_inner["endpoint"] = endpoint_helper
+                    return (
+                        await func(*args, **kwargs_inner)
+                        if inspect.iscoroutinefunction(func)
+                        else func(*args, **kwargs_inner)
+                    )
+
+                # Preserve metadata
+                func_wrapper.__name__ = func.__name__
+                func_wrapper.__doc__ = func.__doc__
+            else:
+                func_wrapper = func
+
+            # Register with endpoint registry and router
+            try:
+                self._endpoint_registry.register_function(
+                    func,
+                    path,
+                    methods=methods or ["GET"],
+                    route_config={
+                        "path": path,
+                        "endpoint": func_wrapper,
+                        "methods": methods or ["GET"],
+                        **kwargs,
+                    },
+                    **kwargs,
+                )
+
+                self.endpoint_router.router.add_api_route(
+                    path=path,
+                    endpoint=func_wrapper,
+                    methods=methods or ["GET"],
+                    **kwargs,
+                )
+
+                self._logger.info(
+                    f"{'🔄' if self._is_running else '📝'} "
+                    f"{'Dynamically registered' if self._is_running else 'Registered'} "
+                    f"function endpoint: {func.__name__} at {path}"
+                )
+
+            except Exception as e:
+                self._logger.warning(
+                    f"Function {func.__name__} already registered: {e}"
+                )
+
+            return func
+
+        return decorator
 
 
 def endpoint(

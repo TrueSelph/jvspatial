@@ -18,14 +18,7 @@ import asyncio
 import math
 from typing import Any, Dict, List, Optional
 
-from jvspatial.core.entities import (
-    Edge,
-    Node,
-    Root,
-    Walker,
-    on_exit,
-    on_visit,
-)
+from jvspatial.core import Edge, Node, Root, Walker, on_exit, on_visit
 
 
 def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

@@ -44,9 +44,10 @@ python auth_example.py
 ### JWT Authentication
 
 ```python
-from jvspatial.api.auth.decorators import auth_endpoint
+from jvspatial.api import auth_endpoint
+from jvspatial.api.auth import get_current_user
 
-@auth_endpoint("/api/secure", auth_required=True)
+@auth_endpoint("/api/secure")
 async def secure_endpoint(endpoint):
     """Endpoint requiring JWT auth."""
     user = get_current_user()
@@ -56,9 +57,9 @@ async def secure_endpoint(endpoint):
 ### API Key Authentication
 
 ```python
-from jvspatial.api.auth.decorators import auth_endpoint
+from jvspatial.api import auth_endpoint
 
-@auth_endpoint("/api/key-auth", api_key_required=True)
+@auth_endpoint("/api/key-auth")
 async def api_key_endpoint(endpoint):
     """Endpoint requiring API key."""
     return endpoint.success(data={"status": "authenticated"})
@@ -67,11 +68,9 @@ async def api_key_endpoint(endpoint):
 ### Role-Based Access Control
 
 ```python
-@auth_endpoint(
-    "/api/admin",
-    auth_required=True,
-    roles=["admin"]
-)
+from jvspatial.api import auth_endpoint
+
+@auth_endpoint("/api/admin", roles=["admin"])
 async def admin_endpoint(endpoint):
     """Only admins can access this endpoint."""
     return endpoint.success(data={"access": "granted"})
@@ -80,11 +79,9 @@ async def admin_endpoint(endpoint):
 ### Permission-Based Access
 
 ```python
-@auth_endpoint(
-    "/api/documents",
-    auth_required=True,
-    permissions=["read_documents"]
-)
+from jvspatial.api import auth_endpoint
+
+@auth_endpoint("/api/documents", permissions=["read_documents"])
 async def read_documents(endpoint):
     """User must have read_documents permission."""
     return endpoint.success(data={"access": "granted"})
@@ -138,6 +135,9 @@ curl http://localhost:8000/api/key-auth \
 The example demonstrates proper error handling:
 
 ```python
+from jvspatial.api import auth_endpoint
+from jvspatial.api.auth import UnauthorizedError, ForbiddenError
+
 @auth_endpoint("/api/secure")
 async def handle_errors(endpoint):
     try:

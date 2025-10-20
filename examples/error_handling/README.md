@@ -32,6 +32,7 @@ Demonstrates Walker-specific error handling:
 ### Exception Hierarchy
 All jvspatial exceptions inherit from `JVSpatialError`:
 ```python
+from jvspatial import exceptions
 from jvspatial.exceptions import (
     JVSpatialError,         # Base exception
     ValidationError,        # Data validation errors

@@ -16,11 +16,9 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel
 
-from jvspatial.api import Server
-from jvspatial.api.auth.decorators import auth_endpoint
-from jvspatial.api.endpoint.decorators import EndpointField
-from jvspatial.api.routing.endpoint import EndpointRouter
-from jvspatial.core.entities import Node, Walker
+from jvspatial.api import Server, auth_endpoint
+from jvspatial.api.endpoint import EndpointField
+from jvspatial.core import Node, Walker
 
 
 # Data models

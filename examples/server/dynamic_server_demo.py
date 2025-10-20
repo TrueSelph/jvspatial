@@ -31,9 +31,8 @@ from jvspatial.api import (
     endpoint,
 )
 from jvspatial.api.context import get_current_server
-from jvspatial.api.endpoint.decorators import EndpointField
-from jvspatial.api.routing.endpoint import EndpointRouter
-from jvspatial.core.entities import Node, Root, Walker, on_exit, on_visit
+from jvspatial.api.endpoint import EndpointField
+from jvspatial.core import Node, Root, Walker, on_exit, on_visit
 
 # ====================== NODE TYPES ======================
 

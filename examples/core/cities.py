@@ -11,8 +11,7 @@ This example shows:
 import asyncio
 from typing import List, Optional
 
-from jvspatial.core import on_exit, on_visit
-from jvspatial.core.entities import Edge, Node, Walker
+from jvspatial.core import Edge, Node, Walker, on_exit, on_visit
 
 
 class City(Node):

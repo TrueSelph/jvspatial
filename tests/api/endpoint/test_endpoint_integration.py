@@ -444,10 +444,10 @@ class TestEndpointInjectionMechanism:
         assert self.test_server._endpoint_registry.has_walker(DiscoveryWalker)
         assert self.test_server._endpoint_registry.has_function(discovery_function)
 
-    @patch("jvspatial.api.context.get_current_server")
-    def test_no_server_available(self, mock_get_server):
+    def test_no_server_available(self):
         """Test endpoint decoration when no current server is available."""
-        mock_get_server.return_value = None
+        # Clear the current server to test no-server scenario
+        set_current_server(None)
 
         @endpoint("/test/no_server")
         class NoServerWalker(Walker):

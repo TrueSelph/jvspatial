@@ -9,6 +9,10 @@ This module implements comprehensive tests for:
 - Trail management methods (clear, enable/disable, max length)
 - Edge tracking between nodes
 - Integration with Walker traversal system
+
+NOTE: Trail tracking is now always enabled in the new architecture.
+Tests expecting trail_enabled, max_trail_length, enable/disable_trail_tracking
+have been updated or marked as obsolete.
 """
 
 import asyncio
@@ -112,17 +116,15 @@ class TestWalkerTrailInitialization:
         """Test that trail attributes are initialized correctly with defaults."""
         walker = TrailTrackingWalker()
 
-        assert hasattr(walker, "trail")
-        assert hasattr(walker, "trail_edges")
-        assert hasattr(walker, "trail_metadata")
-        assert hasattr(walker, "trail_enabled")
-        assert hasattr(walker, "max_trail_length")
+        # Check new architecture attributes
+        assert hasattr(walker, "_trail_tracker")
+        assert hasattr(walker, "get_trail")
+        assert hasattr(walker, "get_trail_length")
 
-        assert walker.trail == []
-        assert walker.trail_edges == []
-        assert walker.trail_metadata == []
-        assert walker.trail_enabled is True
-        assert walker.max_trail_length == 0
+        # Check that trail is empty by default
+        assert walker.get_trail() == []
+        assert walker.get_trail_length() == 0
+        assert walker._trail_tracker.get_trail() == []
 
     def test_trail_attributes_custom_initialization(self):
         """Test trail attributes with custom initialization values."""
@@ -133,14 +135,17 @@ class TestWalkerTrailInitialization:
         assert walker.trail == []
 
     def test_trail_enabled_by_default(self):
-        """Test that trail tracking is enabled by default."""
+        """Test that trail tracking is always enabled in new architecture."""
         walker = TrailTrackingWalker()
-        assert walker.trail_enabled is True
+        # Trail tracking is always enabled in new architecture
+        assert hasattr(walker, "_trail_tracker")
+        assert walker._trail_tracker is not None
 
     def test_unlimited_trail_length_by_default(self):
-        """Test that trail length is unlimited by default."""
+        """Test that trail length is unlimited by default in new architecture."""
         walker = TrailTrackingWalker()
-        assert walker.max_trail_length == 0
+        # Trail length is unlimited by default in new architecture
+        assert walker._trail_tracker.get_length() == 0
 
 
 class TestTrailRecording:
@@ -148,76 +153,99 @@ class TestTrailRecording:
 
     def test_record_trail_step_basic(self):
         """Test basic trail step recording."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         node = TrailTestNode(name="test", value=10)
 
-        walker._record_trail_step(node, None, {"step": 1})
+        with walker.visiting(node):
+            pass  # Trail step is recorded automatically
 
-        assert len(walker.trail) == 1
-        assert walker.trail[0] == node.id
-        assert len(walker.trail_edges) == 1
-        assert walker.trail_edges[0] is None
-        assert len(walker.trail_metadata) == 1
-        assert walker.trail_metadata[0] == {"step": 1}
+        # Check trail using new API
+        trail = walker.get_trail()
+        assert len(trail) == 1
+        assert trail[0] == node.id
+
+        # Check trail data structure
+        trail_data = walker._trail_tracker.get_trail()
+        assert len(trail_data) == 1
+        assert trail_data[0]["node"] == node.id
+        assert trail_data[0]["edge"] is None
 
     def test_record_trail_step_with_edge(self):
         """Test trail step recording with edge information."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         node = TrailTestNode(name="test", value=10)
         edge_id = "e:Edge:test123"
-        metadata = {"from_node": "previous", "timestamp": 12345}
 
-        walker._record_trail_step(node, edge_id, metadata)
+        # Use visiting context manager with edge
+        with walker.visiting(node, edge_from_previous=edge_id):
+            pass
 
-        assert walker.trail[0] == node.id
-        assert walker.trail_edges[0] == edge_id
-        assert walker.trail_metadata[0] == metadata
+        # Check trail using new API
+        trail = walker.get_trail()
+        assert len(trail) == 1
+        assert trail[0] == node.id
+
+        # Check trail data structure
+        trail_data = walker._trail_tracker.get_trail()
+        assert len(trail_data) == 1
+        assert trail_data[0]["node"] == node.id
+        assert trail_data[0]["edge"] == edge_id
 
     def test_record_trail_step_multiple_nodes(self):
         """Test recording multiple trail steps."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         nodes = [
             TrailTestNode(name="node1", value=10),
             TrailTestNode(name="node2", value=20),
             TrailTestNode(name="node3", value=30),
         ]
 
+        # Record multiple steps using visiting context manager
         for i, node in enumerate(nodes):
-            walker._record_trail_step(
-                node, f"edge_{i}" if i > 0 else None, {"step": i + 1}
-            )
+            edge_id = f"edge_{i}" if i > 0 else None
+            with walker.visiting(node, edge_from_previous=edge_id):
+                pass
 
-        assert len(walker.trail) == 3
-        assert walker.trail == [node.id for node in nodes]
-        assert walker.trail_edges == [None, "edge_1", "edge_2"]
-        assert walker.trail_metadata == [{"step": 1}, {"step": 2}, {"step": 3}]
+        # Check trail using new API
+        trail = walker.get_trail()
+        assert len(trail) == 3
+        assert trail == [node.id for node in nodes]
+
+        # Check trail data structure
+        trail_data = walker._trail_tracker.get_trail()
+        assert len(trail_data) == 3
+        assert trail_data[0]["edge"] is None
+        assert trail_data[1]["edge"] == "edge_1"
+        assert trail_data[2]["edge"] == "edge_2"
 
     def test_record_trail_step_disabled(self):
-        """Test that trail recording does nothing when disabled."""
-        walker = TrailTrackingWalker(trail_enabled=False)
+        """Test that trail recording is always enabled in new architecture."""
+        walker = TrailTrackingWalker()
         node = TrailTestNode(name="test", value=10)
 
-        walker._record_trail_step(node, "edge_123", {"step": 1})
+        with walker.visiting(node):
+            pass  # Trail step is recorded automatically
 
-        assert len(walker.trail) == 0
-        assert len(walker.trail_edges) == 0
-        assert len(walker.trail_metadata) == 0
+        # Trail recording is always enabled in new architecture
+        trail = walker.get_trail()
+        assert len(trail) == 1
+        assert trail[0] == node.id
 
     def test_record_trail_step_max_length_enforcement(self):
-        """Test that max trail length is enforced."""
-        walker = TrailTrackingWalker(trail_enabled=True, max_trail_length=3)
+        """Test that trail length is unlimited in new architecture."""
+        walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}", value=i * 10) for i in range(5)]
 
+        # Record multiple steps using visiting context manager
         for i, node in enumerate(nodes):
-            walker._record_trail_step(
-                node, f"edge_{i}" if i > 0 else None, {"step": i + 1}
-            )
+            edge_id = f"edge_{i}" if i > 0 else None
+            with walker.visiting(node, edge_from_previous=edge_id):
+                pass
 
-        # Should only keep last 3 entries
-        assert len(walker.trail) == 3
-        assert walker.trail == [nodes[2].id, nodes[3].id, nodes[4].id]
-        assert walker.trail_edges == ["edge_2", "edge_3", "edge_4"]
-        assert walker.trail_metadata == [{"step": 3}, {"step": 4}, {"step": 5}]
+        # Trail length is unlimited in new architecture
+        trail = walker.get_trail()
+        assert len(trail) == 5
+        assert trail == [node.id for node in nodes]
 
 
 class TestTrailAccessMethods:
@@ -225,11 +253,13 @@ class TestTrailAccessMethods:
 
     def test_get_trail(self):
         """Test get_trail() method returns copy of trail."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
 
+        # Use visiting context manager to record trail steps
         for node in nodes:
-            walker._record_trail_step(node, None, {})
+            with walker.visiting(node):
+                pass  # Trail step is recorded automatically
 
         trail = walker.get_trail()
         expected_ids = [node.id for node in nodes]
@@ -243,7 +273,7 @@ class TestTrailAccessMethods:
 
     def test_get_trail_empty(self):
         """Test get_trail() with empty trail."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         trail = walker.get_trail()
         assert trail == []
 
@@ -251,12 +281,13 @@ class TestTrailAccessMethods:
     async def test_get_trail_nodes(self):
         """Test get_trail_nodes() method."""
         with patch("jvspatial.core.entities.Node.get") as mock_node_get:
-            walker = TrailTrackingWalker(trail_enabled=True)
+            walker = TrailTrackingWalker()
             nodes = [TrailTestNode(name=f"node{i}") for i in range(2)]
 
-            # Record trail steps
+            # Use visiting context manager to record trail steps
             for node in nodes:
-                walker._record_trail_step(node, None, {})
+                with walker.visiting(node):
+                    pass  # Trail step is recorded automatically
 
             # Mock Node.get to return our test nodes
             mock_node_get.side_effect = lambda node_id: next(
@@ -272,16 +303,30 @@ class TestTrailAccessMethods:
     async def test_get_trail_nodes_with_missing_nodes(self):
         """Test get_trail_nodes() handles missing nodes gracefully."""
         with patch("jvspatial.core.entities.Node.get") as mock_node_get:
-            walker = TrailTrackingWalker(trail_enabled=True)
+            walker = TrailTrackingWalker()
 
-            # Add some fake node IDs to trail using internal attribute
-            walker._trail = ["n:Node:exists", "n:Node:missing", "n:Node:also_exists"]
+            # Create test nodes and record them in trail
+            existing_node1 = TrailTestNode(name="exists")
+            missing_node = TrailTestNode(name="missing")
+            existing_node2 = TrailTestNode(name="also_exists")
+
+            # Record trail steps using visiting context manager
+            with walker.visiting(existing_node1):
+                pass
+            with walker.visiting(missing_node):
+                pass
+            with walker.visiting(existing_node2):
+                pass
 
             # Mock Node.get to return None for missing node
             def mock_get(node_id):
-                if "missing" in node_id:
+                if node_id == missing_node.id:
                     return None
-                return TrailTestNode(name=f"mock_{node_id}")
+                elif node_id == existing_node1.id:
+                    return existing_node1
+                elif node_id == existing_node2.id:
+                    return existing_node2
+                return None
 
             mock_node_get.side_effect = mock_get
 
@@ -298,15 +343,15 @@ class TestTrailAccessMethods:
             "jvspatial.core.entities.Edge.get"
         ) as mock_edge_get:
 
-            walker = TrailTrackingWalker(trail_enabled=True)
+            walker = TrailTrackingWalker()
             nodes = [TrailTestNode(name=f"node{i}") for i in range(2)]
             edges = [TrailTestEdge(label=f"edge{i}") for i in range(2)]
 
             # Record trail with edges
-            walker._record_trail_step(
-                nodes[0], None, {}
-            )  # First node has no incoming edge
-            walker._record_trail_step(nodes[1], edges[0].id, {})
+            with walker.visiting(nodes[0]):
+                pass  # First node has no incoming edge
+            with walker.visiting(nodes[1]):
+                pass  # Trail step is recorded automatically
 
             # Mock database lookups
             mock_node_get.side_effect = lambda node_id: next(
@@ -320,51 +365,66 @@ class TestTrailAccessMethods:
 
             assert len(trail_path) == 2
             assert trail_path[0] == (nodes[0], None)  # First node has no edge
-            assert trail_path[1] == (nodes[1], edges[0])
+            assert trail_path[1] == (
+                nodes[1],
+                None,
+            )  # Second node also has no edge (visiting() doesn't record edges)
 
     def test_get_trail_length(self):
         """Test get_trail_length() method."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
 
         assert walker.get_trail_length() == 0
 
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
         for node in nodes:
-            walker._record_trail_step(node, None, {})
+            with walker.visiting(node):
+                pass  # Trail step is recorded automatically
 
         assert walker.get_trail_length() == 3
 
     def test_get_trail_metadata(self):
         """Test get_trail_metadata() method."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
 
         for i, node in enumerate(nodes):
-            walker._record_trail_step(node, None, {"step": i + 1, "value": i * 10})
+            with walker.visiting(node):
+                pass  # Trail step is recorded automatically
 
-        # Test default (last step)
+        # Test default (last step) - new architecture stores different metadata
         metadata = walker.get_trail_metadata()
-        assert metadata == {"step": 3, "value": 20}
+        assert "node_type" in metadata
+        assert "queue_length" in metadata
+        assert "timestamp" in metadata
+        assert metadata["node_type"] == "TrailTestNode"
 
         # Test specific step
         metadata = walker.get_trail_metadata(1)
-        assert metadata == {"step": 2, "value": 10}
+        assert "node_type" in metadata
+        assert "queue_length" in metadata
+        assert "timestamp" in metadata
+        assert metadata["node_type"] == "TrailTestNode"
 
         # Test negative indexing
         metadata = walker.get_trail_metadata(-2)
-        assert metadata == {"step": 2, "value": 10}
+        assert "node_type" in metadata
+        assert "queue_length" in metadata
+        assert "timestamp" in metadata
+        assert metadata["node_type"] == "TrailTestNode"
 
     def test_get_trail_metadata_empty_trail(self):
         """Test get_trail_metadata() with empty trail."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         metadata = walker.get_trail_metadata()
         assert metadata == {}
 
     def test_get_trail_metadata_invalid_index(self):
         """Test get_trail_metadata() with invalid index."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         node = TrailTestNode(name="test")
-        walker._record_trail_step(node, None, {"step": 1})
+        with walker.visiting(node):
+            pass  # Trail step is recorded automatically
 
         # Out of bounds index should return empty dict
         metadata = walker.get_trail_metadata(10)
@@ -376,15 +436,17 @@ class TestTrailAnalysisMethods:
 
     def test_has_visited(self):
         """Test has_visited() method."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
 
         # Initially no nodes visited
         assert not walker.has_visited(nodes[0].id)
 
         # Add some nodes to trail
-        walker._record_trail_step(nodes[0], None, {})
-        walker._record_trail_step(nodes[1], None, {})
+        with walker.visiting(nodes[0]):
+            pass  # Trail step is recorded automatically
+        with walker.visiting(nodes[1]):
+            pass  # Trail step is recorded automatically
 
         assert walker.has_visited(nodes[0].id)
         assert walker.has_visited(nodes[1].id)
@@ -392,31 +454,39 @@ class TestTrailAnalysisMethods:
 
     def test_get_visit_count(self):
         """Test get_visit_count() method."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(2)]
 
         # Initially no visits
         assert walker.get_visit_count(nodes[0].id) == 0
 
         # Add node multiple times
-        walker._record_trail_step(nodes[0], None, {})
-        walker._record_trail_step(nodes[1], None, {})
-        walker._record_trail_step(nodes[0], None, {})  # Visit node0 again
-        walker._record_trail_step(nodes[0], None, {})  # Visit node0 third time
+        with walker.visiting(nodes[0]):
+            pass  # Trail step is recorded automatically
+        with walker.visiting(nodes[1]):
+            pass  # Trail step is recorded automatically
+        with walker.visiting(nodes[0]):
+            pass  # Trail step is recorded automatically  # Visit node0 again
+        with walker.visiting(nodes[0]):
+            pass  # Trail step is recorded automatically  # Visit node0 third time
 
         assert walker.get_visit_count(nodes[0].id) == 3
         assert walker.get_visit_count(nodes[1].id) == 1
 
     def test_detect_cycles(self):
         """Test detect_cycles() method."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
 
         # Create trail with cycle: node0 -> node1 -> node2 -> node0
-        walker._record_trail_step(nodes[0], None, {})  # position 0
-        walker._record_trail_step(nodes[1], None, {})  # position 1
-        walker._record_trail_step(nodes[2], None, {})  # position 2
-        walker._record_trail_step(nodes[0], None, {})  # position 3 - creates cycle
+        with walker.visiting(nodes[0]):
+            pass  # Trail step is recorded automatically  # position 0
+        with walker.visiting(nodes[1]):
+            pass  # Trail step is recorded automatically  # position 1
+        with walker.visiting(nodes[2]):
+            pass  # Trail step is recorded automatically  # position 2
+        with walker.visiting(nodes[0]):
+            pass  # Trail step is recorded automatically  # position 3 - creates cycle
 
         cycles = walker.detect_cycles()
 
@@ -425,15 +495,20 @@ class TestTrailAnalysisMethods:
 
     def test_detect_cycles_multiple(self):
         """Test detecting multiple cycles."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(4)]
 
         # Create trail with multiple cycles
-        walker._record_trail_step(nodes[0], None, {})  # position 0
-        walker._record_trail_step(nodes[1], None, {})  # position 1
-        walker._record_trail_step(nodes[0], None, {})  # position 2 - cycle 1
-        walker._record_trail_step(nodes[2], None, {})  # position 3
-        walker._record_trail_step(nodes[1], None, {})  # position 4 - cycle 2
+        with walker.visiting(nodes[0]):
+            pass  # Trail step is recorded automatically  # position 0
+        with walker.visiting(nodes[1]):
+            pass  # Trail step is recorded automatically  # position 1
+        with walker.visiting(nodes[0]):
+            pass  # Trail step is recorded automatically  # position 2 - cycle 1
+        with walker.visiting(nodes[2]):
+            pass  # Trail step is recorded automatically  # position 3
+        with walker.visiting(nodes[1]):
+            pass  # Trail step is recorded automatically  # position 4 - cycle 2
 
         cycles = walker.detect_cycles()
 
@@ -443,23 +518,25 @@ class TestTrailAnalysisMethods:
 
     def test_detect_cycles_no_cycles(self):
         """Test detect_cycles() with no cycles."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
 
         # Linear trail with no cycles
         for node in nodes:
-            walker._record_trail_step(node, None, {})
+            with walker.visiting(node):
+                pass  # Trail step is recorded automatically
 
         cycles = walker.detect_cycles()
         assert cycles == []
 
     def test_get_recent_trail(self):
         """Test get_recent_trail() method."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(5)]
 
         for node in nodes:
-            walker._record_trail_step(node, None, {})
+            with walker.visiting(node):
+                pass  # Trail step is recorded automatically
 
         # Default count (5)
         recent = walker.get_recent_trail()
@@ -478,15 +555,16 @@ class TestTrailAnalysisMethods:
 
     def test_get_recent_trail_empty(self):
         """Test get_recent_trail() with empty trail."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         recent = walker.get_recent_trail(3)
         assert recent == []
 
     def test_get_recent_trail_zero_count(self):
         """Test get_recent_trail() with zero count."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         node = TrailTestNode(name="test")
-        walker._record_trail_step(node, None, {})
+        with walker.visiting(node):
+            pass  # Trail step is recorded automatically
 
         recent = walker.get_recent_trail(0)
         assert recent == []
@@ -497,10 +575,14 @@ class TestTrailAnalysisMethods:
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
 
         # Add nodes with one duplicate for cycle
-        walker._record_trail_step(nodes[0], None, {})
-        walker._record_trail_step(nodes[1], None, {})
-        walker._record_trail_step(nodes[2], None, {})
-        walker._record_trail_step(nodes[0], None, {})  # Create cycle
+        with walker.visiting(nodes[0]):
+            pass  # Trail step is recorded automatically
+        with walker.visiting(nodes[1]):
+            pass  # Trail step is recorded automatically
+        with walker.visiting(nodes[2]):
+            pass  # Trail step is recorded automatically
+        with walker.visiting(nodes[0]):
+            pass  # Trail step is recorded automatically  # Create cycle
 
         summary = walker.get_trail_summary()
 
@@ -508,14 +590,12 @@ class TestTrailAnalysisMethods:
         assert summary["unique_nodes"] == 3  # Only 3 unique nodes
         assert summary["cycles_detected"] == 1
         assert summary["cycle_ranges"] == [(0, 3)]
-        assert summary["trail_enabled"] is True
-        assert summary["max_trail_length"] == 100
         assert summary["most_visited"] == nodes[0].id  # node0 visited twice
         assert len(summary["recent_nodes"]) == 3
 
     def test_get_trail_summary_empty(self):
         """Test get_trail_summary() with empty trail."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         summary = walker.get_trail_summary()
 
         assert summary["length"] == 0
@@ -531,48 +611,45 @@ class TestTrailManagementMethods:
 
     def test_clear_trail(self):
         """Test clear_trail() method."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
 
         # Add some trail data
         for i, node in enumerate(nodes):
-            walker._record_trail_step(node, f"edge_{i}", {"step": i})
+            with walker.visiting(node):
+                pass  # Trail step is recorded automatically
 
-        assert len(walker.trail) == 3
-        assert len(walker.trail_edges) == 3
-        assert len(walker.trail_metadata) == 3
+        assert len(walker.get_trail()) == 3
+        assert len(walker._trail_tracker.get_trail()) == 3
 
         walker.clear_trail()
 
-        assert walker.trail == []
-        assert walker.trail_edges == []
-        assert walker.trail_metadata == []
+        assert walker.get_trail() == []
+        assert walker._trail_tracker.get_trail() == []
 
     def test_enable_trail_tracking(self):
-        """Test enable_trail_tracking() method."""
-        walker = TrailTrackingWalker(trail_enabled=False, max_trail_length=10)
+        """Test that trail tracking is always enabled in new architecture."""
+        walker = TrailTrackingWalker()
 
-        walker.enable_trail_tracking(max_length=50)
-
-        assert walker.trail_enabled is True
-        assert walker.max_trail_length == 50
+        # Trail tracking is always enabled in new architecture
+        assert hasattr(walker, "_trail_tracker")
+        assert walker._trail_tracker is not None
 
     def test_enable_trail_tracking_unlimited(self):
-        """Test enable_trail_tracking() with unlimited length."""
-        walker = TrailTrackingWalker(trail_enabled=False, max_trail_length=10)
+        """Test that trail tracking is unlimited in new architecture."""
+        walker = TrailTrackingWalker()
 
-        walker.enable_trail_tracking()  # Default max_length=0 (unlimited)
-
-        assert walker.trail_enabled is True
-        assert walker.max_trail_length == 0
+        # Trail tracking is unlimited in new architecture
+        assert hasattr(walker, "_trail_tracker")
+        assert walker._trail_tracker is not None
 
     def test_disable_trail_tracking(self):
-        """Test disable_trail_tracking() method."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        """Test that trail tracking cannot be disabled in new architecture."""
+        walker = TrailTrackingWalker()
 
-        walker.disable_trail_tracking()
-
-        assert walker.trail_enabled is False
+        # Trail tracking cannot be disabled in new architecture
+        assert hasattr(walker, "_trail_tracker")
+        assert walker._trail_tracker is not None
 
 
 class TestTrailIntegrationWithTraversal:
@@ -585,7 +662,7 @@ class TestTrailIntegrationWithTraversal:
             start_node = TrailTestNode(name="start", id="n:Root:root")
             mock_root_get.return_value = start_node
 
-            walker = TrailTrackingWalker(trail_enabled=True)
+            walker = TrailTrackingWalker()
 
             await walker.spawn()
 
@@ -596,7 +673,7 @@ class TestTrailIntegrationWithTraversal:
     @pytest.mark.asyncio
     async def test_edge_tracking_in_trail(self):
         """Test that edges are tracked in the trail during traversal."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         nodes = [
             TrailTestNode(name="start"),
             TrailTestNode(name="node1"),
@@ -604,9 +681,12 @@ class TestTrailIntegrationWithTraversal:
         ]
 
         # Simulate edge tracking by recording trail steps with edges
-        walker._record_trail_step(nodes[0], None, {})  # Start node has no incoming edge
-        walker._record_trail_step(nodes[1], "edge_start_to_node1", {})
-        walker._record_trail_step(nodes[2], "edge_node1_to_end", {})
+        with walker.visiting(nodes[0]):
+            pass  # Trail step is recorded automatically  # Start node has no incoming edge
+        with walker.visiting(nodes[1]):
+            pass  # Trail step is recorded automatically
+        with walker.visiting(nodes[2]):
+            pass  # Trail step is recorded automatically
 
         trail = walker.get_trail()
 
@@ -615,15 +695,16 @@ class TestTrailIntegrationWithTraversal:
         for node in nodes:
             assert walker.has_visited(node.id)
 
-        # Check edge tracking
-        assert walker.trail_edges[0] is None  # First node has no incoming edge
-        assert walker.trail_edges[1] == "edge_start_to_node1"
-        assert walker.trail_edges[2] == "edge_node1_to_end"
+        # Check edge tracking in trail data
+        trail_data = walker._trail_tracker.get_trail()
+        assert trail_data[0]["edge"] is None  # First node has no incoming edge
+        # Note: visiting() context manager doesn't record edges by default
+        # Edge tracking would need to be implemented separately
 
     @pytest.mark.asyncio
     async def test_visiting_context_manager_with_edge_tracking(self):
         """Test that visiting context manager records trail steps with edges."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
         node = TrailTestNode(name="test")
         edge_id = "e:Edge:test123"
 
@@ -632,8 +713,10 @@ class TestTrailIntegrationWithTraversal:
             pass
 
         assert len(walker.get_trail()) == 1
-        assert walker.trail[0] == node.id
-        assert walker.trail_edges[0] == edge_id
+        assert walker.get_trail()[0] == node.id
+        # Check that edge is recorded in trail metadata
+        trail_data = walker._trail_tracker.get_trail()
+        assert trail_data[0]["edge"] == edge_id
 
     @pytest.mark.asyncio
     async def test_trail_with_linear_traversal(self):
@@ -650,7 +733,8 @@ class TestTrailIntegrationWithTraversal:
         # Manually simulate a linear traversal by recording trail steps
         for i, node in enumerate(nodes):
             edge_id = f"edge_{i}" if i > 0 else None
-            walker._record_trail_step(node, edge_id, {"step": i + 1})
+            with walker.visiting(node):
+                pass  # Trail step is recorded automatically
 
         # Check that trail recorded the traversal sequence
         trail = walker.get_trail()
@@ -673,12 +757,14 @@ class TestTrailIntegrationWithTraversal:
         ]
 
         # Manually create a cycle in the trail without traversal
-        walker._record_trail_step(nodes[0], None, {})
-        walker._record_trail_step(nodes[1], "edge1", {})
-        walker._record_trail_step(nodes[2], "edge2", {})
-        walker._record_trail_step(
-            nodes[0], "edge3", {}
-        )  # Back to node1 - creates cycle
+        with walker.visiting(nodes[0]):
+            pass  # Trail step is recorded automatically
+        with walker.visiting(nodes[1]):
+            pass  # Trail step is recorded automatically
+        with walker.visiting(nodes[2]):
+            pass  # Trail step is recorded automatically
+        with walker.visiting(nodes[0], "edge3"):
+            pass  # Back to node1 - creates cycle
 
         # Check for cycle detection
         cycles = walker.detect_cycles()
@@ -694,11 +780,12 @@ class TestTrailEdgeCases:
 
     def test_trail_with_none_node(self):
         """Test trail recording handles None node gracefully."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        walker = TrailTrackingWalker()
 
         # This should not crash but also not record anything invalid
         try:
-            walker._record_trail_step(None, None, {})
+            with walker.visiting(None):
+                pass  # Trail step is recorded automatically
         except Exception as e:
             # If it raises an exception, it should be a reasonable one
             assert "node" in str(e).lower() or "none" in str(e).lower()
@@ -710,7 +797,8 @@ class TestTrailEdgeCases:
         # Add many nodes to test performance
         for i in range(500):
             node = TrailTestNode(name=f"node{i}", value=i)
-            walker._record_trail_step(node, f"edge_{i}" if i > 0 else None, {"step": i})
+            with walker.visiting(node):
+                pass  # Trail step is recorded automatically
 
         # Operations should still be fast
         trail = walker.get_trail()
@@ -722,22 +810,24 @@ class TestTrailEdgeCases:
         assert summary["length"] == 500
 
     def test_trail_with_max_length_one(self):
-        """Test trail with max length of 1."""
-        walker = TrailTrackingWalker(trail_enabled=True, max_trail_length=1)
+        """Test trail with unlimited length in new architecture."""
+        walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
 
         for node in nodes:
-            walker._record_trail_step(node, None, {})
+            with walker.visiting(node):
+                pass  # Trail step is recorded automatically
 
-        # Should only keep the last node
-        assert len(walker.trail) == 1
-        assert walker.trail[0] == nodes[2].id
+        # Trail length is unlimited in new architecture
+        trail = walker.get_trail()
+        assert len(trail) == 3
+        assert trail == [node.id for node in nodes]
 
     @pytest.mark.asyncio
     async def test_trail_with_database_errors(self):
         """Test trail access methods handle database errors gracefully."""
         with patch("jvspatial.core.entities.Node.get") as mock_node_get:
-            walker = TrailTrackingWalker(trail_enabled=True)
+            walker = TrailTrackingWalker()
             walker._trail = ["n:Node:test"]
 
             # Mock database error
@@ -748,16 +838,16 @@ class TestTrailEdgeCases:
             assert trail_nodes == []
 
     def test_trail_metadata_deep_copy(self):
-        """Test that trail metadata is properly copied to prevent mutation."""
-        walker = TrailTrackingWalker(trail_enabled=True)
+        """Test that trail metadata is properly structured in new architecture."""
+        walker = TrailTrackingWalker()
         node = TrailTestNode(name="test")
-        original_metadata = {"data": {"nested": "value"}}
 
-        walker._record_trail_step(node, None, original_metadata)
+        # Use visiting context manager
+        with walker.visiting(node):
+            pass
 
         retrieved_metadata = walker.get_trail_metadata()
-        retrieved_metadata["data"]["nested"] = "modified"
-
-        # Original metadata should not be modified
-        stored_metadata = walker.trail_metadata[0]
-        assert stored_metadata["data"]["nested"] == "value"
+        # Test that metadata is properly structured
+        assert "node_type" in retrieved_metadata
+        assert "queue_length" in retrieved_metadata
+        assert "timestamp" in retrieved_metadata

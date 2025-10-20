@@ -9,14 +9,13 @@ from typing import Any, Dict, List
 
 from fastapi import Request
 
-from jvspatial.api.server import Server
-from jvspatial.api.webhook.decorators import webhook_endpoint
-from jvspatial.core.entities import Node, Walker, on_visit
+from jvspatial.api import Server, webhook_endpoint
+from jvspatial.core import Node, Walker, on_visit
 
 
 # Example 1: Simple webhook endpoint with JSON payload processing
 @webhook_endpoint("/webhook/simple")
-async def simple_webhook(payload: dict, endpoint):
+async def simple_webhook(payload: dict, endpoint) -> Any:
     """Simple webhook that processes JSON payloads.
 
     This endpoint automatically receives parsed JSON data and provides
@@ -46,7 +45,7 @@ async def simple_webhook(payload: dict, endpoint):
     hmac_secret="your-payment-webhook-secret",  # pragma: allowlist secret
     idempotency_ttl_hours=48,  # Keep idempotency records for 48 hours
 )
-async def payment_webhook(payload: dict, endpoint):
+async def payment_webhook(payload: dict, endpoint) -> Any:
     """Payment webhook with HMAC verification and idempotency.
 
     This webhook verifies HMAC signatures and handles duplicate requests
@@ -95,7 +94,7 @@ async def payment_webhook(payload: dict, endpoint):
     path_key_auth=True,
     hmac_secret="stripe-webhook-secret",  # pragma: allowlist secret
 )
-async def stripe_webhook(raw_body: bytes, content_type: str, endpoint):
+async def stripe_webhook(raw_body: bytes, content_type: str, endpoint) -> Any:
     """Stripe webhook with path-based API key authentication.
 
     This webhook uses path-based authentication where the API key is embedded
@@ -156,7 +155,7 @@ async def stripe_webhook(raw_body: bytes, content_type: str, endpoint):
 @webhook_endpoint(
     "/webhook/bulk-data", async_processing=True, permissions=["process_bulk_data"]
 )
-async def bulk_data_webhook(payload: dict, endpoint):
+async def bulk_data_webhook(payload: dict, endpoint) -> Any:
     """Bulk data processing webhook with asynchronous handling.
 
     This webhook immediately returns a 200 response and processes the data
@@ -251,7 +250,7 @@ class LocationUpdateWalker(Walker):
     permissions=["manage_inventory"],
     idempotency_ttl_hours=72,
 )
-async def inventory_webhook(payload: dict, endpoint, request: Request):
+async def inventory_webhook(payload: dict, endpoint, request: Request) -> Any:
     """Advanced inventory webhook with custom validation and error handling.
 
     This example shows more sophisticated webhook handling including
@@ -344,7 +343,7 @@ def create_server():
 
     # Re-register with explicit server to ensure proper registration
     @webhook_endpoint("/webhook/simple", server=server)
-    async def simple_webhook_registered(payload: dict, endpoint) -> Dict[str, Any]:  # type: ignore[call-arg,misc]
+    async def simple_webhook_registered(payload: dict, endpoint) -> Any:
         return simple_webhook(payload, endpoint)  # type: ignore[call-arg]
 
     @webhook_endpoint(
@@ -353,7 +352,7 @@ def create_server():
         idempotency_ttl_hours=48,
         server=server,
     )
-    async def payment_webhook_registered(payload: dict, endpoint) -> Dict[str, Any]:  # type: ignore[call-arg,misc]
+    async def payment_webhook_registered(payload: dict, endpoint) -> Any:
         return payment_webhook(payload, endpoint)  # type: ignore[call-arg]
 
     @webhook_endpoint(
@@ -362,7 +361,9 @@ def create_server():
         hmac_secret="stripe-webhook-secret",  # pragma: allowlist secret
         server=server,
     )
-    async def stripe_webhook_registered(raw_body: bytes, content_type: str, endpoint) -> Dict[str, Any]:  # type: ignore[call-arg,misc]
+    async def stripe_webhook_registered(
+        raw_body: bytes, content_type: str, endpoint
+    ) -> Any:
         return stripe_webhook(raw_body, content_type, endpoint)  # type: ignore[call-arg]
 
     @webhook_endpoint(
@@ -371,7 +372,7 @@ def create_server():
         permissions=["process_bulk_data"],
         server=server,
     )
-    async def bulk_data_webhook_registered(payload: dict, endpoint) -> Dict[str, Any]:  # type: ignore[call-arg,misc]
+    async def bulk_data_webhook_registered(payload: dict, endpoint) -> Any:
         return bulk_data_webhook(payload, endpoint)  # type: ignore[call-arg]
 
     @webhook_endpoint(
@@ -381,7 +382,9 @@ def create_server():
         idempotency_ttl_hours=72,
         server=server,
     )
-    async def inventory_webhook_registered(payload: dict, endpoint, request: Request) -> Dict[str, Any]:  # type: ignore[call-arg,misc]
+    async def inventory_webhook_registered(
+        payload: dict, endpoint, request: Request
+    ) -> Any:
         return inventory_webhook(payload, endpoint, request)  # type: ignore[call-arg]
 
     # Register the walker endpoint

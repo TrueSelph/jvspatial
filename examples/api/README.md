@@ -38,7 +38,8 @@ Demonstrates how to use authentication decorators to create secure API endpoints
 
 **Usage:**
 ```python
-from jvspatial.api.auth import auth_endpoint
+from jvspatial.api import auth_endpoint
+from jvspatial.core import Node, Walker, on_visit
 
 # Simple authenticated endpoint
 @auth_endpoint("/api/profile", methods=["GET"])

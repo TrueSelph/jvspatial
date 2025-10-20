@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from jvspatial.db.database import Database
-from jvspatial.db.query import matches_query
+from jvspatial.db.query import QueryEngine
 
 
 class JsonDB(Database):
@@ -33,7 +33,7 @@ class JsonDB(Database):
             raise RuntimeError(
                 f"Cannot create database directory {base_path}: {e}"
             ) from e
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None  # Lazy initialization
         self._cache: Dict[str, Dict[str, Any]] = {}  # Cache for document data
 
         # Get cache size from parameter, environment variable, or default
@@ -42,6 +42,16 @@ class JsonDB(Database):
         self._cache_size = cache_size
 
         self._cache_mtime: Dict[str, float] = {}  # Track file modification times
+
+    def _get_lock(self) -> asyncio.Lock:
+        """Get or create the async lock lazily.
+
+        Returns:
+            Async lock instance
+        """
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     @property
     def data_dir(self) -> Path:
@@ -125,7 +135,7 @@ class JsonDB(Database):
             raise KeyError("Document data must contain 'id' field")
 
         file_path = self._get_file_path(collection, data["id"])
-        async with self._lock:
+        async with self._get_lock():
             try:
                 with open(file_path, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
@@ -172,7 +182,7 @@ class JsonDB(Database):
             except OSError:
                 pass
 
-        async with self._lock:
+        async with self._get_lock():
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     result = json.load(f)
@@ -205,7 +215,7 @@ class JsonDB(Database):
             return  # Invalid ID is silently ignored
 
         if file_path.exists():
-            async with self._lock:
+            async with self._get_lock():
                 with contextlib.suppress(OSError):
                     file_path.unlink()
 
@@ -231,7 +241,7 @@ class JsonDB(Database):
 
         for file_path in collection_path.glob("*.json"):
             try:
-                async with self._lock:
+                async with self._get_lock():
                     with open(file_path, "r", encoding="utf-8") as f:
                         doc = json.load(f)
 
@@ -244,8 +254,8 @@ class JsonDB(Database):
                     continue
                 seen_ids.add(doc["id"])
 
-                # Check if document matches query using standardized MongoDB-style matcher
-                if matches_query(doc, query):
+                # Use unified QueryEngine for matching
+                if QueryEngine.match(doc, query):
                     results.append(doc)
             except (json.JSONDecodeError, KeyError, IOError, TypeError):
                 # Skip invalid JSON files or files without proper structure
@@ -299,7 +309,7 @@ class JsonDB(Database):
             if node_collection.exists():
                 for file_path in node_collection.glob("*.json"):
                     try:
-                        async with self._lock:
+                        async with self._get_lock():
                             with open(file_path, "r", encoding="utf-8") as f:
                                 node_doc = json.load(f)
                                 if isinstance(node_doc, dict) and "id" in node_doc:
@@ -315,7 +325,7 @@ class JsonDB(Database):
             orphaned_files = []
             for file_path in edge_collection.glob("*.json"):
                 try:
-                    async with self._lock:
+                    async with self._get_lock():
                         with open(file_path, "r", encoding="utf-8") as f:
                             edge_doc = json.load(f)
 
@@ -343,7 +353,7 @@ class JsonDB(Database):
             # Remove orphaned files
             for file_path in orphaned_files:
                 try:
-                    async with self._lock:
+                    async with self._get_lock():
                         file_path.unlink()
                 except OSError:
                     continue  # Skip files that can't be deleted

@@ -25,13 +25,9 @@ from typing import List, Optional
 from fastapi.responses import JSONResponse
 from pydantic import Field
 
-from jvspatial.api import endpoint
-from jvspatial.api.endpoint.decorators import EndpointField
-from jvspatial.api.routing.endpoint import EndpointRouter
-
-# Import the new Server class
-from jvspatial.api.server import Server, create_server
-from jvspatial.core.entities import Node, Root, Walker, on_exit, on_visit
+from jvspatial.api import create_server, endpoint
+from jvspatial.api.endpoint import EndpointField
+from jvspatial.core import Node, Root, Walker, on_exit, on_visit
 
 # ====================== NODE TYPES ======================
 

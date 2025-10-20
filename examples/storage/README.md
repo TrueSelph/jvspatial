@@ -52,8 +52,10 @@ Basic file storage operations:
 
 ### Local Storage
 ```python
+from jvspatial.api import create_server
+
 # Configure local storage
-server = Server(
+server = create_server(
     file_storage_enabled=True,
     file_storage_provider="local",
     file_storage_root=".files",
@@ -63,8 +65,10 @@ server = Server(
 
 ### S3 Storage
 ```python
+from jvspatial.api import create_server
+
 # Configure S3 storage
-server = Server(
+server = create_server(
     file_storage_enabled=True,
     file_storage_provider="s3",
     s3_bucket_name="my-bucket",

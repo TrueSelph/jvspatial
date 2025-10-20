@@ -3,6 +3,8 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
+from .query import QueryEngine
+
 
 class Database(ABC):
     """Abstract base class for database adapters.
@@ -129,7 +131,7 @@ class Database(ABC):
         values = set()
 
         for doc in documents:
-            value = self._get_field_value(doc, field)
+            value = QueryEngine.get_field_value(doc, field)
             if value is not None:
                 # Handle lists by adding each element
                 if isinstance(value, list):
@@ -163,7 +165,7 @@ class Database(ABC):
         if not document:
             if upsert:
                 # Create new document from filter query and update operations
-                new_doc = self._apply_update_operations({}, update)
+                new_doc = QueryEngine.apply_update({}, update)
                 # Merge filter conditions that aren't operators
                 for key, value in filter_query.items():
                     if not key.startswith("$") and key not in new_doc:
@@ -183,7 +185,7 @@ class Database(ABC):
                 return {"matched_count": 0, "modified_count": 0}
 
         # Apply update operations
-        updated_doc = self._apply_update_operations(document.copy(), update)
+        updated_doc = QueryEngine.apply_update(document.copy(), update)
         await self.save(collection, updated_doc)
 
         return {"matched_count": 1, "modified_count": 1}
@@ -204,7 +206,7 @@ class Database(ABC):
         documents = await self.find(collection, filter_query)
 
         for _modified_count, doc in enumerate(documents, 1):
-            updated_doc = self._apply_update_operations(doc.copy(), update)
+            updated_doc = QueryEngine.apply_update(doc.copy(), update)
             await self.save(collection, updated_doc)
 
         return {"matched_count": len(documents), "modified_count": len(documents)}
@@ -249,98 +251,7 @@ class Database(ABC):
 
         return {"deleted_count": deleted_count}
 
-    def _get_field_value(self, document: Dict[str, Any], field: str) -> Any:
-        """Get value from document using dot notation."""
-        if "." not in field:
-            return document.get(field)
-
-        keys = field.split(".")
-        current: Any = document
-
-        for key in keys:
-            if isinstance(current, dict):
-                current = current.get(key)
-            elif isinstance(current, list) and key.isdigit():
-                try:
-                    current = current[int(key)]
-                except (IndexError, ValueError):
-                    return None
-            else:
-                return None
-
-        return current
-
-    def _apply_update_operations(
-        self, document: Dict[str, Any], update: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Apply MongoDB-style update operations to a document."""
-        result = document.copy()
-
-        for operator, operations in update.items():
-            if operator == "$set":
-                for field, value in operations.items():
-                    self._set_field_value(result, field, value)
-            elif operator == "$unset":
-                for field in operations.keys():
-                    self._unset_field_value(result, field)
-            elif operator == "$inc":
-                for field, increment in operations.items():
-                    current = self._get_field_value(result, field) or 0
-                    self._set_field_value(result, field, current + increment)
-            elif operator == "$mul":
-                for field, multiplier in operations.items():
-                    current = self._get_field_value(result, field) or 0
-                    self._set_field_value(result, field, current * multiplier)
-            elif operator == "$push":
-                for field, value in operations.items():
-                    current = self._get_field_value(result, field)
-                    if not isinstance(current, list):
-                        current = []
-                    current.append(value)
-                    self._set_field_value(result, field, current)
-            elif operator == "$pull":
-                for field, value in operations.items():
-                    current = self._get_field_value(result, field)
-                    if isinstance(current, list):
-                        current = [item for item in current if item != value]
-                        self._set_field_value(result, field, current)
-
-        return result
-
-    def _set_field_value(
-        self, document: Dict[str, Any], field: str, value: Any
-    ) -> None:
-        """Set field value using dot notation."""
-        if "." not in field:
-            document[field] = value
-            return
-
-        keys = field.split(".")
-        current = document
-
-        for key in keys[:-1]:
-            if key not in current:
-                current[key] = {}
-            current = current[key]
-
-        current[keys[-1]] = value
-
-    def _unset_field_value(self, document: Dict[str, Any], field: str) -> None:
-        """Remove field using dot notation."""
-        if "." not in field:
-            document.pop(field, None)
-            return
-
-        keys = field.split(".")
-        current = document
-
-        for key in keys[:-1]:
-            if key not in current:
-                return
-            current = current[key]
-
-        if isinstance(current, dict):
-            current.pop(keys[-1], None)
+    # Deprecated per QueryEngine adoption: keeping no-op stubs removed to avoid duplication
 
 
 class VersionConflictError(Exception):

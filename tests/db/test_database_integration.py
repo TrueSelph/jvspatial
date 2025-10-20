@@ -33,7 +33,7 @@ from jvspatial.db.factory import (
     unregister_database,
 )
 from jvspatial.db.jsondb import JsonDB
-from jvspatial.db.query import QueryBuilder, matches_query, query
+from jvspatial.db.query import QueryBuilder, query
 
 
 class DbTestNode(Node):
@@ -289,6 +289,42 @@ def mock_context(mock_database):
 class TestDatabaseFactory:
     """Test database factory and registry functionality."""
 
+    def setup_method(self):
+        """Set up clean state for each test."""
+        # Reset to default state
+        from jvspatial.db.factory import (
+            _DATABASE_CONFIGURATORS,
+            _DATABASE_REGISTRY,
+            set_default_database,
+        )
+
+        # Clean up test databases from previous runs
+        unregister_database("mock")
+        unregister_database("temp")
+        unregister_database("test")
+
+        # Ensure json database is properly registered first
+        if "json" not in _DATABASE_REGISTRY:
+            from jvspatial.db.factory import register_database
+            from jvspatial.db.jsondb import JsonDB
+
+            def json_configurator(kwargs):
+                base_path = kwargs.get("base_path", "jvdb")
+                cache_size = kwargs.get("cache_size")
+                return JsonDB(str(base_path), cache_size=cache_size)
+
+            register_database("json", JsonDB, json_configurator, set_as_default=True)
+
+        # Now set as default
+        set_default_database("json")
+
+    def teardown_method(self):
+        """Clean up after each test."""
+        # Ensure clean state
+        from jvspatial.db.factory import set_default_database
+
+        set_default_database("json")
+
     def test_register_database(self):
         """Test database registration."""
         # Register mock database
@@ -348,7 +384,31 @@ class TestDatabaseFactory:
         unregister_database("test")
 
     def test_get_database_with_config(self):
-        """Test getting database with configuration."""
+        """Test getting database with configuration.
+
+        Note: JsonDB requires an event loop to initialize its async lock.
+        We need to ensure there's an event loop available.
+        """
+        import asyncio
+
+        # Ensure json database is registered
+        from jvspatial.db.factory import (
+            _DATABASE_CONFIGURATORS,
+            _DATABASE_REGISTRY,
+            register_database,
+        )
+        from jvspatial.db.jsondb import JsonDB
+
+        if "json" not in _DATABASE_REGISTRY:
+            register_database("json", JsonDB, set_as_default=True)
+
+        # Ensure we have an event loop for JsonDB's async lock
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
         # This should work with JsonDB
         db = get_database("json", base_path="/tmp/test")
         assert isinstance(db, JsonDB)

@@ -714,6 +714,15 @@ class TestServerConfiguration:
 
     def test_database_configuration(self):
         """Test database configuration."""
+        import asyncio
+
+        # Ensure we have an event loop for JsonDB's async lock
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
         config = ServerConfig(db_type="json", db_path="jvdb/tests")
         server = Server(config=config)
 

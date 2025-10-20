@@ -60,14 +60,8 @@ Usage:
 """
 
 from .decorators import (
-    AuthAwareEndpointProcessor,
     admin_endpoint,
     auth_endpoint,
-    require_admin,
-    require_authenticated_user,
-    require_permissions,
-    require_roles,
-    webhook_endpoint,
 )
 from .entities import (
     APIKey,
@@ -130,14 +124,7 @@ __all__ = [
     "get_admin_user",
     # Decorators - Unified decorators work with both functions and Walker classes
     "auth_endpoint",  # Unified authenticated endpoint (auto-detects functions/walkers)
-    "webhook_endpoint",  # Unified webhook endpoint (auto-detects functions/walkers)
     "admin_endpoint",  # Convenience decorator for admin-only endpoints
-    "AuthAwareEndpointProcessor",
-    # Utility functions
-    "require_authenticated_user",
-    "require_permissions",
-    "require_roles",
-    "require_admin",
 ]
 
 # Version info

@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from jvspatial.core import GraphContext, Node
 from jvspatial.db import Database, get_database, register_database
-from jvspatial.db.query import QueryBuilder, matches_query, query
+from jvspatial.db.query import QueryBuilder, QueryEngine, query
 
 
 # Custom database for testing query compatibility
@@ -49,8 +49,8 @@ class InMemoryDatabase(Database):
 
         for key, doc in self._data.items():
             if key.startswith(prefix):
-                # Use the standardized MongoDB-style query matcher
-                if matches_query(doc, query):
+                # Use the unified MongoDB-style query engine
+                if QueryEngine.match(doc, query):
                     results.append(doc)
 
         return results

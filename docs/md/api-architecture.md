@@ -70,7 +70,7 @@ The endpoint system consists of two main files:
 **Walker Endpoints** - Graph traversal via HTTP:
 ```python
 from jvspatial.api import walker_endpoint
-from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api.endpoint import EndpointField
 
 @walker_endpoint("/process", methods=["POST"])
 class DataProcessor(Walker):

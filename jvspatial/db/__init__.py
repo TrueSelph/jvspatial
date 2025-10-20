@@ -18,7 +18,6 @@ from .jsondb import JsonDB
 from .query import (
     QueryBuilder,
     QueryOperator,
-    matches_query,
     query,
 )
 
@@ -40,7 +39,6 @@ try:
         "query",
         "QueryBuilder",
         "QueryOperator",
-        "matches_query",
     ]
 except ImportError:
     __all__ = [
@@ -56,5 +54,4 @@ except ImportError:
         "query",
         "QueryBuilder",
         "QueryOperator",
-        "matches_query",
     ]

@@ -21,9 +21,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api.endpoint import EndpointField
 from jvspatial.api.routing.endpoint import EndpointRouter
-from jvspatial.core.entities import Node, Root, Walker, on_exit, on_visit
+from jvspatial.core import Node, Root, Walker, on_exit, on_visit
 
 
 def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

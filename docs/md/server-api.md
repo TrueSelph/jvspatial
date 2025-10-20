@@ -21,9 +21,9 @@ The jvspatial Server class provides a powerful, object-oriented abstraction for 
 ## Quick Start
 
 ```python
-from jvspatial.api.server import Server, create_server
-from jvspatial.core.entities import Walker, Node, on_visit
-from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api import Server, create_server, endpoint
+from jvspatial.api.endpoint import EndpointField
+from jvspatial.core import Walker, Node, on_visit
 
 # Create a server instance
 server = create_server(
@@ -314,7 +314,7 @@ my_walkers/
 # my_walkers/walkers.py
 from jvspatial.api import register_walker_to_default
 from jvspatial.api.endpoint.router import EndpointField
-from jvspatial.core.entities import Walker, Root, on_visit
+from jvspatial.core import Walker, Root, on_visit
 
 @register_walker_to_default("/my-package/process")
 class MyPackageWalker(Walker):
@@ -715,7 +715,7 @@ The server automatically sets these environment variables:
 
 ```python
 from jvspatial.api.server import create_server
-from jvspatial.core.entities import Node, Root, Walker, on_visit
+from jvspatial.core import Node, Root, Walker, on_visit
 from jvspatial.api.endpoint.router import EndpointField
 
 server = create_server(title="CRUD API", version="1.0.0")
@@ -754,7 +754,7 @@ if __name__ == "__main__":
 
 ```python
 from jvspatial.api.server import create_server
-from jvspatial.core.entities import Node, Root, Walker, on_visit
+from jvspatial.core import Node, Root, Walker, on_visit
 import math
 
 server = create_server(title="Spatial API", db_type="json")

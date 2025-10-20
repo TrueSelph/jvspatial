@@ -22,9 +22,8 @@ from typing import Dict, List, Optional
 from fastapi import HTTPException
 
 from jvspatial.api import create_server, endpoint
-from jvspatial.api.endpoint.decorators import EndpointField
-from jvspatial.api.routing.endpoint import EndpointRouter
-from jvspatial.core.entities import Node, Root, Walker, on_visit
+from jvspatial.api.endpoint import EndpointField
+from jvspatial.core import Node, Root, Walker, on_visit
 
 # ====================== DATA MODEL ======================
 

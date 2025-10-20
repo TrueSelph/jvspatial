@@ -16,6 +16,7 @@ pymongo>=4.3.3  # MongoDB support
 # Authentication
 PyJWT>=2.7.0  # JWT token handling
 bcrypt>=4.0.1  # Password hashing
+email-validator>=2.0.0  # Email validation for pydantic
 
 # Task management
 schedule>=1.2.2  # Job scheduling

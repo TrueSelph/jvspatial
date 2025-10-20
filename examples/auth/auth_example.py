@@ -18,10 +18,11 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
+from fastapi import HTTPException
+
 from jvspatial.api import Server
 from jvspatial.api.auth.decorators import (
     auth_endpoint,
-    require_authenticated_user,
 )
 from jvspatial.api.auth.middleware import get_current_user
 from jvspatial.api.endpoint.types import APIResponse
@@ -72,7 +73,9 @@ class DocumentProcessor(Walker):
     @on_visit(Document)
     async def process_document(self, here: Document):
         """Process document if user has access."""
-        current_user = await require_authenticated_user(self.endpoint.request)
+        current_user = get_current_user(self.endpoint.request)
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
 
         # Admin can access everything
         if "admin" in current_user.roles:
@@ -116,7 +119,9 @@ class DocumentProcessor(Walker):
 @auth_endpoint("/api/users/profile", methods=["GET"])
 async def get_user_profile(endpoint) -> APIResponse:
     """Get current user's profile."""
-    current_user = await require_authenticated_user(endpoint.request)
+    current_user = get_current_user(endpoint.request)
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
     user = await User.get(current_user.id)
 
     if not user:
@@ -140,7 +145,9 @@ async def create_document(
     title: str, content: str, access_level: str, endpoint
 ) -> APIResponse:
     """Create a new document."""
-    current_user = await require_authenticated_user(endpoint.request)
+    current_user = get_current_user(endpoint.request)
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
 
     # Validate access level
     if access_level not in ["public", "private", "restricted"]:

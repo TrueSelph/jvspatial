@@ -1,12 +1,9 @@
 """
-Test suite for webhook endpoint decorators.
+Test suite for webhook decorators.
 
-This module tests the @webhook_endpoint decorator, ensuring it properly
-configures authentication metadata, handles path patterns with route and
-auth_token parameters, and registers endpoints with the server when available.
+Tests the new unified decorator API for webhook endpoints.
 """
 
-from typing import List
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -31,250 +28,220 @@ class TestWebhookEndpointDecorator:
 
     def test_webhook_endpoint_basic(self):
         """Test basic @webhook_endpoint decorator application."""
+        from jvspatial.api.context import set_current_server
+
+        set_current_server(self.mock_server)
 
         @webhook_endpoint("/webhook/basic")
         async def basic_webhook(payload: dict, endpoint):
             return endpoint.response(content={"status": "ok"})
 
-        # Verify metadata is set correctly
-        assert hasattr(basic_webhook, "_webhook_required")
-        assert basic_webhook._webhook_required is True
-        assert basic_webhook._auth_required is False  # No permissions/roles specified
-        assert basic_webhook._required_permissions == []
-        assert basic_webhook._required_roles == []
-        assert basic_webhook._endpoint_path == "/webhook/basic"
-        assert basic_webhook._endpoint_methods == ["POST"]
+        # Verify endpoint config is set correctly
+        assert hasattr(basic_webhook, "_endpoint_config")
+        config = basic_webhook._endpoint_config
+        assert config.path == "/webhook/basic"
+        assert config.methods == ["POST"]
+        assert config.auth_required is False
+        assert config.permissions == []
+        assert config.roles == []
+        assert config.webhook is not None
+        assert config.webhook.hmac_secret is None
+        assert config.webhook.idempotency_key_field == "X-Idempotency-Key"
+        assert config.webhook.idempotency_ttl_hours == 24
+        assert config.webhook.async_processing is False
+        assert config.webhook.path_key_auth is False
 
-        # Verify webhook-specific metadata
-        assert basic_webhook._hmac_secret is None
-        assert basic_webhook._idempotency_key_field == "X-Idempotency-Key"
-        assert basic_webhook._idempotency_ttl_hours == 24
-        assert basic_webhook._async_processing is False
-        assert basic_webhook._path_key_auth is False
-
-        # Verify route config for registration
-        assert hasattr(basic_webhook, "_route_config")
-        route_config = basic_webhook._route_config
-        assert route_config["path"] == "/webhook/basic"
-        assert route_config["methods"] == ["POST"]
+        # Clean up
+        set_current_server(None)
 
     def test_webhook_endpoint_with_custom_methods(self):
         """Test @webhook_endpoint with custom HTTP methods."""
+        from jvspatial.api.context import set_current_server
+
+        set_current_server(self.mock_server)
 
         @webhook_endpoint("/webhook/custom", methods=["POST", "PUT"])
         async def custom_methods_webhook(payload: dict, endpoint):
             return endpoint.response(content={"status": "ok"})
 
-        assert custom_methods_webhook._endpoint_methods == ["POST", "PUT"]
-        assert custom_methods_webhook._route_config["methods"] == ["POST", "PUT"]
+        config = custom_methods_webhook._endpoint_config
+        assert config.methods == ["POST", "PUT"]
+        assert config.path == "/webhook/custom"
 
-    def test_webhook_endpoint_with_permissions(self):
-        """Test @webhook_endpoint with required permissions."""
+        # Clean up
+        set_current_server(None)
 
-        @webhook_endpoint(
-            "/webhook/secure",
-            permissions=["process_webhooks", "read_events"],
-            hmac_secret="test-secret",  # pragma: allowlist secret
-        )
-        async def secure_webhook(payload: dict, endpoint):
-            return endpoint.response(content={"status": "secure"})
+    def test_webhook_endpoint_with_hmac_secret(self):
+        """Test @webhook_endpoint with HMAC secret."""
+        from jvspatial.api.context import set_current_server
 
-        assert secure_webhook._required_permissions == [
-            "process_webhooks",
-            "read_events",
-        ]
-        assert (
-            secure_webhook._auth_required is True
-        )  # Should be True when permissions specified
-        assert secure_webhook._hmac_secret == "test-secret"  # pragma: allowlist secret
-
-    def test_webhook_endpoint_path_based_auth(self):
-        """Test @webhook_endpoint with path-based authentication."""
+        set_current_server(self.mock_server)
 
         @webhook_endpoint(
-            "/webhook/stripe/{key}",
-            path_key_auth=True,
-            hmac_secret="stripe-secret",  # pragma: allowlist secret
+            "/webhook/hmac", hmac_secret="secret123"  # pragma: allowlist secret
         )
-        async def stripe_webhook(raw_body: bytes, content_type: str, endpoint):
-            return endpoint.response(content={"status": "received"})
+        async def hmac_webhook(payload: dict, endpoint):
+            return endpoint.response(content={"status": "ok"})
 
-        # Verify path-based auth metadata
-        assert stripe_webhook._path_key_auth is True
-        assert (
-            stripe_webhook._hmac_secret == "stripe-secret"  # pragma: allowlist secret
-        )
-        assert stripe_webhook._endpoint_path == "/webhook/stripe/{key}"
+        config = hmac_webhook._endpoint_config
+        assert config.webhook.hmac_secret == "secret123"  # pragma: allowlist secret
 
-    def test_webhook_endpoint_path_key_validation(self):
-        """Test that path_key_auth requires {key} parameter."""
-        with pytest.raises(ValueError, match=r"must include \{key\} parameter"):
+        # Clean up
+        set_current_server(None)
 
-            @webhook_endpoint("/webhook/invalid", path_key_auth=True)
-            async def invalid_webhook(payload: dict, endpoint):
-                return endpoint.response()
+    def test_webhook_endpoint_with_auth_requirements(self):
+        """Test @webhook_endpoint with authentication requirements."""
+        from jvspatial.api.context import set_current_server
 
-    def test_webhook_endpoint_with_roles(self):
-        """Test @webhook_endpoint with required roles."""
+        set_current_server(self.mock_server)
 
         @webhook_endpoint(
-            "/webhook/admin/{route}/{auth_token}", roles=["admin", "webhook_manager"]
+            "/webhook/auth",
+            permissions=["webhook:receive"],
+            roles=["webhook_handler"],
+            auth_required=True,
         )
-        async def admin_webhook(request):
-            return {"status": "admin"}
+        async def auth_webhook(payload: dict, endpoint):
+            return endpoint.response(content={"status": "ok"})
 
-        assert admin_webhook._required_roles == ["admin", "webhook_manager"]
+        config = auth_webhook._endpoint_config
+        assert config.auth_required is True
+        assert config.permissions == ["webhook:receive"]
+        assert config.roles == ["webhook_handler"]
 
-    def test_webhook_endpoint_server_registration(self):
-        """Test server registration when server is available."""
-        with patch(
-            "jvspatial.api.context.get_current_server",
-            return_value=self.mock_server,
-        ):
+        # Clean up
+        set_current_server(None)
 
-            @webhook_endpoint("/webhook/register/{auth_token}")
-            async def register_webhook(request):
-                return {"status": "registered"}
+    def test_webhook_endpoint_with_custom_webhook_config(self):
+        """Test @webhook_endpoint with custom webhook configuration."""
+        from jvspatial.api.context import set_current_server
 
-            # Verify server registration was attempted via endpoint registry
-            self.mock_server._endpoint_registry.register_function.assert_called_once()
-            # Note: Actual registration happens via endpoint_router
-
-    def test_webhook_endpoint_no_server_deferred(self):
-        """Test decorator works without server (deferred registration)."""
-        with patch(
-            "jvspatial.api.auth.decorators.get_current_server", return_value=None
-        ):
-
-            @webhook_endpoint("/webhook/deferred/{auth_token}")
-            async def deferred_webhook(request):
-                return {"status": "deferred"}
-
-            # Should not raise error, metadata still set
-            assert (
-                deferred_webhook._auth_required is False
-            )  # No permissions/roles provided
-            assert deferred_webhook._endpoint_path == "/webhook/deferred/{auth_token}"
-
-    def test_webhook_endpoint_path_pattern(self):
-        """Test that the decorator uses the correct path pattern with route and auth_token."""
-
-        @webhook_endpoint("/webhook/{route}/{auth_token}")
-        async def dynamic_route_webhook(request):
-            return {"status": "dynamic"}
-
-        # The path should include both route and auth_token parameters
-        assert dynamic_route_webhook._endpoint_path == "/webhook/{route}/{auth_token}"
-
-    def test_webhook_endpoint_custom_server(self):
-        """Test @webhook_endpoint with explicit server parameter."""
-        custom_server = MagicMock(spec=Server)
-        custom_server._endpoint_registry = MagicMock()
-        custom_server.endpoint_router = MagicMock()
-        custom_server.endpoint_router.router = MagicMock()
-        custom_server._logger = MagicMock()
-        custom_server._is_running = False
-
-        @webhook_endpoint("/webhook/custom_server/{auth_token}", server=custom_server)
-        async def custom_server_webhook(request):
-            return {"status": "custom"}
-
-        # Should use custom server for registration
-        custom_server._endpoint_registry.register_function.assert_called_once()
-        # Verify registration with endpoint router
-        assert custom_server.endpoint_router.router.add_api_route.called
-
-    @pytest.mark.asyncio
-    async def test_webhook_endpoint_function_execution(self):
-        """Test that decorated webhook functions execute normally."""
-        mock_request = MagicMock()
-        mock_request.state.current_user = self.test_user  # Mock auth already done
-
-        @webhook_endpoint("/webhook/execute/{auth_token}")
-        async def execute_webhook(request):
-            user = request.state.current_user
-            return {"user_id": user.id, "status": "executed"}
-
-        # Execute the function
-        result = await execute_webhook(mock_request)
-        assert result["user_id"] == "user_123"
-        assert result["status"] == "executed"
-
-    def test_webhook_endpoint_metadata_extraction(self):
-        """Test extraction of auth metadata from decorated endpoint."""
-        from jvspatial.api.auth.decorators import AuthAwareEndpointProcessor
+        set_current_server(self.mock_server)
 
         @webhook_endpoint(
-            "/webhook/metadata/{route}/{auth_token}",
-            permissions=["webhook_access"],
-            roles=["operator"],
+            "/webhook/custom-config",
+            hmac_secret="custom_secret",  # pragma: allowlist secret
         )
-        async def metadata_webhook(request):
-            return {"status": "metadata"}
+        async def custom_config_webhook(payload: dict, endpoint):
+            return endpoint.response(content={"status": "ok"})
 
-        # Extract requirements
-        requirements = AuthAwareEndpointProcessor.extract_auth_requirements(
-            metadata_webhook
-        )
+        config = custom_config_webhook._endpoint_config
+        webhook_config = config.webhook
+        assert webhook_config.hmac_secret == "custom_secret"  # pragma: allowlist secret
+        # Other webhook config parameters use defaults
+        assert webhook_config.idempotency_key_field == "X-Idempotency-Key"
+        assert webhook_config.idempotency_ttl_hours == 24
+        assert webhook_config.async_processing is False
+        assert webhook_config.path_key_auth is False
 
-        assert requirements["auth_required"] is True
-        assert requirements["required_permissions"] == ["webhook_access"]
-        assert requirements["required_roles"] == ["operator"]
-        assert requirements["endpoint_path"] == "/webhook/metadata/{route}/{auth_token}"
+        # Clean up
+        set_current_server(None)
 
-    def test_webhook_endpoint_no_auth_required_variant(self):
-        """Test variant without authentication (no permissions/roles)."""
+    def test_webhook_endpoint_on_walker_class(self):
+        """Test @webhook_endpoint decorator on Walker class."""
+        from jvspatial.api.context import set_current_server
 
-        # Test that webhook_endpoint works without permissions/roles (auth_required=False)
-        @webhook_endpoint("/webhook/noauth/{auth_token}")
-        async def noauth_webhook(request):
-            return {"status": "no auth"}
-
-        # Should have auth_required=False when no permissions/roles specified
-        assert noauth_webhook._auth_required is False
-        assert noauth_webhook._required_permissions == []
-        assert noauth_webhook._required_roles == []
-
-    def test_webhook_endpoint_walker_class(self):
-        """Test @webhook_endpoint with a Walker class (unified decorator)."""
+        set_current_server(self.mock_server)
 
         @webhook_endpoint("/webhook/walker")
         class WebhookWalker(Walker):
-            payload: dict
+            async def process_webhook(self, payload: dict, endpoint):
+                return endpoint.response(content={"status": "processed"})
 
-        # Verify Walker class metadata is set correctly
-        assert hasattr(WebhookWalker, "_webhook_required")
-        assert WebhookWalker._webhook_required is True
-        assert WebhookWalker._auth_required is False  # No permissions/roles specified
-        assert WebhookWalker._required_permissions == []
-        assert WebhookWalker._required_roles == []
-        assert WebhookWalker._endpoint_path == "/webhook/walker"
-        assert WebhookWalker._endpoint_methods == ["POST"]
-        assert WebhookWalker._is_webhook is True
+        # Verify endpoint config is set correctly
+        assert hasattr(WebhookWalker, "_endpoint_config")
+        config = WebhookWalker._endpoint_config
+        assert config.path == "/webhook/walker"
+        assert config.methods == ["POST"]
+        assert config.webhook is not None
 
-    def test_webhook_endpoint_walker_with_permissions(self):
-        """Test @webhook_endpoint on Walker with permissions."""
+        # Clean up
+        set_current_server(None)
+
+    def test_webhook_endpoint_no_server(self):
+        """Test webhook endpoint when no server is available."""
+        from jvspatial.api.context import set_current_server
+
+        # Ensure no server is set
+        set_current_server(None)
+
+        @webhook_endpoint("/webhook/no-server")
+        async def no_server_webhook(payload: dict, endpoint):
+            return endpoint.response(content={"status": "ok"})
+
+        # Should still set config even without server
+        assert hasattr(no_server_webhook, "_endpoint_config")
+        config = no_server_webhook._endpoint_config
+        assert config.path == "/webhook/no-server"
+        assert config.webhook is not None
+
+    def test_webhook_endpoint_default_values(self):
+        """Test webhook endpoint with default configuration values."""
+        from jvspatial.api.context import set_current_server
+
+        set_current_server(self.mock_server)
+
+        @webhook_endpoint("/webhook/defaults")
+        async def default_webhook(payload: dict, endpoint):
+            return endpoint.response(content={"status": "ok"})
+
+        config = default_webhook._endpoint_config
+        webhook_config = config.webhook
+
+        # Check default values
+        assert webhook_config.hmac_secret is None
+        assert webhook_config.idempotency_key_field == "X-Idempotency-Key"
+        assert webhook_config.idempotency_ttl_hours == 24
+        assert webhook_config.async_processing is False
+        assert webhook_config.path_key_auth is False
+
+        # Clean up
+        set_current_server(None)
+
+    def test_webhook_endpoint_with_openapi_extra(self):
+        """Test webhook endpoint with OpenAPI extra configuration."""
+        from jvspatial.api.context import set_current_server
+
+        set_current_server(self.mock_server)
 
         @webhook_endpoint(
-            "/webhook/secure-walker", permissions=["webhook_access"], roles=["admin"]
+            "/webhook/openapi",
+            openapi_extra={"tags": ["webhooks"], "summary": "Test webhook"},
         )
-        class SecureWebhookWalker(Walker):
-            payload: dict
+        async def openapi_webhook(payload: dict, endpoint):
+            return endpoint.response(content={"status": "ok"})
 
-        # Verify auth is enabled when permissions/roles specified
-        assert SecureWebhookWalker._auth_required is True
-        assert SecureWebhookWalker._required_permissions == ["webhook_access"]
-        assert SecureWebhookWalker._required_roles == ["admin"]
-        assert SecureWebhookWalker._is_webhook is True
+        config = openapi_webhook._endpoint_config
+        assert config.openapi_extra == {"tags": ["webhooks"], "summary": "Test webhook"}
 
-    def test_webhook_endpoint_non_walker_class_fails(self):
-        """Test that @webhook_endpoint rejects non-Walker classes."""
+        # Clean up
+        set_current_server(None)
 
-        with pytest.raises(TypeError, match="not a Walker subclass"):
+    def test_webhook_endpoint_edge_cases(self):
+        """Test webhook endpoint edge cases."""
+        from jvspatial.api.context import set_current_server
 
-            @webhook_endpoint("/webhook/invalid")
-            class NotAWalker:
-                pass
+        set_current_server(self.mock_server)
 
+        # Test with empty permissions and roles
+        @webhook_endpoint("/webhook/empty", permissions=[], roles=[])
+        async def empty_webhook(payload: dict, endpoint):
+            return endpoint.response(content={"status": "ok"})
 
-# Note: Additional integration tests with full server setup would go in test_endpoints.py
+        config = empty_webhook._endpoint_config
+        assert config.permissions == []
+        assert config.roles == []
+
+        # Test with just hmac_secret
+        @webhook_endpoint(
+            "/webhook/hmac-only", hmac_secret="test_secret"  # pragma: allowlist secret
+        )
+        async def hmac_only_webhook(payload: dict, endpoint):
+            return endpoint.response(content={"status": "ok"})
+
+        config = hmac_only_webhook._endpoint_config
+        assert config.webhook.hmac_secret == "test_secret"  # pragma: allowlist secret
+        assert config.webhook.idempotency_ttl_hours == 24  # default
+
+        # Clean up
+        set_current_server(None)

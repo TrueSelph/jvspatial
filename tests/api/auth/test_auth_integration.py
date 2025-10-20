@@ -23,7 +23,8 @@ from jvspatial.api.auth import (
     configure_auth,
 )
 from jvspatial.api.auth.middleware import auth_config
-from jvspatial.api.server import Server, ServerConfig, endpoint
+from jvspatial.api.decorators.shortcuts import endpoint
+from jvspatial.api.server import Server, ServerConfig
 from jvspatial.core.entities import Node, Walker, on_visit
 
 
@@ -92,7 +93,10 @@ class TestAuthIntegration:
         """Test auth_endpoint registration with Walker class."""
         server = Server(title="Auth Walker Test")
 
-        @auth_endpoint("/auth/data", permissions=["read_data"], server=server)
+        @auth_endpoint(
+            "/auth/data",
+            permissions=["read_data"],
+        )
         class AuthDataWalker(Walker):
             query: str = ""
 
@@ -100,25 +104,30 @@ class TestAuthIntegration:
             async def process_data(self, here):
                 self.report({"data": f"Processed: {here.name} - {self.query}"})
 
-        # Check walker is registered with auth requirements using endpoint registry
-        assert server._endpoint_registry.has_walker(AuthDataWalker)
-        assert hasattr(AuthDataWalker, "_auth_required")
-        assert AuthDataWalker._auth_required is True
-        assert AuthDataWalker._required_permissions == ["read_data"]
+        # In the new system, endpoints are not automatically registered
+        # Check that the walker has the correct decorator configuration
+        assert hasattr(AuthDataWalker, "_endpoint_config")
+        config = AuthDataWalker.__dict__["_endpoint_config"]
+        assert config.auth_required is True
+        assert config.permissions == ["read_data"]
 
     def test_auth_endpoint_registration(self):
         """Test authenticated endpoint registration."""
         server = Server(title="Auth Endpoint Test")
 
-        @auth_endpoint("/auth/info", roles=["user"], server=server)
+        @auth_endpoint(
+            "/auth/info",
+            roles=["user"],
+        )
         async def get_auth_info():
             return {"message": "Authenticated info", "timestamp": datetime.now()}
 
-        # Check function is registered using endpoint registry
-        assert server._endpoint_registry.has_function(get_auth_info)
-        assert hasattr(get_auth_info, "_auth_required")
-        assert get_auth_info._auth_required is True
-        assert get_auth_info._required_roles == ["user"]
+        # In the new system, endpoints are not automatically registered
+        # Check that the function has the correct decorator configuration
+        assert hasattr(get_auth_info, "_endpoint_config")
+        config = get_auth_info._endpoint_config
+        assert config.auth_required is True
+        assert config.roles == ["user"]
 
     def test_admin_endpoint_registration(self):
         """Test admin endpoint registration."""
@@ -129,9 +138,10 @@ class TestAuthIntegration:
             return {"admin": True, "status": "ok"}
 
         # Check admin requirements
-        assert hasattr(admin_status, "_auth_required")
-        assert admin_status._auth_required is True
-        assert admin_status._required_roles == ["admin"]
+        assert hasattr(admin_status, "_endpoint_config")
+        config = admin_status._endpoint_config
+        assert config.auth_required is True
+        assert config.roles == ["admin"]
 
     @pytest.mark.asyncio
     async def test_authentication_flow_middleware(self):
@@ -319,7 +329,9 @@ class TestAuthIntegration:
         set_current_server(server)  # Ensure this server is current for decorators
 
         # Add public walker
-        @endpoint("/public/data", server=server)
+        @endpoint(
+            "/public/data",
+        )
         class PublicWalker(Walker):
             query: str = ""
 
@@ -328,7 +340,10 @@ class TestAuthIntegration:
                 self.report({"public": True})
 
         # Add authenticated walker
-        @auth_endpoint("/auth/data", permissions=["read_data"], server=server)
+        @auth_endpoint(
+            "/auth/data",
+            permissions=["read_data"],
+        )
         class AuthWalker(Walker):
             query: str = ""
 
@@ -337,17 +352,28 @@ class TestAuthIntegration:
                 self.report({"authenticated": True})
 
         # Add admin walker
-        @admin_endpoint("/admin/control", server=server)
+        @admin_endpoint(
+            "/admin/control",
+        )
         async def admin_control():
             return {"admin": True, "control": "active"}
 
-        # Verify all endpoints are registered using endpoint registry
-        walkers = server._endpoint_registry.list_walkers()
-        assert len(walkers) == 2
-        assert server._endpoint_registry.has_walker(PublicWalker)
-        assert server._endpoint_registry.has_walker(AuthWalker)
-        # Check admin function endpoint is registered
-        assert server._endpoint_registry.has_function(admin_control)
+        # In the new system, endpoints are not automatically registered
+        # Check that the decorator configurations are correct
+        assert hasattr(PublicWalker, "_endpoint_config")
+        assert hasattr(AuthWalker, "_endpoint_config")
+        assert hasattr(admin_control, "_endpoint_config")
+
+        # Check configurations
+        public_config = PublicWalker.__dict__["_endpoint_config"]
+        auth_config = AuthWalker.__dict__["_endpoint_config"]
+        admin_config = admin_control._endpoint_config
+
+        assert public_config.auth_required is False
+        assert auth_config.auth_required is True
+        assert auth_config.permissions == ["read_data"]
+        assert admin_config.auth_required is True
+        assert admin_config.roles == ["admin"]
 
     def test_auth_configuration_persistence(self):
         """Test that auth configuration persists across components."""
@@ -403,31 +429,45 @@ class TestAuthIntegration:
         server = Server(title="Decorator Integration Test")
 
         # Test different permission levels
-        @endpoint("/public", server=server)
+        @endpoint(
+            "/public",
+        )
         class PublicWalker(Walker):
             pass
 
-        @auth_endpoint("/user", roles=["user"], server=server)
+        @auth_endpoint(
+            "/user",
+            roles=["user"],
+        )
         class UserWalker(Walker):
             pass
 
         @auth_endpoint(
-            "/manager", roles=["manager"], permissions=["manage_data"], server=server
+            "/manager",
+            roles=["manager"],
+            permissions=["manage_data"],
         )
         class ManagerWalker(Walker):
             pass
 
-        @admin_endpoint("/admin/system", server=server)
+        @admin_endpoint(
+            "/admin/system",
+        )
         async def admin_system():
             return {"system": "admin"}
 
         # Verify different auth levels
-        assert not hasattr(PublicWalker, "_auth_required")  # Public
-        assert UserWalker._auth_required is True
-        assert UserWalker._required_roles == ["user"]
-        assert ManagerWalker._required_roles == ["manager"]
-        assert ManagerWalker._required_permissions == ["manage_data"]
-        assert admin_system._required_roles == ["admin"]
+        public_config = PublicWalker.__dict__["_endpoint_config"]
+        user_config = UserWalker.__dict__["_endpoint_config"]
+        manager_config = ManagerWalker.__dict__["_endpoint_config"]
+        admin_config = admin_system._endpoint_config
+
+        assert public_config.auth_required is False  # Public
+        assert user_config.auth_required is True
+        assert user_config.roles == ["user"]
+        assert manager_config.roles == ["manager"]
+        assert manager_config.permissions == ["manage_data"]
+        assert admin_config.roles == ["admin"]
 
     def test_auth_exception_handling(self):
         """Test authentication exception handling."""
@@ -497,13 +537,18 @@ class TestAuthIntegration:
         )
 
         # Create authenticated endpoints
-        @auth_endpoint("/integrated/walker", permissions=["read_data"], server=server)
+        @auth_endpoint(
+            "/integrated/walker",
+            permissions=["read_data"],
+        )
         class IntegratedWalker(Walker):
             @on_visit(MockNode)
             async def process(self, here):
                 self.report({"integrated": True})
 
-        @admin_endpoint("/integrated/admin", server=server)
+        @admin_endpoint(
+            "/integrated/admin",
+        )
         async def integrated_admin():
             return {"integrated": "admin"}
 
@@ -512,8 +557,10 @@ class TestAuthIntegration:
         middleware = AuthenticationMiddleware(app)
 
         # Verify complete setup
-        assert IntegratedWalker._auth_required is True
-        assert integrated_admin._auth_required is True
+        walker_config = IntegratedWalker.__dict__["_endpoint_config"]
+        admin_config = integrated_admin._endpoint_config
+        assert walker_config.auth_required is True
+        assert admin_config.auth_required is True
         assert middleware is not None
         assert (
             auth_config.jwt_secret_key
@@ -582,7 +629,7 @@ class TestAuthSystemScenarios:
         """Test API with public documentation but protected endpoints."""
 
         # Public documentation endpoints (should not require auth)
-        @endpoint("/public/docs", server=self.server)
+        @endpoint("/public/docs")
         async def public_docs():
             return {"docs": "public", "version": "1.0"}
 
@@ -602,10 +649,21 @@ class TestAuthSystemScenarios:
             return {"requests": 1000, "users": 50, "uptime": "99.9%"}
 
         # Verify endpoint configuration
-        assert self.server._endpoint_registry.has_function(public_docs)
+        # In the new system, endpoints are not automatically registered
+        # Check that the decorator configurations are correct
+        assert hasattr(public_docs, "_endpoint_config")
+        assert hasattr(APIDataWalker, "_endpoint_config")
+        assert hasattr(api_stats, "_endpoint_config")
 
-        assert APIDataWalker._auth_required is True
-        assert api_stats._required_roles == ["admin"]
+        public_config = public_docs._endpoint_config
+        walker_config = APIDataWalker.__dict__["_endpoint_config"]
+        admin_config = api_stats._endpoint_config
+
+        assert public_config.auth_required is False
+        assert walker_config.auth_required is True
+        assert walker_config.permissions == ["api_access"]
+        assert admin_config.auth_required is True
+        assert admin_config.roles == ["admin"]
 
     def test_multi_tenant_scenario(self):
         """Test multi-tenant application with role-based access."""
@@ -636,9 +694,13 @@ class TestAuthSystemScenarios:
             return {"tenants": ["tenant1", "tenant2"], "system": "active"}
 
         # Verify multi-level auth setup
-        assert TenantAdminWalker._required_roles == ["tenant_admin"]
-        assert TenantDataWalker._required_permissions == ["read_tenant_data"]
-        assert manage_tenants._required_roles == ["admin"]
+        admin_config = TenantAdminWalker.__dict__["_endpoint_config"]
+        data_config = TenantDataWalker.__dict__["_endpoint_config"]
+        manage_config = manage_tenants._endpoint_config
+
+        assert admin_config.roles == ["tenant_admin"]
+        assert data_config.permissions == ["read_tenant_data"]
+        assert manage_config.roles == ["admin"]
 
     def test_api_versioning_scenario(self):
         """Test API versioning with different auth requirements."""
@@ -667,13 +729,17 @@ class TestAuthSystemScenarios:
             return {"version": "3.0", "premium": True}
 
         # Verify versioned auth requirements
-        assert v1_simple._required_roles == ["user"]
-        assert len(v1_simple._required_permissions) == 0
+        v1_config = v1_simple._endpoint_config
+        v2_config = V2EnhancedWalker.__dict__["_endpoint_config"]
 
-        assert V2EnhancedWalker._required_roles == ["user"]
-        assert V2EnhancedWalker._required_permissions == ["api_v2_access"]
+        assert v1_config.roles == ["user"]
+        assert len(v1_config.permissions) == 0
 
-        assert v3_premium._required_roles == ["premium", "admin"]
+        assert v2_config.roles == ["user"]
+        assert v2_config.permissions == ["api_v2_access"]
+
+        v3_config = v3_premium._endpoint_config
+        assert v3_config.roles == ["premium", "admin"]
 
     def test_microservice_integration_scenario(self):
         """Test microservice integration with API key authentication."""
@@ -702,16 +768,20 @@ class TestAuthSystemScenarios:
             return {"webhook": "processed", "timestamp": datetime.now().isoformat()}
 
         # Health check for services (no auth)
-        @endpoint("/internal/health", server=self.server)
+        @endpoint("/internal/health")
         async def service_health():
             return {"status": "healthy", "service": "auth-system"}
 
         # Verify service integration setup
-        assert ServiceSyncWalker._required_permissions == ["service_sync"]
-        assert external_webhook._required_permissions == ["webhook_access"]
+        sync_config = ServiceSyncWalker.__dict__["_endpoint_config"]
+        webhook_config = external_webhook._endpoint_config
+        health_config = service_health._endpoint_config
+
+        assert sync_config.permissions == ["service_sync"]
+        assert webhook_config.permissions == ["webhook_access"]
 
         # Health check should not require auth
-        assert self.server._endpoint_registry.has_function(service_health)
+        assert health_config.auth_required is False
 
     def teardown_method(self):
         """Clean up scenario test."""

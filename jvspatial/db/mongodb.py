@@ -38,6 +38,25 @@ class MongoDB(Database):
         """
         self._connection_kwargs = kwargs
 
+    async def initialize(self) -> None:
+        """Initialize the database connection.
+
+        This method is called by tests to explicitly initialize the connection.
+        The actual connection is lazy-initialized via get_db(), but this
+        provides an explicit initialization point for testing.
+        """
+        await self.get_db()
+
+    async def close(self) -> None:
+        """Close the database connection.
+
+        This method closes the MongoDB client connection and cleans up resources.
+        """
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+            self._db = None
+
     async def get_db(self) -> AsyncIOMotorDatabase:
         """Get database instance with thread-safe initialization.
 
@@ -64,11 +83,30 @@ class MongoDB(Database):
                             "minPoolSize": 5,
                             "connectTimeoutMS": 30000,
                             "socketTimeoutMS": 30000,
-                            **self._connection_kwargs,
                         }
-                        # Remove our custom params that aren't for motor
-                        connection_params.pop("uri", None)
-                        connection_params.pop("db_name", None)
+
+                        # Filter valid MongoDB connection parameters
+                        valid_params = {
+                            "maxPoolSize",
+                            "minPoolSize",
+                            "connectTimeoutMS",
+                            "socketTimeoutMS",
+                            "serverSelectionTimeoutMS",
+                            "heartbeatFrequencyMS",
+                            "retryWrites",
+                            "retryReads",
+                            "readPreference",
+                            "readConcern",
+                            "writeConcern",
+                            "directConnection",
+                            "maxConnecting",
+                            "maxIdleTimeMS",
+                            "waitQueueTimeoutMS",
+                        }
+
+                        for key, value in self._connection_kwargs.items():
+                            if key in valid_params:
+                                connection_params[key] = value
 
                         self._client = AsyncIOMotorClient(uri, **connection_params)
                         self._db = self._client.get_database(db_name)
@@ -93,7 +131,7 @@ class MongoDB(Database):
         Raises:
             RuntimeError: If index creation fails
         """
-        if not self._db:
+        if self._db is None:
             return
 
         collections = ["node", "edge", "walker", "object"]
@@ -158,24 +196,39 @@ class MongoDB(Database):
             coll = await self._get_collection(collection)
 
             if "id" in data:
-                # Update existing document with versioning
-                current_version = data.get("_version", 1)
-                data_to_save = data.copy()
-                data_to_save["_version"] = current_version + 1
+                # Check if document exists
+                existing_doc = await coll.find_one({"id": data["id"]})
 
-                result = await coll.find_one_and_update(
-                    {"id": data["id"], "_version": current_version},
-                    {"$set": data_to_save},
-                    return_document=ReturnDocument.AFTER,
-                    upsert=True,
-                )
+                if existing_doc:
+                    # Update existing document with versioning
+                    current_version = existing_doc.get("_version", 1)
+                    data_to_save = data.copy()
+                    data_to_save["_version"] = current_version + 1
 
-                if not result:
-                    raise VersionConflictError(
-                        f"Version conflict for document {data['id']} in {collection}"
+                    result = await coll.find_one_and_update(
+                        {"id": data["id"], "_version": current_version},
+                        {"$set": data_to_save},
+                        return_document=ReturnDocument.AFTER,
                     )
 
-                output = dict(result)
+                    if not result:
+                        raise VersionConflictError(
+                            f"Version conflict for document {data['id']} in {collection}"
+                        )
+
+                    output = dict(result)
+                else:
+                    # Insert new document
+                    data_to_save = data.copy()
+                    data_to_save["_version"] = 1
+
+                    try:
+                        insert_result = await coll.insert_one(data_to_save)
+                        output = data_to_save
+                    except DuplicateKeyError as e:
+                        raise RuntimeError(
+                            f"Duplicate document ID in {collection}"
+                        ) from e
             else:
                 # Insert new document
                 data_to_save = data.copy()
@@ -285,6 +338,21 @@ class MongoDB(Database):
 
         except PyMongoError:
             # Silently ignore cleanup errors - this is a maintenance operation
+            pass
+
+    async def clear_all(self) -> None:
+        """Clear all data from all collections.
+
+        This method is primarily for testing purposes.
+        """
+        try:
+            db = await self.get_db()
+            collections = await db.list_collection_names()
+            for collection_name in collections:
+                collection = db[collection_name]
+                await collection.delete_many({})
+        except PyMongoError:
+            # Silently ignore cleanup errors
             pass
 
     async def find(

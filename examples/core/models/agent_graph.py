@@ -20,9 +20,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import Field
 
-from jvspatial.api import Server, endpoint
-from jvspatial.api.endpoint.decorators import EndpointField
-from jvspatial.api.routing.endpoint import EndpointRouter
+from jvspatial.api import Server, create_server, endpoint
+from jvspatial.api.endpoint import EndpointField
 from jvspatial.core import Node, Root, Walker, on_exit, on_visit
 
 # Configure environment for example
