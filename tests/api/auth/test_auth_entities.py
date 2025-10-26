@@ -28,17 +28,15 @@ from jvspatial.api.auth.entities import (
 class TestUser:
     """Test User entity functionality."""
 
-    def test_user_creation(self):
+    async def test_user_creation(self):
         """Test basic user creation."""
         user = User(
-            username="testuser",
             email="test@example.com",
             password_hash="hashed_password",  # pragma: allowlist secret
             roles=["user"],
             permissions=["read_data"],
         )
 
-        assert user.username == "testuser"
         assert user.email == "test@example.com"
         assert user.password_hash == "hashed_password"  # pragma: allowlist secret
         assert user.is_active is True
@@ -48,16 +46,16 @@ class TestUser:
         assert user.permissions == ["read_data"]
         assert user.rate_limit_per_hour == 1000
 
-    def test_user_collection_name(self):
+    async def test_user_collection_name(self):
         """Test user uses correct collection name."""
         user = User(
             username="test",
             email="test@example.com",
             password_hash="hash",  # pragma: allowlist secret
         )
-        assert user.get_collection_name() == "user"
+        assert user.get_collection_name() == "object"
 
-    def test_password_hashing(self):
+    async def test_password_hashing(self):
         """Test password hashing functionality."""
         password = "test_password_123"  # pragma: allowlist secret
         hashed = User.hash_password(password)
@@ -67,7 +65,7 @@ class TestUser:
         assert len(hashed) > 50  # BCrypt hashes are long
         assert hashed.startswith("$2b$")  # BCrypt identifier
 
-    def test_password_verification(self):
+    async def test_password_verification(self):
         """Test password verification."""
         password = "test_password_123"  # pragma: allowlist secret
         user = User(
@@ -82,7 +80,7 @@ class TestUser:
         # Should reject incorrect password
         assert user.verify_password("wrong_password") is False
 
-    def test_permission_checking(self):
+    async def test_permission_checking(self):
         """Test permission checking logic."""
         # Regular user with specific permissions
         user = User(
@@ -107,7 +105,7 @@ class TestUser:
         assert admin_user.has_permission("read_data") is True
         assert admin_user.has_permission("any_permission") is True
 
-    def test_role_checking(self):
+    async def test_role_checking(self):
         """Test role checking logic."""
         user = User(
             username="test",
@@ -132,7 +130,7 @@ class TestUser:
         assert admin_user.has_role("superuser") is True
         assert admin_user.has_role("analyst") is False
 
-    def test_region_access_checking(self):
+    async def test_region_access_checking(self):
         """Test spatial region access control."""
         # User with specific regions allowed
         user = User(
@@ -166,7 +164,7 @@ class TestUser:
 
         assert unrestricted_user.can_access_region("any_region") is True
 
-    def test_node_type_access_checking(self):
+    async def test_node_type_access_checking(self):
         """Test node type access control."""
         # User with specific node types allowed
         user = User(
@@ -182,7 +180,6 @@ class TestUser:
 
         # Admin user can access all node types
         admin_user = User(
-            username="admin",
             email="admin@example.com",
             password_hash="hash",  # pragma: allowlist secret
             is_admin=True,
@@ -194,7 +191,6 @@ class TestUser:
     async def test_record_login(self):
         """Test login recording functionality."""
         user = User(
-            username="test",
             email="test@example.com",
             password_hash="hash",  # pragma: allowlist secret
             login_count=5,
@@ -210,52 +206,9 @@ class TestUser:
             # Should increment login count and update last login
             assert user.login_count == old_count + 1
             assert user.last_login is not None
-            assert isinstance(user.last_login, datetime)
+            # last_login is stored as ISO string, not datetime object
+            assert isinstance(user.last_login, str)
             mock_save.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_find_by_username(self):
-        """Test finding user by username."""
-        mock_ctx = MagicMock()
-        mock_ctx.database.find = AsyncMock(
-            return_value=[
-                {
-                    "id": "user_123",
-                    "context": {
-                        "username": "testuser",
-                        "email": "test@example.com",
-                        "password_hash": "hash",  # pragma: allowlist secret
-                    },
-                }
-            ]
-        )
-        mock_ctx._deserialize_entity = AsyncMock(
-            return_value=User(
-                username="testuser",
-                email="test@example.com",
-                password_hash="hash",  # pragma: allowlist secret
-            )
-        )
-
-        with patch("jvspatial.core.context.get_default_context", return_value=mock_ctx):
-            user = await User.find_by_username("testuser")
-
-            assert user is not None
-            assert user.username == "testuser"
-            mock_ctx.database.find.assert_called_once_with(
-                "user", {"context.username": "testuser"}
-            )
-
-    @pytest.mark.asyncio
-    async def test_find_by_username_not_found(self):
-        """Test finding user by username when not found."""
-        mock_ctx = MagicMock()
-        mock_ctx.database.find = AsyncMock(return_value=[])
-
-        with patch("jvspatial.core.context.get_default_context", return_value=mock_ctx):
-            user = await User.find_by_username("nonexistent")
-
-            assert user is None
 
     @pytest.mark.asyncio
     async def test_find_by_email(self):
@@ -265,20 +218,10 @@ class TestUser:
             return_value=[
                 {
                     "id": "user_123",
-                    "context": {
-                        "username": "testuser",
-                        "email": "test@example.com",
-                        "password_hash": "hash",  # pragma: allowlist secret
-                    },
+                    "email": "test@example.com",
+                    "password_hash": "hash",  # pragma: allowlist secret
                 }
             ]
-        )
-        mock_ctx._deserialize_entity = AsyncMock(
-            return_value=User(
-                username="testuser",
-                email="test@example.com",
-                password_hash="hash",  # pragma: allowlist secret
-            )
         )
 
         with patch("jvspatial.core.context.get_default_context", return_value=mock_ctx):
@@ -287,14 +230,46 @@ class TestUser:
             assert user is not None
             assert user.email == "test@example.com"
             mock_ctx.database.find.assert_called_once_with(
-                "user", {"context.email": "test@example.com"}
+                "user", {"email": "test@example.com"}
             )
+
+    @pytest.mark.asyncio
+    async def test_find_by_email_not_found(self):
+        """Test finding user by email when not found."""
+        mock_ctx = MagicMock()
+        mock_ctx.database.find = AsyncMock(return_value=[])
+
+        with patch("jvspatial.core.context.get_default_context", return_value=mock_ctx):
+            user = await User.find_by_email("nonexistent@example.com")
+
+            assert user is None
+
+    @pytest.mark.asyncio
+    async def test_find_by_id(self):
+        """Test finding user by ID."""
+        mock_ctx = MagicMock()
+        mock_ctx.database.find = AsyncMock(
+            return_value=[
+                {
+                    "id": "user_123",
+                    "email": "test@example.com",
+                    "password_hash": "hash",  # pragma: allowlist secret
+                }
+            ]
+        )
+
+        with patch("jvspatial.core.context.get_default_context", return_value=mock_ctx):
+            user = await User.find_by_id("user_123")
+
+            assert user is not None
+            assert user.email == "test@example.com"
+            mock_ctx.database.find.assert_called_once_with("user", {"id": "user_123"})
 
 
 class TestAPIKey:
     """Test APIKey entity functionality."""
 
-    def test_api_key_creation(self):
+    async def test_api_key_creation(self):
         """Test basic API key creation."""
         api_key = APIKey(
             name="Test Key",
@@ -312,12 +287,12 @@ class TestAPIKey:
         assert api_key.usage_count == 0
         assert api_key.rate_limit_per_hour == 10000
 
-    def test_api_key_collection_name(self):
+    async def test_api_key_collection_name(self):
         """Test API key uses correct collection name."""
         api_key = APIKey(name="test", key_id="id", key_hash="hash", user_id="user")
-        assert api_key.get_collection_name() == "apikey"
+        assert api_key.get_collection_name() == "object"
 
-    def test_generate_key_pair(self):
+    async def test_generate_key_pair(self):
         """Test API key pair generation."""
         key_id, secret_key = APIKey.generate_key_pair()
 
@@ -327,7 +302,7 @@ class TestAPIKey:
         assert len(secret_key) > 20  # Should be longer than key_id
         assert key_id != secret_key
 
-    def test_hash_secret(self):
+    async def test_hash_secret(self):
         """Test secret key hashing."""
         secret = "my_secret_key"  # pragma: allowlist secret
         hashed = APIKey.hash_secret(secret)
@@ -335,7 +310,7 @@ class TestAPIKey:
         assert hashed != secret
         assert len(hashed) == 64  # SHA-256 produces 64 character hex string
 
-    def test_verify_secret(self):
+    async def test_verify_secret(self):
         """Test secret key verification."""
         secret = "my_secret_key"  # pragma: allowlist secret
         api_key = APIKey(
@@ -348,7 +323,7 @@ class TestAPIKey:
         assert api_key.verify_secret(secret) is True
         assert api_key.verify_secret("wrong_secret") is False
 
-    def test_is_valid_active_key(self):
+    async def test_is_valid_active_key(self):
         """Test validity check for active key."""
         api_key = APIKey(
             name="test", key_id="id", key_hash="hash", user_id="user", is_active=True
@@ -356,7 +331,7 @@ class TestAPIKey:
 
         assert api_key.is_valid() is True
 
-    def test_is_valid_inactive_key(self):
+    async def test_is_valid_inactive_key(self):
         """Test validity check for inactive key."""
         api_key = APIKey(
             name="test", key_id="id", key_hash="hash", user_id="user", is_active=False
@@ -364,7 +339,7 @@ class TestAPIKey:
 
         assert api_key.is_valid() is False
 
-    def test_is_valid_expired_key(self):
+    async def test_is_valid_expired_key(self):
         """Test validity check for expired key."""
         api_key = APIKey(
             name="test",
@@ -372,12 +347,14 @@ class TestAPIKey:
             key_hash="hash",
             user_id="user",
             is_active=True,
-            expires_at=datetime.now() - timedelta(hours=1),  # Expired 1 hour ago
+            expires_at=(
+                datetime.now() - timedelta(hours=1)
+            ).isoformat(),  # Expired 1 hour ago
         )
 
         assert api_key.is_valid() is False
 
-    def test_is_valid_future_expiry(self):
+    async def test_is_valid_future_expiry(self):
         """Test validity check for key with future expiry."""
         api_key = APIKey(
             name="test",
@@ -385,12 +362,14 @@ class TestAPIKey:
             key_hash="hash",
             user_id="user",
             is_active=True,
-            expires_at=datetime.now() + timedelta(hours=1),  # Expires in 1 hour
+            expires_at=(
+                datetime.now() + timedelta(hours=1)
+            ).isoformat(),  # Expires in 1 hour
         )
 
         assert api_key.is_valid() is True
 
-    def test_can_access_endpoint_unrestricted(self):
+    async def test_can_access_endpoint_unrestricted(self):
         """Test endpoint access for unrestricted key."""
         api_key = APIKey(
             name="test",
@@ -403,7 +382,7 @@ class TestAPIKey:
         assert api_key.can_access_endpoint("/any/endpoint") is True
         assert api_key.can_access_endpoint("/admin/users") is True
 
-    def test_can_access_endpoint_restricted(self):
+    async def test_can_access_endpoint_restricted(self):
         """Test endpoint access for restricted key."""
         api_key = APIKey(
             name="test",
@@ -418,7 +397,7 @@ class TestAPIKey:
         assert api_key.can_access_endpoint("/api/search") is True
         assert api_key.can_access_endpoint("/admin/users") is False
 
-    def test_can_perform_operation_unrestricted(self):
+    async def test_can_perform_operation_unrestricted(self):
         """Test operation checking for unrestricted key."""
         api_key = APIKey(
             name="test",
@@ -431,7 +410,7 @@ class TestAPIKey:
         assert api_key.can_perform_operation("read") is True
         assert api_key.can_perform_operation("write") is True
 
-    def test_can_perform_operation_restricted(self):
+    async def test_can_perform_operation_restricted(self):
         """Test operation checking for restricted key."""
         api_key = APIKey(
             name="test",
@@ -462,7 +441,8 @@ class TestAPIKey:
             # Should increment usage count and update last used
             assert api_key.usage_count == old_count + 1
             assert api_key.last_used is not None
-            assert isinstance(api_key.last_used, datetime)
+            # last_used is stored as ISO string, not datetime object
+            assert isinstance(api_key.last_used, str)
             mock_save.assert_called_once()
 
     @pytest.mark.asyncio
@@ -497,21 +477,21 @@ class TestAPIKey:
             assert api_key is not None
             assert api_key.key_id == "test_key_id"
             mock_ctx.database.find.assert_called_once_with(
-                "apikey", {"context.key_id": "test_key_id"}
+                "apikey", {"key_id": "test_key_id"}
             )
 
 
 class TestSession:
     """Test Session entity functionality."""
 
-    def test_session_creation(self):
+    async def test_session_creation(self):
         """Test basic session creation."""
         session = Session(
             session_id="session_123",
             user_id="user_123",
             jwt_token="jwt_token_string",
             refresh_token="refresh_token_string",
-            expires_at=datetime.now() + timedelta(hours=24),
+            expires_at=(datetime.now() + timedelta(hours=24)).isoformat(),
         )
 
         assert session.session_id == "session_123"
@@ -521,18 +501,37 @@ class TestSession:
         assert session.is_active is True
         assert session.revoked_at is None
 
-    def test_session_collection_name(self):
+    async def test_session_revoke(self):
+        """Test session revocation."""
+        session = Session(
+            session_id="session_123",
+            user_id="user_123",
+            jwt_token="jwt_token_string",
+            refresh_token="refresh_token_string",
+            expires_at=(
+                datetime.now() + timedelta(hours=24)
+            ).isoformat(),  # Use ISO format string
+        )
+
+        # Test session revocation (save method is called internally by revoke)
+        await session.revoke("User logout")
+
+        assert session.is_active is False
+        assert session.revoked_at is not None
+        assert session.revoked_reason == "User logout"
+
+    async def test_session_collection_name(self):
         """Test session uses correct collection name."""
         session = Session(
             session_id="id",
             user_id="user",
             jwt_token="jwt",
             refresh_token="refresh",
-            expires_at=datetime.now() + timedelta(hours=1),
+            expires_at=(datetime.now() + timedelta(hours=1)).isoformat(),
         )
-        assert session.get_collection_name() == "session"
+        assert session.get_collection_name() == "object"
 
-    def test_create_session_id(self):
+    async def test_create_session_id(self):
         """Test session ID generation."""
         session_id = Session.create_session_id()
 
@@ -543,67 +542,69 @@ class TestSession:
         session_id_2 = Session.create_session_id()
         assert session_id != session_id_2
 
-    def test_is_valid_active_session(self):
+    async def test_is_valid_active_session(self):
         """Test validity check for active session."""
         session = Session(
             session_id="id",
             user_id="user",
             jwt_token="jwt",
             refresh_token="refresh",
-            expires_at=datetime.now() + timedelta(hours=1),
+            expires_at=(datetime.now() + timedelta(hours=1)).isoformat(),
             is_active=True,
         )
 
         assert session.is_valid() is True
 
-    def test_is_valid_inactive_session(self):
+    async def test_is_valid_inactive_session(self):
         """Test validity check for inactive session."""
         session = Session(
             session_id="id",
             user_id="user",
             jwt_token="jwt",
             refresh_token="refresh",
-            expires_at=datetime.now() + timedelta(hours=1),
+            expires_at=(datetime.now() + timedelta(hours=1)).isoformat(),
             is_active=False,
         )
 
         assert session.is_valid() is False
 
-    def test_is_valid_revoked_session(self):
+    async def test_is_valid_revoked_session(self):
         """Test validity check for revoked session."""
         session = Session(
             session_id="id",
             user_id="user",
             jwt_token="jwt",
             refresh_token="refresh",
-            expires_at=datetime.now() + timedelta(hours=1),
+            expires_at=(datetime.now() + timedelta(hours=1)).isoformat(),
             is_active=True,
-            revoked_at=datetime.now() - timedelta(minutes=30),
+            revoked_at=(datetime.now() - timedelta(minutes=30)).isoformat(),
         )
 
         assert session.is_valid() is False
 
-    def test_is_valid_expired_session(self):
+    async def test_is_valid_expired_session(self):
         """Test validity check for expired session."""
         session = Session(
             session_id="id",
             user_id="user",
             jwt_token="jwt",
             refresh_token="refresh",
-            expires_at=datetime.now() - timedelta(hours=1),  # Expired 1 hour ago
+            expires_at=(
+                datetime.now() - timedelta(hours=1)
+            ).isoformat(),  # Expired 1 hour ago
             is_active=True,
         )
 
         assert session.is_valid() is False
 
-    def test_extend_session(self):
+    async def test_extend_session(self):
         """Test session extension."""
         session = Session(
             session_id="id",
             user_id="user",
             jwt_token="jwt",
             refresh_token="refresh",
-            expires_at=datetime.now() + timedelta(hours=1),
+            expires_at=(datetime.now() + timedelta(hours=1)).isoformat(),
         )
 
         old_expires = session.expires_at
@@ -611,12 +612,18 @@ class TestSession:
 
         # Should have extended expiration
         assert session.expires_at > old_expires
-        time_diff = session.expires_at - datetime.now()
+        # Convert to datetime for comparison
+        if isinstance(session.expires_at, str):
+            expires_dt = datetime.fromisoformat(session.expires_at)
+        else:
+            expires_dt = session.expires_at
+        time_diff = expires_dt - datetime.now()
         assert time_diff.total_seconds() > 47 * 3600  # Should be close to 48 hours
 
         # Should have updated last activity
         assert session.last_activity is not None
-        assert isinstance(session.last_activity, datetime)
+        # last_activity is stored as ISO string, not datetime object
+        assert isinstance(session.last_activity, str)
 
     @pytest.mark.asyncio
     async def test_revoke(self):
@@ -626,7 +633,7 @@ class TestSession:
             user_id="user",
             jwt_token="jwt",
             refresh_token="refresh",
-            expires_at=datetime.now() + timedelta(hours=1),
+            expires_at=(datetime.now() + timedelta(hours=1)).isoformat(),
         )
 
         with patch(
@@ -648,7 +655,7 @@ class TestSession:
             user_id="user",
             jwt_token="jwt",
             refresh_token="refresh",
-            expires_at=datetime.now() + timedelta(hours=1),
+            expires_at=(datetime.now() + timedelta(hours=1)).isoformat(),
         )
 
         with patch(
@@ -674,7 +681,7 @@ class TestSession:
                         "user_id": "user_123",
                         "jwt_token": "jwt",
                         "refresh_token": "refresh",
-                        "expires_at": datetime.now() + timedelta(hours=1),
+                        "expires_at": (datetime.now() + timedelta(hours=1)).isoformat(),
                     },
                 }
             ]
@@ -685,7 +692,7 @@ class TestSession:
                 user_id="user_123",
                 jwt_token="jwt",
                 refresh_token="refresh",
-                expires_at=datetime.now() + timedelta(hours=1),
+                expires_at=(datetime.now() + timedelta(hours=1)).isoformat(),
             )
         )
 
@@ -702,43 +709,43 @@ class TestSession:
 class TestAuthExceptions:
     """Test authentication exception classes."""
 
-    def test_authentication_error(self):
+    async def test_authentication_error(self):
         """Test AuthenticationError exception."""
         error = AuthenticationError("Test auth error")
         assert str(error) == "Test auth error"
         assert isinstance(error, Exception)
 
-    def test_authorization_error(self):
+    async def test_authorization_error(self):
         """Test AuthorizationError exception."""
         error = AuthorizationError("Test authz error")
         assert str(error) == "Test authz error"
         assert isinstance(error, Exception)
 
-    def test_rate_limit_error(self):
+    async def test_rate_limit_error(self):
         """Test RateLimitError exception."""
         error = RateLimitError("Rate limit exceeded")
         assert str(error) == "Rate limit exceeded"
         assert isinstance(error, Exception)
 
-    def test_invalid_credentials_error(self):
+    async def test_invalid_credentials_error(self):
         """Test InvalidCredentialsError exception."""
         error = InvalidCredentialsError("Invalid creds")
         assert str(error) == "Invalid creds"
         assert isinstance(error, AuthenticationError)
 
-    def test_user_not_found_error(self):
+    async def test_user_not_found_error(self):
         """Test UserNotFoundError exception."""
         error = UserNotFoundError("User not found")
         assert str(error) == "User not found"
         assert isinstance(error, AuthenticationError)
 
-    def test_session_expired_error(self):
+    async def test_session_expired_error(self):
         """Test SessionExpiredError exception."""
         error = SessionExpiredError("Session expired")
         assert str(error) == "Session expired"
         assert isinstance(error, AuthenticationError)
 
-    def test_api_key_invalid_error(self):
+    async def test_api_key_invalid_error(self):
         """Test APIKeyInvalidError exception."""
         error = APIKeyInvalidError("Invalid API key")
         assert str(error) == "Invalid API key"

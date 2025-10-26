@@ -51,7 +51,7 @@ from jvspatial.api.auth import get_current_user
 async def secure_endpoint(endpoint):
     """Endpoint requiring JWT auth."""
     user = get_current_user()
-    return endpoint.success(data={"user": user.username})
+    return endpoint.success(data={"user": user.email})
 ```
 
 ### API Key Authentication
@@ -118,7 +118,7 @@ Test the authenticated endpoints using curl:
 # Get a JWT token
 TOKEN=$(curl -X POST http://localhost:8000/auth/token \
   -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "password"}' \
+  -d '{"email": "admin@example.com", "password": "password"}' \
   | jq -r .access_token)
 
 # Use the token

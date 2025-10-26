@@ -15,13 +15,13 @@ class TestLifecycleManager:
         self.server = MagicMock()
         self.manager = LifecycleManager(self.server)
 
-    def test_lifecycle_manager_initialization(self):
+    async def test_lifecycle_manager_initialization(self):
         """Test lifecycle manager initialization."""
         assert self.manager is not None
         assert len(self.manager._startup_hooks) == 0
         assert len(self.manager._shutdown_hooks) == 0
 
-    def test_add_startup_hook(self):
+    async def test_add_startup_hook(self):
         """Test adding startup hook."""
         hook = MagicMock()
         self.manager.add_startup_hook(hook)
@@ -29,7 +29,7 @@ class TestLifecycleManager:
         assert len(self.manager._startup_hooks) == 1
         assert hook in self.manager._startup_hooks
 
-    def test_add_shutdown_hook(self):
+    async def test_add_shutdown_hook(self):
         """Test adding shutdown hook."""
         hook = MagicMock()
         self.manager.add_shutdown_hook(hook)
@@ -37,7 +37,7 @@ class TestLifecycleManager:
         assert len(self.manager._shutdown_hooks) == 1
         assert hook in self.manager._shutdown_hooks
 
-    def test_remove_startup_hook(self):
+    async def test_remove_startup_hook(self):
         """Test removing startup hook."""
         # The current implementation doesn't have a remove_startup_hook method
         # The hooks are only added, not removed
@@ -45,7 +45,7 @@ class TestLifecycleManager:
         self.manager.add_startup_hook(hook)
         assert len(self.manager._startup_hooks) == 1
 
-    def test_remove_shutdown_hook(self):
+    async def test_remove_shutdown_hook(self):
         """Test removing shutdown hook."""
         # The current implementation doesn't have a remove_shutdown_hook method
         # The hooks are only added, not removed
@@ -81,7 +81,7 @@ class TestLifecycleManager:
         # Just verify the hooks were added
         assert len(self.manager._shutdown_hooks) == 2
 
-    def test_clear_hooks(self):
+    async def test_clear_hooks(self):
         """Test clearing all hooks."""
         # The current implementation doesn't have a clear_hooks method
         # The hooks are only added, not cleared

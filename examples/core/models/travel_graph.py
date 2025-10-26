@@ -42,7 +42,7 @@ async def find_nearby_cities(
 ) -> List["City"]:
     """Find cities within a specified radius of coordinates using entity-centric queries."""
     # RECOMMENDED: Use entity-centric find instead of Node.all()
-    all_cities = await City.find()
+    all_cities = await City.find({})
     nearby = []
 
     for city in all_cities:
@@ -131,7 +131,7 @@ class Tourist(Walker):
             print(f"🎅 Tourist visiting {here.name} (pop: {here.population:,})")
 
             # Report the visit
-            self.report(
+            await self.report(
                 {
                     "city_visited": {
                         "name": here.name,
@@ -201,7 +201,7 @@ class FreightTrain(Walker):
                 f"🚂 Loaded {chicago_cargo['weight']} tons of {chicago_cargo['type']} in {here.name}"
             )
             # Report cargo loaded
-            self.report(
+            await self.report(
                 {
                     "cargo_loaded": {
                         "city": here.name,
@@ -227,7 +227,7 @@ class FreightTrain(Walker):
                 f"🚂 Loaded {kansas_cargo['weight']} tons of {kansas_cargo['type']} in {here.name}"
             )
             # Report cargo loaded
-            self.report(
+            await self.report(
                 {
                     "cargo_loaded": {
                         "city": here.name,
@@ -262,7 +262,7 @@ class FreightTrain(Walker):
             print(f"  Route taken: {' → '.join(self.route_cities)}")
 
             # Report final delivery summary
-            self.report(
+            await self.report(
                 {
                     "delivery_summary": {
                         "total_weight": total_weight,
@@ -532,17 +532,17 @@ async def main() -> None:
     # Create and run tourist walker
     print("\n🎅 Starting Tourist walker (follows highways)")
     tourist = Tourist()
-    await tourist.spawn(start=chicago)
+    await tourist.spawn(chicago)
 
     # Access walker's collected data
-    tourist_report = tourist.get_report()
+    tourist_report = await tourist.get_report()
     print(f"🗂️ Tourist route: {' → '.join(tourist.visited_cities)}")
     print(f"📊 Tourist collected {len(tourist_report)} reports")
 
     # Create and run freight train walker
     print("\n🚂 Starting FreightTrain walker (follows railroads)")
     freight_train = FreightTrain()
-    await freight_train.spawn(start=chicago)
+    await freight_train.spawn(chicago)
 
     # Show concurrent walker execution
     print("\n🔄 Demonstrating concurrent walker execution")
@@ -555,9 +555,7 @@ async def main() -> None:
         print(
             "Running Tourist from Chicago and FreightTrain from Kansas City simultaneously..."
         )
-        await asyncio.gather(
-            tourist2.spawn(start=chicago), freight_train2.spawn(start=kansas_city)
-        )
+        await asyncio.gather(tourist2.spawn(chicago), freight_train2.spawn(kansas_city))
 
         # Access data from walkers
         print(f"🎅 Tourist 2 visited: {', '.join(tourist2.visited_cities)}")
@@ -591,7 +589,7 @@ async def main() -> None:
     try:
         print("Testing error handling in walker traversal...")
         error_walker = ErrorWalker()
-        await error_walker.spawn(start=chicago)
+        await error_walker.spawn(chicago)
     except Exception as e:
         print(f"❌ Caught expected error: {str(e)}")
 

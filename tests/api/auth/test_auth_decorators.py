@@ -27,7 +27,7 @@ class TestWalkerEndpointAuth:
         self.mock_server = MagicMock()
         self.mock_server.register_walker_class = MagicMock()
 
-    def test_auth_endpoint_basic(self):
+    async def test_auth_endpoint_basic(self):
         """Test basic auth endpoint decorator."""
         from jvspatial.api.context import set_current_server
 
@@ -53,7 +53,7 @@ class TestWalkerEndpointAuth:
         # Clean up
         set_current_server(None)
 
-    def test_auth_endpoint_with_permissions(self):
+    async def test_auth_endpoint_with_permissions(self):
         """Test auth endpoint with permissions on Walker class."""
         from jvspatial.api.context import set_current_server
 
@@ -79,7 +79,7 @@ class TestWalkerEndpointAuth:
         # Clean up
         set_current_server(None)
 
-    def test_auth_endpoint_with_roles(self):
+    async def test_auth_endpoint_with_roles(self):
         """Test auth endpoint with roles on Walker class."""
         from jvspatial.api.context import set_current_server
 
@@ -105,7 +105,7 @@ class TestWalkerEndpointAuth:
         # Clean up
         set_current_server(None)
 
-    def test_auth_endpoint_with_both_permissions_and_roles(self):
+    async def test_auth_endpoint_with_both_permissions_and_roles(self):
         """Test auth endpoint with both permissions and roles."""
         from jvspatial.api.context import set_current_server
 
@@ -132,7 +132,7 @@ class TestWalkerEndpointAuth:
         # Clean up
         set_current_server(None)
 
-    def test_admin_endpoint(self):
+    async def test_admin_endpoint(self):
         """Test admin_endpoint decorator."""
         from jvspatial.api.context import set_current_server
 
@@ -154,7 +154,7 @@ class TestWalkerEndpointAuth:
         # Clean up
         set_current_server(None)
 
-    def test_admin_endpoint_with_custom_methods(self):
+    async def test_admin_endpoint_with_custom_methods(self):
         """Test admin_endpoint with custom methods."""
         from jvspatial.api.context import set_current_server
 
@@ -185,7 +185,7 @@ class TestFunctionEndpointAuth:
         self.mock_server = MagicMock()
         self.mock_server.register_function = MagicMock()
 
-    def test_auth_endpoint_function_basic(self):
+    async def test_auth_endpoint_function_basic(self):
         """Test basic auth endpoint decorator on function."""
         from jvspatial.api.context import set_current_server
 
@@ -207,7 +207,7 @@ class TestFunctionEndpointAuth:
         # Clean up
         set_current_server(None)
 
-    def test_auth_endpoint_function_with_permissions(self):
+    async def test_auth_endpoint_function_with_permissions(self):
         """Test auth endpoint function with permissions."""
         from jvspatial.api.context import set_current_server
 
@@ -233,7 +233,7 @@ class TestFunctionEndpointAuth:
         # Clean up
         set_current_server(None)
 
-    def test_admin_endpoint_function(self):
+    async def test_admin_endpoint_function(self):
         """Test admin_endpoint decorator on function."""
         from jvspatial.api.context import set_current_server
 
@@ -259,7 +259,7 @@ class TestFunctionEndpointAuth:
 class TestAuthDecoratorEdgeCases:
     """Test edge cases and error conditions for auth decorators."""
 
-    def test_auth_endpoint_no_server(self):
+    async def test_auth_endpoint_no_server(self):
         """Test auth endpoint when no server is available."""
         from jvspatial.api.context import set_current_server
 
@@ -276,7 +276,7 @@ class TestAuthDecoratorEdgeCases:
         assert config.path == "/test/no-server"
         assert config.auth_required is True
 
-    def test_auth_endpoint_empty_permissions(self):
+    async def test_auth_endpoint_empty_permissions(self):
         """Test auth endpoint with empty permissions list."""
         from jvspatial.api.context import set_current_server
 
@@ -292,7 +292,7 @@ class TestAuthDecoratorEdgeCases:
         # Clean up
         set_current_server(None)
 
-    def test_auth_endpoint_empty_roles(self):
+    async def test_auth_endpoint_empty_roles(self):
         """Test auth endpoint with empty roles list."""
         from jvspatial.api.context import set_current_server
 
@@ -308,7 +308,7 @@ class TestAuthDecoratorEdgeCases:
         # Clean up
         set_current_server(None)
 
-    def test_auth_endpoint_multiple_methods(self):
+    async def test_auth_endpoint_multiple_methods(self):
         """Test auth endpoint with multiple HTTP methods."""
         from jvspatial.api.context import set_current_server
 

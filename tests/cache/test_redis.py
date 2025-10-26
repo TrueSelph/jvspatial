@@ -17,13 +17,15 @@ except ImportError:
 # Check if Redis server is actually running
 redis_server_available = False
 if redis_available:
+
+    async def check_redis_server():
+        cache = RedisCache(redis_url="redis://localhost:6379")
+        return await cache.ping()
+
     try:
-
-        async def check_redis_server():
-            cache = RedisCache(redis_url="redis://localhost:6379")
-            return await cache.ping()
-
         # Try to check if Redis server is running
+        import asyncio
+
         redis_server_available = asyncio.run(check_redis_server())
     except Exception:
         redis_server_available = False
@@ -37,13 +39,13 @@ pytestmark = pytest.mark.skipif(
 class TestRedisCache:
     """Test RedisCache functionality."""
 
-    def test_redis_cache_initialization(self):
+    async def test_redis_cache_initialization(self):
         """Test Redis cache initialization."""
         cache = RedisCache(redis_url="redis://localhost:6379")
         assert cache is not None
         assert cache.redis_url == "redis://localhost:6379"
 
-    def test_redis_cache_default_config(self):
+    async def test_redis_cache_default_config(self):
         """Test Redis cache with default configuration."""
         cache = RedisCache()
         assert cache is not None
@@ -104,7 +106,7 @@ class TestRedisCache:
         # Check that user:2:* key still exists
         assert await cache.get("user:2:profile") == "data2"
 
-    def test_redis_cache_stats(self):
+    async def test_redis_cache_stats(self):
         """Test Redis cache statistics."""
         cache = RedisCache(redis_url="redis://localhost:6379")
         stats = cache.get_stats()

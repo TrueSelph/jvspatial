@@ -16,8 +16,9 @@ import pytest
 
 from jvspatial.api.server import Server, ServerConfig
 from jvspatial.cache.factory import get_cache_backend
+from jvspatial.core import on_visit
 from jvspatial.core.context import GraphContext
-from jvspatial.core.entities import Edge, Node, Walker, on_visit
+from jvspatial.core.entities import Edge, Node, Walker
 from jvspatial.db.factory import get_database
 from jvspatial.storage import get_file_interface
 

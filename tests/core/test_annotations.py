@@ -38,7 +38,7 @@ class SampleEntity(ProtectedAttributeMixin, BaseModel):
 class TestPrivateAnnotation:
     """Tests for @private decorator functionality (Pydantic PrivateAttr)."""
 
-    def test_private_annotation(self):
+    async def test_private_annotation(self):
         """Test that private attributes are excluded from serialization."""
 
         class TestModel(ProtectedAttributeMixin, BaseModel):
@@ -63,7 +63,7 @@ class TestPrivateAnnotation:
         model_export = instance.export()  # ProtectedAttributeMixin provides export()
         assert "_private_field" not in model_export
 
-    def test_compound_private_transient(self):
+    async def test_compound_private_transient(self):
         """Test that private attributes work correctly."""
 
         class TestModel(ProtectedAttributeMixin, BaseModel):
@@ -76,7 +76,7 @@ class TestPrivateAnnotation:
         assert "_internal_cache" not in instance.model_dump()
         assert "_internal_cache" not in instance.export()
 
-    def test_private_with_metadata(self):
+    async def test_private_with_metadata(self):
         """Test private annotation works as Pydantic PrivateAttr."""
 
         class TestModel(BaseModel):
@@ -94,19 +94,19 @@ class TestPrivateAnnotation:
 class TestProtectedAnnotation:
     """Tests for @protected decorator functionality."""
 
-    def test_protected_field_initialization(self):
+    async def test_protected_field_initialization(self):
         """Test that protected fields can be set during initialization."""
         entity = SampleEntity(id="test-123", name="My Entity")
         assert entity.id == "test-123"
         assert entity.name == "My Entity"
 
-    def test_normal_field_modification(self):
+    async def test_normal_field_modification(self):
         """Test that normal fields can be modified after initialization."""
         entity = SampleEntity(id="test-123")
         entity.name = "Updated Name"
         assert entity.name == "Updated Name"
 
-    def test_protected_field_modification_fails(self):
+    async def test_protected_field_modification_fails(self):
         """Test that protected fields cannot be modified after initialization."""
         entity = SampleEntity(id="test-123", name="My Entity")
 
@@ -117,13 +117,13 @@ class TestProtectedAnnotation:
         assert exc_info.value.cls_name == "SampleEntity"
         assert "Cannot modify protected attribute" in str(exc_info.value)
 
-    def test_is_protected_utility(self):
+    async def test_is_protected_utility(self):
         """Test is_protected utility function."""
         assert is_protected(SampleEntity, "id") is True
         assert is_protected(SampleEntity, "name") is False
         assert is_protected(SampleEntity, "cache") is False
 
-    def test_get_protected_attrs_utility(self):
+    async def test_get_protected_attrs_utility(self):
         """Test get_protected_attrs utility function."""
         protected_attrs = get_protected_attrs(SampleEntity)
         assert "id" in protected_attrs
@@ -134,7 +134,7 @@ class TestProtectedAnnotation:
 class TestTransientAnnotation:
     """Tests for @transient decorator functionality."""
 
-    def test_transient_field_works_at_runtime(self):
+    async def test_transient_field_works_at_runtime(self):
         """Test that transient fields work normally at runtime."""
         entity = SampleEntity(id="test-456", name="Transient Test")
         entity.cache["temp_data"] = "should not be exported"
@@ -148,7 +148,7 @@ class TestTransientAnnotation:
             == "also should not be exported"  # pragma: allowlist secret
         )
 
-    def test_transient_field_excluded_from_export(self):
+    async def test_transient_field_excluded_from_export(self):
         """Test that transient fields are excluded from exports."""
         entity = SampleEntity(id="test-456", name="Transient Test")
         entity.cache["temp_data"] = "should not be exported"
@@ -163,14 +163,14 @@ class TestTransientAnnotation:
         assert export_data.get("id") == "test-456"
         assert export_data.get("name") == "Transient Test"
 
-    def test_is_transient_utility(self):
+    async def test_is_transient_utility(self):
         """Test is_transient utility function."""
         assert is_transient(SampleEntity, "cache") is True
         assert is_transient(SampleEntity, "internal_state") is True
         assert is_transient(SampleEntity, "id") is False
         assert is_transient(SampleEntity, "name") is False
 
-    def test_get_transient_attrs_utility(self):
+    async def test_get_transient_attrs_utility(self):
         """Test get_transient_attrs utility function."""
         transient_attrs = get_transient_attrs(SampleEntity)
         assert "cache" in transient_attrs
@@ -181,7 +181,7 @@ class TestTransientAnnotation:
 class TestCompoundDecorators:
     """Tests for compound @protected @transient usage."""
 
-    def test_compound_protection_works(self):
+    async def test_compound_protection_works(self):
         """Test that compound decorators provide protection."""
         entity = SampleEntity(id="test-789")
         entity.internal_state["data"] = "test"
@@ -190,7 +190,7 @@ class TestCompoundDecorators:
         with pytest.raises(AttributeProtectionError):
             entity.internal_state = {"new": "dict"}
 
-    def test_compound_transient_works(self):
+    async def test_compound_transient_works(self):
         """Test that compound decorators exclude from export."""
         entity = SampleEntity(id="test-789")
         entity.internal_state["data"] = "test"
@@ -200,7 +200,7 @@ class TestCompoundDecorators:
         # Should be transient (not in export)
         assert "internal_state" not in export_data
 
-    def test_compound_both_behaviors(self):
+    async def test_compound_both_behaviors(self):
         """Test that compound decorators have both behaviors."""
         entity = SampleEntity(id="test-789")
 
@@ -212,7 +212,7 @@ class TestCompoundDecorators:
 class TestInheritance:
     """Tests for annotation inheritance across class hierarchy."""
 
-    def test_inherited_annotations(self):
+    async def test_inherited_annotations(self):
         """Test that annotations work with inheritance."""
 
         class ParentEntity(ProtectedAttributeMixin, BaseModel):
@@ -249,7 +249,7 @@ class TestInheritance:
         assert export_data.get("parent_id") == "parent-123"
         assert export_data.get("child_id") == "child-456"
 
-    def test_protected_attrs_includes_inherited(self):
+    async def test_protected_attrs_includes_inherited(self):
         """Test that get_protected_attrs includes inherited fields."""
 
         class Parent(ProtectedAttributeMixin, BaseModel):
@@ -262,7 +262,7 @@ class TestInheritance:
         assert "parent_field" in protected_attrs
         assert "child_field" in protected_attrs
 
-    def test_transient_attrs_includes_inherited(self):
+    async def test_transient_attrs_includes_inherited(self):
         """Test that get_transient_attrs includes inherited fields."""
 
         class Parent(ProtectedAttributeMixin, BaseModel):
@@ -279,7 +279,7 @@ class TestInheritance:
 class TestPrivateDecorator:
     """Tests for @private decorator functionality."""
 
-    def test_private_creates_pydantic_private_attributes(self):
+    async def test_private_creates_pydantic_private_attributes(self):
         """Test that private decorator creates Pydantic private attributes (underscore fields)."""
 
         class Entity(ProtectedAttributeMixin, BaseModel):
@@ -320,7 +320,7 @@ class TestPrivateDecorator:
 class TestFieldWithDefaultFactory:
     """Tests for proper handling of Field with default_factory."""
 
-    def test_transient_with_default_factory_dict(self):
+    async def test_transient_with_default_factory_dict(self):
         """Test transient with dict default_factory."""
 
         class Entity(ProtectedAttributeMixin, BaseModel):
@@ -331,7 +331,7 @@ class TestFieldWithDefaultFactory:
         entity.cache["key"] = "value"
         assert entity.cache["key"] == "value"
 
-    def test_transient_with_default_factory_list(self):
+    async def test_transient_with_default_factory_list(self):
         """Test transient with list default_factory."""
 
         class Entity(ProtectedAttributeMixin, BaseModel):
@@ -342,7 +342,7 @@ class TestFieldWithDefaultFactory:
         entity.items.append("item")
         assert len(entity.items) == 1
 
-    def test_field_with_additional_kwargs(self):
+    async def test_field_with_additional_kwargs(self):
         """Test that additional kwargs are preserved with Field."""
 
         class Entity(ProtectedAttributeMixin, BaseModel):
@@ -358,7 +358,7 @@ class TestFieldWithDefaultFactory:
 class TestErrorMessages:
     """Tests for error message quality."""
 
-    def test_protection_error_message_quality(self):
+    async def test_protection_error_message_quality(self):
         """Test that AttributeProtectionError provides useful information."""
         entity = SampleEntity(id="test-123")
 
@@ -376,14 +376,14 @@ class TestErrorMessages:
 class TestEdgeCases:
     """Tests for edge cases and special scenarios."""
 
-    def test_setting_protected_field_to_same_value(self):
+    async def test_setting_protected_field_to_same_value(self):
         """Test that setting a protected field to its current value still fails."""
         entity = SampleEntity(id="test-123")
 
         with pytest.raises(AttributeProtectionError):
             entity.id = "test-123"  # Same value, still protected
 
-    def test_multiple_protected_fields(self):
+    async def test_multiple_protected_fields(self):
         """Test entity with multiple protected fields."""
 
         class MultiProtected(ProtectedAttributeMixin, BaseModel):
@@ -401,7 +401,7 @@ class TestEdgeCases:
         with pytest.raises(AttributeProtectionError):
             entity.created_at = "new"
 
-    def test_empty_entity(self):
+    async def test_empty_entity(self):
         """Test entity with no annotations."""
 
         class EmptyEntity(ProtectedAttributeMixin, BaseModel):

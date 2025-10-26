@@ -65,7 +65,7 @@ class RedisCache(CacheBackend):
         if self._client is None:
             import redis.asyncio  # type: ignore[import-not-found, import-untyped]
 
-            self._client = await redis.asyncio.from_url(
+            self._client = redis.asyncio.from_url(
                 self.redis_url,
                 encoding="utf-8",
                 decode_responses=False,  # We handle serialization ourselves
@@ -99,15 +99,15 @@ class RedisCache(CacheBackend):
             data = await client.get(redis_key)
 
             if data:
-                self._stats.record_hit()
+                await self._stats.record_hit()
                 return pickle.loads(data)
 
-            self._stats.record_miss()
+            await self._stats.record_miss()
             return None
         except Exception as e:
             # Log error but don't crash - graceful degradation
             print(f"Redis get error for key {key}: {e}")
-            self._stats.record_miss()
+            await self._stats.record_miss()
             return None
 
     async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
@@ -125,7 +125,7 @@ class RedisCache(CacheBackend):
 
             ttl_seconds = ttl or self.default_ttl
             await client.setex(redis_key, ttl_seconds, data)
-            self._stats.record_set()
+            await self._stats.record_set()
         except Exception as e:
             # Log error but don't crash - graceful degradation
             print(f"Redis set error for key {key}: {e}")
@@ -140,7 +140,7 @@ class RedisCache(CacheBackend):
             client = await self._get_client()
             redis_key = self._make_key(key)
             await client.delete(redis_key)
-            self._stats.record_delete()
+            await self._stats.record_delete()
         except Exception as e:
             print(f"Redis delete error for key {key}: {e}")
 

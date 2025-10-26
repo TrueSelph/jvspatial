@@ -28,7 +28,7 @@ class TrailTrackingWalker(Walker):
 class TestWalkerTrailInitialization:
     """Test Walker trail initialization in new architecture."""
 
-    def test_trail_always_enabled(self):
+    async def test_trail_always_enabled(self):
         """Test that trail tracking is always enabled in new architecture."""
         walker = TrailTrackingWalker()
 
@@ -36,7 +36,7 @@ class TestWalkerTrailInitialization:
         assert hasattr(walker, "_trail_tracker")
         assert walker._trail_tracker is not None
 
-    def test_trail_tracker_initialization(self):
+    async def test_trail_tracker_initialization(self):
         """Test that TrailTracker is properly initialized."""
         walker = TrailTrackingWalker()
 
@@ -45,13 +45,13 @@ class TestWalkerTrailInitialization:
         assert walker._trail_tracker.get_trail() == []
         assert walker._trail_tracker.get_length() == 0
 
-    def test_trail_data_structure(self):
+    async def test_trail_data_structure(self):
         """Test the new trail data structure."""
         walker = TrailTrackingWalker()
         node = TrailTestNode(name="test_node")
 
         # Record a trail step using visiting context
-        with walker.visiting(node):
+        with await walker.visiting(node):
             pass
 
         trail = walker.get_trail()
@@ -69,13 +69,13 @@ class TestWalkerTrailInitialization:
 class TestTrailRecording:
     """Test trail recording functionality."""
 
-    def test_visiting_context_manager(self):
+    async def test_visiting_context_manager(self):
         """Test that visiting context manager records trail steps."""
         walker = TrailTrackingWalker()
         node = TrailTestNode(name="test_node")
 
         # Use visiting context manager
-        with walker.visiting(node):
+        with await walker.visiting(node):
             pass
 
         trail = walker.get_trail()
@@ -88,14 +88,14 @@ class TestTrailRecording:
         assert trail_data[0]["node"] == node.id
         assert trail_data[0]["node_type"] == "TrailTestNode"
 
-    def test_visiting_context_manager_with_edge(self):
+    async def test_visiting_context_manager_with_edge(self):
         """Test visiting context manager with edge tracking."""
         walker = TrailTrackingWalker()
         node = TrailTestNode(name="test_node")
         edge_id = "e:Edge:test123"
 
         # Use visiting context manager with edge
-        with walker.visiting(node, edge_from_previous=edge_id):
+        with await walker.visiting(node, edge_from_previous=edge_id):
             pass
 
         trail = walker.get_trail()
@@ -108,14 +108,14 @@ class TestTrailRecording:
         assert trail_data[0]["node"] == node.id
         assert trail_data[0]["edge"] == edge_id
 
-    def test_multiple_trail_steps(self):
+    async def test_multiple_trail_steps(self):
         """Test recording multiple trail steps."""
         walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
 
         # Record multiple steps
         for node in nodes:
-            with walker.visiting(node):
+            with await walker.visiting(node):
                 pass
 
         trail = walker.get_trail()
@@ -123,12 +123,12 @@ class TestTrailRecording:
         for i, node in enumerate(nodes):
             assert trail[i] == node.id
 
-    def test_trail_step_metadata(self):
+    async def test_trail_step_metadata(self):
         """Test that trail steps include metadata."""
         walker = TrailTrackingWalker()
         node = TrailTestNode(name="test_node", value=42)
 
-        with walker.visiting(node):
+        with await walker.visiting(node):
             pass
 
         trail = walker.get_trail()
@@ -148,14 +148,14 @@ class TestTrailRecording:
 class TestTrailAccessMethods:
     """Test trail access methods."""
 
-    def test_get_trail(self):
+    async def test_get_trail(self):
         """Test get_trail() method."""
         walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
 
         # Record trail steps
         for node in nodes:
-            with walker.visiting(node):
+            with await walker.visiting(node):
                 pass
 
         trail = walker.get_trail()
@@ -176,7 +176,7 @@ class TestTrailAccessMethods:
 
         # Record trail steps
         for node in nodes:
-            with walker.visiting(node):
+            with await walker.visiting(node):
                 pass
 
         trail_nodes = await walker.get_trail_nodes()
@@ -195,33 +195,33 @@ class TestTrailAccessMethods:
 
         # Record trail steps
         for node in nodes:
-            with walker.visiting(node):
+            with await walker.visiting(node):
                 pass
 
-        path = await walker.get_trail_path()
+        path = walker.get_trail_path()
         assert len(path) == 3
-        assert [node_tuple[0].id for node_tuple in path] == [node.id for node in nodes]
+        assert path == [node.id for node in nodes]
 
-    def test_get_trail_length(self):
+    async def test_get_trail_length(self):
         """Test get_trail_length() method."""
         walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
 
         # Record trail steps
         for node in nodes:
-            with walker.visiting(node):
+            with await walker.visiting(node):
                 pass
 
         assert walker.get_trail_length() == 3
 
-    def test_get_recent_trail(self):
+    async def test_get_recent_trail(self):
         """Test get_recent_trail() method."""
         walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(5)]
 
         # Record trail steps
         for node in nodes:
-            with walker.visiting(node):
+            with await walker.visiting(node):
                 pass
 
         # Test getting recent trail
@@ -229,54 +229,54 @@ class TestTrailAccessMethods:
         assert len(recent) == 3
         assert recent == [node.id for node in nodes[-3:]]
 
-    def test_has_visited(self):
+    async def test_has_visited(self):
         """Test has_visited() method."""
         walker = TrailTrackingWalker()
         node1 = TrailTestNode(name="node1")
         node2 = TrailTestNode(name="node2")
 
         # Visit first node
-        with walker.visiting(node1):
+        with await walker.visiting(node1):
             pass
 
         assert walker.has_visited(node1.id) is True
         assert walker.has_visited(node2.id) is False
 
-    def test_get_visit_count(self):
+    async def test_get_visit_count(self):
         """Test get_visit_count() method."""
         walker = TrailTrackingWalker()
         node = TrailTestNode(name="test_node")
 
         # Visit node multiple times
         for _ in range(3):
-            with walker.visiting(node):
+            with await walker.visiting(node):
                 pass
 
-        assert walker.get_visit_count(node.id) == 3
+        assert await walker.get_visit_count(node.id) == 3
 
-    def test_detect_cycles(self):
+    async def test_detect_cycles(self):
         """Test detect_cycles() method."""
         walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
 
         # Create a cycle: node0 -> node1 -> node2 -> node0
         for node in nodes:
-            with walker.visiting(node):
+            with await walker.visiting(node):
                 pass
-        with walker.visiting(nodes[0]):  # Back to first node
+        with await walker.visiting(nodes[0]):  # Back to first node
             pass
 
-        cycles = walker.detect_cycles()
+        cycles = await walker.detect_cycles()
         assert len(cycles) > 0  # Should detect the cycle
 
-    def test_get_trail_summary(self):
+    async def test_get_trail_summary(self):
         """Test get_trail_summary() method."""
         walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
 
         # Record trail steps
         for node in nodes:
-            with walker.visiting(node):
+            with await walker.visiting(node):
                 pass
 
         summary = walker.get_trail_summary()
@@ -293,14 +293,14 @@ class TestTrailAccessMethods:
 class TestTrailManagementMethods:
     """Test trail management methods."""
 
-    def test_clear_trail(self):
+    async def test_clear_trail(self):
         """Test clear_trail() method."""
         walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
 
         # Record trail steps
         for node in nodes:
-            with walker.visiting(node):
+            with await walker.visiting(node):
                 pass
 
         assert walker.get_trail_length() == 3
@@ -324,7 +324,7 @@ class TestTrailIntegrationWithTraversal:
         await walker.visit(nodes)
 
         # Spawn should record trail steps
-        await walker.spawn()
+        await walker.spawn(nodes[0])
 
         # Check that trail was recorded
         trail = walker.get_trail()
@@ -339,7 +339,10 @@ class TestTrailIntegrationWithTraversal:
         # Add nodes to queue
         await walker.visit(nodes)
 
-        # Pause the walker first
+        # Start the walker first
+        await walker.spawn(nodes[0])
+
+        # Pause the walker
         walker.paused = True
 
         # Resume should record trail steps
@@ -359,7 +362,7 @@ class TestTrailIntegrationWithTraversal:
         await walker.visit(nodes)
 
         # Spawn with protection should record trail steps
-        await walker.spawn()
+        await walker.spawn(nodes[0])
 
         # Check that trail was recorded
         trail = walker.get_trail()
@@ -370,28 +373,28 @@ class TestTrailIntegrationWithTraversal:
 class TestTrailEdgeCases:
     """Test trail edge cases."""
 
-    def test_empty_trail(self):
+    async def test_empty_trail(self):
         """Test operations on empty trail."""
         walker = TrailTrackingWalker()
 
         assert walker.get_trail() == []
         assert walker.get_trail_length() == 0
         assert walker.get_recent_trail(5) == []
-        assert walker.detect_cycles() == []
+        assert await walker.detect_cycles() == []
 
-    def test_trail_with_duplicate_nodes(self):
+    async def test_trail_with_duplicate_nodes(self):
         """Test trail with duplicate node visits."""
         walker = TrailTrackingWalker()
         node = TrailTestNode(name="duplicate_node")
 
         # Visit same node multiple times
         for _ in range(3):
-            with walker.visiting(node):
+            with await walker.visiting(node):
                 pass
 
         trail = walker.get_trail()
         assert len(trail) == 3
-        assert walker.get_visit_count(node.id) == 3
+        assert await walker.get_visit_count(node.id) == 3
 
     @pytest.mark.asyncio
     async def test_trail_with_missing_nodes(self):
@@ -403,7 +406,7 @@ class TestTrailEdgeCases:
         await node.save()
 
         # Record trail step
-        with walker.visiting(node):
+        with await walker.visiting(node):
             pass
 
         # Get trail nodes (should handle missing nodes gracefully)
@@ -411,7 +414,7 @@ class TestTrailEdgeCases:
         assert len(trail_nodes) == 1
         assert trail_nodes[0].id == node.id
 
-    def test_trail_summary_empty(self):
+    async def test_trail_summary_empty(self):
         """Test trail summary with empty trail."""
         walker = TrailTrackingWalker()
 
@@ -423,16 +426,16 @@ class TestTrailEdgeCases:
         assert summary["most_visited"] is None
         assert summary["recent_nodes"] == []
 
-    def test_trail_summary_with_cycles(self):
+    async def test_trail_summary_with_cycles(self):
         """Test trail summary with cycles."""
         walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
 
         # Create a cycle
         for node in nodes:
-            with walker.visiting(node):
+            with await walker.visiting(node):
                 pass
-        with walker.visiting(nodes[0]):  # Back to first node
+        with await walker.visiting(nodes[0]):  # Back to first node
             pass
 
         summary = walker.get_trail_summary()

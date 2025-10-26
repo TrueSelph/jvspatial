@@ -45,36 +45,34 @@ class TestPublicAuthEndpoints:
         from jvspatial.api.auth.endpoints import UserRegistrationRequest
 
         request_data = UserRegistrationRequest(
-            username="newuser",
             email="new@example.com",
             password="password123",  # pragma: allowlist secret
             confirm_password="password123",  # pragma: allowlist secret
         )
 
-        # Mock that username and email don't exist
+        # Mock that email doesn't exist
         with patch(
-            "jvspatial.api.auth.entities.User.find_by_username", return_value=None
-        ):
+            "jvspatial.api.auth.entities.User.find_by_email", new_callable=AsyncMock
+        ) as mock_find_email:
             with patch(
-                "jvspatial.api.auth.entities.User.find_by_email", return_value=None
-            ):
-                with patch("jvspatial.api.auth.entities.User.create") as mock_create:
-                    mock_user = User(
-                        id="user_123",
-                        username="newuser",
-                        email="new@example.com",
-                        password_hash="hashed",  # pragma: allowlist secret
-                        created_at=datetime.now(),
-                    )
-                    mock_create.return_value = mock_user
+                "jvspatial.api.auth.entities.User.create", new_callable=AsyncMock
+            ) as mock_create:
+                mock_find_email.return_value = None
 
-                    result = await register_user(request_data)
+                mock_user = User(
+                    id="user_123",
+                    email="new@example.com",
+                    password_hash="hashed",  # pragma: allowlist secret
+                    created_at=datetime.now().isoformat(),  # Use ISO format string
+                )
+                mock_create.return_value = mock_user
 
-                    assert result["status"] == "success"
-                    assert result["message"] == "User registered successfully"
-                    assert result["user"]["username"] == "newuser"
-                    assert result["user"]["email"] == "new@example.com"
-                    mock_create.assert_called_once()
+                result = await register_user(request_data)
+
+                assert result["status"] == "success"
+                assert result["message"] == "User registered successfully"
+                assert result["user"]["email"] == "new@example.com"
+                mock_create.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_register_user_password_mismatch(self):
@@ -82,7 +80,6 @@ class TestPublicAuthEndpoints:
         from jvspatial.api.auth.endpoints import UserRegistrationRequest
 
         request_data = UserRegistrationRequest(
-            username="newuser",
             email="new@example.com",
             password="password123",  # pragma: allowlist secret
             confirm_password="different456",  # pragma: allowlist secret
@@ -95,63 +92,31 @@ class TestPublicAuthEndpoints:
         assert "Passwords do not match" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_register_user_username_taken(self):
-        """Test user registration with existing username."""
-        from jvspatial.api.auth.endpoints import UserRegistrationRequest
-
-        request_data = UserRegistrationRequest(
-            username="existing",
-            email="new@example.com",
-            password="password123",  # pragma: allowlist secret
-            confirm_password="password123",  # pragma: allowlist secret
-        )
-
-        existing_user = User(
-            username="existing",
-            email="existing@example.com",
-            password_hash="hash",  # pragma: allowlist secret
-        )
-
-        with patch(
-            "jvspatial.api.auth.entities.User.find_by_username",
-            return_value=existing_user,
-        ):
-            result = await register_user(request_data)
-
-            assert result["status"] == "error"
-            assert result["error"] == "username_taken"
-            assert "Username is already taken" in result["message"]
-
-    @pytest.mark.asyncio
     async def test_register_user_email_taken(self):
         """Test user registration with existing email."""
         from jvspatial.api.auth.endpoints import UserRegistrationRequest
 
         request_data = UserRegistrationRequest(
-            username="newuser",
             email="existing@example.com",
             password="password123",  # pragma: allowlist secret
             confirm_password="password123",  # pragma: allowlist secret
         )
 
         existing_user = User(
-            username="other",
             email="existing@example.com",
             password_hash="hash",  # pragma: allowlist secret
         )
 
         with patch(
-            "jvspatial.api.auth.entities.User.find_by_username", return_value=None
+            "jvspatial.api.auth.entities.User.find_by_email",
+            new_callable=AsyncMock,
+            return_value=existing_user,
         ):
-            with patch(
-                "jvspatial.api.auth.entities.User.find_by_email",
-                return_value=existing_user,
-            ):
-                result = await register_user(request_data)
+            result = await register_user(request_data)
 
-                assert result["status"] == "error"
-                assert result["error"] == "email_taken"
-                assert "Email is already registered" in result["message"]
+            assert result["status"] == "error"
+            assert result["error"] == "email_taken"
+            assert "Email is already registered" in result["message"]
 
     @pytest.mark.asyncio
     async def test_login_user_success(self):
@@ -159,14 +124,13 @@ class TestPublicAuthEndpoints:
         from jvspatial.api.auth.endpoints import LoginRequest
 
         request_data = LoginRequest(
-            username="testuser",
+            email="test@example.com",
             password="password123",  # pragma: allowlist secret
             remember_me=False,
         )
 
         test_user = User(
             id="user_123",
-            username="testuser",
             email="test@example.com",
             password_hash="hash",  # pragma: allowlist secret
             roles=["user"],
@@ -174,7 +138,9 @@ class TestPublicAuthEndpoints:
         )
 
         with patch(
-            "jvspatial.api.auth.endpoints.authenticate_user", return_value=test_user
+            "jvspatial.api.auth.endpoints.authenticate_user",
+            new_callable=AsyncMock,
+            return_value=test_user,
         ):
             with patch(
                 "jvspatial.api.auth.endpoints.JWTManager.create_access_token",
@@ -185,14 +151,17 @@ class TestPublicAuthEndpoints:
                     return_value="refresh_token",
                 ):
                     with patch(
-                        "jvspatial.api.auth.entities.Session.create"
+                        "jvspatial.api.auth.entities.Session.create",
+                        new_callable=AsyncMock,
                     ) as mock_create_session:
                         mock_session = Session(
                             session_id="session_123",
                             user_id="user_123",
                             jwt_token="access_token",
                             refresh_token="refresh_token",
-                            expires_at=datetime.now() + timedelta(hours=24),
+                            expires_at=(
+                                datetime.now() + timedelta(hours=24)
+                            ).isoformat(),  # Use ISO format string
                         )
                         mock_create_session.return_value = mock_session
 
@@ -202,7 +171,6 @@ class TestPublicAuthEndpoints:
                         assert result["access_token"] == "access_token"
                         assert result["refresh_token"] == "refresh_token"
                         assert result["token_type"] == "bearer"
-                        assert result["user"]["username"] == "testuser"
                         assert result["user"]["email"] == "test@example.com"
 
     @pytest.mark.asyncio
@@ -211,14 +179,13 @@ class TestPublicAuthEndpoints:
         from jvspatial.api.auth.endpoints import LoginRequest
 
         request_data = LoginRequest(
-            username="testuser",
+            email="test@example.com",
             password="password123",  # pragma: allowlist secret
             remember_me=True,
         )
 
         test_user = User(
             id="user_123",
-            username="testuser",
             email="test@example.com",
             password_hash="hash",  # pragma: allowlist secret
         )
@@ -245,6 +212,9 @@ class TestPublicAuthEndpoints:
                         # Check session creation was called with extended duration
                         call_args = mock_create_session.call_args[1]
                         expires_at = call_args["expires_at"]
+                        # Convert to datetime for comparison
+                        if isinstance(expires_at, str):
+                            expires_at = datetime.fromisoformat(expires_at)
                         time_diff = expires_at - datetime.now()
                         assert time_diff.days >= 6  # About 7 days
 
@@ -254,7 +224,8 @@ class TestPublicAuthEndpoints:
         from jvspatial.api.auth.endpoints import LoginRequest
 
         request_data = LoginRequest(
-            username="testuser", password="wrongpassword"  # pragma: allowlist secret
+            email="test@example.com",
+            password="wrongpassword",  # pragma: allowlist secret
         )
 
         with patch(
@@ -265,7 +236,7 @@ class TestPublicAuthEndpoints:
 
             assert result["status"] == "error"
             assert result["error"] == "invalid_credentials"
-            assert "Invalid username or password" in result["message"]
+            assert "Invalid email or password" in result["message"]
 
     @pytest.mark.asyncio
     async def test_refresh_token_success(self):
@@ -311,33 +282,65 @@ class TestAuthenticatedEndpoints:
         """Set up test data."""
         self.test_user = User(
             id="user_123",
-            username="testuser",
             email="test@example.com",
             password_hash="hash",  # pragma: allowlist secret
             roles=["user"],
             permissions=["read_data"],
             is_active=True,
-            created_at=datetime.now(),
-            last_login=datetime.now() - timedelta(days=1),
+            created_at=datetime.now().isoformat(),  # Use ISO format string
+            last_login=(
+                datetime.now() - timedelta(days=1)
+            ).isoformat(),  # Use ISO format string
             login_count=5,
         )
 
     @pytest.mark.asyncio
     async def test_logout_user_success(self):
-        """Test successful user logout."""
+        """Test successful user logout with session revocation."""
         from jvspatial.api.auth.endpoints import LogoutRequest
 
         request_data = LogoutRequest(revoke_all_sessions=False)
 
         mock_request = MagicMock(spec=Request)
+        mock_request.headers = {"Authorization": "Bearer test_token"}
 
+        # Mock database context and session finding
         with patch(
             "jvspatial.api.auth.endpoints.get_current_user", return_value=self.test_user
         ):
-            result = await logout_user(request_data, mock_request)
+            with patch(
+                "jvspatial.core.context.get_default_context"
+            ) as mock_get_context:
+                mock_ctx = MagicMock()
+                mock_get_context.return_value = mock_ctx
 
-            assert result["status"] == "success"
-            assert result["message"] == "Logged out successfully"
+                # Mock session data
+                mock_session_data = [
+                    {
+                        "session_id": "session_123",
+                        "user_id": "user_123",
+                        "jwt_token": "test_token",
+                        "refresh_token": "refresh_token",
+                        "expires_at": (
+                            datetime.now() + timedelta(hours=24)
+                        ).isoformat(),
+                        "is_active": True,
+                    }
+                ]
+                mock_ctx.database.find = AsyncMock(return_value=mock_session_data)
+
+                # Mock the Session.revoke method directly
+                with patch(
+                    "jvspatial.api.auth.entities.Session.revoke", new_callable=AsyncMock
+                ) as mock_revoke:
+                    result = await logout_user(request_data, mock_request)
+
+                    assert result["status"] == "success"
+                    assert result["message"] == "Logged out successfully"
+                    assert result["sessions_revoked"] is False
+
+                    # Verify session was revoked
+                    mock_revoke.assert_called_once_with("User logout")
 
     @pytest.mark.asyncio
     async def test_logout_user_revoke_all(self):
@@ -347,14 +350,45 @@ class TestAuthenticatedEndpoints:
         request_data = LogoutRequest(revoke_all_sessions=True)
 
         mock_request = MagicMock(spec=Request)
+        mock_request.headers = {"Authorization": "Bearer test_token"}
 
+        # Mock database context and session finding
         with patch(
             "jvspatial.api.auth.endpoints.get_current_user", return_value=self.test_user
         ):
-            result = await logout_user(request_data, mock_request)
+            with patch(
+                "jvspatial.core.context.get_default_context"
+            ) as mock_get_context:
+                mock_ctx = MagicMock()
+                mock_get_context.return_value = mock_ctx
 
-            assert result["status"] == "success"
-            assert result["message"] == "Logged out successfully"
+                # Mock session data for current session
+                mock_session_data = [
+                    {
+                        "session_id": "session_123",
+                        "user_id": "user_123",
+                        "jwt_token": "test_token",
+                        "refresh_token": "refresh_token",
+                        "expires_at": (
+                            datetime.now() + timedelta(hours=24)
+                        ).isoformat(),
+                        "is_active": True,
+                    }
+                ]
+                mock_ctx.database.find = AsyncMock(return_value=mock_session_data)
+
+                # Mock the Session.revoke method directly
+                with patch(
+                    "jvspatial.api.auth.entities.Session.revoke", new_callable=AsyncMock
+                ) as mock_revoke:
+                    result = await logout_user(request_data, mock_request)
+
+                    assert result["status"] == "success"
+                    assert result["message"] == "Logged out successfully"
+                    assert result["sessions_revoked"] is True
+
+                    # Verify session was revoked
+                    mock_revoke.assert_called()
 
     @pytest.mark.asyncio
     async def test_get_user_profile_success(self):
@@ -368,7 +402,6 @@ class TestAuthenticatedEndpoints:
 
             assert result["status"] == "success"
             assert result["message"] == "Profile retrieved successfully"
-            assert result["profile"]["username"] == "testuser"
             assert result["profile"]["email"] == "test@example.com"
             assert result["profile"]["roles"] == ["user"]
             assert result["profile"]["permissions"] == ["read_data"]
@@ -404,9 +437,13 @@ class TestAuthenticatedEndpoints:
         ):
             with patch.object(User, "verify_password", return_value=True):
                 with patch(
-                    "jvspatial.api.auth.entities.User.find_by_email", return_value=None
+                    "jvspatial.api.auth.entities.User.find_by_email",
+                    new_callable=AsyncMock,
+                    return_value=None,
                 ):
-                    with patch.object(User, "save") as mock_save:
+                    with patch.object(
+                        User, "save", new_callable=AsyncMock
+                    ) as mock_save:
                         result = await update_user_profile(request_data, mock_request)
 
                         assert result["status"] == "success"
@@ -482,7 +519,6 @@ class TestAuthenticatedEndpoints:
         mock_request = MagicMock(spec=Request)
         existing_user = User(
             id="other_user",
-            username="other",
             email="taken@example.com",
             password_hash="hash",  # pragma: allowlist secret
         )
@@ -493,6 +529,7 @@ class TestAuthenticatedEndpoints:
             with patch.object(User, "verify_password", return_value=True):
                 with patch(
                     "jvspatial.api.auth.entities.User.find_by_email",
+                    new_callable=AsyncMock,
                     return_value=existing_user,
                 ):
                     result = await update_user_profile(request_data, mock_request)
@@ -509,7 +546,6 @@ class TestAPIKeyEndpoints:
         """Set up test data."""
         self.test_user = User(
             id="user_123",
-            username="testuser",
             email="test@example.com",
             password_hash="hash",  # pragma: allowlist secret
         )
@@ -519,7 +555,7 @@ class TestAPIKeyEndpoints:
             name="Test API Key",
             key_hash="hashed_secret",
             user_id="user_123",
-            created_at=datetime.now(),
+            created_at=datetime.now().isoformat(),
             usage_count=42,
             rate_limit_per_hour=1000,
             is_active=True,
@@ -535,6 +571,7 @@ class TestAPIKeyEndpoints:
         ):
             with patch(
                 "jvspatial.api.auth.entities.APIKey.find",
+                new_callable=AsyncMock,
                 return_value=[self.test_api_key],
             ):
                 result = await list_api_keys(mock_request)
@@ -578,7 +615,7 @@ class TestAPIKeyEndpoints:
                         name="New API Key",
                         key_hash="hashed_secret",
                         user_id="user_123",
-                        created_at=datetime.now(),
+                        created_at=datetime.now().isoformat(),
                     )
                     mock_create.return_value = mock_api_key
 
@@ -618,7 +655,7 @@ class TestAPIKeyEndpoints:
                         name="Expiring Key",
                         key_hash="hashed_secret",
                         user_id="user_123",
-                        created_at=datetime.now(),
+                        created_at=datetime.now().isoformat(),
                     )
                     mock_create.return_value = mock_api_key
 
@@ -628,6 +665,9 @@ class TestAPIKeyEndpoints:
                     call_args = mock_create.call_args[1]
                     expires_at = call_args["expires_at"]
                     assert expires_at is not None
+                    # Convert to datetime if it's a string
+                    if isinstance(expires_at, str):
+                        expires_at = datetime.fromisoformat(expires_at)
                     time_diff = expires_at - datetime.now()
                     assert 6 <= time_diff.days <= 7
 
@@ -645,6 +685,7 @@ class TestAPIKeyEndpoints:
         ):
             with patch(
                 "jvspatial.api.auth.entities.APIKey.find_by_key_id",
+                new_callable=AsyncMock,
                 return_value=self.test_api_key,
             ):
                 with patch.object(APIKey, "save", new_callable=AsyncMock) as mock_save:
@@ -667,11 +708,13 @@ class TestAPIKeyEndpoints:
         mock_request = MagicMock(spec=Request)
 
         with patch(
-            "jvspatial.api.auth.middleware.get_current_user",
+            "jvspatial.api.auth.endpoints.get_current_user",
             return_value=self.test_user,
         ):
             with patch(
-                "jvspatial.api.auth.entities.APIKey.find_by_key_id", return_value=None
+                "jvspatial.api.auth.entities.APIKey.find_by_key_id",
+                new_callable=AsyncMock,
+                return_value=None,
             ):
                 result = await revoke_api_key(request_data, mock_request)
 
@@ -697,11 +740,12 @@ class TestAPIKeyEndpoints:
         )
 
         with patch(
-            "jvspatial.api.auth.middleware.get_current_user",
+            "jvspatial.api.auth.endpoints.get_current_user",
             return_value=self.test_user,
         ):
             with patch(
                 "jvspatial.api.auth.entities.APIKey.find_by_key_id",
+                new_callable=AsyncMock,
                 return_value=other_api_key,
             ):
                 result = await revoke_api_key(request_data, mock_request)
@@ -718,7 +762,6 @@ class TestAdminEndpoints:
         """Set up test data."""
         self.admin_user = User(
             id="admin_123",
-            username="admin",
             email="admin@example.com",
             password_hash="hash",  # pragma: allowlist secret
             is_admin=True,
@@ -727,7 +770,6 @@ class TestAdminEndpoints:
 
         self.regular_user = User(
             id="user_123",
-            username="regular",
             email="user@example.com",
             password_hash="hash",  # pragma: allowlist secret
             is_admin=False,
@@ -749,18 +791,27 @@ class TestAdminEndpoints:
             "jvspatial.api.auth.endpoints.get_current_user",
             return_value=self.admin_user,
         ):
-            with patch("jvspatial.api.auth.entities.User.find", return_value=users):
-                result = await list_users(request_data, mock_request)
+            with patch(
+                "jvspatial.api.auth.entities.User.find",
+                new_callable=AsyncMock,
+                return_value=users,
+            ):
+                with patch(
+                    "jvspatial.api.auth.entities.User.count",
+                    new_callable=AsyncMock,
+                    return_value=2,
+                ):
+                    result = await list_users(request_data, mock_request)
 
-                assert result["status"] == "success"
-                assert len(result["users"]) == 2
-                assert result["pagination"]["total"] == 2
-                assert result["pagination"]["pages"] == 1
+                    assert result["status"] == "success"
+                    assert len(result["users"]) == 2
+                    assert result["pagination"]["total"] == 2
+                    assert result["pagination"]["pages"] == 1
 
-                # Check user data
-                admin_data = result["users"][0]
-                assert admin_data["username"] == "admin"
-                assert admin_data["is_admin"] is True
+                    # Check user data
+                    admin_data = result["users"][0]
+                    assert admin_data["email"] == "admin@example.com"
+                    assert admin_data["is_admin"] is True
 
     @pytest.mark.asyncio
     async def test_list_users_active_only(self):
@@ -772,15 +823,22 @@ class TestAdminEndpoints:
         mock_request = MagicMock(spec=Request)
 
         with patch(
-            "jvspatial.api.auth.middleware.get_current_user",
+            "jvspatial.api.auth.endpoints.get_current_user",
             return_value=self.admin_user,
         ):
-            with patch("jvspatial.api.auth.entities.User.find") as mock_find:
-                await list_users(request_data, mock_request)
+            with patch(
+                "jvspatial.api.auth.entities.User.find", new_callable=AsyncMock
+            ) as mock_find:
+                with patch(
+                    "jvspatial.api.auth.entities.User.count",
+                    new_callable=AsyncMock,
+                    return_value=1,
+                ):
+                    await list_users(request_data, mock_request)
 
-                # Check that query included active filter
-                call_args = mock_find.call_args[0][0]
-                assert call_args["context.is_active"] is True
+                    # Check that query included active filter
+                    call_args = mock_find.call_args
+                    assert call_args[0][0]["context.is_active"] is True
 
     @pytest.mark.asyncio
     async def test_list_users_pagination(self):
@@ -793,18 +851,27 @@ class TestAdminEndpoints:
         users = [self.admin_user, self.regular_user]
 
         with patch(
-            "jvspatial.api.auth.middleware.get_current_user",
+            "jvspatial.api.auth.endpoints.get_current_user",
             return_value=self.admin_user,
         ):
-            with patch("jvspatial.api.auth.entities.User.find", return_value=users):
-                result = await list_users(request_data, mock_request)
+            with patch(
+                "jvspatial.api.auth.entities.User.find",
+                new_callable=AsyncMock,
+                return_value=users,
+            ):  # Return all users
+                with patch(
+                    "jvspatial.api.auth.entities.User.count",
+                    new_callable=AsyncMock,
+                    return_value=2,
+                ):
+                    result = await list_users(request_data, mock_request)
 
-                # Should only return 1 user (page 2, limit 1)
-                assert len(result["users"]) == 1
-                assert result["pagination"]["page"] == 2
-                assert result["pagination"]["limit"] == 1
-                assert result["pagination"]["total"] == 2
-                assert result["pagination"]["pages"] == 2
+                    # Should only return 1 user (page 2, limit 1)
+                    assert len(result["users"]) == 1
+                    assert result["pagination"]["page"] == 2
+                    assert result["pagination"]["limit"] == 1
+                    assert result["pagination"]["total"] == 2
+                    assert result["pagination"]["pages"] == 2
 
     @pytest.mark.asyncio
     async def test_update_user_success(self):
@@ -822,7 +889,9 @@ class TestAdminEndpoints:
             return_value=self.admin_user,
         ):
             with patch(
-                "jvspatial.api.auth.entities.User.get", return_value=self.regular_user
+                "jvspatial.api.auth.entities.User.find_by_id",
+                new_callable=AsyncMock,
+                return_value=self.regular_user,
             ):
                 with patch.object(User, "save", new_callable=AsyncMock) as mock_save:
                     result = await update_user(request_data, mock_request)
@@ -832,7 +901,7 @@ class TestAdminEndpoints:
                     assert result["user_id"] == "user_123"
                     assert "is_active" in result["updates"]
                     assert "roles" in result["updates"]
-                    assert result["updated_by"]["admin_username"] == "admin"
+                    assert result["updated_by"]["admin_email"] == "admin@example.com"
 
                     # Check user was actually updated
                     assert self.regular_user.is_active is False
@@ -849,7 +918,7 @@ class TestAdminEndpoints:
         mock_request = MagicMock(spec=Request)
 
         with patch(
-            "jvspatial.api.auth.middleware.get_current_user",
+            "jvspatial.api.auth.endpoints.get_current_user",
             return_value=self.admin_user,
         ):
             with patch("jvspatial.api.auth.entities.User.get", return_value=None):
@@ -874,7 +943,7 @@ class TestAdminEndpoints:
                 user_id="user1",
                 jwt_token="jwt1",
                 refresh_token="refresh1",
-                expires_at=datetime.now() + timedelta(hours=1),
+                expires_at=(datetime.now() + timedelta(hours=1)).isoformat(),
             )
         ]
 
@@ -882,28 +951,53 @@ class TestAdminEndpoints:
             "jvspatial.api.auth.endpoints.get_current_user",
             return_value=self.admin_user,
         ):
-            with patch("jvspatial.api.auth.entities.User.find", return_value=users):
+            with patch(
+                "jvspatial.api.auth.entities.User.find",
+                new_callable=AsyncMock,
+                return_value=users,
+            ):
                 with patch(
-                    "jvspatial.api.auth.entities.APIKey.find", return_value=api_keys
+                    "jvspatial.api.auth.entities.User.count",
+                    new_callable=AsyncMock,
+                    return_value=2,
                 ):
                     with patch(
-                        "jvspatial.api.auth.entities.Session.find",
-                        return_value=sessions,
+                        "jvspatial.api.auth.entities.APIKey.find",
+                        new_callable=AsyncMock,
+                        return_value=api_keys,
                     ):
-                        result = await get_auth_stats(mock_request)
+                        with patch(
+                            "jvspatial.api.auth.entities.APIKey.count",
+                            new_callable=AsyncMock,
+                            return_value=1,
+                        ):
+                            with patch(
+                                "jvspatial.api.auth.entities.Session.find",
+                                new_callable=AsyncMock,
+                                return_value=sessions,
+                            ):
+                                with patch(
+                                    "jvspatial.api.auth.entities.Session.count",
+                                    new_callable=AsyncMock,
+                                    return_value=1,
+                                ):
+                                    result = await get_auth_stats(mock_request)
 
-                        assert result["status"] == "success"
-                        stats = result["statistics"]
-                        assert stats["total_users"] == 2
-                        assert (
-                            stats["active_users"] == 2
-                        )  # Both users are active by default
-                        assert stats["admin_users"] == 1
-                        assert stats["total_api_keys"] == 1
-                        assert stats["active_api_keys"] == 1
-                        assert stats["active_sessions"] == 1
-                        assert "database_collections" in stats
-                        assert result["generated_by"]["admin_username"] == "admin"
+                                    assert result["status"] == "success"
+                                    stats = result["statistics"]
+                                    assert stats["total_users"] == 2
+                                    assert (
+                                        stats["active_users"] == 2
+                                    )  # Both users are active by default
+                                    assert stats["admin_users"] == 1
+                                    assert stats["total_api_keys"] == 1
+                                    assert stats["active_api_keys"] == 1
+                                    assert stats["active_sessions"] == 1
+                                    assert "database_collections" in stats
+                                    assert (
+                                        result["generated_by"]["admin_email"]
+                                        == "admin@example.com"
+                                    )
 
     @pytest.mark.asyncio
     async def test_delete_user_success(self):
@@ -920,7 +1014,7 @@ class TestAdminEndpoints:
                 user_id="user_123",
                 jwt_token="jwt",
                 refresh_token="refresh",
-                expires_at=datetime.now() + timedelta(hours=1),
+                expires_at=(datetime.now() + timedelta(hours=1)).isoformat(),
             )
         ]
 
@@ -929,45 +1023,60 @@ class TestAdminEndpoints:
             return_value=self.admin_user,
         ):
             with patch(
-                "jvspatial.api.auth.entities.User.get", return_value=self.regular_user
+                "jvspatial.api.auth.entities.User.find_by_id",
+                new_callable=AsyncMock,
+                return_value=self.regular_user,
             ):
                 with patch(
                     "jvspatial.api.auth.entities.APIKey.find",
+                    new_callable=AsyncMock,
                     return_value=user_api_keys,
                 ):
                     with patch(
                         "jvspatial.api.auth.entities.Session.find",
+                        new_callable=AsyncMock,
                         return_value=user_sessions,
                     ):
                         with patch.object(
-                            User, "delete", new_callable=AsyncMock
-                        ) as mock_delete_user:
+                            User, "save", new_callable=AsyncMock
+                        ) as mock_save_user:
                             with patch.object(
-                                APIKey, "delete", new_callable=AsyncMock
-                            ) as mock_delete_key:
+                                User, "delete", new_callable=AsyncMock
+                            ) as mock_delete_user:
                                 with patch.object(
-                                    Session, "delete", new_callable=AsyncMock
-                                ) as mock_delete_session:
-                                    result = await delete_user("user_123", mock_request)
+                                    APIKey, "delete", new_callable=AsyncMock
+                                ) as mock_delete_key:
+                                    with patch.object(
+                                        Session, "delete", new_callable=AsyncMock
+                                    ) as mock_delete_session:
+                                        result = await delete_user(
+                                            "user_123", mock_request
+                                        )
 
-                                    assert result["status"] == "success"
-                                    assert (
-                                        result["message"] == "User deleted successfully"
-                                    )
-                                    assert (
-                                        result["deleted_user"]["username"] == "regular"
-                                    )
-                                    assert (
-                                        result["deleted_by"]["admin_username"]
-                                        == "admin"
-                                    )
-                                    assert result["cleanup"]["api_keys_deleted"] == 1
-                                    assert result["cleanup"]["sessions_deleted"] == 1
+                                        assert result["status"] == "success"
+                                        assert (
+                                            result["message"]
+                                            == "User deleted successfully"
+                                        )
+                                        assert (
+                                            result["deleted_user"]["email"]
+                                            == "user@example.com"
+                                        )
+                                        assert (
+                                            result["deleted_by"]["admin_email"]
+                                            == "admin@example.com"
+                                        )
+                                        assert (
+                                            result["cleanup"]["api_keys_deleted"] == 1
+                                        )
+                                        assert (
+                                            result["cleanup"]["sessions_deleted"] == 1
+                                        )
 
-                                    # Check deletions were called
-                                    mock_delete_user.assert_called_once()
-                                    mock_delete_key.assert_called_once()
-                                    mock_delete_session.assert_called_once()
+                                        # Check deletions were called
+                                        mock_delete_user.assert_called_once()
+                                        mock_delete_key.assert_called_once()
+                                        mock_delete_session.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_delete_user_self_deletion(self):
@@ -979,7 +1088,9 @@ class TestAdminEndpoints:
             return_value=self.admin_user,
         ):
             with patch(
-                "jvspatial.api.auth.entities.User.get", return_value=self.admin_user
+                "jvspatial.api.auth.entities.User.find_by_id",
+                new_callable=AsyncMock,
+                return_value=self.admin_user,
             ):
                 result = await delete_user("admin_123", mock_request)
 
@@ -993,7 +1104,7 @@ class TestAdminEndpoints:
         mock_request = MagicMock(spec=Request)
 
         with patch(
-            "jvspatial.api.auth.middleware.get_current_user",
+            "jvspatial.api.auth.endpoints.get_current_user",
             return_value=self.admin_user,
         ):
             with patch("jvspatial.api.auth.entities.User.get", return_value=None):

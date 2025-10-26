@@ -35,12 +35,12 @@ class EventBus:
         )
         self._lock = asyncio.Lock()
 
-    def register_entity(self, entity) -> None:
+    async def register_entity(self, entity) -> None:
         """Register a walker or node for event handling."""
         if hasattr(entity, "id"):
             self._active_entities[entity.id] = entity
 
-    def unregister_entity(self, entity_id: str) -> None:
+    async def unregister_entity(self, entity_id: str) -> None:
         """Unregister an entity from event handling."""
         self._active_entities.pop(entity_id, None)
 
@@ -76,11 +76,11 @@ class EventBus:
                 if entity_id != source_id and hasattr(entity, "_event_handlers"):
                     for handler in entity._event_handlers.get(event_type, []):
                         try:
-                            # Call handler with just the event data (matching @on_emit decorator expectations)
+                            # Call handler with self, event_type, data, and source_id (matching @on_emit decorator expectations)
                             if asyncio.iscoroutinefunction(handler):
-                                await handler(entity, data)
+                                await handler(entity, event_type, data, source_id)
                             else:
-                                handler(entity, data)
+                                handler(entity, event_type, data, source_id)
                             handlers_called += 1
                         except Exception as e:
                             logger.error(
@@ -92,19 +92,19 @@ class EventBus:
         )
         return handlers_called
 
-    def add_handler(self, event_type: str, handler: Callable) -> None:
+    async def add_handler(self, event_type: str, handler: Callable) -> None:
         """Add a direct event handler for an event type."""
         if event_type not in self._handlers:
             self._handlers[event_type] = []
         self._handlers[event_type].append(handler)
 
-    def remove_handler(self, event_type: str, handler: Callable) -> None:
+    async def remove_handler(self, event_type: str, handler: Callable) -> None:
         """Remove a direct event handler."""
         if event_type in self._handlers:
             with suppress(ValueError):
                 self._handlers[event_type].remove(handler)
 
-    def get_stats(self) -> Dict[str, Any]:
+    async def get_stats(self) -> Dict[str, Any]:
         """Get event bus statistics."""
         return {
             "active_entities": len(self._active_entities),
@@ -128,11 +128,11 @@ def on_emit(*event_types: str):
     Example:
         ```python
         class MyWalker(Walker):
-            @on_emit("data_found")
+            @await on_emit("data_found")
             async def handle_data_found(self, event_type: str, data: Any, source_id: str):
                 self.report(f"Received data from {source_id}: {data}")
 
-            @on_emit("status_update", "progress_report")
+            @await on_emit("status_update", "progress_report")
             async def handle_status(self, event_type: str, data: Any, source_id: str):
                 print(f"Status from {source_id}: {data}")
         ```
@@ -168,7 +168,7 @@ async def emit_event(
     return await event_bus.emit(event_type, data, source_id)
 
 
-def add_event_handler(event_type: str, handler: Callable) -> None:
+async def add_event_handler(event_type: str, handler: Callable) -> None:
     """Add a global event handler.
 
     Args:
@@ -180,7 +180,7 @@ def add_event_handler(event_type: str, handler: Callable) -> None:
         def log_all_events(event_type: str, data: Any, source_id: str):
             print(f"Event: {event_type} from {source_id}")
 
-        add_event_handler("*", log_all_events)
+        await add_event_handler("*", log_all_events)
         ```
     """
-    event_bus.add_handler(event_type, handler)
+    await event_bus.add_handler(event_type, handler)

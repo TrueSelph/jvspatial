@@ -6,7 +6,7 @@ API endpoints with various authentication mechanisms.
 
 from __future__ import annotations
 
-from jvspatial.api.decorators.shortcuts import admin_endpoint, auth_endpoint
+from jvspatial.api.decorators.route import admin_endpoint, auth_endpoint
 
 __all__ = [
     "auth_endpoint",

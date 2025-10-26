@@ -149,21 +149,21 @@ def sample_proxy_data():
 class TestURLProxyManagerInitialization:
     """Tests for URLProxyManager initialization."""
 
-    def test_init_with_context(self, mock_context):
+    async def test_init_with_context(self, mock_context):
         """Test initialization with provided context."""
         manager = URLProxyManager(context=mock_context)
         assert manager._context == mock_context
-        assert manager.context == mock_context
+        assert await manager.context == mock_context
 
-    def test_init_without_context(self):
+    async def test_init_without_context(self):
         """Test initialization without context uses default."""
         manager = URLProxyManager()
         assert manager._context is None
         # Context will be created on first access
-        context = manager.context
+        context = await manager.context
         assert context is not None
 
-    def test_get_proxy_manager_function(self, mock_context):
+    async def test_get_proxy_manager_function(self, mock_context):
         """Test get_proxy_manager convenience function."""
         manager = get_proxy_manager(context=mock_context)
         assert isinstance(manager, URLProxyManager)
@@ -958,7 +958,7 @@ class TestIntegrationWorkflows:
 # ============================================================================
 
 
-def test_module_imports():
+async def test_module_imports():
     """Test that all required modules can be imported."""
     from jvspatial.storage.managers import URLProxyManager, get_proxy_manager
 
@@ -966,7 +966,7 @@ def test_module_imports():
     assert get_proxy_manager is not None
 
 
-def test_manager_class_attributes():
+async def test_manager_class_attributes():
     """Test URLProxyManager class attributes."""
     assert hasattr(URLProxyManager, "_lock")
     assert hasattr(URLProxyManager, "_indexes_created")

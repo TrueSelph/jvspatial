@@ -51,15 +51,15 @@ class MemoryCache(CacheBackend):
             if entry.get("expires_at") and time.time() > entry["expires_at"]:
                 # Expired, remove it
                 del self._cache[key]
-                self._stats.record_miss()
+                await self._stats.record_miss()
                 return None
 
             # Move to end for LRU
             self._cache[key] = self._cache.pop(key)
-            self._stats.record_hit()
+            await self._stats.record_hit()
             return entry["value"]
 
-        self._stats.record_miss()
+        await self._stats.record_miss()
         return None
 
     async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
@@ -86,7 +86,7 @@ class MemoryCache(CacheBackend):
 
         # Store entry
         self._cache[key] = {"value": value, "expires_at": expires_at}
-        self._stats.record_set()
+        await self._stats.record_set()
 
     async def delete(self, key: str) -> None:
         """Delete value from memory cache.
@@ -96,7 +96,7 @@ class MemoryCache(CacheBackend):
         """
         if key in self._cache:
             del self._cache[key]
-            self._stats.record_delete()
+            await self._stats.record_delete()
 
     async def clear(self) -> None:
         """Clear all entries from memory cache."""

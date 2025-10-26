@@ -43,7 +43,7 @@ class URLProxyManager:
         >>> manager = URLProxyManager()
         >>>
         >>> # Create a proxy
-        >>> proxy = await manager.create_proxy(
+        >>> proxy = manager.create_proxy(
         ...     file_path="uploads/document.pdf",
         ...     expires_in=3600,  # 1 hour
         ...     metadata={"user_id": "user123"}
@@ -51,7 +51,7 @@ class URLProxyManager:
         >>> print(f"Access via: /p/{proxy.code}")
         >>>
         >>> # Resolve a proxy
-        >>> file_path, metadata = await manager.resolve_proxy(proxy.code)
+        >>> file_path, metadata = manager.resolve_proxy(proxy.code)
         >>>
         >>> # Revoke a proxy
         >>> await manager.revoke_proxy(proxy.code)
@@ -69,7 +69,7 @@ class URLProxyManager:
         self._context = context
 
     @property
-    def context(self) -> GraphContext:
+    async def context(self) -> GraphContext:
         """Get the GraphContext instance.
 
         Returns:
@@ -153,7 +153,7 @@ class URLProxyManager:
             StorageError: If proxy creation fails
 
         Example:
-            >>> proxy = await manager.create_proxy(
+            >>> proxy = manager.create_proxy(
             ...     file_path="uploads/doc.pdf",
             ...     expires_in=7200,
             ...     one_time=True,
@@ -161,7 +161,8 @@ class URLProxyManager:
             ... )
         """
         # Ensure indexes are created
-        await self._ensure_indexes(self.context)
+        context = await self.context
+        await self._ensure_indexes(context)
 
         # Generate unique code
         max_attempts = 5
@@ -203,7 +204,7 @@ class URLProxyManager:
             )
 
             # Save to database
-            proxy._graph_context = self.context
+            proxy._graph_context = context
             await proxy.save()
 
             logger.info(
@@ -233,7 +234,7 @@ class URLProxyManager:
             URLProxy instance if found, None otherwise
 
         Example:
-            >>> proxy = await manager.get_proxy("abc123XY")
+            >>> proxy = manager.get_proxy("abc123XY")
             >>> if proxy:
             ...     print(f"Proxy for: {proxy.file_path}")
         """
@@ -273,7 +274,7 @@ class URLProxyManager:
 
         Example:
             >>> try:
-            ...     file_path, metadata = await manager.resolve_proxy("abc123XY")
+            ...     file_path, metadata = manager.resolve_proxy("abc123XY")
             ...     # Serve file at file_path
             ... except AccessDeniedError:
             ...     # Proxy expired or invalid
@@ -321,7 +322,7 @@ class URLProxyManager:
             True if proxy was revoked, False if not found
 
         Example:
-            >>> success = await manager.revoke_proxy(
+            >>> success = manager.revoke_proxy(
             ...     "abc123XY",
             ...     reason="User requested deletion"
             ... )
@@ -352,7 +353,7 @@ class URLProxyManager:
 
         Example:
             >>> # Run periodic cleanup
-            >>> count = await manager.cleanup_expired()
+            >>> count = manager.cleanup_expired()
             >>> print(f"Cleaned up {count} expired proxies")
         """
         try:
@@ -360,7 +361,7 @@ class URLProxyManager:
             now = datetime.now()
 
             # Query for expired or inactive proxies
-            ctx = self.context
+            ctx = await self.context
             results = await ctx.database.find(
                 "url_proxy",
                 {
@@ -399,7 +400,7 @@ class URLProxyManager:
             Dict with statistics or None if proxy not found
 
         Example:
-            >>> stats = await manager.get_stats("abc123XY")
+            >>> stats = manager.get_stats("abc123XY")
             >>> if stats:
             ...     print(f"Accessed {stats['access_count']} times")
         """
@@ -443,10 +444,10 @@ class URLProxyManager:
 
         Example:
             >>> # List all active proxies
-            >>> proxies = await manager.list_active_proxies()
+            >>> proxies = manager.list_active_proxies()
             >>>
             >>> # List proxies for specific file
-            >>> proxies = await manager.list_active_proxies("uploads/doc.pdf")
+            >>> proxies = manager.list_active_proxies("uploads/doc.pdf")
         """
         try:
             if file_path:
@@ -455,7 +456,7 @@ class URLProxyManager:
                 return cast(List[URLProxy], file_proxies[:limit])
             else:
                 # Query for all active, non-expired proxies
-                ctx = self.context
+                ctx = await self.context
                 results = await ctx.database.find("url_proxy", {"context.active": True})
 
                 active_proxies: List[URLProxy] = []
@@ -488,6 +489,6 @@ def get_proxy_manager(context: Optional[GraphContext] = None) -> URLProxyManager
         >>> from jvspatial.storage.managers import get_proxy_manager
         >>>
         >>> manager = get_proxy_manager()
-        >>> proxy = await manager.create_proxy("uploads/file.pdf")
+        >>> proxy = manager.create_proxy("uploads/file.pdf")
     """
     return URLProxyManager(context=context)

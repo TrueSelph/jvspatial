@@ -63,7 +63,7 @@ class TestDatabaseFactory:
         MockDatabase.__name__ = name
         return MockDatabase
 
-    def test_database_registration(self):
+    async def test_database_registration(self):
         """Test database registration."""
         # Create a real database class for testing
         MockDatabase = self._create_mock_database_class("MockDatabase")
@@ -77,7 +77,7 @@ class TestDatabaseFactory:
         assert "mock" in _DATABASE_REGISTRY
         assert _DATABASE_REGISTRY["mock"] == MockDatabase
 
-    def test_database_unregistration(self):
+    async def test_database_unregistration(self):
         """Test database unregistration."""
         # Create a real database class for testing
         MockDatabase = self._create_mock_database_class("MockDatabase")
@@ -93,7 +93,7 @@ class TestDatabaseFactory:
 
         assert "mock" not in _DATABASE_REGISTRY
 
-    def test_database_registration_duplicate(self):
+    async def test_database_registration_duplicate(self):
         """Test duplicate database registration."""
         MockDatabase = self._create_mock_database_class("MockDatabase")
 
@@ -104,13 +104,13 @@ class TestDatabaseFactory:
         with pytest.raises(InvalidConfigurationError):
             register_database("mock", MockDatabase)
 
-    def test_database_registration_invalid_class(self):
+    async def test_database_registration_invalid_class(self):
         """Test registration of invalid database class."""
         # Try to register non-Database class
         with pytest.raises(ValidationError):
             register_database("invalid", str)
 
-    def test_database_registration_invalid_name(self):
+    async def test_database_registration_invalid_name(self):
         """Test registration with invalid name."""
         # Empty name should work but is discouraged
         # Just test with valid database class
@@ -118,7 +118,7 @@ class TestDatabaseFactory:
         register_database("test_empty", MockDatabase)
         unregister_database("test_empty")
 
-    def test_database_unregistration_nonexistent(self):
+    async def test_database_unregistration_nonexistent(self):
         """Test unregistration of non-existent database."""
         # Unregistering non-existent database should succeed (no-op)
         unregister_database("nonexistent")
@@ -126,7 +126,7 @@ class TestDatabaseFactory:
         available = list_available_databases()
         assert "nonexistent" not in available
 
-    def test_list_available_databases(self):
+    async def test_list_available_databases(self):
         """Test listing available databases."""
         # Register some databases
         mock_db1 = self._create_mock_database_class("MockDatabase1")
@@ -140,7 +140,7 @@ class TestDatabaseFactory:
         assert "mock1" in available
         assert "mock2" in available
 
-    def test_list_available_databases_empty(self):
+    async def test_list_available_databases_empty(self):
         """Test listing available databases."""
         # Built-in databases are always registered (json, mongodb if available)
         available = list_available_databases()
@@ -148,7 +148,7 @@ class TestDatabaseFactory:
         assert len(available) >= 1  # At least json is registered
         assert "json" in available
 
-    def test_set_default_database(self):
+    async def test_set_default_database(self):
         """Test setting default database."""
         mock_db_class = self._create_mock_database_class()
         register_database("mock", mock_db_class)
@@ -160,12 +160,12 @@ class TestDatabaseFactory:
         default_type = get_default_database_type()
         assert default_type == "mock"
 
-    def test_set_default_database_nonexistent(self):
+    async def test_set_default_database_nonexistent(self):
         """Test setting non-existent database as default."""
         with pytest.raises(InvalidConfigurationError):
             set_default_database("nonexistent")
 
-    def test_get_default_database_type(self):
+    async def test_get_default_database_type(self):
         """Test getting default database type."""
         mock_db_class = self._create_mock_database_class()
         register_database("mock", mock_db_class)
@@ -174,7 +174,7 @@ class TestDatabaseFactory:
         default_type = get_default_database_type()
         assert default_type == "mock"
 
-    def test_get_default_database_type_none(self):
+    async def test_get_default_database_type_none(self):
         """Test getting default database type when none is set."""
         # The default is always set, just verify it returns a string
         default_type = get_default_database_type()
@@ -189,7 +189,7 @@ class TestDatabaseCreation:
         # Clean up any "mock" registrations from previous tests
         unregister_database("mock")
 
-    def test_get_database_with_type(self):
+    async def test_get_database_with_type(self):
         """Test getting database with specific type."""
         # Register mock database
         mock_db_class = MagicMock(spec=Database)
@@ -205,7 +205,7 @@ class TestDatabaseCreation:
         assert db == mock_db_instance
         mock_db_class.assert_called_once_with(config={"test": "value"})
 
-    def test_get_database_with_default(self):
+    async def test_get_database_with_default(self):
         """Test getting database with default type."""
         # Register mock database and set as default
         mock_db_class = MagicMock(spec=Database)
@@ -222,12 +222,12 @@ class TestDatabaseCreation:
         assert db == mock_db_instance
         mock_db_class.assert_called_once_with(config={"test": "value"})
 
-    def test_get_database_nonexistent_type(self):
+    async def test_get_database_nonexistent_type(self):
         """Test getting database with non-existent type."""
         with pytest.raises(ValueError):
             get_database("nonexistent")
 
-    def test_get_database_no_default(self):
+    async def test_get_database_no_default(self):
         """Test getting database with default."""
         # There's always a default (json), so this should succeed
         db = get_database()
@@ -236,7 +236,7 @@ class TestDatabaseCreation:
 
         assert isinstance(db, JsonDB)
 
-    def test_get_database_with_environment(self):
+    async def test_get_database_with_environment(self):
         """Test getting database with environment configuration."""
         # Mock environment variable
         with patch.dict(os.environ, {"JVSPATIAL_DB_TYPE": "mock"}):
@@ -253,7 +253,7 @@ class TestDatabaseCreation:
             # Verify database creation
             assert db == mock_db_instance
 
-    def test_get_database_with_config_override(self):
+    async def test_get_database_with_config_override(self):
         """Test getting database with configuration override."""
         # Register mock database
         mock_db_class = MagicMock(spec=Database)
@@ -278,20 +278,20 @@ class TestBuiltinDatabases:
         # Don't clear the registry - keep built-in databases available
         pass
 
-    def test_json_database_registration(self):
+    async def test_json_database_registration(self):
         """Test JSON database registration."""
         # JSON database should be available
         available = list_available_databases()
         assert "json" in available
 
-    def test_mongodb_database_registration(self):
+    async def test_mongodb_database_registration(self):
         """Test MongoDB database registration."""
         # MongoDB database should be available if pymongo is installed
         available = list_available_databases()
         # MongoDB might not be available if pymongo is not installed
         # This test should pass regardless
 
-    def test_get_json_database(self):
+    async def test_get_json_database(self):
         """Test getting JSON database."""
         # Get JSON database
         db = get_database("json", config={"root_path": "/tmp/test"})
@@ -299,7 +299,7 @@ class TestBuiltinDatabases:
         # Verify it's a JsonDB instance
         assert isinstance(db, JsonDB)
 
-    def test_get_mongodb_database(self):
+    async def test_get_mongodb_database(self):
         """Test getting MongoDB database."""
         # Get MongoDB database
         db = get_database(
@@ -309,7 +309,7 @@ class TestBuiltinDatabases:
         # Verify it's a MongoDB instance
         assert isinstance(db, MongoDB)
 
-    def test_database_configuration_validation(self):
+    async def test_database_configuration_validation(self):
         """Test database configuration validation."""
         # JsonDB doesn't validate config, it just ignores unknown params
         # This is intentional - it accepts base_path and cache_size
@@ -328,7 +328,7 @@ class TestDatabaseFactoryIntegration:
         unregister_database("db1")
         unregister_database("db2")
 
-    def test_factory_with_custom_database(self):
+    async def test_factory_with_custom_database(self):
         """Test factory with custom database."""
 
         # Create custom database class
@@ -361,7 +361,7 @@ class TestDatabaseFactoryIntegration:
         assert isinstance(db, CustomDatabase)
         assert db.custom_initialized is True
 
-    def test_factory_with_multiple_databases(self):
+    async def test_factory_with_multiple_databases(self):
         """Test factory with multiple databases."""
         # Register multiple databases
         mock_db1 = MagicMock(spec=Database)
@@ -430,7 +430,7 @@ class TestDatabaseFactoryIntegration:
         await db.close()
         assert db.closed
 
-    def test_factory_error_handling(self):
+    async def test_factory_error_handling(self):
         """Test factory error handling."""
         # Test with invalid database type
         with pytest.raises(ValueError):
@@ -465,7 +465,7 @@ class TestDatabaseFactoryIntegration:
         with pytest.raises(InvalidConfigurationError):
             get_database("failing")
 
-    def test_factory_configuration_merging(self):
+    async def test_factory_configuration_merging(self):
         """Test configuration merging."""
         # Test with environment variables
         with patch.dict(
@@ -481,7 +481,7 @@ class TestDatabaseFactoryIntegration:
         db = get_database("json", base_path="/tmp/override")
         assert str(db.base_path) == os.path.realpath("/tmp/override")
 
-    def test_factory_database_validation(self):
+    async def test_factory_database_validation(self):
         """Test database validation."""
         # Test with valid database
         db = get_database("json", base_path="/tmp/test")
@@ -505,7 +505,7 @@ class TestDatabaseFactoryPerformance:
         unregister_database("perf")
         unregister_database("large_config")
 
-    def test_factory_registration_performance(self):
+    async def test_factory_registration_performance(self):
         """Test factory registration performance."""
         # Get initial count (built-in databases)
         initial_count = len(list_available_databases())
@@ -519,7 +519,7 @@ class TestDatabaseFactoryPerformance:
         available = list_available_databases()
         assert len(available) == initial_count + 1000
 
-    def test_factory_database_creation_performance(self):
+    async def test_factory_database_creation_performance(self):
         """Test database creation performance."""
         # Register database
         mock_db_class = MagicMock(spec=Database)
@@ -533,7 +533,7 @@ class TestDatabaseFactoryPerformance:
             db = get_database("perf")
             assert db is not None
 
-    def test_factory_configuration_performance(self):
+    async def test_factory_configuration_performance(self):
         """Test configuration performance."""
         # Test with large configuration
         large_config = {f"key_{i}": f"value_{i}" for i in range(1000)}

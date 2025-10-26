@@ -229,7 +229,7 @@ class LocationUpdateWalker(Walker):
                 self.updated_locations.append(
                     {"id": location_id, "coordinates": coordinates, "updated": True}
                 )
-                self.report(
+                await self.report(
                     {"location_updated": location_id, "coordinates": coordinates}
                 )
 
@@ -238,7 +238,7 @@ class LocationUpdateWalker(Walker):
                 self.updated_locations.append(
                     {"id": location_id, "error": "Location not found"}
                 )
-                self.report(
+                await self.report(
                     {"location_error": location_id, "error": "Location not found"}
                 )
 
@@ -414,7 +414,7 @@ def create_server():
                 self.updated_locations.append(
                     {"id": location_id, "coordinates": coordinates, "updated": True}
                 )
-                self.report(
+                await self.report(
                     {"location_updated": location_id, "coordinates": coordinates}
                 )
 

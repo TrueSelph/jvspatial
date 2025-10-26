@@ -14,6 +14,7 @@ import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import Field
 
 from jvspatial.core.context import (
     GraphContext,
@@ -33,6 +34,7 @@ class ContextTestNode(Node):
     name: str = ""
     value: int = 0
     category: str = ""
+    type_code: str = Field(default="n")
 
 
 class ContextTestEdge(Edge):
@@ -40,6 +42,7 @@ class ContextTestEdge(Edge):
 
     weight: int = 1
     condition: str = "good"
+    type_code: str = Field(default="e")
 
 
 class ContextTestObject(Object):
@@ -47,6 +50,7 @@ class ContextTestObject(Object):
 
     name: str = ""
     value: int = 0
+    type_code: str = Field(default="o")
 
 
 class ContextTestWalker(Walker):
@@ -54,12 +58,13 @@ class ContextTestWalker(Walker):
 
     name: str = ""
     limit: int = 10
+    type_code: str = Field(default="w")
 
 
 class TestGraphContextInitialization:
     """Test GraphContext initialization."""
 
-    def test_context_creation_default(self):
+    async def test_context_creation_default(self):
         """Test context creation with default configuration."""
         context = GraphContext()
 
@@ -67,7 +72,7 @@ class TestGraphContextInitialization:
         assert context.database is not None
         assert context._cache is not None
 
-    def test_context_creation_with_config(self):
+    async def test_context_creation_with_config(self):
         """Test context creation with configuration."""
         # The current implementation doesn't accept a config parameter
         # It uses database and cache_backend parameters instead
@@ -76,7 +81,7 @@ class TestGraphContextInitialization:
         assert context is not None
         assert context.database is not None
 
-    def test_context_creation_with_database(self):
+    async def test_context_creation_with_database(self):
         """Test context creation with database."""
         # The current implementation doesn't accept a config parameter
         # It uses database and cache_backend parameters instead
@@ -85,7 +90,7 @@ class TestGraphContextInitialization:
         assert context is not None
         assert context.database is not None
 
-    def test_context_creation_with_cache(self):
+    async def test_context_creation_with_cache(self):
         """Test context creation with cache."""
         # The current implementation doesn't accept a config parameter
         # It uses database and cache_backend parameters instead
@@ -94,14 +99,14 @@ class TestGraphContextInitialization:
         assert context is not None
         assert context._cache is not None
 
-    def test_context_creation_with_invalid_config(self):
+    async def test_context_creation_with_invalid_config(self):
         """Test context creation with invalid configuration."""
         config = {"db_type": "invalid", "db_config": {}}
 
         context = GraphContext()
         assert context is not None
 
-    def test_context_creation_with_missing_config(self):
+    async def test_context_creation_with_missing_config(self):
         """Test context creation with missing configuration."""
         config = {
             "db_type": "json"
@@ -465,14 +470,14 @@ class TestGraphContextCaching:
 class TestGraphContextErrorHandling:
     """Test GraphContext error handling."""
 
-    def test_context_creation_with_invalid_config(self):
+    async def test_context_creation_with_invalid_config(self):
         """Test context creation with invalid configuration."""
         config = {"db_type": "invalid", "db_config": {}}
 
         context = GraphContext()
         assert context is not None
 
-    def test_context_creation_with_missing_config(self):
+    async def test_context_creation_with_missing_config(self):
         """Test context creation with missing configuration."""
         config = {
             "db_type": "json"
@@ -702,12 +707,12 @@ class TestGraphContextIntegration:
 class TestGraphContextUtilities:
     """Test GraphContext utility functions."""
 
-    def test_get_default_context(self):
+    async def test_get_default_context(self):
         """Test getting default context."""
         context = get_default_context()
         assert context is not None
 
-    def test_set_default_context(self):
+    async def test_set_default_context(self):
         """Test setting default context."""
         context = GraphContext()
         set_default_context(context)
@@ -715,7 +720,7 @@ class TestGraphContextUtilities:
         default_context = get_default_context()
         assert default_context == context
 
-    def test_graph_context_decorator(self):
+    async def test_graph_context_decorator(self):
         """Test graph_context context manager."""
         with graph_context() as ctx:
             assert ctx is not None
@@ -728,7 +733,7 @@ class TestGraphContextUtilities:
             assert ctx is not None
             assert isinstance(ctx, GraphContext)
 
-    def test_context_utilities_integration(self):
+    async def test_context_utilities_integration(self):
         """Test context utilities integration."""
         # Set default context
         context = GraphContext()

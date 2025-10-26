@@ -35,7 +35,7 @@ class QueryTestEdge(Edge):
 class TestQueryBuilder:
     """Test QueryBuilder functionality."""
 
-    def test_basic_query_construction(self):
+    async def test_basic_query_construction(self):
         """Test basic query construction."""
         qb = QueryBuilder()
         qb.field("name").eq("test")
@@ -45,7 +45,7 @@ class TestQueryBuilder:
         assert query_dict["name"]["$eq"] == "test"
         assert query_dict["value"]["$gt"] == 10
 
-    def test_equality_operators(self):
+    async def test_equality_operators(self):
         """Test equality operators."""
         qb = QueryBuilder()
         qb.field("name").eq("test")
@@ -55,7 +55,7 @@ class TestQueryBuilder:
         assert query_dict["name"]["$eq"] == "test"
         assert query_dict["category"]["$ne"] == "deleted"
 
-    def test_comparison_operators(self):
+    async def test_comparison_operators(self):
         """Test comparison operators."""
         qb = QueryBuilder()
         qb.field("value").gt(10).gte(5).lt(100).lte(50)
@@ -66,7 +66,7 @@ class TestQueryBuilder:
         assert query_dict["value"]["$lt"] == 100
         assert query_dict["value"]["$lte"] == 50
 
-    def test_array_operators(self):
+    async def test_array_operators(self):
         """Test array operators."""
         qb = QueryBuilder()
         qb.field("category").in_(["test", "prod"])
@@ -79,7 +79,7 @@ class TestQueryBuilder:
         assert query_dict["status"]["$nin"] == ["deleted", "archived"]
         assert query_dict["tags"]["$all"] == ["important", "urgent"]
 
-    def test_string_operators(self):
+    async def test_string_operators(self):
         """Test string operators."""
         qb = QueryBuilder()
         qb.field("name").regex(r"^test.*", "i")
@@ -92,7 +92,7 @@ class TestQueryBuilder:
         assert query_dict["email"]["$exists"] is True
         assert query_dict["value"]["$type"] == "number"
 
-    def test_logical_operators(self):
+    async def test_logical_operators(self):
         """Test logical operators."""
         qb = QueryBuilder()
         qb.and_({"name": "test"}, {"value": {"$gt": 10}})
@@ -105,7 +105,7 @@ class TestQueryBuilder:
         assert "$or" in query_dict
         assert "$nor" in query_dict
 
-    def test_nested_queries(self):
+    async def test_nested_queries(self):
         """Test nested query construction."""
         qb = QueryBuilder()
         qb.field("metadata.type").eq("user")
@@ -117,7 +117,7 @@ class TestQueryBuilder:
         assert query_dict["metadata.score"]["$gt"] == 100
         assert query_dict["metadata.tags"]["$in"] == ["admin", "user"]
 
-    def test_complex_query_construction(self):
+    async def test_complex_query_construction(self):
         """Test complex query construction."""
         qb = QueryBuilder()
         qb.and_(
@@ -133,7 +133,7 @@ class TestQueryBuilder:
         assert "$and" in query_dict
         assert len(query_dict["$and"]) == 4
 
-    def test_query_chaining(self):
+    async def test_query_chaining(self):
         """Test query method chaining."""
         qb = QueryBuilder()
         qb.field("name").eq("test")
@@ -147,7 +147,7 @@ class TestQueryBuilder:
         assert query_dict["category"]["$in"] == ["test", "prod"]
         assert query_dict["description"]["$regex"] == r".*important.*"
 
-    def test_query_reset(self):
+    async def test_query_reset(self):
         """Test query reset functionality."""
         qb = QueryBuilder()
         qb.field("name").eq("test")
@@ -162,7 +162,7 @@ class TestQueryBuilder:
         assert "value" not in query_dict
         assert query_dict["category"]["$eq"] == "prod"
 
-    def test_query_validation(self):
+    async def test_query_validation(self):
         """Test query validation."""
         qb = QueryBuilder()
 
@@ -176,7 +176,7 @@ class TestQueryBuilder:
         query_dict = qb.build()
         assert len(query_dict) == 0
 
-    def test_query_cloning(self):
+    async def test_query_cloning(self):
         """Test query cloning via copy."""
         import copy
 
@@ -203,7 +203,7 @@ class TestQueryBuilder:
 class TestQueryOperator:
     """Test QueryOperator functionality."""
 
-    def test_operator_constants(self):
+    async def test_operator_constants(self):
         """Test operator constants."""
         # QueryOperator is just an enumeration of constants
         assert QueryOperator.EQ == "$eq"
@@ -220,7 +220,7 @@ class TestQueryOperator:
 class TestQueryFunction:
     """Test query function functionality."""
 
-    def test_query_function_basic(self):
+    async def test_query_function_basic(self):
         """Test basic query function usage."""
         q = query()
         q.field("name").eq("test")
@@ -230,7 +230,7 @@ class TestQueryFunction:
         assert query_dict["name"]["$eq"] == "test"
         assert query_dict["value"]["$gt"] == 10
 
-    def test_query_function_chaining(self):
+    async def test_query_function_chaining(self):
         """Test query function chaining."""
         q = query()
         q.field("name").eq("test")
@@ -244,7 +244,7 @@ class TestQueryFunction:
         assert query_dict["category"]["$in"] == ["test", "prod"]
         assert query_dict["description"]["$regex"] == r".*important.*"
 
-    def test_query_function_complex(self):
+    async def test_query_function_complex(self):
         """Test complex query function usage."""
         q = query().and_(
             [
@@ -259,7 +259,7 @@ class TestQueryFunction:
         assert "$and" in query_dict
         assert len(query_dict["$and"]) == 4
 
-    def test_query_function_validation(self):
+    async def test_query_function_validation(self):
         """Test query function validation."""
         # Valid query
         q = query()
@@ -272,7 +272,7 @@ class TestQueryFunction:
         query_dict = q.build()
         assert len(query_dict) == 0
 
-    def test_query_function_cloning(self):
+    async def test_query_function_cloning(self):
         """Test query function cloning."""
         import copy
 
@@ -299,7 +299,7 @@ class TestQueryFunction:
 class TestQueryPerformance:
     """Test query performance characteristics."""
 
-    def test_large_query_construction(self):
+    async def test_large_query_construction(self):
         """Test construction of large queries."""
         qb = QueryBuilder()
 
@@ -310,7 +310,7 @@ class TestQueryPerformance:
         query_dict = qb.build()
         assert len(query_dict) == 1000
 
-    def test_nested_query_performance(self):
+    async def test_nested_query_performance(self):
         """Test performance of nested queries."""
         qb = QueryBuilder()
 
@@ -321,7 +321,7 @@ class TestQueryPerformance:
         query_dict = qb.build()
         assert "$and" in query_dict
 
-    def test_query_serialization_performance(self):
+    async def test_query_serialization_performance(self):
         """Test query serialization performance."""
         qb = QueryBuilder()
         qb.field("name").eq("test")
@@ -337,7 +337,7 @@ class TestQueryPerformance:
 class TestQueryIntegration:
     """Test query integration with entities."""
 
-    def test_node_query_integration(self):
+    async def test_node_query_integration(self):
         """Test query integration with Node entities."""
         # Test query construction for Node
         qb = QueryBuilder()
@@ -350,7 +350,7 @@ class TestQueryIntegration:
         assert query_dict["value"]["$gt"] == 10
         assert query_dict["category"]["$in"] == ["test", "prod"]
 
-    def test_edge_query_integration(self):
+    async def test_edge_query_integration(self):
         """Test query integration with Edge entities."""
         # Test query construction for Edge
         qb = QueryBuilder()
@@ -363,7 +363,7 @@ class TestQueryIntegration:
         assert query_dict["weight"]["$gt"] == 5
         assert query_dict["condition"]["$eq"] == "good"
 
-    def test_complex_entity_queries(self):
+    async def test_complex_entity_queries(self):
         """Test complex queries for entities."""
         # Test complex node query
         node_query = query().and_(
@@ -390,7 +390,7 @@ class TestQueryIntegration:
         edge_query_dict = edge_query.build()
         assert "$and" in edge_query_dict
 
-    def test_query_validation_with_entities(self):
+    async def test_query_validation_with_entities(self):
         """Test query validation with entity constraints."""
         # Test valid query for Node
         node_query = query()
@@ -415,7 +415,7 @@ class TestQueryIntegration:
 class TestQueryErrorHandling:
     """Test query error handling."""
 
-    def test_invalid_operator_handling(self):
+    async def test_invalid_operator_handling(self):
         """Test handling of invalid operators."""
         qb = QueryBuilder()
 
@@ -423,7 +423,7 @@ class TestQueryErrorHandling:
         with pytest.raises(AttributeError):
             qb.invalid_operator("name", "test")
 
-    def test_invalid_value_handling(self):
+    async def test_invalid_value_handling(self):
         """Test handling of invalid values."""
         qb = QueryBuilder()
 
@@ -432,7 +432,7 @@ class TestQueryErrorHandling:
         query_dict = qb.build()
         assert query_dict["name"]["$eq"] is None
 
-    def test_invalid_query_structure(self):
+    async def test_invalid_query_structure(self):
         """Test handling of invalid query structures."""
         qb = QueryBuilder()
 
@@ -443,7 +443,7 @@ class TestQueryErrorHandling:
         # Empty logical operators should not be added to query
         assert len(query_dict) == 0
 
-    def test_query_builder_error_recovery(self):
+    async def test_query_builder_error_recovery(self):
         """Test query builder error recovery."""
         qb = QueryBuilder()
 
@@ -462,7 +462,7 @@ class TestQueryErrorHandling:
         assert query_dict["name"]["$eq"] == "test"
         assert query_dict["value"]["$gt"] == 10
 
-    def test_operator_error_handling(self):
+    async def test_operator_error_handling(self):
         """Test operator error handling."""
         # QueryOperator is just constants, not instantiable
         # Just verify the constants exist

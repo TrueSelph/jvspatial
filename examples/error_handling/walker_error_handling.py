@@ -51,7 +51,7 @@ class TaskProcessor(Walker):
             await here.save()
 
             # Report success
-            self.report(
+            await self.report(
                 {
                     "task_completed": {
                         "id": here.id,
@@ -68,7 +68,7 @@ class TaskProcessor(Walker):
                 "task_title": here.title,
             }
 
-            self.report({"task_error": error_report})
+            await self.report({"task_error": error_report})
 
             if self.fail_fast:
                 raise WalkerExecutionError(
@@ -130,7 +130,7 @@ class SafeTaskWalker(Walker):
 
                 if retries == self.max_retries:
                     self.error_count += 1
-                    self.report(
+                    await self.report(
                         {
                             "permanent_failure": {
                                 "task_id": here.id,
@@ -140,7 +140,7 @@ class SafeTaskWalker(Walker):
                         }
                     )
                 else:
-                    self.report(
+                    await self.report(
                         {
                             "retry_attempt": {
                                 "task_id": here.id,
@@ -154,14 +154,16 @@ class SafeTaskWalker(Walker):
         """Safe task processing with various error checks."""
         # Validate task state
         if task.status == "completed":
-            self.report(
+            await self.report(
                 {"task_skipped": {"id": task.id, "reason": "already completed"}}
             )
             return
 
         # Check due date
         if task.due_date and task.due_date < datetime.now():
-            self.report({"task_warning": {"id": task.id, "message": "Task is overdue"}})
+            await self.report(
+                {"task_warning": {"id": task.id, "message": "Task is overdue"}}
+            )
 
         # Process task
         try:
@@ -172,7 +174,7 @@ class SafeTaskWalker(Walker):
             task.status = "completed"
             await task.save()
 
-            self.report(
+            await self.report(
                 {
                     "task_success": {
                         "id": task.id,

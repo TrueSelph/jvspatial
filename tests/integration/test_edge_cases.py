@@ -25,18 +25,18 @@ import pytest
 from pydantic import Field, PrivateAttr
 
 from jvspatial.api.server import Server, ServerConfig
+from jvspatial.core import on_exit, on_visit
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import (
     Edge,
     Node,
     Object,
     Root,
-    TraversalPaused,
-    TraversalSkipped,
     Walker,
-    on_exit,
-    on_visit,
 )
+
+# TraversalPaused and TraversalSkipped are not available in protection module
+# These may be defined elsewhere or need to be imported differently
 from jvspatial.core.pager import ObjectPager
 from jvspatial.db.database import Database, VersionConflictError
 
@@ -182,11 +182,11 @@ class TestErrorConditions:
 
         # Walker should handle runtime errors gracefully
         with patch("jvspatial.core.entities.Root.get", return_value=node):
-            result = await walker.spawn()
+            result = await walker.spawn(node)
 
             # Walker should complete despite error
             assert result == walker
-            report = walker.get_report()
+            report = await walker.get_report()
             # Check for hook error reports
             hook_error_reports = [
                 item
@@ -205,7 +205,7 @@ class TestErrorConditions:
         with patch("jvspatial.core.entities.Root.get", return_value=node):
             # Memory errors should be caught and handled
             try:
-                await walker.spawn()
+                await walker.spawn(node)
             except MemoryError:
                 pytest.fail("MemoryError should be handled by walker")
 
@@ -218,7 +218,7 @@ class TestErrorConditions:
         nodes = [EdgeCaseTestNode(name=f"node{i}") for i in range(5)]
 
         # Simulate infinite traversal
-        walker.queue.extend(nodes * 20)  # Add many duplicate nodes
+        await walker.queue.append(nodes * 20)  # Add many duplicate nodes
 
         with patch("jvspatial.core.entities.Root.get", return_value=nodes[0]):
             await walker.spawn(nodes[0])
@@ -252,7 +252,7 @@ class TestErrorConditions:
         with pytest.raises(ConnectionError):
             await mock_context.save(node)
 
-    def test_malformed_walker_definition(self):
+    async def test_malformed_walker_definition(self):
         """Test handling of malformed walker definitions."""
         # Test walker with invalid hook definitions (non-string, non-class)
         with pytest.raises(ValueError, match="Target type must be a class or string"):
@@ -274,7 +274,7 @@ class TestErrorConditions:
         edge2 = EdgeCaseTestEdge(source=node2.id, target=node1.id)
 
         walker = EdgeCaseTestWalker()
-        walker.queue.extend([node1, node2, node1])  # Circular queue
+        await walker.queue.append([node1, node2, node1])  # Circular queue
 
         # Should handle circular references without infinite loop
         with patch("jvspatial.core.entities.Root.get", return_value=node1):
@@ -296,7 +296,7 @@ class TestBoundaryConditions:
             root = EdgeCaseTestNode(name="empty_root")
             mock_root.return_value = root
 
-            result = await walker.spawn()
+            result = await walker.spawn(root)
 
             # Should complete successfully with empty graph
             assert result == walker
@@ -309,7 +309,7 @@ class TestBoundaryConditions:
         single_node = EdgeCaseTestNode(name="single")
 
         with patch("jvspatial.core.entities.Root.get", return_value=single_node):
-            result = await walker.spawn()
+            result = await walker.spawn(single_node)
 
             assert result == walker
             assert walker.current_iterations == 1
@@ -323,7 +323,7 @@ class TestBoundaryConditions:
         large_node_set = [EdgeCaseTestNode(name=f"node_{i}") for i in range(10000)]
 
         # Add to queue
-        walker.queue.extend(large_node_set)
+        await walker.queue.append(large_node_set)
 
         with patch("jvspatial.core.entities.Root.get", return_value=large_node_set[0]):
             result = await walker.spawn(large_node_set[0])
@@ -341,7 +341,7 @@ class TestBoundaryConditions:
         nodes = [EdgeCaseTestNode(name=f"level_{i}") for i in range(100)]
 
         # Queue nodes in sequence
-        walker.queue.extend(nodes)
+        await walker.queue.append(nodes)
 
         with patch("jvspatial.core.entities.Root.get", return_value=nodes[0]):
             result = await walker.spawn(nodes[0])
@@ -349,7 +349,7 @@ class TestBoundaryConditions:
             assert result == walker
             # Should handle deep traversal
 
-    def test_maximum_field_lengths(self):
+    async def test_maximum_field_lengths(self):
         """Test handling of maximum field lengths."""
         # Test very long field values
         very_long_name = "x" * 10000
@@ -380,10 +380,10 @@ class TestBoundaryConditions:
             mock_context.database.count.return_value = 20
 
             # Mock find to return different results for different page requests
-            def mock_find(collection, query):
+            async def mock_find(collection, query):
                 # Simulate pagination behavior - only return results for first page
                 if query.get("_limit") == 20 and query.get("_skip", 0) == 0:
-                    return [node.export() for node in nodes]
+                    return [await node.export() for node in nodes]
                 else:
                     return []  # Second page and beyond are empty
 
@@ -413,11 +413,11 @@ class TestMemoryManagement:
         initial_refs = len(walker.allocated_resources)
 
         # Add nodes to the queue and simulate spawning
-        walker.queue.extend(nodes)
+        await walker.queue.append(nodes)
 
         # Mock the visiting context to ensure hooks are called
         for node in nodes:
-            with walker.visiting(node):
+            with await walker.visiting(node):
                 await walker.allocate_resources(node)
 
         # Should have allocated resources during traversal
@@ -428,7 +428,7 @@ class TestMemoryManagement:
         await walker.cleanup_resources()
         assert len(walker.allocated_resources) == 0
 
-    def test_weak_reference_handling(self):
+    async def test_weak_reference_handling(self):
         """Test proper handling of weak references."""
         node = EdgeCaseTestNode(name="test")
         weak_ref = weakref.ref(node)
@@ -487,7 +487,7 @@ class TestConcurrencyAndThreadSafety:
         nodes = [EdgeCaseTestNode(name=f"node_{i}") for i in range(10)]
 
         async def run_walker(walker, start_node):
-            walker.queue.extend(nodes)
+            await walker.queue.append(nodes)
             with patch("jvspatial.core.entities.Root.get", return_value=start_node):
                 return await walker.spawn(start_node)
 
@@ -505,7 +505,7 @@ class TestConcurrencyAndThreadSafety:
         walker = ConcurrentWalker()
         nodes = [EdgeCaseTestNode(name=f"node_{i}") for i in range(50)]
 
-        walker.queue.extend(nodes)
+        await walker.queue.append(nodes)
 
         with patch("jvspatial.core.entities.Root.get", return_value=nodes[0]):
             await walker.spawn(nodes[0])
@@ -513,7 +513,7 @@ class TestConcurrencyAndThreadSafety:
         # Counter should reflect all processed nodes
         assert walker.shared_counter > 0
 
-    def test_thread_pool_execution(self):
+    async def test_thread_pool_execution(self):
         """Test walker execution in thread pool."""
 
         def sync_walker_execution():
@@ -541,7 +541,7 @@ class TestConcurrencyAndThreadSafety:
 class TestValidationAndSanitization:
     """Test input validation and data sanitization."""
 
-    def test_node_field_validation(self):
+    async def test_node_field_validation(self):
         """Test node field validation."""
         # Test with valid data
         node = EdgeCaseTestNode(name="valid", value=42)
@@ -553,7 +553,7 @@ class TestValidationAndSanitization:
         assert node_edge.name == ""
         assert node_edge.value == 0
 
-    def test_walker_parameter_validation(self):
+    async def test_walker_parameter_validation(self):
         """Test walker parameter validation."""
         # Test walker with invalid parameters
         walker = EdgeCaseTestWalker(max_iterations=-1)  # Invalid negative value
@@ -572,7 +572,7 @@ class TestValidationAndSanitization:
         await mock_context.save(node)
         mock_context.database.save.assert_called_once()
 
-    def test_api_field_exclusion(self):
+    async def test_api_field_exclusion(self):
         """Test exclusion of sensitive fields from API."""
         # Test that sensitive fields are properly excluded
         node = EdgeCaseTestNode(
@@ -634,7 +634,7 @@ class TestPerformanceEdgeCases:
 
         # Create large workload
         nodes = [EdgeCaseTestNode(name=f"load_{i}") for i in range(5000)]
-        walker.queue.extend(nodes)
+        await walker.queue.append(nodes)
 
         start_time = time.time()
 
@@ -665,7 +665,7 @@ class TestRecoveryAndResilience:
 
         walker = PausingWalker()
         nodes = [EdgeCaseTestNode(name=f"node_{i}") for i in range(10)]
-        walker.queue.extend(nodes)
+        await walker.queue.append(nodes)
 
         with patch("jvspatial.core.entities.Root.get", return_value=nodes[0]):
             # First run should pause
@@ -728,7 +728,7 @@ class TestRecoveryAndResilience:
         # The timing assertion is unreliable in test environments
         # Just verify the walker completed successfully
 
-    def test_configuration_validation(self):
+    async def test_configuration_validation(self):
         """Test validation of configuration parameters."""
         # Test server configuration validation
         config = ServerConfig(port=-1, page_size=0)  # Invalid port  # Invalid page size
@@ -763,7 +763,7 @@ class TestComplexScenarios:
 
         # Phase 2: Processing with error handling
         walker = EdgeCaseTestWalker()
-        walker.queue.extend(nodes)
+        await walker.queue.append(nodes)
 
         try:
             with patch(
@@ -809,11 +809,14 @@ class TestComplexScenarios:
                 sync_result = self.sync_operation(here.name)
                 async_result = await self.async_operation(here.name)
 
-                self.report({here.id: {"sync": sync_result, "async": async_result}})
+                await self.report(
+                    {here.id: {"sync": sync_result, "async": async_result}}
+                )
 
         walker = MixedWalker()
         nodes = [EdgeCaseTestNode(name=f"mixed_{i}") for i in range(5)]
-        walker.queue.extend(nodes)
+        # Add remaining nodes to queue (not the start node to avoid duplication)
+        await walker.queue.append(nodes[1:])
 
         with patch("jvspatial.core.entities.Root.get", return_value=nodes[0]):
             result = await walker.spawn(nodes[0])

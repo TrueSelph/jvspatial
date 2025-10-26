@@ -29,7 +29,7 @@ class URLProxy(Object):
         last_accessed: Last access timestamp
     """
 
-    type_code = "o"
+    type_code: str = Field(default="o")
 
     code: str = ""
     file_path: str = ""

@@ -10,9 +10,9 @@ from jvspatial.api.context import (
     get_current_server,
     set_current_server,
 )
-from jvspatial.api.endpoint.decorators import EndpointField
-from jvspatial.api.response.helpers import ResponseHelper as EndpointResponseHelper
-from jvspatial.api.routing.endpoint import EndpointRouter
+from jvspatial.api.decorators import EndpointField
+from jvspatial.api.endpoints.response import ResponseHelper as EndpointResponseHelper
+from jvspatial.api.endpoints.router import EndpointRouter
 from jvspatial.api.server import (
     Server,
     endpoint,
@@ -36,7 +36,7 @@ class TestWalkerEndpointIntegration:
         # Cleanup - reset current server
         set_current_server(None)
 
-    def test_walker_endpoint_injection(self):
+    async def test_walker_endpoint_injection(self):
         """Test that @endpoint injects endpoint helper into walker."""
 
         @endpoint("/test/walker")
@@ -57,7 +57,7 @@ class TestWalkerEndpointIntegration:
         # (it should be injected during endpoint execution)
         assert not hasattr(walker, "endpoint")
 
-    def test_walker_endpoint_response_methods(self):
+    async def test_walker_endpoint_response_methods(self):
         """Test that endpoint response methods work correctly."""
 
         @endpoint("/test/responses")
@@ -69,25 +69,25 @@ class TestWalkerEndpointIntegration:
 
             async def visit_node(self, node):
                 # Simulate endpoint injection (normally done by router)
-                from jvspatial.api.response.helpers import create_endpoint_helper
+                from jvspatial.api.endpoints.response import create_endpoint_helper
 
                 self.endpoint = create_endpoint_helper(walker_instance=self)
 
                 if self.response_type == "success":
-                    return self.endpoint.success(
+                    return await self.endpoint.success(
                         data={"message": "Success response"},
                         message="Operation completed",
                     )
                 elif self.response_type == "error":
-                    return self.endpoint.bad_request(
+                    return await self.endpoint.bad_request(
                         message="Invalid request", details={"field": "test_field"}
                     )
                 elif self.response_type == "not_found":
-                    return self.endpoint.not_found(
+                    return await self.endpoint.not_found(
                         message="Resource not found", details={"resource_id": "123"}
                     )
                 elif self.response_type == "created":
-                    return self.endpoint.created(
+                    return await self.endpoint.created(
                         data={"id": "new_123"},
                         message="Resource created",
                         headers={"Location": "/resources/123"},
@@ -95,9 +95,9 @@ class TestWalkerEndpointIntegration:
 
         # Test success response
         walker = ResponseTestWalker(response_type="success")
-        asyncio.run(walker.visit_node(None))
+        await walker.visit_node(None)
 
-        report = walker.get_report()
+        report = await walker.get_report()
         # Find the response data in the report
         response_items = [
             item for item in report if isinstance(item, dict) and "status" in item
@@ -110,9 +110,9 @@ class TestWalkerEndpointIntegration:
 
         # Test error response
         walker = ResponseTestWalker(response_type="error")
-        asyncio.run(walker.visit_node(None))
+        await walker.visit_node(None)
 
-        report = walker.get_report()
+        report = await walker.get_report()
         response_items = [
             item for item in report if isinstance(item, dict) and "status" in item
         ]
@@ -124,9 +124,9 @@ class TestWalkerEndpointIntegration:
 
         # Test not found response
         walker = ResponseTestWalker(response_type="not_found")
-        asyncio.run(walker.visit_node(None))
+        await walker.visit_node(None)
 
-        report = walker.get_report()
+        report = await walker.get_report()
         response_items = [
             item for item in report if isinstance(item, dict) and "status" in item
         ]
@@ -138,9 +138,9 @@ class TestWalkerEndpointIntegration:
 
         # Test created response
         walker = ResponseTestWalker(response_type="created")
-        asyncio.run(walker.visit_node(None))
+        await walker.visit_node(None)
 
-        report = walker.get_report()
+        report = await walker.get_report()
         response_items = [
             item for item in report if isinstance(item, dict) and "status" in item
         ]
@@ -151,7 +151,7 @@ class TestWalkerEndpointIntegration:
         assert response_data["message"] == "Resource created"
         assert response_data["headers"]["Location"] == "/resources/123"
 
-    def test_walker_endpoint_custom_response(self):
+    async def test_walker_endpoint_custom_response(self):
         """Test endpoint with custom response formatting."""
 
         @endpoint("/test/custom")
@@ -162,11 +162,11 @@ class TestWalkerEndpointIntegration:
 
             async def visit_node(self, node):
                 # Simulate endpoint injection
-                from jvspatial.api.response.helpers import create_endpoint_helper
+                from jvspatial.api.endpoints.response import create_endpoint_helper
 
                 self.endpoint = create_endpoint_helper(walker_instance=self)
 
-                return self.endpoint.response(
+                return await self.endpoint.response(
                     content={
                         "custom_message": "Custom response format",
                         "processed_at": "2025-09-21T06:32:18Z",
@@ -179,9 +179,9 @@ class TestWalkerEndpointIntegration:
                 )
 
         walker = CustomResponseWalker(status_code=202)
-        asyncio.run(walker.visit_node(None))
+        await walker.visit_node(None)
 
-        report = walker.get_report()
+        report = await walker.get_report()
         response_items = [
             item for item in report if isinstance(item, dict) and "status" in item
         ]
@@ -210,7 +210,7 @@ class TestFunctionEndpointIntegration:
         # Cleanup
         set_current_server(None)
 
-    def test_function_endpoint_injection_signature(self):
+    async def test_function_endpoint_injection_signature(self):
         """Test that @endpoint decorator modifies function signature to include endpoint parameter."""
 
         @endpoint("/test/function")
@@ -230,7 +230,7 @@ class TestFunctionEndpointIntegration:
         assert func_info.path == "/test/function"
         assert func_info.endpoint_type == "function"
 
-    def test_function_endpoint_response_methods(self):
+    async def test_function_endpoint_response_methods(self):
         """Test function endpoint response methods."""
 
         @endpoint("/test/responses/{response_type}")
@@ -275,7 +275,7 @@ class TestFunctionEndpointIntegration:
         assert func_info.methods == ["GET"]  # Default for function endpoints
         assert func_info.endpoint_type == "function"
 
-    def test_function_endpoint_with_post_method(self):
+    async def test_function_endpoint_with_post_method(self):
         """Test function endpoint with POST method."""
 
         @endpoint("/test/create", methods=["POST"])
@@ -305,7 +305,7 @@ class TestFunctionEndpointIntegration:
         assert func_info.methods == ["POST"]
         assert func_info.endpoint_type == "function"
 
-    def test_function_endpoint_multiple_methods(self):
+    async def test_function_endpoint_multiple_methods(self):
         """Test function endpoint with multiple HTTP methods."""
 
         @endpoint("/test/multi", methods=["GET", "POST", "PUT"])
@@ -323,7 +323,7 @@ class TestFunctionEndpointIntegration:
         assert func_info.path == "/test/multi"
         assert func_info.methods == ["GET", "POST", "PUT"]
 
-    def test_function_endpoint_no_endpoint_param_error(self):
+    async def test_function_endpoint_no_endpoint_param_error(self):
         """Test that function without endpoint parameter can still be decorated."""
 
         @endpoint("/test/no_endpoint")
@@ -354,7 +354,7 @@ class TestEndpointInjectionMechanism:
         yield
         set_current_server(None)
 
-    def test_walker_endpoint_registration(self):
+    async def test_walker_endpoint_registration(self):
         """Test that endpoints are properly registered with server."""
 
         @endpoint("/test/registration")
@@ -375,7 +375,7 @@ class TestEndpointInjectionMechanism:
         assert endpoint_info.path == "/test/registration"
         assert endpoint_info.methods == ["POST"]  # Default for walker endpoints
 
-    def test_function_endpoint_registration(self):
+    async def test_function_endpoint_registration(self):
         """Test that function endpoints are properly registered with server."""
 
         @endpoint("/test/function_registration")
@@ -395,10 +395,12 @@ class TestEndpointInjectionMechanism:
         assert endpoint_info.path == "/test/function_registration"
         assert endpoint_info.methods == ["GET"]  # Default for function endpoints
 
-    def test_endpoint_helper_factory(self):
+    async def test_endpoint_helper_factory(self):
         """Test the endpoint helper factory function."""
-        from jvspatial.api.response import ResponseHelper as EndpointResponseHelper
-        from jvspatial.api.response import (
+        from jvspatial.api.endpoints.response import (
+            ResponseHelper as EndpointResponseHelper,
+        )
+        from jvspatial.api.endpoints.response import (
             create_endpoint_helper,
         )
 
@@ -413,7 +415,7 @@ class TestEndpointInjectionMechanism:
         assert isinstance(helper_with_walker, EndpointResponseHelper)
         assert helper_with_walker.walker_instance is mock_walker
 
-    def test_server_discovery_and_registration(self):
+    async def test_server_discovery_and_registration(self):
         """Test that server properly discovers and registers endpoints."""
 
         # Test discovery count using endpoint registry
@@ -444,7 +446,7 @@ class TestEndpointInjectionMechanism:
         assert self.test_server._endpoint_registry.has_walker(DiscoveryWalker)
         assert self.test_server._endpoint_registry.has_function(discovery_function)
 
-    def test_no_server_available(self):
+    async def test_no_server_available(self):
         """Test endpoint decoration when no current server is available."""
         # Clear the current server to test no-server scenario
         set_current_server(None)
@@ -468,7 +470,7 @@ class TestEndpointInjectionMechanism:
         assert function_config["path"] == "/test/no_server_function"
         assert function_config["is_function"] is True
 
-    def test_endpoint_configuration_preservation(self):
+    async def test_endpoint_configuration_preservation(self):
         """Test that endpoint configuration is properly preserved on classes/functions."""
 
         @endpoint("/test/config", methods=["POST", "PUT"], tags=["test"])

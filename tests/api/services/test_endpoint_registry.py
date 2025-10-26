@@ -11,19 +11,19 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jvspatial.api.server import Server
-from jvspatial.api.services.endpoint_registry import (
+from jvspatial.api.endpoints.registry import (
     EndpointInfo,
     EndpointRegistryService,
     EndpointType,
 )
+from jvspatial.api.server import Server
 from jvspatial.core.entities import Walker
 
 
 class TestEndpointInfo:
     """Test EndpointInfo functionality."""
 
-    def test_endpoint_info_creation(self):
+    async def test_endpoint_info_creation(self):
         """Test EndpointInfo creation."""
         info = EndpointInfo(
             path="/test",
@@ -37,7 +37,7 @@ class TestEndpointInfo:
         assert info.handler is not None
         assert info.endpoint_type == EndpointType.WALKER
 
-    def test_endpoint_info_default_values(self):
+    async def test_endpoint_info_default_values(self):
         """Test EndpointInfo default values."""
         info = EndpointInfo(
             path="/test",
@@ -53,7 +53,7 @@ class TestEndpointInfo:
         assert info.kwargs == {}
         assert info.is_dynamic is False
 
-    def test_endpoint_info_equality(self):
+    async def test_endpoint_info_equality(self):
         """Test EndpointInfo equality."""
         handler1 = MagicMock()
         handler2 = MagicMock()
@@ -65,7 +65,7 @@ class TestEndpointInfo:
         assert info1 == info2
         assert info1 != info3
 
-    def test_endpoint_info_hash(self):
+    async def test_endpoint_info_hash(self):
         """Test EndpointInfo hashing."""
         handler = MagicMock()
         info1 = EndpointInfo("/test", ["GET"], EndpointType.WALKER, handler)
@@ -74,7 +74,7 @@ class TestEndpointInfo:
         # EndpointInfo is not hashable in current implementation
         # assert hash(info1) == hash(info2)
 
-    def test_endpoint_info_string_representation(self):
+    async def test_endpoint_info_string_representation(self):
         """Test EndpointInfo string representation."""
         handler = MagicMock()
         info = EndpointInfo("/test", ["GET"], EndpointType.WALKER, handler)
@@ -83,7 +83,7 @@ class TestEndpointInfo:
         assert "/test" in str_repr
         assert "GET" in str_repr
 
-    def test_endpoint_info_serialization(self):
+    async def test_endpoint_info_serialization(self):
         """Test EndpointInfo serialization."""
         handler = MagicMock()
         info = EndpointInfo(
@@ -103,7 +103,7 @@ class TestEndpointInfo:
         # assert serialized["roles"] == ["admin"]
         # assert "handler" not in serialized  # Handler not serialized
 
-    def test_endpoint_info_deserialization(self):
+    async def test_endpoint_info_deserialization(self):
         """Test EndpointInfo deserialization."""
         # EndpointInfo doesn't have a deserialize method in current implementation
         # data = {
@@ -132,14 +132,14 @@ class TestEndpointRegistryService:
         self.registry = EndpointRegistryService()
         self.mock_server = MagicMock(spec=Server)
 
-    def test_registry_initialization(self):
+    async def test_registry_initialization(self):
         """Test registry initialization."""
         assert self.registry is not None
         assert len(self.registry._walker_registry) == 0
         assert len(self.registry._function_registry) == 0
         assert len(self.registry._custom_routes) == 0
 
-    def test_register_endpoint(self):
+    async def test_register_endpoint(self):
         """Test endpoint registration."""
         handler = MagicMock()
         info = EndpointInfo(
@@ -161,7 +161,7 @@ class TestEndpointRegistryService:
         assert "/test" in self.registry._custom_routes
         assert len(self.registry._custom_routes["/test"]) == 1
 
-    def test_register_endpoint_duplicate(self):
+    async def test_register_endpoint_duplicate(self):
         """Test duplicate endpoint registration."""
         handler1 = MagicMock()
         handler2 = MagicMock()
@@ -181,7 +181,7 @@ class TestEndpointRegistryService:
         # Should have 2 entries for the same path
         assert len(self.registry._custom_routes["/test"]) == 2
 
-    def test_register_endpoint_different_methods(self):
+    async def test_register_endpoint_different_methods(self):
         """Test endpoint registration with different methods."""
         handler = MagicMock()
 
@@ -207,7 +207,7 @@ class TestEndpointRegistryService:
         # Let's just check that we have 2 methods total
         assert len(methods) == 2
 
-    def test_unregister_endpoint(self):
+    async def test_unregister_endpoint(self):
         """Test endpoint unregistration."""
         handler = MagicMock()
         info = EndpointInfo("/test", ["GET"], EndpointType.WALKER, handler)
@@ -225,13 +225,13 @@ class TestEndpointRegistryService:
         assert len(self.registry._custom_routes) == 0
         assert "/test" not in self.registry._custom_routes
 
-    def test_unregister_endpoint_nonexistent(self):
+    async def test_unregister_endpoint_nonexistent(self):
         """Test unregistering non-existent endpoint."""
         # Current implementation doesn't raise an error for non-existent endpoints
         result = self.registry.unregister_by_path("/nonexistent")
         assert result == 0  # Should return 0 for non-existent endpoints
 
-    def test_get_endpoint(self):
+    async def test_get_endpoint(self):
         """Test getting endpoint."""
         handler = MagicMock()
         info = EndpointInfo("/test", ["GET"], EndpointType.WALKER, handler)
@@ -247,12 +247,12 @@ class TestEndpointRegistryService:
         assert len(retrieved_info) == 1
         assert retrieved_info[0].path == info.path
 
-    def test_get_endpoint_nonexistent(self):
+    async def test_get_endpoint_nonexistent(self):
         """Test getting non-existent endpoint."""
         retrieved_info = self.registry.get_by_path("/nonexistent")
         assert len(retrieved_info) == 0
 
-    def test_list_endpoints(self):
+    async def test_list_endpoints(self):
         """Test listing endpoints."""
         handler1 = MagicMock()
         handler2 = MagicMock()
@@ -272,12 +272,12 @@ class TestEndpointRegistryService:
         assert "/test1" in endpoints["custom_routes"]
         assert "/test2" in endpoints["custom_routes"]
 
-    def test_list_endpoints_empty(self):
+    async def test_list_endpoints_empty(self):
         """Test listing endpoints when registry is empty."""
         endpoints = self.registry.list_all()
         assert len(endpoints["custom_routes"]) == 0
 
-    def test_has_endpoint(self):
+    async def test_has_endpoint(self):
         """Test checking if endpoint exists."""
         handler = MagicMock()
         info = EndpointInfo("/test", ["GET"], EndpointType.WALKER, handler)
@@ -293,7 +293,7 @@ class TestEndpointRegistryService:
 
         assert len(self.registry.get_by_path("/test")) > 0
 
-    def test_clear_endpoints(self):
+    async def test_clear_endpoints(self):
         """Test clearing all endpoints."""
         handler1 = MagicMock()
         handler2 = MagicMock()
@@ -316,7 +316,7 @@ class TestEndpointRegistryService:
         assert len(self.registry._function_registry) == 0
         assert len(self.registry._custom_routes) == 0
 
-    def test_endpoint_validation(self):
+    async def test_endpoint_validation(self):
         """Test endpoint validation."""
         # Valid endpoint
         handler = MagicMock()
@@ -339,7 +339,7 @@ class TestEndpointRegistryService:
         # The current implementation doesn't have a validate_endpoint method
         # assert self.registry.validate_endpoint(invalid_info) is False
 
-    def test_endpoint_metadata(self):
+    async def test_endpoint_metadata(self):
         """Test endpoint metadata management."""
         handler = MagicMock()
         info = EndpointInfo(
@@ -366,12 +366,12 @@ class TestEndpointRegistryService:
         # assert metadata[0].permissions == ["read"]
         # assert metadata[0].roles == ["admin"]
 
-    def test_endpoint_metadata_nonexistent(self):
+    async def test_endpoint_metadata_nonexistent(self):
         """Test getting metadata for non-existent endpoint."""
         metadata = self.registry.get_by_path("/nonexistent")
         assert len(metadata) == 0
 
-    def test_endpoint_search(self):
+    async def test_endpoint_search(self):
         """Test endpoint search functionality."""
         handler1 = MagicMock()
         handler2 = MagicMock()
@@ -406,7 +406,7 @@ class TestEndpointRegistryService:
         # assert "/api/posts" in results
         pass
 
-    def test_endpoint_search_empty(self):
+    async def test_endpoint_search_empty(self):
         """Test endpoint search with no results."""
         # The current implementation doesn't have a search_endpoints method
         # This test is commented out until search functionality is implemented
@@ -414,7 +414,7 @@ class TestEndpointRegistryService:
         # assert len(results) == 0
         pass
 
-    def test_endpoint_statistics(self):
+    async def test_endpoint_statistics(self):
         """Test endpoint statistics."""
         handler1 = MagicMock()
         handler2 = MagicMock()
@@ -451,7 +451,7 @@ class TestEndpointRegistryService:
         # The current implementation doesn't have with_roles field
         # assert stats["with_roles"] == 0
 
-    def test_endpoint_statistics_empty(self):
+    async def test_endpoint_statistics_empty(self):
         """Test endpoint statistics with empty registry."""
         stats = self.registry.count_endpoints()
 
@@ -475,7 +475,7 @@ class TestEndpointRegistryServiceIntegration:
         self.registry = EndpointRegistryService()
         self.mock_server = MagicMock(spec=Server)
 
-    def test_registry_with_server_integration(self):
+    async def test_registry_with_server_integration(self):
         """Test registry integration with server."""
         # Mock server methods
         self.mock_server.register_endpoint = MagicMock()
@@ -501,7 +501,7 @@ class TestEndpointRegistryServiceIntegration:
         # Verify endpoint is unregistered
         assert len(self.registry.get_by_path("/test")) == 0
 
-    def test_registry_with_walker_endpoints(self):
+    async def test_registry_with_walker_endpoints(self):
         """Test registry with walker endpoints."""
 
         class TestWalker(Walker):
@@ -537,7 +537,7 @@ class TestEndpointRegistryServiceIntegration:
         # assert endpoint_info.permissions == ["execute"]
         # assert endpoint_info.roles == ["user"]
 
-    def test_registry_with_multiple_servers(self):
+    async def test_registry_with_multiple_servers(self):
         """Test registry with multiple servers."""
         server1 = MagicMock(spec=Server)
         server2 = MagicMock(spec=Server)
@@ -566,7 +566,7 @@ class TestEndpointRegistryServiceIntegration:
         assert "/server1/test" in endpoints["custom_routes"]
         assert "/server2/test" in endpoints["custom_routes"]
 
-    def test_registry_with_endpoint_groups(self):
+    async def test_registry_with_endpoint_groups(self):
         """Test registry with endpoint groups."""
         # Register endpoints in groups
         handler1 = MagicMock()
@@ -599,7 +599,7 @@ class TestEndpointRegistryServiceIntegration:
         # assert "/api/v2/users" in v2_endpoints
         pass
 
-    def test_registry_with_endpoint_versions(self):
+    async def test_registry_with_endpoint_versions(self):
         """Test registry with endpoint versions."""
         # Register endpoints with versions
         handler1 = MagicMock()
@@ -626,7 +626,7 @@ class TestEndpointRegistryServiceIntegration:
         # assert "/api/v2/users" in v2_endpoints
         pass
 
-    def test_registry_with_endpoint_permissions(self):
+    async def test_registry_with_endpoint_permissions(self):
         """Test registry with endpoint permissions."""
         # Register endpoints with different permissions
         handler1 = MagicMock()
@@ -658,7 +658,7 @@ class TestEndpointRegistryServiceIntegration:
         # assert "/admin/data" in admin_endpoints
         pass
 
-    def test_registry_with_endpoint_roles(self):
+    async def test_registry_with_endpoint_roles(self):
         """Test registry with endpoint roles."""
         # Register endpoints with different roles
         handler1 = MagicMock()
@@ -690,7 +690,7 @@ class TestEndpointRegistryServiceIntegration:
         # assert "/admin/data" in admin_endpoints
         pass
 
-    def test_registry_with_endpoint_methods(self):
+    async def test_registry_with_endpoint_methods(self):
         """Test registry with endpoint methods."""
         # Register endpoints with different methods
         handler1 = MagicMock()
@@ -726,7 +726,7 @@ class TestEndpointRegistryServiceIntegration:
         # assert "/data" in put_endpoints
         pass
 
-    def test_registry_with_endpoint_auth(self):
+    async def test_registry_with_endpoint_auth(self):
         """Test registry with endpoint authentication."""
         # Register endpoints with different auth requirements
         handler1 = MagicMock()
@@ -759,7 +759,7 @@ class TestEndpointRegistryServiceIntegration:
         # assert "/admin/data" in private_endpoints
         pass
 
-    def test_registry_with_endpoint_metadata(self):
+    async def test_registry_with_endpoint_metadata(self):
         """Test registry with endpoint metadata."""
         # Register endpoint with metadata
         handler = MagicMock()
@@ -787,7 +787,7 @@ class TestEndpointRegistryServiceIntegration:
         # assert metadata[0].permissions == ["read"]
         # assert metadata[0].roles == ["user"]
 
-    def test_registry_with_endpoint_statistics(self):
+    async def test_registry_with_endpoint_statistics(self):
         """Test registry with endpoint statistics."""
         # Register multiple endpoints
         handler1 = MagicMock()
@@ -826,7 +826,7 @@ class TestEndpointRegistryServiceIntegration:
         # The current implementation doesn't have with_roles field
         # assert stats["with_roles"] == 0
 
-    def test_registry_with_endpoint_validation(self):
+    async def test_registry_with_endpoint_validation(self):
         """Test registry with endpoint validation."""
         # Test valid endpoint
         handler = MagicMock()
@@ -839,7 +839,7 @@ class TestEndpointRegistryServiceIntegration:
         # The current implementation doesn't have a validate_endpoint method
         # assert self.registry.validate_endpoint(invalid_info) is False
 
-    def test_registry_with_endpoint_clearing(self):
+    async def test_registry_with_endpoint_clearing(self):
         """Test registry with endpoint clearing."""
         # Register multiple endpoints
         handler1 = MagicMock()
@@ -866,7 +866,7 @@ class TestEndpointRegistryServiceIntegration:
         assert len(self.registry.get_by_path("/test1")) == 0
         assert len(self.registry.get_by_path("/test2")) == 0
 
-    def test_registry_with_endpoint_search(self):
+    async def test_registry_with_endpoint_search(self):
         """Test registry with endpoint search."""
         # Register multiple endpoints
         handler1 = MagicMock()
@@ -907,7 +907,7 @@ class TestEndpointRegistryServiceIntegration:
         # assert "/api/users" in api_get_endpoints
         pass
 
-    def test_registry_with_endpoint_errors(self):
+    async def test_registry_with_endpoint_errors(self):
         """Test registry with endpoint errors."""
         # Test duplicate registration
         handler = MagicMock()
@@ -933,7 +933,7 @@ class TestEndpointRegistryServiceIntegration:
         result = self.registry.get_by_path("/nonexistent")
         assert len(result) == 0
 
-    def test_registry_with_endpoint_performance(self):
+    async def test_registry_with_endpoint_performance(self):
         """Test registry with endpoint performance."""
         # Register many endpoints
         for i in range(1000):
@@ -959,7 +959,7 @@ class TestEndpointRegistryServiceIntegration:
         assert stats["total"] == 1000
         assert stats["custom_routes"] == 1000
 
-    def test_registry_with_endpoint_concurrent_access(self):
+    async def test_registry_with_endpoint_concurrent_access(self):
         """Test registry with concurrent access."""
         import threading
         import time

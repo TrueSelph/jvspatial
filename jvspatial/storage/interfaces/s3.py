@@ -9,7 +9,7 @@ import hashlib
 import logging
 import os
 from asyncio import to_thread
-from typing import Any, AsyncGenerator, Dict, List, Optional, cast
+from typing import Any, AsyncIterator, Dict, List, Optional, cast
 
 from ..exceptions import (
     AccessDeniedError,
@@ -341,22 +341,23 @@ class S3FileInterface(FileStorageInterface):
             logger.error(f"Failed to download from S3: {e}")
             raise self._handle_s3_error(e, "get")
 
-    async def stream_file(
+    async def stream_file(  # type: ignore[override,misc]
         self, file_path: str, chunk_size: int = 8192
-    ) -> AsyncGenerator[bytes, None]:
+    ) -> AsyncIterator[bytes]:
         """Stream file from S3 in chunks.
 
         Args:
             file_path: Relative file path (S3 key)
             chunk_size: Size of chunks to yield (default: 8KB)
 
-        Yields:
-            File content in chunks
+        Returns:
+            AsyncIterator of file content in chunks
 
         Raises:
             FileNotFoundError: If file doesn't exist
             StorageProviderError: If streaming fails
         """
+
         logger.debug(f"Streaming from S3: {file_path} (chunk_size={chunk_size})")
 
         try:
@@ -559,7 +560,7 @@ class S3FileInterface(FileStorageInterface):
                 logger.error(f"Failed to generate pre-signed URL: {e}")
             return None
 
-    async def serve_file(self, file_path: str) -> AsyncGenerator[bytes, None]:
+    async def serve_file(self, file_path: str) -> AsyncIterator[bytes]:  # type: ignore[override,misc]
         """Serve file from S3.
 
         For S3, this determines whether to serve directly (small text files)
@@ -574,6 +575,7 @@ class S3FileInterface(FileStorageInterface):
         Raises:
             FileNotFoundError: If file doesn't exist
         """
+
         logger.debug(f"Serving file from S3: {file_path}")
 
         # Check if file exists

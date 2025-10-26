@@ -59,7 +59,7 @@ class CityAnalyzer(Walker):
         # Skip small cities if we have a population filter
         if here.population < self.min_population:
             print(f"  Skipping {here.name} - below population threshold")
-            self.skip()
+            await self.skip()
             return
 
         # Get connected cities via highways
@@ -72,7 +72,7 @@ class CityAnalyzer(Walker):
         # Update total distance traveled
         for city in connected:
             # Get the highway between cities
-            context = here.get_context()
+            context = await here.get_context()
             edges = await context.find_edges_between(here.id, city.id, Highway)
             if edges:
                 highway = edges[0]  # Take first highway found
@@ -86,7 +86,7 @@ class CityAnalyzer(Walker):
     async def generate_report(self) -> None:
         """Generate final statistics when traversal is complete."""
         print("\nFinal Report:")
-        self.report(
+        await self.report(
             {
                 "total_cities": len(self._visited_nodes),
                 "total_population": self.total_population,

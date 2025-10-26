@@ -25,7 +25,7 @@ from jvspatial.api.auth.decorators import (
     auth_endpoint,
 )
 from jvspatial.api.auth.middleware import get_current_user
-from jvspatial.api.endpoint.types import APIResponse
+from jvspatial.api.endpoints.response import APIResponse
 from jvspatial.core import on_visit
 from jvspatial.core.entities import Node, Walker
 
@@ -44,7 +44,6 @@ server = Server(
 class User(Node):
     """User with role-based permissions."""
 
-    username: str = ""
     email: str = ""
     roles: List[str] = []
     is_active: bool = True
@@ -73,13 +72,13 @@ class DocumentProcessor(Walker):
     @on_visit(Document)
     async def process_document(self, here: Document):
         """Process document if user has access."""
-        current_user = get_current_user(self.endpoint.request)
+        current_user = get_current_user(self.endpoint.request)  # type: ignore[attr-defined]
         if not current_user:
             raise HTTPException(status_code=401, detail="Authentication required")
 
         # Admin can access everything
         if "admin" in current_user.roles:
-            self.report(
+            await self.report(
                 {
                     "document": {
                         "id": here.id,
@@ -94,16 +93,16 @@ class DocumentProcessor(Walker):
         # Check access level
         if here.access_level == "private" and here.owner != current_user.id:
             # Skip private documents not owned by user
-            self.skip()
+            await self.skip()
             return
 
         if here.access_level == "restricted" and "manager" not in current_user.roles:
             # Skip restricted documents if not a manager
-            self.skip()
+            await self.skip()
             return
 
         # User has access - process document
-        self.report(
+        await self.report(
             {
                 "document": {
                     "id": here.id,
@@ -117,7 +116,7 @@ class DocumentProcessor(Walker):
 
 # API endpoints
 @auth_endpoint("/api/users/profile", methods=["GET"])
-async def get_user_profile(endpoint) -> APIResponse:
+async def get_user_profile(endpoint):
     """Get current user's profile."""
     current_user = get_current_user(endpoint.request)
     if not current_user:
@@ -131,7 +130,6 @@ async def get_user_profile(endpoint) -> APIResponse:
 
     return endpoint.success(
         data={
-            "username": user.username,
             "email": user.email,
             "roles": user.roles,
             "is_active": user.is_active,
@@ -141,9 +139,7 @@ async def get_user_profile(endpoint) -> APIResponse:
 
 
 @auth_endpoint("/api/documents", methods=["POST"], permissions=["create_documents"])
-async def create_document(
-    title: str, content: str, access_level: str, endpoint
-) -> APIResponse:
+async def create_document(title: str, content: str, access_level: str, endpoint):
     """Create a new document."""
     current_user = get_current_user(endpoint.request)
     if not current_user:
@@ -180,9 +176,9 @@ async def create_document(
     return endpoint.created(
         data={
             "id": doc.id,
-            "title": doc.title,
-            "access_level": doc.access_level,
-            "created_at": doc.created_at.isoformat(),
+            "title": doc.title,  # type: ignore[attr-defined]
+            "access_level": doc.access_level,  # type: ignore[attr-defined]
+            "created_at": doc.created_at.isoformat(),  # type: ignore[attr-defined]
         },
         message="Document created successfully",
     )
@@ -192,19 +188,16 @@ async def create_sample_data():
     """Create sample users and documents."""
     # Create users with different roles
     admin = await User.create(
-        username="admin", email="admin@example.com", roles=["admin"], is_active=True
+        email="admin@example.com", roles=["admin"], is_active=True
     )
 
     manager = await User.create(
-        username="manager",
         email="manager@example.com",
         roles=["manager"],
         is_active=True,
     )
 
-    user = await User.create(
-        username="user", email="user@example.com", roles=["user"], is_active=True
-    )
+    user = await User.create(email="user@example.com", roles=["user"], is_active=True)
 
     # Create documents with different access levels
     await Document.create(

@@ -37,7 +37,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from jvspatial.api import Server, auth_endpoint, create_server, webhook_endpoint
-from jvspatial.api.endpoint import EndpointField
+from jvspatial.api.decorators import EndpointField
 from jvspatial.core import Node, Root, Walker, on_exit, on_visit
 
 # ====================== DATA MODELS ======================

@@ -93,19 +93,19 @@ class CacheStats:
         self.sets: int = 0
         self.deletes: int = 0
 
-    def record_hit(self) -> None:
+    async def record_hit(self) -> None:
         """Record a cache hit."""
         self.hits += 1
 
-    def record_miss(self) -> None:
+    async def record_miss(self) -> None:
         """Record a cache miss."""
         self.misses += 1
 
-    def record_set(self) -> None:
+    async def record_set(self) -> None:
         """Record a cache set operation."""
         self.sets += 1
 
-    def record_delete(self) -> None:
+    async def record_delete(self) -> None:
         """Record a cache delete operation."""
         self.deletes += 1
 

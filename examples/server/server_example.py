@@ -179,7 +179,7 @@ class TaskProcessor(Walker):
         # Get matching tasks
         tasks = await Task.all(**query)
         if not tasks:
-            self.report({"message": "No matching tasks found"})
+            await self.report({"message": "No matching tasks found"})
             return
 
         # Process tasks
@@ -204,7 +204,7 @@ class TaskProcessor(Walker):
             await here.save()
 
         self._processed += 1
-        self.report(
+        await self.report(
             {
                 "processed_task": {
                     "id": here.id,
@@ -217,7 +217,7 @@ class TaskProcessor(Walker):
 
     async def on_finish(self):
         """Summarize processing results."""
-        self.report(
+        await self.report(
             {
                 "summary": {
                     "tasks_processed": self._processed,

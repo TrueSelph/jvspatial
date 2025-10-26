@@ -1347,7 +1347,7 @@ class SpatialAnalysis(Walker):
         # Perform analysis for authorized user
         self.response = {
             "analysis": f"Spatial analysis of {here.name}",
-            "user": current_user.username,
+            "user": current_user.email,
             "permissions": current_user.permissions
         }
 ```

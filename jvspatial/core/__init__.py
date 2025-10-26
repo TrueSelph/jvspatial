@@ -7,11 +7,13 @@ is handled internally to maintain semantic simplicity.
 
 from .context import (
     GraphContext,
-    async_graph_context,
     get_default_context,
     graph_context,
     set_default_context,
 )
+from .decorators import on_exit, on_visit
+
+# Import all entities from entities/ package
 from .entities import (
     Edge,
     Node,
@@ -19,13 +21,10 @@ from .entities import (
     Object,
     Root,
     Walker,
-    find_subclass_by_name,
-    generate_id,
-    on_exit,
-    on_visit,
 )
 from .events import on_emit
 from .pager import ObjectPager, paginate_by_field, paginate_objects
+from .utils import find_subclass_by_name, generate_id, serialize_datetime
 
 __all__ = [
     # Core entity classes
@@ -46,6 +45,7 @@ __all__ = [
     # Utilities
     "generate_id",
     "find_subclass_by_name",
+    "serialize_datetime",
     # Context (advanced usage)
     "GraphContext",
     "get_default_context",

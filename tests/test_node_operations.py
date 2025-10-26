@@ -1,6 +1,10 @@
+import os
+import tempfile
+
 import pytest
 
 from jvspatial.core import Edge, GraphContext, Node
+from jvspatial.db.jsondb import JsonDB
 
 
 # Define a custom edge class for testing
@@ -11,16 +15,18 @@ class CustomEdge(Edge):
 
 @pytest.fixture(scope="module")
 async def context():
-    ctx = GraphContext()
-    yield ctx
-    # No close method exists, so removed await ctx.close()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = JsonDB(os.path.join(tmpdir, "test.json"))
+        ctx = GraphContext(database=db)
+        yield ctx
 
 
 @pytest.fixture(autouse=True)
 async def cleanup(context):
     # Clean up before each test
-    await context.database.delete_many("node", {})
-    await context.database.delete_many("edge", {})
+    db = context.database
+    await db.delete_many("node", {})
+    await db.delete_many("edge", {})
 
 
 @pytest.mark.asyncio

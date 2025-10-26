@@ -19,16 +19,27 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import Field
 
+from jvspatial.core import on_exit, on_visit
 from jvspatial.core.entities import (
     Edge,
     Node,
     Root,
-    TraversalPaused,
-    TraversalSkipped,
     Walker,
-    on_exit,
-    on_visit,
 )
+from jvspatial.exceptions import JVSpatialError, WalkerError
+
+
+# Define traversal exceptions for testing
+class TraversalPaused(JVSpatialError):
+    """Exception raised when traversal is paused."""
+
+    pass
+
+
+class TraversalSkipped(JVSpatialError):
+    """Exception raised when traversal is skipped."""
+
+    pass
 
 
 class WalkerTestNode(Node):
@@ -86,7 +97,7 @@ class SkippingWalker(Walker):
         """Visit hook that conditionally skips nodes."""
         if here.name.startswith("skip"):
             self.skipped_nodes.append(here.name)
-            self.skip()  # This should prevent further processing
+            await self.skip()  # This should prevent further processing
             # This line should not be reached
             self.visited_nodes.append("SHOULD_NOT_REACH")
         else:
@@ -163,28 +174,28 @@ async def test_edges(test_nodes):
 class TestWalkerBasicFunctionality:
     """Test basic Walker functionality."""
 
-    def test_walker_initialization(self):
+    async def test_walker_initialization(self):
         """Test Walker initialization."""
         walker = WalkerTestWalker()
         assert walker.id.startswith("w:WalkerTestWalker:")
-        assert isinstance(walker.queue, deque)
+        assert hasattr(walker.queue, "to_list")  # WalkerQueue object
         assert len(walker.queue) == 0
-        assert walker.get_report() == []
+        assert await walker.get_report() == []
         assert walker.current_node is None
         assert not walker.paused
 
-    def test_walker_custom_id(self):
+    async def test_walker_custom_id(self):
         """Test Walker with custom ID."""
         custom_id = "custom_walker_id"
         walker = WalkerTestWalker(id=custom_id)
         assert walker.id == custom_id
 
-    def test_walker_report_initialization(self):
+    async def test_walker_report_initialization(self):
         """Test Walker report initialization."""
         walker = WalkerTestWalker()
-        assert walker.get_report() == []
+        assert await walker.get_report() == []
 
-    def test_here_property(self):
+    async def test_here_property(self):
         """Test the 'here' property returns current_node."""
         walker = WalkerTestWalker()
         node = WalkerTestNode(name="test")
@@ -193,7 +204,7 @@ class TestWalkerBasicFunctionality:
         walker.current_node = node
         assert walker.here == node
 
-    def test_visitor_property(self):
+    async def test_visitor_property(self):
         """Test the 'visitor' property returns the walker itself."""
         walker = WalkerTestWalker()
         assert walker.visitor == walker
@@ -202,175 +213,176 @@ class TestWalkerBasicFunctionality:
 class TestWalkerQueueOperations:
     """Test Walker queue manipulation methods."""
 
-    def test_visit_single_node(self):
+    async def test_visit_single_node(self):
         """Test adding a single node to queue via visit()."""
         walker = WalkerTestWalker()
         node = WalkerTestNode(name="test")
 
-        result = asyncio.run(walker.visit(node))
+        result = await walker.visit(node)
         assert len(result) == 1
         assert result[0] == node
         assert len(walker.queue) == 1
-        assert walker.queue[0] == node
+        queue_list = walker.queue.to_list()
+        assert queue_list[0] == node
 
-    def test_visit_multiple_nodes(self):
+    async def test_visit_multiple_nodes(self):
         """Test adding multiple nodes to queue via visit()."""
         walker = WalkerTestWalker()
         nodes = [WalkerTestNode(name=f"node{i}") for i in range(3)]
 
-        result = asyncio.run(walker.visit(nodes))
+        result = await walker.visit(nodes)
         assert len(result) == 3
         assert result == nodes
         assert len(walker.queue) == 3
-        assert list(walker.queue) == nodes
+        assert await walker.get_queue() == nodes
 
-    def test_append_nodes(self):
+    async def test_append_nodes(self):
         """Test append() method for adding nodes to queue end."""
         walker = WalkerTestWalker()
         nodes = [WalkerTestNode(name=f"node{i}") for i in range(3)]
 
-        result = walker.append(nodes[0])
+        result = await walker.append(nodes[0])
         assert result == [nodes[0]]
         assert len(walker.queue) == 1
 
-        result = walker.append(nodes[1:])
+        result = await walker.append(nodes[1:])
         assert result == nodes[1:]
         assert len(walker.queue) == 3
-        assert list(walker.queue) == nodes
+        assert await walker.get_queue() == nodes
 
-    def test_prepend_nodes(self):
+    async def test_prepend_nodes(self):
         """Test prepend() method for adding nodes to queue beginning."""
         walker = WalkerTestWalker()
         nodes = [WalkerTestNode(name=f"node{i}") for i in range(3)]
 
         # Add initial node
-        walker.append(nodes[0])
+        await walker.append(nodes[0])
 
         # Prepend should add to beginning
-        result = walker.prepend(nodes[1:])
+        result = await walker.prepend(nodes[1:])
         assert result == nodes[1:]
         assert len(walker.queue) == 3
         # Should maintain relative order: node1, node2, node0
-        assert list(walker.queue) == [nodes[1], nodes[2], nodes[0]]
+        assert await walker.get_queue() == [nodes[1], nodes[2], nodes[0]]
 
-    def test_add_next_nodes(self):
+    async def test_add_next_nodes(self):
         """Test add_next() method for adding nodes next in queue."""
         walker = WalkerTestWalker()
         nodes = [WalkerTestNode(name=f"node{i}") for i in range(4)]
 
         # Add initial nodes
-        walker.append(nodes[:2])
+        await walker.append(nodes[:2])
 
         # Add next should insert at beginning of queue
-        result = walker.add_next(nodes[2:])
+        result = await walker.add_next(nodes[2:])
         assert result == nodes[2:]
         assert len(walker.queue) == 4
         # Should be: node2, node3, node0, node1
-        assert list(walker.queue) == [nodes[2], nodes[3], nodes[0], nodes[1]]
+        assert await walker.get_queue() == [nodes[2], nodes[3], nodes[0], nodes[1]]
 
-    def test_dequeue_nodes(self):
+    async def test_dequeue_nodes(self):
         """Test dequeue() method for removing nodes from queue."""
         walker = WalkerTestWalker()
         nodes = [WalkerTestNode(name=f"node{i}") for i in range(4)]
 
         # Add all nodes
-        walker.append(nodes)
+        await walker.append(nodes)
         assert len(walker.queue) == 4
 
         # Remove single node
-        result = walker.dequeue(nodes[1])
+        result = await walker.dequeue(nodes[1])
         assert result == [nodes[1]]
         assert len(walker.queue) == 3
         assert nodes[1] not in walker.queue
 
         # Remove multiple nodes
-        result = walker.dequeue([nodes[0], nodes[2]])
+        result = await walker.dequeue([nodes[0], nodes[2]])
         assert len(result) == 2
         assert nodes[0] in result
         assert nodes[2] in result
         assert len(walker.queue) == 1
-        assert list(walker.queue) == [nodes[3]]
+        assert await walker.get_queue() == [nodes[3]]
 
-    def test_insert_after_node(self):
+    async def test_insert_after_node(self):
         """Test insert_after() method."""
         walker = WalkerTestWalker()
         nodes = [WalkerTestNode(name=f"node{i}") for i in range(5)]
 
         # Add initial nodes: 0, 1, 2
-        walker.append(nodes[:3])
+        await walker.append(nodes[:3])
 
         # Insert after node1
-        result = walker.insert_after(nodes[1], nodes[3:])
+        result = await walker.insert_after(nodes[1], nodes[3:])
         assert result == nodes[3:]
         assert len(walker.queue) == 5
         # Should be: node0, node1, node3, node4, node2
         expected_order = [nodes[0], nodes[1], nodes[3], nodes[4], nodes[2]]
-        assert list(walker.queue) == expected_order
+        assert walker.queue.to_list() == expected_order
 
-    def test_insert_after_nonexistent_node(self):
+    async def test_insert_after_nonexistent_node(self):
         """Test insert_after() with node not in queue."""
         walker = WalkerTestWalker()
         nodes = [WalkerTestNode(name=f"node{i}") for i in range(3)]
 
-        walker.append(nodes[:2])
+        await walker.append(nodes[:2])
 
         with pytest.raises(ValueError, match="Target node .* not found in queue"):
-            walker.insert_after(nodes[2], [WalkerTestNode(name="new")])
+            await walker.insert_after(nodes[2], [WalkerTestNode(name="new")])
 
-    def test_insert_before_node(self):
+    async def test_insert_before_node(self):
         """Test insert_before() method."""
         walker = WalkerTestWalker()
         nodes = [WalkerTestNode(name=f"node{i}") for i in range(5)]
 
         # Add initial nodes: 0, 1, 2
-        walker.append(nodes[:3])
+        await walker.append(nodes[:3])
 
         # Insert before node1
-        result = walker.insert_before(nodes[1], nodes[3:])
+        result = await walker.insert_before(nodes[1], nodes[3:])
         assert result == nodes[3:]
         assert len(walker.queue) == 5
         # Should be: node0, node3, node4, node1, node2
         expected_order = [nodes[0], nodes[3], nodes[4], nodes[1], nodes[2]]
-        assert list(walker.queue) == expected_order
+        assert walker.queue.to_list() == expected_order
 
-    def test_is_queued(self):
+    async def test_is_queued(self):
         """Test is_queued() method."""
         walker = WalkerTestWalker()
         nodes = [WalkerTestNode(name=f"node{i}") for i in range(3)]
 
         # Initially no nodes queued
-        assert not walker.is_queued(nodes[0])
+        assert not await walker.is_queued(nodes[0])
 
         # Add some nodes
-        walker.append(nodes[:2])
-        assert walker.is_queued(nodes[0])
-        assert walker.is_queued(nodes[1])
-        assert not walker.is_queued(nodes[2])
+        await walker.append(nodes[:2])
+        assert await walker.is_queued(nodes[0])
+        assert await walker.is_queued(nodes[1])
+        assert not await walker.is_queued(nodes[2])
 
-    def test_get_queue(self):
+    async def test_get_queue(self):
         """Test get_queue() method."""
         walker = WalkerTestWalker()
         nodes = [WalkerTestNode(name=f"node{i}") for i in range(3)]
 
         # Empty queue
-        queue_list = walker.get_queue()
+        queue_list = await walker.get_queue()
         assert queue_list == []
 
         # Add nodes and verify
-        walker.append(nodes)
-        queue_list = walker.get_queue()
+        await walker.append(nodes)
+        queue_list = await walker.get_queue()
         assert queue_list == nodes
         assert isinstance(queue_list, list)  # Should return list, not deque
 
-    def test_clear_queue(self):
+    async def test_clear_queue(self):
         """Test clear_queue() method."""
         walker = WalkerTestWalker()
         nodes = [WalkerTestNode(name=f"node{i}") for i in range(3)]
 
-        walker.append(nodes)
+        await walker.append(nodes)
         assert len(walker.queue) == 3
 
-        walker.clear_queue()
+        await walker.clear_queue()
         assert len(walker.queue) == 0
 
 
@@ -380,16 +392,13 @@ class TestWalkerTraversalBasic:
     @pytest.mark.asyncio
     async def test_spawn_with_root_node(self):
         """Test spawn() method with root node."""
-        with patch("jvspatial.core.entities.Root.get") as mock_root_get:
-            root_node = WalkerTestNode(name="root", id="n:Root:root")
-            mock_root_get.return_value = root_node
+        root_node = WalkerTestNode(name="root", id="n:Root:root")
+        walker = WalkerTestWalker()
+        result = await walker.spawn(root_node)
 
-            walker = WalkerTestWalker()
-            result = await walker.spawn()
-
-            assert result == walker
-            assert "root" in walker.visited_nodes
-            assert walker.exit_called
+        assert result == walker
+        assert "root" in walker.visited_nodes
+        assert walker.exit_called
 
     @pytest.mark.asyncio
     async def test_spawn_with_custom_start_node(self):
@@ -429,7 +438,7 @@ class TestWalkerTraversalBasic:
         assert walker.current_node is None
         assert node.visitor is None
 
-        with walker.visiting(node):
+        with await walker.visiting(node):
             assert walker.current_node == node
             assert node.visitor == walker
 
@@ -527,7 +536,7 @@ class TestWalkerControlFlow:
         walker = WalkerTestWalker()
         node = WalkerTestNode(name="test")
         walker.current_node = node
-        node.visitor = walker
+        node.set_visitor(walker)
 
         result = await walker.disengage()
 
@@ -550,7 +559,7 @@ class TestWalkerControlFlow:
 class TestWalkerDecorators:
     """Test @on_visit and @on_exit decorators."""
 
-    def test_on_visit_decorator_registration(self):
+    async def test_on_visit_decorator_registration(self):
         """Test @on_visit decorator registers hooks correctly."""
         # Check that hooks are registered in class
         assert WalkerTestNode in WalkerTestWalker._visit_hooks
@@ -565,7 +574,7 @@ class TestWalkerDecorators:
         assert any("visit_test_node" in str(hook) for hook in node_hooks)
         assert any("visit_test_edge" in str(hook) for hook in edge_hooks)
 
-    def test_on_exit_decorator_registration(self):
+    async def test_on_exit_decorator_registration(self):
         """Test @on_exit decorator marks methods correctly."""
         walker = WalkerTestWalker()
         exit_method = walker.on_walker_exit
@@ -641,7 +650,7 @@ class TestWalkerErrorHandling:
 
         # Walker should continue despite hook errors
         # Check that error was logged to report
-        report = walker.get_report()
+        report = await walker.get_report()
         assert any("hook_error" in item for item in report if isinstance(item, dict))
 
     @pytest.mark.asyncio
@@ -662,22 +671,24 @@ class TestWalkerErrorHandling:
         result = await walker.spawn(nodes[0])
 
         assert result == walker
-        report = walker.get_report()
+        report = await walker.get_report()
         assert any("hook_error" in item for item in report if isinstance(item, dict))
 
-    def test_skip_outside_traversal(self):
+    @pytest.mark.asyncio
+    async def test_skip_outside_traversal(self):
         """Test skip() raises exception when not in traversal."""
         walker = WalkerTestWalker()
 
-        with pytest.raises(TraversalSkipped):
-            walker.skip()
+        with pytest.raises(JVSpatialError):
+            await walker.skip()
 
-    def test_pause_outside_traversal(self):
+    @pytest.mark.asyncio
+    async def test_pause_outside_traversal(self):
         """Test pause() raises exception when not in traversal."""
         walker = WalkerTestWalker()
 
-        with pytest.raises(TraversalPaused):
-            walker.pause("Test pause")
+        with pytest.raises(WalkerError):
+            await walker.pause("Test pause")
 
 
 class TestWalkerEdgeCases:

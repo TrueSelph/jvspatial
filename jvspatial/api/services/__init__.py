@@ -5,19 +5,24 @@ endpoint registration, lifecycle management, and other core services.
 """
 
 from jvspatial.api.services.discovery import PackageDiscoveryService
-from jvspatial.api.services.endpoint_registry import (
-    EndpointInfo,
-    EndpointRegistryService,
-)
-from jvspatial.api.services.file_storage import FileStorageService
+
+# Note: EndpointRegistryService moved to endpoints module
+# from jvspatial.api.services.endpoint_registry import (
+#     EndpointInfo,
+#     EndpointRegistryService,
+# )
+# Note: FileStorageService moved to integrations/storage module
+# from jvspatial.api.services.file_storage import FileStorageService
 from jvspatial.api.services.lifecycle import LifecycleManager
-from jvspatial.api.services.middleware import MiddlewareManager
+
+# Note: MiddlewareManager moved to middleware module
+# from jvspatial.api.services.middleware import MiddlewareManager
 
 __all__ = [
-    "EndpointInfo",
-    "EndpointRegistryService",
-    "FileStorageService",
+    # "EndpointInfo",           # Moved to endpoints
+    # "EndpointRegistryService", # Moved to endpoints
+    # "FileStorageService",     # Moved to integrations/storage
     "LifecycleManager",
-    "MiddlewareManager",
+    # "MiddlewareManager",  # Moved to middleware module
     "PackageDiscoveryService",
 ]

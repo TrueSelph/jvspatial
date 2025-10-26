@@ -12,7 +12,7 @@ from typing import List, Optional, cast
 from fastapi import Request
 from pydantic import BaseModel, EmailStr, Field
 
-from jvspatial.api.decorators.shortcuts import endpoint  # For public endpoints
+from jvspatial.api.decorators.route import endpoint  # For public endpoints
 
 from .decorators import (
     admin_endpoint,
@@ -35,7 +35,6 @@ logger = logging.getLogger(__name__)
 class UserRegistrationRequest(BaseModel):
     """Request model for user registration."""
 
-    username: str = Field(..., min_length=3, max_length=50)
     email: EmailStr = Field(...)
     password: str = Field(..., min_length=8, max_length=100)
     confirm_password: str = Field(..., min_length=8, max_length=100)
@@ -44,7 +43,7 @@ class UserRegistrationRequest(BaseModel):
 class LoginRequest(BaseModel):
     """Request model for user login."""
 
-    username: str = Field(..., description="Username or email")
+    email: str = Field(..., description="Email address")
     password: str = Field(..., min_length=1)
     remember_me: bool = Field(default=False, description="Extend session duration")
 
@@ -118,6 +117,32 @@ class UserListRequest(BaseModel):
     active_only: bool = Field(default=False, description="Show only active users")
 
 
+class CreateAPIKeyRequest(BaseModel):
+    """Request model for creating API keys."""
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Human-readable name for the API key",
+    )
+    expires_at: Optional[datetime] = Field(
+        default=None, description="Optional expiration time"
+    )
+    allowed_operations: Optional[List[str]] = Field(
+        default=None, description="List of allowed operations"
+    )
+    allowed_endpoints: Optional[List[str]] = Field(
+        default=None, description="List of allowed endpoint patterns"
+    )
+    rate_limit_per_hour: Optional[int] = Field(
+        default=None, ge=1, description="Requests per hour limit"
+    )
+    allowed_ips: Optional[List[str]] = Field(
+        default=None, description="List of allowed IP addresses"
+    )
+
+
 # ====================== PUBLIC AUTHENTICATION ENDPOINTS ======================
 
 
@@ -133,18 +158,9 @@ async def register_user(request: UserRegistrationRequest):
                 "message": "Passwords do not match",
             }
 
-        # Check if username already exists
-        existing_user = await User.find_by_username(request.username)
-        if existing_user:
-            return {
-                "status": "error",
-                "error": "username_taken",
-                "message": "Username is already taken",
-            }
-
         # Check if email already exists
         existing_email = await User.find_by_email(request.email)
-        if existing_email:
+        if existing_email is not None:
             return {
                 "status": "error",
                 "error": "email_taken",
@@ -154,10 +170,9 @@ async def register_user(request: UserRegistrationRequest):
         # Create new user
         password_hash = User.hash_password(request.password)
         user = await User.create(
-            username=request.username,
             email=request.email,
             password_hash=password_hash,
-            created_at=datetime.now(),
+            created_at=datetime.now().isoformat(),
         )
 
         return {
@@ -165,9 +180,8 @@ async def register_user(request: UserRegistrationRequest):
             "message": "User registered successfully",
             "user": {
                 "id": user.id,
-                "username": user.username,
                 "email": user.email,
-                "created_at": user.created_at.isoformat(),
+                "created_at": user.created_at,  # Already in ISO format
             },
         }
 
@@ -184,8 +198,8 @@ async def register_user(request: UserRegistrationRequest):
 async def login_user(request: LoginRequest):
     """Authenticate user and create session."""
     try:
-        # Authenticate user
-        user = await authenticate_user(request.username, request.password)
+        # Authenticate user with email
+        user = await authenticate_user(request.email, request.password)
 
         # Create session tokens
         access_token = JWTManager.create_access_token(user)
@@ -198,7 +212,7 @@ async def login_user(request: LoginRequest):
             user_id=user.id,
             jwt_token=access_token,
             refresh_token=refresh_token,
-            expires_at=datetime.now() + timedelta(hours=session_duration),
+            expires_at=(datetime.now() + timedelta(hours=session_duration)).isoformat(),
         )
 
         return {
@@ -209,7 +223,6 @@ async def login_user(request: LoginRequest):
             "expires_in": session_duration * 3600,  # Convert to seconds
             "user": {
                 "id": user.id,
-                "username": user.username,
                 "email": user.email,
                 "is_admin": user.is_admin,
                 "roles": user.roles,
@@ -221,7 +234,7 @@ async def login_user(request: LoginRequest):
         return {
             "status": "error",
             "error": "invalid_credentials",
-            "message": "Invalid username or password",
+            "message": "Invalid email or password",
         }
     except Exception as e:
         logger.error(f"Login failed: {e}")
@@ -268,12 +281,58 @@ async def logout_user(request: LogoutRequest, current_request: Request):
         # Get current user from request
         current_user = get_current_user(current_request)
 
-        if request.revoke_all_sessions and current_user:
-            # In a real implementation, we would revoke all sessions for this user
-            # For now, just acknowledge the request
-            pass
+        if not current_user:
+            return {
+                "status": "error",
+                "error": "not_authenticated",
+                "message": "User not authenticated",
+            }
 
-        return {"status": "success", "message": "Logged out successfully"}
+        # Get the JWT token from the Authorization header
+        auth_header = current_request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]  # Remove "Bearer " prefix
+
+            # Find and revoke the current session using database query
+            from jvspatial.core.context import get_default_context
+
+            ctx = get_default_context()
+
+            # Find sessions matching user_id and jwt_token
+            sessions_data = await ctx.database.find(
+                "session", {"user_id": current_user.id, "jwt_token": token}
+            )
+
+            for session_data in sessions_data:
+                session = Session(**session_data)
+                await session.revoke("User logout")
+                logger.info(
+                    f"Revoked session {session.session_id} for user {current_user.id}"
+                )
+
+        # If revoke_all_sessions is requested, revoke all sessions for this user
+        if request.revoke_all_sessions:
+            from jvspatial.core.context import get_default_context
+
+            ctx = get_default_context()
+
+            # Find all sessions for this user
+            all_sessions_data = await ctx.database.find(
+                "session", {"user_id": current_user.id}
+            )
+
+            for session_data in all_sessions_data:
+                session = Session(**session_data)
+                await session.revoke("User logout - all sessions")
+                logger.info(
+                    f"Revoked session {session.session_id} for user {current_user.id}"
+                )
+
+        return {
+            "status": "success",
+            "message": "Logged out successfully",
+            "sessions_revoked": request.revoke_all_sessions,
+        }
 
     except Exception as e:
         logger.error(f"Logout failed: {e}")
@@ -299,15 +358,14 @@ async def get_user_profile(request: Request):
             "message": "Profile retrieved successfully",
             "profile": {
                 "id": current_user.id,
-                "username": current_user.username,
                 "email": current_user.email,
                 "roles": current_user.roles,
                 "permissions": current_user.permissions,
                 "is_admin": current_user.is_admin,
                 "is_active": current_user.is_active,
-                "created_at": current_user.created_at.isoformat(),
+                "created_at": current_user.created_at,  # Already in ISO format
                 "last_login": (
-                    current_user.last_login.isoformat()
+                    current_user.last_login  # Already in ISO format
                     if current_user.last_login
                     else None
                 ),
@@ -433,12 +491,10 @@ async def list_api_keys(request: Request):
                 {
                     "key_id": key.key_id,
                     "name": key.name,
-                    "created_at": key.created_at.isoformat(),
-                    "last_used": key.last_used.isoformat() if key.last_used else None,
+                    "created_at": key.created_at,
+                    "last_used": key.last_used if key.last_used else None,
                     "usage_count": key.usage_count,
-                    "expires_at": (
-                        key.expires_at.isoformat() if key.expires_at else None
-                    ),
+                    "expires_at": key.expires_at if key.expires_at else None,
                     "is_active": key.is_active,
                     "rate_limit_per_hour": key.rate_limit_per_hour,
                     "allowed_endpoints": key.allowed_endpoints,
@@ -477,7 +533,9 @@ async def create_api_key(request_data: APIKeyCreateRequest, request: Request):
         # Calculate expiration
         expires_at = None
         if request_data.expires_days:
-            expires_at = datetime.now() + timedelta(days=request_data.expires_days)
+            expires_at = (
+                datetime.now() + timedelta(days=request_data.expires_days)
+            ).isoformat()
 
         # Create API key
         api_key = await APIKey.create(
@@ -497,8 +555,8 @@ async def create_api_key(request_data: APIKeyCreateRequest, request: Request):
                 "key_id": key_id,
                 "secret_key": secret_key,  # Only shown once!
                 "name": request_data.name,
-                "created_at": api_key.created_at.isoformat(),
-                "expires_at": expires_at.isoformat() if expires_at else None,
+                "created_at": api_key.created_at,
+                "expires_at": expires_at,
                 "rate_limit_per_hour": request_data.rate_limit_per_hour,
                 "allowed_endpoints": request_data.allowed_endpoints,
             },
@@ -596,16 +654,17 @@ async def list_users(request_data: UserListRequest, request: Request):
             "users": [
                 {
                     "id": user.id,
-                    "username": user.username,
                     "email": user.email,
                     "is_active": user.is_active,
                     "is_admin": user.is_admin,
                     "is_verified": user.is_verified,
                     "roles": user.roles,
                     "permissions": user.permissions,
-                    "created_at": user.created_at.isoformat(),
+                    "created_at": user.created_at,  # Already in ISO format
                     "last_login": (
-                        user.last_login.isoformat() if user.last_login else None
+                        user.last_login
+                        if user.last_login
+                        else None  # Already in ISO format
                     ),
                     "login_count": user.login_count,
                 }
@@ -643,7 +702,7 @@ async def update_user(request_data: UserUpdateRequest, request: Request):
             }
 
         # Find user to update
-        user = await User.get(request_data.user_id)
+        user = await User.find_by_id(request_data.user_id)
         if user is None:
             return {
                 "status": "error",
@@ -685,7 +744,7 @@ async def update_user(request_data: UserUpdateRequest, request: Request):
             "updates": updates,
             "updated_by": {
                 "admin_id": admin_user.id,
-                "admin_username": admin_user.username,
+                "admin_email": admin_user.email,
             },
         }
 
@@ -738,7 +797,7 @@ async def get_auth_stats(request: Request):
             "generated_at": datetime.now().isoformat(),
             "generated_by": {
                 "admin_id": admin_user.id,
-                "admin_username": admin_user.username,
+                "admin_email": admin_user.email,
             },
         }
 
@@ -765,7 +824,7 @@ async def delete_user(user_id: str, request: Request):
             }
 
         # Find user to delete
-        user = await User.get(user_id)
+        user = await User.find_by_id(user_id)
         if user is None:
             return {
                 "status": "error",
@@ -799,12 +858,11 @@ async def delete_user(user_id: str, request: Request):
             "message": "User deleted successfully",
             "deleted_user": {
                 "id": user.id,
-                "username": user.username,
                 "email": user.email,
             },
             "deleted_by": {
                 "admin_id": admin_user.id,
-                "admin_username": admin_user.username,
+                "admin_email": admin_user.email,
             },
             "cleanup": {
                 "api_keys_deleted": len(user_api_keys),

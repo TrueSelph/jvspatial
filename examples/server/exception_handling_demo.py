@@ -85,7 +85,7 @@ class UserAnalyzer(Walker):
         except ValidationError as e:
             logger.warning(f"User validation failed for {here.id}: {e.message}")
             self.error_count += 1
-            self.report(
+            await self.report(
                 {
                     "error_type": "validation",
                     "node_id": here.id,
@@ -96,7 +96,7 @@ class UserAnalyzer(Walker):
         except Exception as e:
             logger.error(f"Unexpected error processing {here.id}: {e}")
             self.error_count += 1
-            self.report(
+            await self.report(
                 {"error_type": "unexpected", "node_id": here.id, "error": str(e)}
             )
 
@@ -110,7 +110,7 @@ class UserAnalyzer(Walker):
             raise RuntimeError("External service error")
 
         # Record analysis results
-        self.report(
+        await self.report(
             {
                 "user_analyzed": {
                     "id": user.id,

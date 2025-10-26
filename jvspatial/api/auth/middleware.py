@@ -6,6 +6,7 @@ API key validation, rate limiting, and user context injection.
 
 import hashlib
 import hmac
+import logging
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -28,6 +29,39 @@ from .entities import (
     SessionExpiredError,
     User,
 )
+
+logger = logging.getLogger(__name__)
+
+
+async def authenticate_user(email: str, password: str) -> User:
+    """Authenticate a user with email and password.
+
+    Args:
+        email: User email address
+        password: Plain text password
+
+    Returns:
+        User instance if authentication succeeds
+
+    Raises:
+        InvalidCredentialsError: If authentication fails
+    """
+    # Find user by email
+    user = await User.find_by_email(email)
+
+    # If user not found, raise authentication error
+    if user is None:
+        raise InvalidCredentialsError("Invalid email or password")
+
+    # Check if user is active
+    if not user.is_active:
+        raise InvalidCredentialsError("Account is deactivated")
+
+    # Verify password
+    if not user.verify_password(password):
+        raise InvalidCredentialsError("Invalid email or password")
+
+    return user
 
 
 class AuthConfig:
@@ -195,7 +229,6 @@ class JWTManager:
 
         payload = {
             "sub": user.id,
-            "username": user.username,
             "email": user.email,
             "roles": user.roles,
             "is_admin": user.is_admin,
@@ -284,6 +317,8 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             "/health",
             "/auth/login",
             "/auth/register",
+            "/api/auth/login",
+            "/api/auth/register",
         ]
 
     async def dispatch(self, request: Request, call_next):
@@ -348,11 +383,11 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                     key_id, secret = auth_token.split(":", 1)
                     # Validate path-based API key
                     user = await self._validate_api_key(key_id, secret)
-                    if user:
+                    if user is not None:
                         request.state.current_user = user
                         # Get api_key_obj for HMAC
                         api_key_obj = await APIKey.find_by_key_id(key_id)
-                        if api_key_obj:
+                        if api_key_obj is not None:
                             request.state.api_key_obj = api_key_obj
                         request.state.webhook_route = route
 
@@ -382,9 +417,21 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 return await call_next(request)
 
         # Check if endpoint requires authentication
+        # First check request state (set by endpoint wrapper)
         endpoint_auth = getattr(request.state, "endpoint_auth", None)
         required_permissions = getattr(request.state, "required_permissions", [])
         required_roles = getattr(request.state, "required_roles", [])
+
+        # If not set on request state, check the endpoint function itself
+        if endpoint_auth is None:
+            # Try to get the endpoint function from the scope
+            endpoint_func = request.scope.get("endpoint")
+            if endpoint_func:
+                endpoint_auth = getattr(endpoint_func, "_auth_required", None)
+                required_permissions = getattr(
+                    endpoint_func, "_required_permissions", []
+                )
+                required_roles = getattr(endpoint_func, "_required_roles", [])
 
         # Explicitly bypass auth if endpoint_auth is False
         if endpoint_auth is False:
@@ -404,7 +451,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             # Check if user was already set (e.g., from webhook path auth)
             # Only accept it if it's actually a User object, not a mock or None
             current_user = getattr(request.state, "current_user", None)
-            if current_user and isinstance(current_user, User):
+            if current_user is not None and isinstance(current_user, User):
                 user = current_user
             else:
                 # Fallback to normal authentication (JWT or header/query API key)
@@ -412,7 +459,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
             # Set current_user in request state if authenticated
             # Use setattr to ensure it works with both real and mock objects
-            if user:
+            if user is not None:
                 # Create a copy of user for state to avoid modifying the original
                 request.state.current_user = user  # Direct assignment is safe here
 
@@ -517,7 +564,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 await api_key_obj.record_usage()
 
                 # Get associated user
-                user = await User.get(api_key_obj.user_id)
+                user = await User.find_by_id(api_key_obj.user_id)
                 if user and user.is_active:
                     return user
 
@@ -560,9 +607,39 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
                 if user_id:
                     # Get user from database
-                    user = await User.get(user_id)
-                    if user and user.is_active:
-                        return user
+                    user = await User.find_by_id(user_id)
+                    if user is not None and user.is_active:
+                        # Check if session still exists in database
+                        from jvspatial.core.context import get_default_context
+
+                        ctx = get_default_context()
+
+                        # Find session with this JWT token
+                        sessions_data = await ctx.database.find(
+                            "session", {"user_id": user_id, "jwt_token": token}
+                        )
+
+                        # If session exists and is active, user is authenticated
+                        if sessions_data:
+                            session_data = sessions_data[
+                                0
+                            ]  # Get the first (and should be only) session
+                            if session_data.get(
+                                "is_active", True
+                            ):  # Default to True for backward compatibility
+                                return user
+                            else:
+                                # Session was revoked (logout), token is invalid
+                                logger.info(
+                                    f"JWT token for user {user_id} is invalid - session revoked"
+                                )
+                                return None
+                        else:
+                            # Session was not found, token is invalid
+                            logger.info(
+                                f"JWT token for user {user_id} is invalid - session not found"
+                            )
+                            return None
 
             except (InvalidCredentialsError, SessionExpiredError):
                 pass
@@ -607,8 +684,8 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                     await api_key_obj.record_usage(endpoint=endpoint)
 
                     # Get associated user
-                    user = await User.get(api_key_obj.user_id)
-                    if user and user.is_active:
+                    user = await User.find_by_id(api_key_obj.user_id)
+                    if user is not None and user.is_active:
                         # Attach api_key_obj to state for HMAC if needed
                         request.state.api_key_obj = api_key_obj
                         return user
@@ -679,64 +756,28 @@ def no_auth_required(func: Callable) -> Callable:
     return wrapper
 
 
-async def create_user_session(user: User, request: Request) -> Session:
-    """Create a new user session with JWT tokens.
+async def create_user_session(user: "User", request: Request) -> "Session":
+    """Create a new user session.
 
     Args:
         user: User to create session for
-        request: Request object for context
+        request: FastAPI request object
 
     Returns:
         Created session object
     """
-    session_id = Session.create_session_id()
+    from .entities import Session
 
-    # Create JWT tokens
-    access_token = JWTManager.create_access_token(user)
-    refresh_token = JWTManager.create_refresh_token(user)
+    # Extract client information
+    client_ip = getattr(request.client, "host", "127.0.0.1")
+    user_agent = request.headers.get("user-agent", "Unknown")
 
     # Create session
     session = await Session.create(
-        session_id=session_id,
-        user_id=user.id,
-        jwt_token=access_token,
-        refresh_token=refresh_token,
-        expires_at=datetime.now() + timedelta(hours=auth_config.jwt_expiration_hours),
-        client_ip=request.client.host if request.client else "",
-        user_agent=request.headers.get("user-agent", ""),
+        user_id=user.id, client_ip=client_ip, user_agent=user_agent
     )
 
     return session
-
-
-async def authenticate_user(username: str, password: str) -> User:
-    """Authenticate a user with username/password.
-
-    Args:
-        username: Username or email
-        password: Plain text password
-
-    Returns:
-        Authenticated user
-
-    Raises:
-        InvalidCredentialsError: If credentials are invalid
-    """
-    # Try to find user by username first, then email
-    user = await User.find_by_username(username)
-    if not user:
-        user = await User.find_by_email(username)
-
-    if not user or not user.is_active:
-        raise InvalidCredentialsError("Invalid username or password")
-
-    if not user.verify_password(password):
-        raise InvalidCredentialsError("Invalid username or password")
-
-    # Record login
-    await user.record_login()
-
-    return cast(User, user)
 
 
 async def refresh_session(refresh_token: str) -> Tuple[str, str]:
@@ -760,7 +801,7 @@ async def refresh_session(refresh_token: str) -> Tuple[str, str]:
         user_id = payload.get("sub")
         user = await User.get(cast(str, user_id))
 
-        if not user or not user.is_active:
+        if user is None or not user.is_active:
             raise SessionExpiredError("User not found or inactive")
 
         # Create new tokens
@@ -793,7 +834,7 @@ async def get_current_user_dependency(
         HTTPException: If user is not authenticated
     """
     user = get_current_user(request)
-    if not user:
+    if user is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return user
 
@@ -810,7 +851,7 @@ async def get_current_active_user(current_user: Optional[User] = None) -> User:
     Raises:
         HTTPException: If user is inactive
     """
-    if not current_user or not current_user.is_active:
+    if current_user is None or not current_user.is_active:
         raise HTTPException(status_code=403, detail="Inactive user")
     return current_user
 
@@ -827,7 +868,7 @@ async def get_admin_user(current_user: Optional[User] = None) -> User:
     Raises:
         HTTPException: If user is not admin
     """
-    if not current_user or not current_user.is_admin:
+    if current_user is None or not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
 

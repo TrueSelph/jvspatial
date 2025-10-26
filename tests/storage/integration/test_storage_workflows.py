@@ -298,7 +298,7 @@ class TestProxyBasedSecureSharing:
         mock_proxy.is_valid = MagicMock(return_value=True)
         mock_proxy.record_access = AsyncMock()
         mock_proxy.save = AsyncMock()
-        mock_proxy._graph_context = proxy_manager.context
+        mock_proxy._graph_context = await proxy_manager.context
 
         with patch("jvspatial.storage.managers.proxy.URLProxy") as MockURLProxy:
             MockURLProxy.find_by_code = AsyncMock(return_value=None)  # For creation
@@ -578,7 +578,7 @@ class TestRealWorldScenarios:
         mock_proxy.access_count = 0
         mock_proxy.metadata = {"user_id": user_id, "type": "avatar"}
         mock_proxy.save = AsyncMock()
-        mock_proxy._graph_context = proxy_manager.context
+        mock_proxy._graph_context = await proxy_manager.context
 
         with patch.object(URLProxyManager, "create_proxy", return_value=mock_proxy):
             proxy = await proxy_manager.create_proxy(
@@ -857,7 +857,7 @@ class TestErrorPropagation:
 # ============================================================================
 
 
-def test_module_imports():
+async def test_module_imports():
     """Test that all integration components can be imported."""
     from jvspatial.storage import (
         FileValidator,

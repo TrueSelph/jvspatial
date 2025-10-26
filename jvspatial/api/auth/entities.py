@@ -8,7 +8,7 @@ collections from spatial data for security and performance isolation.
 import hashlib
 import secrets
 from datetime import datetime, timedelta
-from typing import ClassVar, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from pydantic import Field
 
@@ -18,15 +18,14 @@ from jvspatial.core.entities import Object
 class User(Object):
     """User entity for authentication and authorization.
 
-    Extends Object to integrate with the jvspatial database system while
-    being stored in a separate 'user' collection for security isolation.
-    Users represent system actors who can authenticate and access spatial data.
+    Extends Object to integrate with the jvspatial database system and
+    is stored in the 'object' collection. Users represent system actors
+    who can authenticate and access spatial data.
     """
 
-    type_code: ClassVar[str] = "u"  # 'u' for user collection
+    type_code: str = Field(default="o")  # 'o' for object collection
 
     # Basic user information
-    username: str = Field(..., min_length=3, max_length=50)
     email: str = Field(..., pattern=r"^[^@]+@[^@]+\.[^@]+$")
     password_hash: str = Field(..., description="BCrypt hashed password")
 
@@ -55,8 +54,8 @@ class User(Object):
     )
 
     # Metadata
-    created_at: datetime = Field(default_factory=datetime.now)
-    last_login: Optional[datetime] = Field(default=None)
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    last_login: Optional[str] = Field(default=None)
     login_count: int = Field(default=0)
 
     # Rate limiting
@@ -65,8 +64,41 @@ class User(Object):
     )
 
     def get_collection_name(self, cls=None) -> str:
-        """Override to use 'user' collection."""
-        return "user"
+        """Override to use 'object' collection."""
+        return "object"
+
+    def __init__(self, **kwargs):
+        """Initialize User with proper ID generation."""
+        # Ensure type_code is set for ID generation
+        if "type_code" not in kwargs:
+            kwargs["type_code"] = "o"  # 'o' for object collection
+        super().__init__(**kwargs)
+
+    def export(self, exclude_transient: bool = True, **kwargs) -> Dict[str, Any]:
+        """Export user data with datetime serialization for JSON database compatibility.
+
+        Args:
+            exclude_transient: Whether to exclude transient fields
+            **kwargs: Additional arguments passed to model_dump()
+
+        Returns:
+            Dictionary representation with datetime fields converted to ISO strings
+        """
+        # Get the base export from parent class
+        data = super().export(exclude_transient=exclude_transient, **kwargs)
+
+        # Convert datetime fields to ISO strings for JSON serialization
+        if "created_at" in data and isinstance(data["created_at"], datetime):
+            data["created_at"] = data["created_at"].isoformat()
+
+        if (
+            "last_login" in data
+            and data["last_login"] is not None
+            and isinstance(data["last_login"], datetime)
+        ):
+            data["last_login"] = data["last_login"].isoformat()
+
+        return data
 
     @classmethod
     def hash_password(cls, password: str) -> str:
@@ -159,29 +191,9 @@ class User(Object):
 
     async def record_login(self) -> None:
         """Record a successful login."""
-        self.last_login = datetime.now()
+        self.last_login = datetime.now().isoformat()
         self.login_count += 1
         await self.save()
-
-    @classmethod
-    async def find_by_username(cls, username: str) -> Optional["User"]:
-        """Find a user by username.
-
-        Args:
-            username: Username to search for
-
-        Returns:
-            User instance if found, None otherwise
-        """
-        from jvspatial.core.context import get_default_context
-
-        ctx = get_default_context()
-        results = await ctx.database.find("user", {"context.username": username})
-
-        if not results:
-            return None
-
-        return await ctx._deserialize_entity(cls, results[0])
 
     @classmethod
     async def find_by_email(cls, email: str) -> Optional["User"]:
@@ -196,23 +208,111 @@ class User(Object):
         from jvspatial.core.context import get_default_context
 
         ctx = get_default_context()
-        results = await ctx.database.find("user", {"context.email": email})
+        results = await ctx.database.find("user", {"email": email})
 
         if not results:
             return None
 
-        return await ctx._deserialize_entity(cls, results[0])
+        # Create a new instance from the database result
+        user_data = results[0]
+        user = cls(**user_data)
+        return user
+
+    @classmethod
+    async def create_user(
+        cls, email: str, password_hash: str, created_at: str
+    ) -> "User":
+        """Create a new user.
+
+        Args:
+            email: Email address for the user
+            password_hash: Hashed password
+            created_at: Creation timestamp (ISO string)
+
+        Returns:
+            Created User instance
+        """
+        user = cls(
+            email=email,
+            password_hash=password_hash,
+            created_at=created_at,
+            is_active=True,
+            is_verified=False,
+            is_admin=False,
+            roles=[],
+            permissions=[],
+            allowed_regions=[],
+            allowed_node_types=[],
+            max_traversal_depth=10,
+            login_count=0,
+            last_login=None,
+        )
+
+        await user.save()
+        return user
+
+    @classmethod
+    async def find_users(
+        cls, active_only: bool = False, limit: int = 50, offset: int = 0
+    ) -> List["User"]:
+        """Find users with optional filtering and pagination."""
+        from jvspatial.core.context import get_default_context
+
+        ctx = get_default_context()
+
+        # Build query filters
+        filters = {}
+        if active_only:
+            filters["is_active"] = True
+
+        # Find users with filters
+        users_data = await ctx.database.find("user", filters)
+
+        # Convert to User objects
+        users = []
+        for user_data in users_data[offset : offset + limit]:
+            user = cls(**user_data)
+            users.append(user)
+
+        return users
+
+    @classmethod
+    async def find_by_id(cls, user_id: str) -> Optional["User"]:
+        """Find a user by their ID."""
+        from jvspatial.core.context import get_default_context
+
+        ctx = get_default_context()
+        user_data = await ctx.database.find("user", {"id": user_id})
+        if user_data:
+            return cls(**user_data[0])
+        return None
+
+    @classmethod
+    async def count(cls, active_only: bool = False) -> int:
+        """Count users with optional filtering."""
+        from jvspatial.core.context import get_default_context
+
+        ctx = get_default_context()
+
+        # Build query filters
+        filters = {}
+        if active_only:
+            filters["is_active"] = True
+
+        # Count users with filters
+        users_data = await ctx.database.find("user", filters)
+        return len(users_data)
 
 
 class APIKey(Object):
     """API Key entity for service-to-service authentication.
 
-    Extends Object to be stored in separate 'apikey' collection.
+    Extends Object and is stored in the 'object' collection.
     Provides long-lived authentication tokens for automated systems
     and service integrations with jvspatial APIs.
     """
 
-    type_code: ClassVar[str] = "k"  # 'k' for key collection
+    type_code: str = Field(default="o")  # 'o' for object collection
 
     # Key identification
     name: str = Field(..., description="Human-readable name for the API key")
@@ -224,11 +324,11 @@ class APIKey(Object):
 
     # Key status and lifetime
     is_active: bool = Field(default=True)
-    expires_at: Optional[datetime] = Field(default=None)
+    expires_at: Optional[str] = Field(default=None)
 
     # Usage tracking
-    created_at: datetime = Field(default_factory=datetime.now)
-    last_used: Optional[datetime] = Field(default=None)
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    last_used: Optional[str] = Field(default=None)
     usage_count: int = Field(default=0)
 
     # Permissions (can be more restrictive than user permissions)
@@ -253,8 +353,146 @@ class APIKey(Object):
     )
 
     def get_collection_name(self, cls=None) -> str:
-        """Override to use 'apikey' collection."""
-        return "apikey"
+        """Override to use 'object' collection."""
+        return "object"
+
+    def export(self, exclude_transient: bool = True, **kwargs) -> Dict[str, Any]:
+        """Export API key data with datetime serialization for JSON database compatibility.
+
+        Args:
+            exclude_transient: Whether to exclude transient fields
+            **kwargs: Additional arguments passed to model_dump()
+
+        Returns:
+            Dictionary representation with datetime fields converted to ISO strings
+        """
+        # Get the base export from parent class
+        data = super().export(exclude_transient=exclude_transient, **kwargs)
+
+        # Convert datetime fields to ISO strings for JSON serialization
+        if "created_at" in data and isinstance(data["created_at"], datetime):
+            data["created_at"] = data["created_at"].isoformat()
+
+        if (
+            "last_used" in data
+            and data["last_used"] is not None
+            and isinstance(data["last_used"], datetime)
+        ):
+            data["last_used"] = data["last_used"].isoformat()
+
+        if (
+            "expires_at" in data
+            and data["expires_at"] is not None
+            and isinstance(data["expires_at"], datetime)
+        ):
+            data["expires_at"] = data["expires_at"].isoformat()
+
+        return data
+
+    @classmethod
+    async def find(cls, query: Dict[str, Any]) -> List["APIKey"]:  # type: ignore[override]
+        """Find API keys matching the query.
+
+        Args:
+            query: Query dictionary to match against
+
+        Returns:
+            List of APIKey instances matching the query
+        """
+        from jvspatial.core.context import get_default_context
+
+        ctx = get_default_context()
+        results = await ctx.database.find("object", query)
+
+        if not results:
+            return []
+
+        api_keys = []
+        for result in results:
+            api_key = await ctx._deserialize_entity(cls, result)
+            if api_key is not None:
+                api_keys.append(api_key)
+
+        return api_keys
+
+    @classmethod
+    async def find_by_user(cls, user_id: str) -> List["APIKey"]:
+        """Find API keys for a specific user.
+
+        Args:
+            user_id: ID of the user to find keys for
+
+        Returns:
+            List of APIKey instances for the user
+        """
+        return await cls.find({"context.user_id": user_id})
+
+    @classmethod
+    async def find_by_id(cls, key_id: str) -> Optional["APIKey"]:
+        """Find an API key by ID.
+
+        Args:
+            key_id: ID of the API key to find
+
+        Returns:
+            APIKey instance if found, None otherwise
+        """
+        from jvspatial.core.context import get_default_context
+
+        ctx = get_default_context()
+        results = await ctx.database.find("apikey", {"context.key_id": key_id})
+
+        if not results:
+            return None
+
+        return await ctx._deserialize_entity(cls, results[0])
+
+    @classmethod
+    async def create_api_key(
+        cls,
+        name: str,
+        key_id: str,
+        key_hash: str,
+        user_id: str,
+        expires_at: Optional[datetime] = None,
+        allowed_operations: Optional[List[str]] = None,
+        allowed_endpoints: Optional[List[str]] = None,
+        rate_limit_per_hour: int = 10000,
+        allowed_ips: Optional[List[str]] = None,
+    ) -> "APIKey":
+        """Create a new API key.
+
+        Args:
+            name: Human-readable name for the API key
+            key_id: Public identifier for the key
+            key_hash: Hashed secret key
+            user_id: ID of the user who owns this key
+            expires_at: Optional expiration time
+            allowed_operations: List of allowed operations
+            allowed_endpoints: List of allowed endpoint patterns
+            rate_limit_per_hour: Requests per hour limit
+            allowed_ips: List of allowed IP addresses
+
+        Returns:
+            Created APIKey instance
+        """
+        api_key = cls(
+            name=name,
+            key_id=key_id,
+            key_hash=key_hash,
+            user_id=user_id,
+            expires_at=expires_at.isoformat() if expires_at else None,
+            allowed_operations=allowed_operations or [],
+            allowed_endpoints=allowed_endpoints or [],
+            rate_limit_per_hour=rate_limit_per_hour,
+            allowed_ips=allowed_ips or [],
+            is_active=True,
+            usage_count=0,
+            last_used=None,
+        )
+
+        await api_key.save()
+        return api_key
 
     @classmethod
     def generate_key_pair(cls) -> Tuple[str, str]:
@@ -299,7 +537,7 @@ class APIKey(Object):
         if not self.is_active:
             return False
 
-        if self.expires_at and datetime.now() > self.expires_at:
+        if self.expires_at and datetime.now() > datetime.fromisoformat(self.expires_at):
             return False
 
         return True
@@ -338,7 +576,7 @@ class APIKey(Object):
 
     async def record_usage(self, endpoint: str = "", operation: str = "") -> None:
         """Record API key usage."""
-        self.last_used = datetime.now()
+        self.last_used = datetime.now().isoformat()
         self.usage_count += 1
         await self.save()
 
@@ -355,22 +593,61 @@ class APIKey(Object):
         from jvspatial.core.context import get_default_context
 
         ctx = get_default_context()
-        results = await ctx.database.find("apikey", {"context.key_id": key_id})
+        results = await ctx.database.find("apikey", {"key_id": key_id})
 
         if not results:
             return None
 
         return await ctx._deserialize_entity(cls, results[0])
 
+    @classmethod
+    async def find_all(cls, active_only: bool = False) -> List["APIKey"]:
+        """Find API keys with optional filtering."""
+        from jvspatial.core.context import get_default_context
+
+        ctx = get_default_context()
+
+        # Build query filters
+        filters = {}
+        if active_only:
+            filters["is_active"] = True
+
+        # Find API keys with filters
+        keys_data = await ctx.database.find("apikey", filters)
+
+        # Convert to APIKey objects
+        keys = []
+        for key_data in keys_data:
+            key = cls(**key_data)
+            keys.append(key)
+
+        return keys
+
+    @classmethod
+    async def count(cls, active_only: bool = False) -> int:
+        """Count API keys with optional filtering."""
+        from jvspatial.core.context import get_default_context
+
+        ctx = get_default_context()
+
+        # Build query filters
+        filters = {}
+        if active_only:
+            filters["is_active"] = True
+
+        # Count API keys with filters
+        keys_data = await ctx.database.find("apikey", filters)
+        return len(keys_data)
+
 
 class Session(Object):
     """Session entity for JWT token management.
 
-    Extends Object to be stored in separate 'session' collection.
+    Extends Object and is stored in the 'object' collection.
     Tracks active user sessions with JWT tokens for web-based authentication.
     """
 
-    type_code: ClassVar[str] = "s"  # 's' for session collection
+    type_code: str = Field(default="o")  # 'o' for object collection
 
     # Session identification
     session_id: str = Field(..., description="Unique session identifier")
@@ -381,9 +658,9 @@ class Session(Object):
     refresh_token: str = Field(..., description="Refresh token for extending session")
 
     # Session metadata
-    created_at: datetime = Field(default_factory=datetime.now)
-    expires_at: datetime = Field(..., description="Session expiration time")
-    last_activity: datetime = Field(default_factory=datetime.now)
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    expires_at: str = Field(..., description="Session expiration time")
+    last_activity: str = Field(default_factory=lambda: datetime.now().isoformat())
 
     # Session context
     client_ip: str = Field(default="", description="Client IP address")
@@ -391,12 +668,12 @@ class Session(Object):
 
     # Status
     is_active: bool = Field(default=True)
-    revoked_at: Optional[datetime] = Field(default=None)
+    revoked_at: Optional[str] = Field(default=None)
     revoked_reason: str = Field(default="", description="Reason for revocation")
 
     def get_collection_name(self, cls=None) -> str:
-        """Override to use 'session' collection."""
-        return "session"
+        """Override to use 'object' collection."""
+        return "object"
 
     @classmethod
     def create_session_id(cls) -> str:
@@ -416,7 +693,7 @@ class Session(Object):
         if not self.is_active or self.revoked_at:
             return False
 
-        if datetime.now() > self.expires_at:
+        if self.expires_at and datetime.now() > datetime.fromisoformat(self.expires_at):
             return False
 
         return True
@@ -427,8 +704,8 @@ class Session(Object):
         Args:
             duration_hours: Hours to extend the session by
         """
-        self.expires_at = datetime.now() + timedelta(hours=duration_hours)
-        self.last_activity = datetime.now()
+        self.expires_at = (datetime.now() + timedelta(hours=duration_hours)).isoformat()
+        self.last_activity = datetime.now().isoformat()
 
     async def revoke(self, reason: str = "Manual revocation") -> None:
         """Revoke the session.
@@ -437,13 +714,13 @@ class Session(Object):
             reason: Reason for revoking the session
         """
         self.is_active = False
-        self.revoked_at = datetime.now()
+        self.revoked_at = datetime.now().isoformat()
         self.revoked_reason = reason
         await self.save()
 
     async def update_activity(self) -> None:
         """Update the last activity timestamp."""
-        self.last_activity = datetime.now()
+        self.last_activity = datetime.now().isoformat()
         await self.save()
 
     @classmethod
@@ -465,6 +742,45 @@ class Session(Object):
             return None
 
         return await ctx._deserialize_entity(cls, results[0])
+
+    @classmethod
+    async def find_sessions(cls, active_only: bool = False) -> List["Session"]:
+        """Find sessions with optional filtering."""
+        from jvspatial.core.context import get_default_context
+
+        ctx = get_default_context()
+
+        # Build query filters
+        filters = {}
+        if active_only:
+            filters["is_active"] = True
+
+        # Find sessions with filters
+        sessions_data = await ctx.database.find("session", filters)
+
+        # Convert to Session objects
+        sessions = []
+        for session_data in sessions_data:
+            session = cls(**session_data)
+            sessions.append(session)
+
+        return sessions
+
+    @classmethod
+    async def count(cls, active_only: bool = False) -> int:
+        """Count sessions with optional filtering."""
+        from jvspatial.core.context import get_default_context
+
+        ctx = get_default_context()
+
+        # Build query filters
+        filters = {}
+        if active_only:
+            filters["is_active"] = True
+
+        # Count sessions with filters
+        sessions_data = await ctx.database.find("session", filters)
+        return len(sessions_data)
 
 
 # Custom exceptions for authentication system

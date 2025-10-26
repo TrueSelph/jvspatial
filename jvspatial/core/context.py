@@ -2,7 +2,17 @@
 
 import time
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Dict,
+    List,
+    Optional,
+    Type,
+    TypeVar,
+    cast,
+)
 
 if TYPE_CHECKING:
     from .entities import Object
@@ -22,7 +32,7 @@ class PerformanceMonitor:
         self.hook_executions: List[Dict[str, Any]] = []
         self.db_errors: List[Dict[str, Any]] = []
 
-    def record_db_operation(
+    async def record_db_operation(
         self,
         collection: str,
         operation: str,
@@ -42,7 +52,7 @@ class PerformanceMonitor:
             }
         )
 
-    def record_hook_execution(
+    async def record_hook_execution(
         self,
         hook_name: str,
         duration: float,
@@ -60,7 +70,7 @@ class PerformanceMonitor:
             }
         )
 
-    def record_db_error(self, collection: str, operation: str, error: str):
+    async def record_db_error(self, collection: str, operation: str, error: str):
         """Record a database error."""
         self.db_errors.append(
             {
@@ -71,7 +81,7 @@ class PerformanceMonitor:
             }
         )
 
-    def get_stats(self) -> Dict[str, Any]:
+    async def get_stats(self) -> Dict[str, Any]:
         """Get performance statistics."""
         total_ops = len(self.db_operations)
         if total_ops == 0:
@@ -102,9 +112,9 @@ def disable_performance_monitoring():
     perf_monitor = None
 
 
-def get_performance_stats() -> Optional[Dict[str, Any]]:
+async def get_performance_stats() -> Optional[Dict[str, Any]]:
     """Get current performance statistics."""
-    return perf_monitor.get_stats() if perf_monitor else None
+    return await perf_monitor.get_stats() if perf_monitor else None
 
 
 class GraphContext:
@@ -121,8 +131,8 @@ class GraphContext:
         ctx = GraphContext(database=my_db)
 
         # Use context for operations
-        node = await ctx.create_node(name="Test")
-        retrieved = await ctx.get_node(node.id)
+        node = ctx.create_node(name="Test")
+        retrieved = ctx.get_node(node.id)
     """
 
     def __init__(self, database: Optional[Database] = None, cache_backend=None):
@@ -152,21 +162,27 @@ class GraphContext:
             self._database = get_database()
         return self._database
 
-    def set_database(self, database: Database) -> None:
+    async def set_database(self, database: Database) -> None:
         """Set a new database instance."""
         self._database = database
         # Clear cache when database changes
-        import asyncio
+        await self.clear_cache()
 
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(self._cache.clear())
-            else:
-                loop.run_until_complete(self._cache.clear())
-        except RuntimeError:
-            # No event loop, will clear on next access
-            pass
+    def _get_entity_type_code(self, entity_class: Type[T]) -> str:
+        """Get the type_code for an entity class.
+
+        Args:
+            entity_class: The entity class to get type_code for
+
+        Returns:
+            The type_code string, defaulting to 'o' if not found
+        """
+        type_code_field = entity_class.model_fields.get("type_code")
+        if type_code_field and hasattr(type_code_field, "default"):
+            default_value = type_code_field.default
+            if isinstance(default_value, str):
+                return default_value
+        return "o"
 
     async def _get_from_cache(self, entity_id: str) -> Optional[Any]:
         """Get entity from cache if available."""
@@ -216,77 +232,30 @@ class GraphContext:
             return cast(T, cached)
 
         # Import here to avoid circular imports
-        from .entities import find_subclass_by_name
+        from .utils import find_subclass_by_name  # noqa: F401
 
-        collection = self._get_collection_name(entity_class.type_code)
-        data = await self.database.get(collection, entity_id)
+        # Get type_code from model fields
+        type_code = self._get_entity_type_code(entity_class)
+        collection = self._get_collection_name(type_code)
+        db = self.database
+        data = await db.get(collection, entity_id)
 
         if not data:
             return None
 
-        stored_name = data.get("name", entity_class.__name__)
-        target_class = find_subclass_by_name(entity_class, stored_name) or entity_class
-
-        # Create object with proper subclass
-        context_data = data["context"].copy()
-
-        if entity_class.type_code == "n":
-            # Handle Node-specific logic
-            if "edges" in data:
-                context_data["edge_ids"] = data["edges"]
-            elif "edge_ids" in data["context"]:  # Handle legacy format
-                context_data["edge_ids"] = data["context"]["edge_ids"]
-
-            # Extract _data if present
-            stored_data = context_data.pop("_data", {})
-            entity = target_class(id=data["id"], **context_data)
-
-        elif entity_class.type_code == "e":
-            # Handle Edge-specific logic with source/target/bidirectional
-            if "source" in data and "target" in data:
-                # New format: source/target/bidirectional at top level
-                source = data["source"]
-                target = data["target"]
-                bidirectional = data.get("bidirectional", True)
-            else:
-                # Context format: source/target/bidirectional in context
-                source = context_data.get("source", "")
-                target = context_data.get("target", "")
-                bidirectional = context_data.get("bidirectional", True)
-
-            # Remove these from context_data to avoid duplication
-            context_data = {
-                k: v
-                for k, v in context_data.items()
-                if k not in ["source", "target", "bidirectional"]
-            }
-
-            # Extract _data if present
-            stored_data = context_data.pop("_data", {})
-
-            entity = target_class(
-                id=data["id"],
-                source=source,
-                target=target,
-                bidirectional=bidirectional,
-                **context_data,
-            )
-
-        else:
-            # Handle other entity types
-            stored_data = context_data.pop("_data", {})
-            entity = target_class(id=data["id"], **context_data)
-
-        entity._graph_context = self
-
-        # Restore _data after object creation
-        if stored_data:
-            entity._data.update(stored_data)
+        # Deserialize the entity
+        entity = await self._deserialize_entity(entity_class, data)
 
         # Add to cache
-        await self._add_to_cache(entity_id, entity)
+        if entity is not None:
+            await self._add_to_cache(entity_id, entity)
 
         return entity
+
+    async def _remove_from_cache(self, entity_id: str) -> None:
+        """Remove entity from cache."""
+        if self._cache:
+            await self._cache.delete(entity_id)
 
     async def save(self, entity):
         """Save an entity to the database.
@@ -298,8 +267,21 @@ class GraphContext:
             The saved entity instance
         """
         record = entity.export()
-        collection = self._get_collection_name(entity.type_code)
-        await self.database.save(collection, record)
+        # Use entity's get_collection_name method if available, otherwise use type_code
+        if hasattr(entity, "get_collection_name"):
+            collection = entity.get_collection_name()
+        else:
+            # Fallback to type_code-based collection name
+            type_code = entity.type_code
+            if type_code == "n":
+                collection = "node"
+            elif type_code == "e":
+                collection = "edge"
+            else:
+                collection = type_code.lower()
+
+        db = self.database
+        await db.save(collection, record)
         # Update cache with latest version
         await self._add_to_cache(entity.id, entity)
         return entity
@@ -315,7 +297,8 @@ class GraphContext:
             await self._cascade_delete(entity)
 
         collection = self._get_collection_name(entity.type_code)
-        await self.database.delete(collection, entity.id)
+        db = self.database
+        await db.delete(collection, entity.id)
         # Remove from cache
         await self._cache.delete(entity.id)
 
@@ -329,7 +312,7 @@ class GraphContext:
 
             for edge_id in edge_ids:
                 try:
-                    edge = await self.get(Edge, edge_id)
+                    edge = self.get(Edge, edge_id)
                     if edge:
                         await self.delete(edge, cascade=False)
                 except Exception:
@@ -448,12 +431,13 @@ class GraphContext:
         Returns:
             List of matching node instances
         """
-        collection = self._get_collection_name(node_class.type_code)
+        collection = self._get_collection_name(self._get_entity_type_code(node_class))
 
         # Add class name filter to query for type safety
         db_query = {"name": node_class.__name__, **query}
 
-        results = await self.database.find(collection, db_query)
+        db = self.database
+        results = await db.find(collection, db_query)
 
         if limit:
             results = results[:limit]
@@ -487,16 +471,14 @@ class GraphContext:
 
         edge_cls = edge_class or Edge
 
-        source_query = {"$or": [{"source": source_id}, {"context.source": source_id}]}
+        query: Dict[str, Any] = {}
 
-        if target_id:
-            target_query = {
-                "$or": [{"target": target_id}, {"context.target": target_id}]
-            }
-            query: Dict[str, Any] = {"$and": [source_query, target_query]}
-        else:
-            query = source_query
+        if source_id is not None:
+            query["source"] = source_id
+        if target_id is not None:
+            query["target"] = target_id
 
+        # Filter by edge class if specified
         if edge_class:
             query["name"] = edge_class.__name__
 
@@ -504,14 +486,15 @@ class GraphContext:
         for key, value in kwargs.items():
             query[f"context.{key}"] = value
 
-        collection = self._get_collection_name(edge_cls.type_code)
-        results = await self.database.find(collection, query)
+        collection = self._get_collection_name(self._get_entity_type_code(edge_cls))
+        db = self.database
+        results = await db.find(collection, query)
 
         edges = []
         for data in results:
             try:
                 edge = await self._deserialize_entity(edge_cls, data)
-                if edge:
+                if edge is not None:
                     edges.append(edge)
             except Exception:
                 continue
@@ -532,7 +515,7 @@ class GraphContext:
         """
         try:
             # Import here to avoid circular imports
-            from .entities import find_subclass_by_name
+            from .utils import find_subclass_by_name
 
             stored_name = data.get("name", entity_class.__name__)
             target_class = (
@@ -540,38 +523,51 @@ class GraphContext:
             )
 
             # Create object with proper subclass
-            context_data = data["context"].copy()
+            # Handle different export structures for different entity types
+            if "context" in data:
+                context_data = data["context"].copy()
+            else:
+                # For Object types, the data is directly in the root
+                context_data = {
+                    k: v for k, v in data.items() if k not in ["id", "type_code"]
+                }
 
-            if entity_class.type_code == "n":
+            entity_type_code = self._get_entity_type_code(entity_class)
+
+            if entity_type_code == "n":
                 # Handle Node-specific logic
                 if "edges" in data:
                     context_data["edge_ids"] = data["edges"]
-                elif "edge_ids" in data["context"]:  # Handle legacy format
+                elif (
+                    "context" in data and "edge_ids" in data["context"]
+                ):  # Handle legacy format
                     context_data["edge_ids"] = data["context"]["edge_ids"]
 
                 # Extract _data if present
                 stored_data = context_data.pop("_data", {})
                 entity = target_class(id=data["id"], **context_data)
+                # Set the _data field
+                entity._data = stored_data
 
-            elif entity_class.type_code == "e":
+            elif entity_type_code == "e":
                 # Handle Edge-specific logic with source/target
                 # Handle both new and legacy data formats
                 if "source" in data and "target" in data:
                     # New format: source/target at top level
                     source = data["source"]
                     target = data["target"]
-                    direction = data.get("direction", "both")
+                    bidirectional = data.get("bidirectional", True)
                 else:
                     # Legacy format: source/target in context
                     source = context_data.get("source", "")
                     target = context_data.get("target", "")
-                    direction = context_data.get("direction", "both")
+                    bidirectional = context_data.get("bidirectional", True)
 
                 # Remove these from context_data to avoid duplication
                 context_data = {
                     k: v
                     for k, v in context_data.items()
-                    if k not in ["source", "target", "direction"]
+                    if k not in ["source", "target", "bidirectional"]
                 }
 
                 # Extract _data if present
@@ -581,7 +577,7 @@ class GraphContext:
                     id=data["id"],
                     source=source,
                     target=target,
-                    direction=direction,
+                    bidirectional=bidirectional,
                     **context_data,
                 )
 
@@ -599,6 +595,194 @@ class GraphContext:
             return entity
         except Exception:
             return None
+
+    # Batch operations for improved performance
+    async def save_batch(self, entities: List[Any]) -> List[Any]:
+        """Save multiple entities in a single transaction.
+
+        Args:
+            entities: List of entity instances to save
+
+        Returns:
+            List of saved entity instances
+        """
+        if not entities:
+            return []
+
+        # Group entities by type for efficient batch operations
+        entities_by_type: Dict[str, List[Any]] = {}
+        for entity in entities:
+            collection = self._get_collection_name(entity.type_code)
+            if collection not in entities_by_type:
+                entities_by_type[collection] = []
+            entities_by_type[collection].append(entity)
+
+        saved_entities = []
+
+        # Process each type group
+        for collection, type_entities in entities_by_type.items():
+            # Export all entities of this type
+            records = []
+            for entity in type_entities:
+                record = entity.export()
+                records.append(record)
+
+            # Save all records of this type
+            db = self.database
+            for i, record in enumerate(records):
+                try:
+                    await db.save(collection, record)
+                    # Update cache with latest version
+                    await self._add_to_cache(record["id"], type_entities[i])
+                    saved_entities.append(type_entities[i])
+                except Exception as e:
+                    # Log error but continue with other entities
+                    print(
+                        f"Failed to save entity {type_entities[i].get('id', 'unknown')}: {e}"
+                    )
+                    continue
+
+        return saved_entities
+
+    async def get_batch(self, entity_class: Type[T], ids: List[str]) -> List[T]:
+        """Retrieve multiple entities by ID.
+
+        Args:
+            entity_class: Entity class type to retrieve
+            ids: List of entity IDs to retrieve
+
+        Returns:
+            List of entity instances (may be shorter than input if some not found)
+        """
+        if not ids:
+            return []
+
+        # Check cache first
+        cached_entities = []
+        uncached_ids = []
+
+        for entity_id in ids:
+            cached_entity = await self._get_from_cache(entity_id)
+            if cached_entity:
+                cached_entities.append(cached_entity)
+            else:
+                uncached_ids.append(entity_id)
+
+        # Fetch uncached entities from database
+        if uncached_ids:
+            collection = self._get_collection_name(entity_class.type_code)
+            db = self.database
+
+            # Use database batch query if available
+            query = {"id": {"$in": uncached_ids}}
+            results = await db.find(collection, query)
+
+            # Deserialize results
+            for data in results:
+                try:
+                    entity = await self._deserialize_entity(entity_class, data)
+                    if entity:
+                        await self._add_to_cache(entity.id, entity)
+                        cached_entities.append(entity)
+                except Exception:
+                    continue
+
+        return cached_entities
+
+    async def delete_batch(self, entities: List[Any]) -> None:
+        """Delete multiple entities in a single transaction.
+
+        Args:
+            entities: List of entity instances to delete
+        """
+        if not entities:
+            return
+
+        # Group entities by type for efficient batch operations
+        entities_by_type: Dict[str, List[Any]] = {}
+        for entity in entities:
+            collection = self._get_collection_name(entity.type_code)
+            if collection not in entities_by_type:
+                entities_by_type[collection] = []
+            entities_by_type[collection].append(entity)
+
+        # Process each type group
+        for collection, type_entities in entities_by_type.items():
+            db = self.database
+            for entity in type_entities:
+                try:
+                    await db.delete(collection, entity["id"])
+                    # Remove from cache
+                    await self._cache.delete(entity["id"])
+                except Exception as e:
+                    # Log error but continue with other entities
+                    print(f"Failed to delete entity {entity.get('id', 'unknown')}: {e}")
+                    continue
+
+    # Async iterators for large datasets
+    async def async_node_iterator(
+        self, node_class, query: Optional[Dict[str, Any]] = None
+    ) -> AsyncIterator[T]:
+        """Async iterator for large node collections.
+
+        Args:
+            node_class: Node class to iterate over
+            query: Database query parameters
+
+        Yields:
+            Node instances one at a time
+        """
+        if query is None:
+            query = {}
+
+        collection = self._get_collection_name(node_class.type_code)
+        db = self.database
+
+        # Use database cursor if available, otherwise fallback to find
+        if hasattr(db, "async_find"):
+            async for data in db.async_find(collection, query):
+                entity = await self._deserialize_entity(node_class, data)
+                if entity:
+                    yield entity
+        else:
+            # Fallback to regular find
+            results = await db.find(collection, query)
+            for data in results:
+                entity = await self._deserialize_entity(node_class, data)
+                if entity:
+                    yield entity
+
+    async def async_edge_iterator(
+        self, edge_class, query: Optional[Dict[str, Any]] = None
+    ) -> AsyncIterator[T]:
+        """Async iterator for large edge collections.
+
+        Args:
+            edge_class: Edge class to iterate over
+            query: Database query parameters
+
+        Yields:
+            Edge instances one at a time
+        """
+        if query is None:
+            query = {}
+
+        collection = self._get_collection_name(edge_class.type_code)
+        db = self.database
+
+        # Use database cursor if available, otherwise fallback to find
+        if hasattr(db, "async_find"):
+            async for data in db.async_find(collection, query):
+                entity = await self._deserialize_entity(edge_class, data)
+                if entity:
+                    yield entity
+        else:
+            # Fallback to regular find
+            results = await db.find(collection, query)
+            for data in results:
+                entity = await self._deserialize_entity(edge_class, data)
+                if entity:
+                    yield entity
 
 
 # Global context instance for backwards compatibility
@@ -624,8 +808,8 @@ def graph_context(database: Optional[Database] = None):
     """Context manager for temporary graph context.
 
     Usage:
-        with graph_context(my_db) as ctx:
-            node = await ctx.create_node(name="Test")
+        with await graph_context(my_db) as ctx:
+            node = ctx.create_node(name="Test")
     """
     ctx = GraphContext(database)
     yield ctx
@@ -641,3 +825,28 @@ async def async_graph_context(database: Optional[Database] = None):
     """
     ctx = GraphContext(database)
     yield ctx
+
+
+@asynccontextmanager
+async def async_transaction_context(database: Optional[Database] = None):
+    """Async context manager for database transactions.
+
+    Usage:
+        async with async_transaction_context(my_db) as ctx:
+            node = await ctx.create_node(name="Test")
+            # All operations are automatically committed
+    """
+    ctx = GraphContext(database)
+    try:
+        # Start transaction if database supports it
+        if hasattr(ctx.database, "begin_transaction"):
+            await ctx.database.begin_transaction()
+        yield ctx
+        # Commit transaction
+        if hasattr(ctx.database, "commit_transaction"):
+            await ctx.database.commit_transaction()
+    except Exception:
+        # Rollback transaction on error
+        if hasattr(ctx.database, "rollback_transaction"):
+            await ctx.database.rollback_transaction()
+        raise

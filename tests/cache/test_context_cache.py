@@ -117,7 +117,7 @@ async def test_database_switch_clears_cache(tmp_path):
     assert stats_before["cache_size"] > 0
 
     # Switch to different database
-    ctx.set_database(db2)
+    await ctx.set_database(db2)
 
     # Manually clear to ensure async clear completes
     # (In production, this happens automatically but asynchronously)

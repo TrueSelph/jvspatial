@@ -32,7 +32,8 @@ import os
 from typing import Any, Dict, Optional
 
 from jvspatial.api import Server, endpoint
-from jvspatial.core.entities import Node, Root, Walker, on_visit
+from jvspatial.core.decorators import on_visit
+from jvspatial.core.entities import Node, Root, Walker
 
 
 # Example 1: Basic Server Setup with File Storage

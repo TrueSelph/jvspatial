@@ -22,7 +22,7 @@ from typing import Dict, List, Optional
 from fastapi import HTTPException
 
 from jvspatial.api import create_server, endpoint
-from jvspatial.api.endpoint import EndpointField
+from jvspatial.api.decorators import EndpointField
 from jvspatial.core import Node, Root, Walker, on_visit
 
 # ====================== DATA MODEL ======================
@@ -416,7 +416,7 @@ async def remove_walker(walker_name: str):
 
         # Get the path from walker info and remove by path
         walker_path = walker_info[walker_name]["path"]
-        removed = server.unregister_endpoint_by_path(walker_path)
+        removed = await server.unregister_endpoint_by_path(walker_path)
 
         if removed > 0:
             return {

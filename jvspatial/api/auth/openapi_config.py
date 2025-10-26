@@ -100,10 +100,11 @@ def get_endpoint_security_requirements(
     Returns:
         List of security requirement dictionaries for OpenAPI spec
     """
-    # For authenticated endpoints, allow both Bearer and API Key auth
+    # For authenticated endpoints, allow EITHER Bearer OR API Key auth
+    # This means the client can use either authentication method, not both
     return [
-        {"BearerAuth": []},
-        {"ApiKeyAuth": []},
+        {"BearerAuth": []},  # Option 1: Bearer token only
+        {"ApiKeyAuth": []},  # Option 2: API key only
     ]
 
 

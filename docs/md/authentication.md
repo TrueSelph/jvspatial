@@ -75,7 +75,6 @@ from jvspatial.api.auth import User
 
 # Users have spatial-aware permissions
 class User(Object):
-    username: str
     email: str
     password_hash: str  # BCrypt hashed
 
@@ -172,7 +171,7 @@ JVSPATIAL_RATE_LIMIT_ENABLED=true
 async def register_user(request: UserRegistrationRequest):
     # Built-in endpoint handles:
     # - Password validation
-    # - Duplicate username/email checks
+    # - Duplicate email checks
     # - Secure password hashing
     # - User creation
     pass
@@ -183,7 +182,7 @@ async def register_user(request: UserRegistrationRequest):
 ```python
 from jvspatial.api.auth import authenticate_user
 
-# Authenticate with username/email and password
+# Authenticate with email and password
 user = await authenticate_user("alice@example.com", "password123")
 
 # Check user permissions
@@ -203,8 +202,7 @@ Users can be restricted to specific spatial regions and node types:
 ```python
 # Create user with spatial restrictions
 user = await User.create(
-    username="regional_analyst",
-    email="analyst@company.com",
+    email="regional_analyst@example.com",
     password_hash=User.hash_password("password"),
     allowed_regions=["us-west", "us-east"],  # Only these regions
     allowed_node_types=["City", "Highway"],  # Only these node types
@@ -229,7 +227,6 @@ if user.can_access_node_type("City"):
 # Access Token Payload
 {
     "sub": "user_id",
-    "username": "alice",
     "email": "alice@example.com",
     "roles": ["user", "analyst"],
     "is_admin": false,
@@ -261,7 +258,7 @@ from jvspatial.api.auth import get_current_user
 @auth_endpoint("/protected/data")
 async def get_data(request: Request):
     current_user = get_current_user(request)
-    return {"user": current_user.username, "data": "protected content"}
+    return {"user": current_user.email, "data": "protected content"}
 ```
 
 ### Token Refresh
@@ -334,7 +331,7 @@ The system includes standard roles:
 ```python
 # Create user with custom roles and permissions
 user = await User.create(
-    username="spatial_analyst",
+    email="spatial_analyst@example.com",
     roles=["analyst", "data_viewer"],
     permissions=[
         "read_spatial_data",
@@ -359,7 +356,7 @@ if user.has_role("analyst"):
 ```python
 # Admin users automatically have all permissions
 admin_user = await User.create(
-    username="admin",
+    email="admin@example.com",
     is_admin=True,
     roles=["admin"]  # Admin role also grants all permissions
 )
@@ -500,7 +497,6 @@ async def user_dashboard(request: Request):
 
     return {
         "user": {
-            "username": current_user.username,
             "email": current_user.email,
             "roles": current_user.roles,
             "permissions": current_user.permissions
@@ -676,7 +672,7 @@ class AdminWalker(Walker):
 from jvspatial.api.auth import (
     configure_auth,         # Configure authentication settings
     get_current_user,       # Get current user from request
-    authenticate_user,      # Authenticate username/password
+    authenticate_user,      # Authenticate email/password
     create_user_session,    # Create user session
     refresh_session         # Refresh user session
 )
@@ -689,7 +685,7 @@ from jvspatial.api.auth import (
     AuthenticationError,    # Base authentication error
     AuthorizationError,     # Permission/role error
     RateLimitError,        # Rate limit exceeded
-    InvalidCredentialsError, # Bad username/password
+    InvalidCredentialsError, # Bad email/password
     UserNotFoundError,      # User doesn't exist
     SessionExpiredError,    # Token expired
     APIKeyInvalidError      # Invalid API key

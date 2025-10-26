@@ -325,7 +325,7 @@ class TestDatabaseFactory:
 
         set_default_database("json")
 
-    def test_register_database(self):
+    async def test_register_database(self):
         """Test database registration."""
         # Register mock database
         register_database("mock", MockDatabase)
@@ -341,7 +341,7 @@ class TestDatabaseFactory:
         # Cleanup
         unregister_database("mock")
 
-    def test_unregister_database(self):
+    async def test_unregister_database(self):
         """Test database unregistration."""
         register_database("temp", MockDatabase)
         assert "temp" in list_available_databases()
@@ -353,7 +353,7 @@ class TestDatabaseFactory:
         with pytest.raises(ValueError, match="Unsupported database type: 'temp'"):
             get_database("temp")
 
-    def test_set_default_database(self):
+    async def test_set_default_database(self):
         """Test setting default database type."""
         register_database("mock", MockDatabase)
 
@@ -369,7 +369,7 @@ class TestDatabaseFactory:
         unregister_database("mock")
         set_default_database("json")
 
-    def test_list_available_databases(self):
+    async def test_list_available_databases(self):
         """Test listing available databases."""
         available = list_available_databases()
         assert "json" in available
@@ -383,7 +383,7 @@ class TestDatabaseFactory:
         # Cleanup
         unregister_database("test")
 
-    def test_get_database_with_config(self):
+    async def test_get_database_with_config(self):
         """Test getting database with configuration.
 
         Note: JsonDB requires an event loop to initialize its async lock.
@@ -414,7 +414,7 @@ class TestDatabaseFactory:
         assert isinstance(db, JsonDB)
         assert str(db.base_path).endswith("/tmp/test")
 
-    def test_get_nonexistent_database(self):
+    async def test_get_nonexistent_database(self):
         """Test getting non-existent database type."""
         with pytest.raises(
             ValueError, match="Unsupported database type: 'nonexistent'"
@@ -579,15 +579,19 @@ class TestNodeDatabaseIntegration:
             "jvspatial.core.context.get_default_context", return_value=mock_context
         ):
             # Find by class method
-            all_nodes = await DbTestNode.find()
+            all_nodes = await DbTestNode.find({"name": "DbTestNode"})
             assert len(all_nodes) >= 3
 
             # Find by category
-            people = await DbTestNode.find({"context.category": "person"})
+            people = await DbTestNode.find(
+                {"name": "DbTestNode", "context.category": "person"}
+            )
             assert len(people) == 2
 
             # Find active nodes
-            active_nodes = await DbTestNode.find({"context.active": True})
+            active_nodes = await DbTestNode.find(
+                {"name": "DbTestNode", "context.active": True}
+            )
             assert len(active_nodes) == 2
 
     @pytest.mark.asyncio
@@ -700,7 +704,9 @@ class TestEdgeDatabaseIntegration:
             "jvspatial.core.context.get_default_context", return_value=mock_context
         ):
             # Find edges by source
-            source_edges = await DbTestEdge.find({"source": node1.id})
+            source_edges = await DbTestEdge.find(
+                {"name": "DbTestEdge", "source": node1.id}
+            )
             assert len(source_edges) == 1
             assert source_edges[0].target == node2.id
 
@@ -727,7 +733,9 @@ class TestWalkerDatabaseIntegration:
         ):
             # Create walker and collect data
             walker = DbTestWalker()
-            category_a_nodes = await DbTestNode.find({"context.category": "A"})
+            category_a_nodes = await DbTestNode.find(
+                {"name": "DbTestNode", "context.category": "A"}
+            )
             result = await walker.collect_data(category_a_nodes)
 
             assert len(walker.visited_nodes) == 2
@@ -753,7 +761,9 @@ class TestWalkerDatabaseIntegration:
         ):
             # Walker processes only active nodes
             walker = DbTestWalker()
-            active_nodes = await DbTestNode.find({"context.active": True})
+            active_nodes = await DbTestNode.find(
+                {"name": "DbTestNode", "context.active": True}
+            )
             result = await walker.collect_data(active_nodes)
 
             assert len(walker.visited_nodes) == 2

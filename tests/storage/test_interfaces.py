@@ -121,7 +121,7 @@ def mock_s3_client():
 class TestLocalFileInterfaceInit:
     """Tests for LocalFileInterface initialization."""
 
-    def test_init_with_defaults(self, temp_storage_dir):
+    async def test_init_with_defaults(self, temp_storage_dir):
         """Test initialization with default settings."""
         storage = LocalFileInterface(root_dir=temp_storage_dir)
 
@@ -129,7 +129,7 @@ class TestLocalFileInterfaceInit:
         assert storage.base_url is None
         assert isinstance(storage.validator, FileValidator)
 
-    def test_init_with_base_url(self, temp_storage_dir):
+    async def test_init_with_base_url(self, temp_storage_dir):
         """Test initialization with base URL."""
         storage = LocalFileInterface(
             root_dir=temp_storage_dir, base_url="http://example.com/"
@@ -137,7 +137,7 @@ class TestLocalFileInterfaceInit:
 
         assert storage.base_url == "http://example.com"
 
-    def test_init_with_custom_validator(self, temp_storage_dir, custom_validator):
+    async def test_init_with_custom_validator(self, temp_storage_dir, custom_validator):
         """Test initialization with custom validator."""
         storage = LocalFileInterface(
             root_dir=temp_storage_dir, validator=custom_validator
@@ -145,7 +145,7 @@ class TestLocalFileInterfaceInit:
 
         assert storage.validator == custom_validator
 
-    def test_init_creates_root_directory(self):
+    async def test_init_creates_root_directory(self):
         """Test that root directory is created if it doesn't exist."""
         with tempfile.TemporaryDirectory() as tmpdir:
             new_root = os.path.join(tmpdir, "new_storage")
@@ -153,7 +153,7 @@ class TestLocalFileInterfaceInit:
 
             assert os.path.exists(new_root)
 
-    def test_init_fails_for_missing_directory(self):
+    async def test_init_fails_for_missing_directory(self):
         """Test that initialization fails if root doesn't exist and create_root=False."""
         with tempfile.TemporaryDirectory() as tmpdir:
             missing_root = os.path.join(tmpdir, "missing")
@@ -573,7 +573,7 @@ class TestS3FileInterfaceInit:
     """Tests for S3FileInterface initialization."""
 
     @patch("jvspatial.storage.interfaces.s3.boto3")
-    def test_init_with_bucket_name(self, mock_boto3):
+    async def test_init_with_bucket_name(self, mock_boto3):
         """Test initialization with bucket name."""
         mock_boto3.client.return_value = MagicMock()
 
@@ -583,7 +583,7 @@ class TestS3FileInterfaceInit:
         assert storage.region_name == "us-west-2"
 
     @patch("jvspatial.storage.interfaces.s3.boto3")
-    def test_init_without_bucket_raises_error(self, mock_boto3):
+    async def test_init_without_bucket_raises_error(self, mock_boto3):
         """Test that initialization without bucket name raises error."""
         with pytest.raises(ValueError) as exc_info:
             S3FileInterface()
@@ -612,7 +612,7 @@ class TestS3FileInterfaceInit:
         assert storage.secret_access_key == "test-secret"  # pragma: allowlist secret
 
     @patch("jvspatial.storage.interfaces.s3.boto3")
-    def test_init_with_custom_validator(self, mock_boto3, custom_validator):
+    async def test_init_with_custom_validator(self, mock_boto3, custom_validator):
         """Test initialization with custom validator."""
         mock_boto3.client.return_value = MagicMock()
 
@@ -620,7 +620,7 @@ class TestS3FileInterfaceInit:
 
         assert storage.validator == custom_validator
 
-    def test_init_fails_without_boto3(self):
+    async def test_init_fails_without_boto3(self):
         """Test that initialization fails if boto3 not installed."""
         # Since boto3 is now imported at module level, we need to patch HAS_BOTO3
         with patch("jvspatial.storage.interfaces.s3.HAS_BOTO3", False):
@@ -1212,7 +1212,7 @@ class TestStorageErrorHandling:
 # ============================================================================
 
 
-def test_module_imports():
+async def test_module_imports():
     """Test that all required modules can be imported."""
     from jvspatial.storage.exceptions import (
         FileNotFoundError,

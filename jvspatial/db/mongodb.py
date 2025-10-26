@@ -244,7 +244,7 @@ class MongoDB(Database):
 
             if perf_monitor:
                 duration = asyncio.get_event_loop().time() - start_time
-                perf_monitor.record_db_operation(
+                await perf_monitor.record_db_operation(
                     collection=collection,
                     operation=operation,
                     duration=duration,
@@ -258,11 +258,11 @@ class MongoDB(Database):
             raise
         except PyMongoError as e:
             if perf_monitor:
-                perf_monitor.record_db_error(collection, operation, str(e))
+                await perf_monitor.record_db_error(collection, operation, str(e))
             raise RuntimeError(f"MongoDB operation failed: {e}") from e
         except Exception as e:
             if perf_monitor:
-                perf_monitor.record_db_error(collection, operation, str(e))
+                await perf_monitor.record_db_error(collection, operation, str(e))
             raise RuntimeError(f"Unexpected error during save: {e}") from e
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
@@ -327,7 +327,7 @@ class MongoDB(Database):
                 from jvspatial.core.context import perf_monitor
 
                 if perf_monitor and delete_result.deleted_count > 0:
-                    perf_monitor.record_db_operation(
+                    await perf_monitor.record_db_operation(
                         collection="edge",
                         operation="clean",
                         duration=0,  # Duration not tracked for cleanup

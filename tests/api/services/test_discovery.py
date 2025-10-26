@@ -17,16 +17,16 @@ class TestPackageDiscoveryService:
         server = Server()
         self.service = PackageDiscoveryService(server)
 
-    def test_discovery_service_initialization(self):
+    async def test_discovery_service_initialization(self):
         """Test discovery service initialization."""
         assert self.service is not None
 
-    def test_discover_packages(self):
+    async def test_discover_packages(self):
         """Test package discovery."""
         count = self.service.discover_and_register()
         assert isinstance(count, int)
 
-    def test_discover_modules(self):
+    async def test_discover_modules(self):
         """Test module discovery."""
         # The service doesn't have a discover_modules method, test discover_in_module instead
         import sys

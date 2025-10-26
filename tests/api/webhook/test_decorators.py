@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from jvspatial.api.integrations.webhooks.decorators import webhook_endpoint
 from jvspatial.api.server import Server
-from jvspatial.api.webhook.decorators import webhook_endpoint
 from jvspatial.core.entities import Walker
 
 
@@ -26,7 +26,7 @@ class TestWebhookEndpointDecorator:
         self.mock_server._is_running = False
         self.test_user = MagicMock(id="user_123")
 
-    def test_webhook_endpoint_basic(self):
+    async def test_webhook_endpoint_basic(self):
         """Test basic @webhook_endpoint decorator application."""
         from jvspatial.api.context import set_current_server
 
@@ -54,7 +54,7 @@ class TestWebhookEndpointDecorator:
         # Clean up
         set_current_server(None)
 
-    def test_webhook_endpoint_with_custom_methods(self):
+    async def test_webhook_endpoint_with_custom_methods(self):
         """Test @webhook_endpoint with custom HTTP methods."""
         from jvspatial.api.context import set_current_server
 
@@ -71,7 +71,7 @@ class TestWebhookEndpointDecorator:
         # Clean up
         set_current_server(None)
 
-    def test_webhook_endpoint_with_hmac_secret(self):
+    async def test_webhook_endpoint_with_hmac_secret(self):
         """Test @webhook_endpoint with HMAC secret."""
         from jvspatial.api.context import set_current_server
 
@@ -89,7 +89,7 @@ class TestWebhookEndpointDecorator:
         # Clean up
         set_current_server(None)
 
-    def test_webhook_endpoint_with_auth_requirements(self):
+    async def test_webhook_endpoint_with_auth_requirements(self):
         """Test @webhook_endpoint with authentication requirements."""
         from jvspatial.api.context import set_current_server
 
@@ -112,7 +112,7 @@ class TestWebhookEndpointDecorator:
         # Clean up
         set_current_server(None)
 
-    def test_webhook_endpoint_with_custom_webhook_config(self):
+    async def test_webhook_endpoint_with_custom_webhook_config(self):
         """Test @webhook_endpoint with custom webhook configuration."""
         from jvspatial.api.context import set_current_server
 
@@ -137,7 +137,7 @@ class TestWebhookEndpointDecorator:
         # Clean up
         set_current_server(None)
 
-    def test_webhook_endpoint_on_walker_class(self):
+    async def test_webhook_endpoint_on_walker_class(self):
         """Test @webhook_endpoint decorator on Walker class."""
         from jvspatial.api.context import set_current_server
 
@@ -158,7 +158,7 @@ class TestWebhookEndpointDecorator:
         # Clean up
         set_current_server(None)
 
-    def test_webhook_endpoint_no_server(self):
+    async def test_webhook_endpoint_no_server(self):
         """Test webhook endpoint when no server is available."""
         from jvspatial.api.context import set_current_server
 
@@ -175,7 +175,7 @@ class TestWebhookEndpointDecorator:
         assert config.path == "/webhook/no-server"
         assert config.webhook is not None
 
-    def test_webhook_endpoint_default_values(self):
+    async def test_webhook_endpoint_default_values(self):
         """Test webhook endpoint with default configuration values."""
         from jvspatial.api.context import set_current_server
 
@@ -198,7 +198,7 @@ class TestWebhookEndpointDecorator:
         # Clean up
         set_current_server(None)
 
-    def test_webhook_endpoint_with_openapi_extra(self):
+    async def test_webhook_endpoint_with_openapi_extra(self):
         """Test webhook endpoint with OpenAPI extra configuration."""
         from jvspatial.api.context import set_current_server
 
@@ -217,7 +217,7 @@ class TestWebhookEndpointDecorator:
         # Clean up
         set_current_server(None)
 
-    def test_webhook_endpoint_edge_cases(self):
+    async def test_webhook_endpoint_edge_cases(self):
         """Test webhook endpoint edge cases."""
         from jvspatial.api.context import set_current_server
 

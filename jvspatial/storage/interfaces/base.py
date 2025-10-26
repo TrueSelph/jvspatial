@@ -69,7 +69,7 @@ class FileStorageInterface(ABC):
             PathTraversalError: If path is unsafe
 
         Example:
-            >>> result = await storage.save_file(
+            >>> result = storage.save_file(
             ...     "uploads/doc.pdf",
             ...     file_bytes,
             ...     metadata={"user": "user123"}
@@ -103,14 +103,14 @@ class FileStorageInterface(ABC):
             StorageProviderError: If read operation fails
 
         Example:
-            >>> content = await storage.get_file("uploads/doc.pdf")
+            >>> content = storage.get_file("uploads/doc.pdf")
             >>> if content:
             ...     print(f"File size: {len(content)} bytes")
         """
         pass
 
     @abstractmethod
-    def stream_file(
+    async def stream_file(
         self, file_path: str, chunk_size: int = 8192
     ) -> AsyncIterator[bytes]:
         """Stream file content in chunks.
@@ -162,7 +162,7 @@ class FileStorageInterface(ABC):
             AccessDeniedError: If deletion not permitted
 
         Example:
-            >>> deleted = await storage.delete_file("old-file.txt")
+            >>> deleted = storage.delete_file("old-file.txt")
             >>> if deleted:
             ...     print("File deleted successfully")
         """
@@ -184,7 +184,7 @@ class FileStorageInterface(ABC):
             True if file exists, False otherwise
 
         Example:
-            >>> exists = await storage.file_exists("uploads/doc.pdf")
+            >>> exists = storage.file_exists("uploads/doc.pdf")
             >>> if not exists:
             ...     print("File not found")
         """
@@ -213,7 +213,7 @@ class FileStorageInterface(ABC):
             Or None if file not found
 
         Example:
-            >>> metadata = await storage.get_metadata("uploads/doc.pdf")
+            >>> metadata = storage.get_metadata("uploads/doc.pdf")
             >>> if metadata:
             ...     print(f"Size: {metadata['size']} bytes")
         """
@@ -239,13 +239,13 @@ class FileStorageInterface(ABC):
             Signed/presigned URL string, or None if not supported/file missing
 
         Example:
-            >>> url = await storage.get_file_url("uploads/doc.pdf", expires_in=7200)
+            >>> url = storage.get_file_url("uploads/doc.pdf", expires_in=7200)
             >>> print(f"Download URL: {url}")
         """
         pass
 
     @abstractmethod
-    def serve_file(self, file_path: str) -> AsyncIterator[bytes]:
+    async def serve_file(self, file_path: str) -> AsyncIterator[bytes]:
         """Serve file for HTTP response.
 
         Similar to stream_file() but optimized for HTTP serving.

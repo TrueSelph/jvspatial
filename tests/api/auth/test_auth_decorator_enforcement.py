@@ -14,9 +14,9 @@ from fastapi.testclient import TestClient
 from jvspatial.api import Server
 from jvspatial.api.auth import admin_endpoint, auth_endpoint
 from jvspatial.api.auth.entities import User
-from jvspatial.api.decorators.shortcuts import endpoint
-from jvspatial.api.endpoint.decorators import EndpointField
-from jvspatial.core.entities import Node, Walker, on_visit
+from jvspatial.api.decorators import EndpointField, endpoint
+from jvspatial.core import on_visit
+from jvspatial.core.entities import Node, Walker
 
 
 class SampleNode(Node):
@@ -38,6 +38,8 @@ class TestAuthEndpointEnforcement:
 
     def setup_method(self):
         """Set up test server with authenticated endpoints."""
+        from jvspatial.api.context import set_current_server
+
         # Create server
         self.server = Server(
             title="Auth Test Server",
@@ -45,6 +47,9 @@ class TestAuthEndpointEnforcement:
             version="1.0.0",
             port=8001,
         )
+
+        # Explicitly set the server context
+        set_current_server(self.server)
 
         # Create authenticated endpoints AFTER server creation
         @auth_endpoint("/profile", methods=["GET"])
@@ -91,7 +96,7 @@ class TestAuthEndpointEnforcement:
 
         set_current_server(None)
 
-    def test_endpoints_registered(self):
+    async def test_endpoints_registered(self):
         """Test that decorated endpoints have configuration set."""
         # Check that endpoints have _endpoint_config set
         assert hasattr(self.get_profile, "_endpoint_config")
@@ -105,7 +110,7 @@ class TestAuthEndpointEnforcement:
         assert self.generate_report._endpoint_config.path == "/reports"
         assert self.admin_settings._endpoint_config.path == "/admin/settings"
 
-    def test_auth_metadata_stored(self):
+    async def test_auth_metadata_stored(self):
         """Test that auth metadata is stored on endpoints."""
         # Check auth configuration
         assert self.get_profile._endpoint_config.auth_required is True
@@ -124,7 +129,7 @@ class TestAuthEndpointEnforcement:
         assert self.admin_settings._endpoint_config.permissions == []
         assert self.admin_settings._endpoint_config.roles == ["admin"]
 
-    def test_auth_middleware_applied(self):
+    async def test_auth_middleware_applied(self):
         """Test that authentication middleware can be applied."""
         app = self.server.get_app()
 
@@ -135,29 +140,29 @@ class TestAuthEndpointEnforcement:
         # This test verifies the current behavior
         assert "CORSMiddleware" in middleware_names
 
-    def test_unauthenticated_request_rejected(self):
+    async def test_unauthenticated_request_rejected(self):
         """Test that decorator configuration is correct for auth requirements."""
         # In the new system, decorators only set configuration
         # HTTP testing would require explicit endpoint registration
         assert self.get_profile._endpoint_config.auth_required is True
         assert self.get_profile._endpoint_config.path == "/profile"
 
-    def test_permission_required_endpoint_rejected(self):
+    async def test_permission_required_endpoint_rejected(self):
         """Test that permission requirements are correctly configured."""
         assert self.read_data._endpoint_config.auth_required is True
         assert self.read_data._endpoint_config.permissions == ["read_data"]
 
-    def test_role_required_endpoint_rejected(self):
+    async def test_role_required_endpoint_rejected(self):
         """Test that role requirements are correctly configured."""
         assert self.generate_report._endpoint_config.auth_required is True
         assert self.generate_report._endpoint_config.roles == ["analyst", "admin"]
 
-    def test_admin_endpoint_rejected(self):
+    async def test_admin_endpoint_rejected(self):
         """Test that admin endpoint configuration is correct."""
         assert self.admin_settings._endpoint_config.auth_required is True
         assert self.admin_settings._endpoint_config.roles == ["admin"]
 
-    def test_public_endpoints_accessible(self):
+    async def test_public_endpoints_accessible(self):
         """Test that public endpoints remain accessible."""
         # Health endpoint should work without auth
         response = self.client.get("/health")
@@ -167,7 +172,7 @@ class TestAuthEndpointEnforcement:
         response = self.client.get("/")
         assert response.status_code == 200
 
-    def test_docs_accessible_without_auth(self):
+    async def test_docs_accessible_without_auth(self):
         """Test that API documentation is accessible without authentication."""
         response = self.client.get("/docs")
         assert response.status_code == 200
@@ -202,7 +207,7 @@ class TestAuthWalkerEndpointEnforcement:
 
             @on_visit(MockDataNode)
             async def analyze(self, here: Node):
-                self.report({"analyzed": here.name})
+                await self.report({"analyzed": here.name})
 
         @auth_endpoint(
             "/process",
@@ -216,7 +221,7 @@ class TestAuthWalkerEndpointEnforcement:
 
             @on_visit(MockDataNode)
             async def process(self, here: Node):
-                self.report({"processed": self.operation})
+                await self.report({"processed": self.operation})
 
         # Store references
         self.AnalyzeWalker = AnalyzeWalker
@@ -233,7 +238,7 @@ class TestAuthWalkerEndpointEnforcement:
 
         set_current_server(None)
 
-    def test_walker_endpoints_registered(self):
+    async def test_walker_endpoints_registered(self):
         """Test that walker endpoints have configuration set."""
         # Check that walker classes have _endpoint_config set
         assert hasattr(self.AnalyzeWalker, "_endpoint_config")
@@ -243,7 +248,7 @@ class TestAuthWalkerEndpointEnforcement:
         assert self.AnalyzeWalker._endpoint_config.path == "/analyze"
         assert self.ProcessWalker._endpoint_config.path == "/process"
 
-    def test_walker_auth_metadata_stored(self):
+    async def test_walker_auth_metadata_stored(self):
         """Test that auth metadata is stored on walker classes."""
         # Check auth configuration
         assert self.AnalyzeWalker._endpoint_config.auth_required is True
@@ -254,17 +259,17 @@ class TestAuthWalkerEndpointEnforcement:
         assert self.ProcessWalker._endpoint_config.permissions == []
         assert self.ProcessWalker._endpoint_config.roles == ["processor", "admin"]
 
-    def test_walker_unauthenticated_request_rejected(self):
+    async def test_walker_unauthenticated_request_rejected(self):
         """Test that walker auth configuration is correct."""
         assert self.AnalyzeWalker._endpoint_config.auth_required is True
         assert self.AnalyzeWalker._endpoint_config.path == "/analyze"
 
-    def test_walker_permission_endpoint_rejected(self):
+    async def test_walker_permission_endpoint_rejected(self):
         """Test that walker permission configuration is correct."""
         assert self.AnalyzeWalker._endpoint_config.auth_required is True
         assert self.AnalyzeWalker._endpoint_config.permissions == ["analyze_data"]
 
-    def test_walker_role_endpoint_rejected(self):
+    async def test_walker_role_endpoint_rejected(self):
         """Test that walker role configuration is correct."""
         assert self.ProcessWalker._endpoint_config.auth_required is True
         assert self.ProcessWalker._endpoint_config.roles == ["processor", "admin"]
@@ -287,10 +292,10 @@ class TestMixedEndpointEnforcement:
         # Create a simple function and manually register it
         async def public_info_func():
             """Public endpoint - no auth required."""
-            from jvspatial.api.response.helpers import create_endpoint_helper
+            from jvspatial.api.endpoints.response import create_endpoint_helper
 
             endpoint = create_endpoint_helper(walker_instance=None)
-            return endpoint.success(data={"info": "public"})
+            return await endpoint.success(data={"info": "public"})
 
         # Manually register with endpoint router
         self.server.endpoint_router.router.add_api_route(
@@ -304,7 +309,7 @@ class TestMixedEndpointEnforcement:
         @auth_endpoint("/private/info", methods=["GET"])
         async def private_info(endpoint):
             """Private endpoint - auth required."""
-            return endpoint.success(data={"info": "private"})
+            return await endpoint.success(data={"info": "private"})
 
         # Public walker endpoint (using endpoint decorator)
         @endpoint("/public/search", methods=["POST"])
@@ -315,7 +320,7 @@ class TestMixedEndpointEnforcement:
 
             @on_visit(MockDataNode)
             async def search(self, here: Node):
-                self.report({"result": here.name})
+                await self.report({"result": here.name})
 
         # Authenticated walker endpoint
         @auth_endpoint(
@@ -330,7 +335,7 @@ class TestMixedEndpointEnforcement:
 
             @on_visit(MockDataNode)
             async def search(self, here: Node):
-                self.report({"result": here.name})
+                await self.report({"result": here.name})
 
         # Store references
         self.public_info = public_info
@@ -349,7 +354,7 @@ class TestMixedEndpointEnforcement:
 
         set_current_server(None)
 
-    def test_public_function_endpoint_accessible(self):
+    async def test_public_function_endpoint_accessible(self):
         """Test that public function endpoints are accessible without auth."""
         response = self.client.get("/api/public/info")
 
@@ -359,26 +364,26 @@ class TestMixedEndpointEnforcement:
         assert "data" in data
         assert data["data"]["info"] == "public"
 
-    def test_private_function_endpoint_protected(self):
+    async def test_private_function_endpoint_protected(self):
         """Test that private function endpoint configuration is correct."""
         assert self.private_info._endpoint_config.auth_required is True
         assert self.private_info._endpoint_config.path == "/private/info"
 
-    def test_public_walker_endpoint_accessible(self):
+    async def test_public_walker_endpoint_accessible(self):
         """Test that public walker endpoint configuration is correct."""
         # Now using the new unified decorator system
         config = self.PublicSearchWalker.__dict__["_endpoint_config"]
         assert config.auth_required is False
         assert config.path == "/public/search"
 
-    def test_private_walker_endpoint_protected(self):
+    async def test_private_walker_endpoint_protected(self):
         """Test that private walker endpoint configuration is correct."""
         config = self.PrivateSearchWalker.__dict__["_endpoint_config"]
         assert config.auth_required is True
         assert config.path == "/private/search"
         assert config.permissions == ["search_data"]
 
-    def test_auth_metadata_differences(self):
+    async def test_auth_metadata_differences(self):
         """Test that public and private endpoints have different auth metadata."""
         # Public function endpoint is not decorated, so it doesn't have _endpoint_config
         # Public walker endpoint should have auth_required = False
@@ -453,7 +458,7 @@ class TestAuthEnforcementWithMockedUser:
 class TestCompleteAuthFlow:
     """Test complete authentication flow from decorator to enforcement."""
 
-    def test_decorator_to_middleware_pipeline(self):
+    async def test_decorator_to_middleware_pipeline(self):
         """Test complete pipeline from decorator application to middleware enforcement."""
         # 1. Create server
         server = Server(title="Pipeline Test")
@@ -474,7 +479,7 @@ class TestCompleteAuthFlow:
         # The decorator only sets configuration, registration happens separately
         # This test verifies the decorator configuration is correct
 
-    def test_walker_decorator_to_handler_metadata_transfer(self):
+    async def test_walker_decorator_to_handler_metadata_transfer(self):
         """Test that walker auth metadata is transferred to FastAPI handlers."""
         server = Server(title="Walker Metadata Test")
 
@@ -484,7 +489,7 @@ class TestCompleteAuthFlow:
 
             @on_visit(SampleNode)
             async def process(self, here: Node):
-                self.report({"node": here.id})
+                await self.report({"node": here.id})
 
         # In the new system, endpoints are not automatically registered
         # Check that the walker class has the correct decorator configuration
@@ -493,7 +498,7 @@ class TestCompleteAuthFlow:
         assert config.auth_required is True
         assert config.permissions == ["walker_perm"]
 
-    def test_auto_middleware_detection(self):
+    async def test_auto_middleware_detection(self):
         """Test that decorator configuration is set correctly."""
         # Create server without explicitly adding auth middleware
         server = Server(title="Auto Middleware Test")
@@ -510,12 +515,12 @@ class TestCompleteAuthFlow:
         assert config.auth_required is True
         assert config.path == "/protected"
 
-    def test_no_middleware_without_auth_endpoints(self):
+    async def test_no_middleware_without_auth_endpoints(self):
         """Test that middleware is not added when no auth endpoints exist."""
         # Create server with only public endpoints
         server = Server(title="No Auth Test")
 
-        from jvspatial.api.decorators.shortcuts import endpoint
+        from jvspatial.api.decorators import endpoint
 
         @endpoint("/public")
         async def public_endpoint(endpoint):
@@ -534,7 +539,7 @@ class TestCompleteAuthFlow:
 class TestEndpointHelperInjection:
     """Test that endpoint helper is properly injected by auth decorators."""
 
-    def test_auth_endpoint_has_endpoint_parameter(self):
+    async def test_auth_endpoint_has_endpoint_parameter(self):
         """Test that @auth_endpoint injects endpoint helper."""
         server = Server(title="Helper Injection Test")
 
@@ -562,7 +567,7 @@ class TestEndpointHelperInjection:
 class TestAuthDecoratorEdgeCases:
     """Test edge cases and error scenarios for auth decorators."""
 
-    def test_decorator_with_no_server_context(self):
+    async def test_decorator_with_no_server_context(self):
         """Test decorator behavior when no server is in context."""
         from jvspatial.api.context import set_current_server
 
@@ -580,7 +585,7 @@ class TestAuthDecoratorEdgeCases:
         assert config.auth_required is True
         assert config.path == "/deferred"
 
-    def test_multiple_servers_with_decorators(self):
+    async def test_multiple_servers_with_decorators(self):
         """Test using decorators with multiple servers."""
         server1 = Server(title="Server 1", port=9001)
         server2 = Server(title="Server 2", port=9002)
@@ -604,7 +609,7 @@ class TestAuthDecoratorEdgeCases:
         assert config1.path == "/server1"
         assert config2.path == "/server2"
 
-    def test_combining_permissions_and_roles(self):
+    async def test_combining_permissions_and_roles(self):
         """Test endpoints that require both permissions AND roles."""
         server = Server(title="Combined Auth Test")
 

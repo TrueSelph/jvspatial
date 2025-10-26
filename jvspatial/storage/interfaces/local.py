@@ -11,7 +11,7 @@ import os
 from asyncio import to_thread
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List, Optional, cast
+from typing import Any, AsyncIterator, Dict, List, Optional, cast
 
 from ..exceptions import (
     AccessDeniedError,
@@ -279,9 +279,9 @@ class LocalFileInterface(FileStorageInterface):
                 )
             raise
 
-    async def stream_file(
+    async def stream_file(  # type: ignore[override,misc]
         self, file_path: str, chunk_size: int = 8192
-    ) -> AsyncGenerator[bytes, None]:
+    ) -> AsyncIterator[bytes]:
         """Stream file content in chunks.
 
         Args:
@@ -295,6 +295,7 @@ class LocalFileInterface(FileStorageInterface):
             FileNotFoundError: If file doesn't exist
             StorageProviderError: If streaming fails
         """
+
         logger.debug(f"Streaming file: {file_path} (chunk_size={chunk_size})")
 
         try:
@@ -327,10 +328,9 @@ class LocalFileInterface(FileStorageInterface):
         except Exception as e:
             if not isinstance(e, PathTraversalError):
                 logger.error(f"Failed to stream file {file_path}: {e}")
-                raise StorageProviderError(
-                    f"Failed to stream file: {e}", provider="local", operation="stream"
-                )
-            raise
+            raise StorageProviderError(
+                f"Failed to stream file: {e}", provider="local", operation="stream"
+            )
 
     async def delete_file(self, file_path: str) -> bool:
         """Delete file from filesystem.
@@ -461,7 +461,7 @@ class LocalFileInterface(FileStorageInterface):
 
         return url
 
-    async def serve_file(self, file_path: str) -> AsyncGenerator[bytes, None]:
+    async def serve_file(self, file_path: str) -> AsyncIterator[bytes]:  # type: ignore[override,misc]
         """Serve file for HTTP response.
 
         For local storage, this uses FastAPI's FileResponse if available,
@@ -476,6 +476,7 @@ class LocalFileInterface(FileStorageInterface):
         Raises:
             FileNotFoundError: If file doesn't exist
         """
+
         logger.debug(f"Serving file: {file_path}")
 
         # Verify file exists

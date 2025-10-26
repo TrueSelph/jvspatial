@@ -38,9 +38,10 @@ from jvspatial.api.auth import (
     configure_auth,
     get_current_user,
 )
-from jvspatial.api.endpoint.decorators import EndpointField
+from jvspatial.api.decorators import EndpointField
 from jvspatial.core import Root
-from jvspatial.core.entities import Node, Walker, on_visit
+from jvspatial.core.decorators import on_visit
+from jvspatial.core.entities import Node, Walker
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -146,7 +147,11 @@ async def initialize_demo_data():
 
         # Check if demo data already exists
         existing_users = await User.find(
-            {"context.username": {"$in": ["demo_admin", "demo_user", "regional_user"]}}
+            {
+                "context.email": {
+                    "$in": ["admin@demo.com", "user@demo.com", "regional@demo.com"]
+                }
+            }
         )
         if existing_users:
             logger.info("📋 Demo data already exists, skipping initialization")
@@ -156,7 +161,6 @@ async def initialize_demo_data():
 
         # 1. Admin User
         admin_user = await User.create(
-            username="demo_admin",
             email="admin@demo.com",
             password_hash=User.hash_password("admin123"),
             is_admin=True,
@@ -168,11 +172,10 @@ async def initialize_demo_data():
             max_traversal_depth=50,
             rate_limit_per_hour=10000,
         )
-        logger.info(f"👑 Created admin user: {admin_user.username}")
+        logger.info(f"👑 Created admin user: {admin_user.email}")
 
         # 2. Standard User with Basic Permissions
         standard_user = await User.create(
-            username="demo_user",
             email="user@demo.com",
             password_hash=User.hash_password("user123"),
             is_admin=False,
@@ -184,11 +187,10 @@ async def initialize_demo_data():
             max_traversal_depth=10,
             rate_limit_per_hour=1000,
         )
-        logger.info(f"👤 Created standard user: {standard_user.username}")
+        logger.info(f"👤 Created standard user: {standard_user.email}")
 
         # 3. Regional Analyst with Spatial Restrictions
         regional_user = await User.create(
-            username="regional_user",
             email="regional@demo.com",
             password_hash=User.hash_password("regional123"),
             is_admin=False,
@@ -200,7 +202,7 @@ async def initialize_demo_data():
             max_traversal_depth=15,
             rate_limit_per_hour=2000,
         )
-        logger.info(f"🗺️ Created regional user: {regional_user.username}")
+        logger.info(f"🗺️ Created regional user: {regional_user.email}")
 
         # === Create API Keys ===
 
@@ -348,17 +350,17 @@ async def demo_dashboard():
         },
         "demo_accounts": {
             "admin": {
-                "username": "demo_admin",
+                "email": "admin@demo.com",
                 "password": "admin123",  # pragma: allowlist secret
                 "permissions": "Full admin access",
             },
             "user": {
-                "username": "demo_user",
+                "email": "user@demo.com",
                 "password": "user123",  # pragma: allowlist secret
                 "permissions": "Read access to North America and Europe",
             },
             "regional": {
-                "username": "regional_user",
+                "email": "regional@demo.com",
                 "password": "regional123",  # pragma: allowlist secret
                 "permissions": "Analyst access limited to North America",
             },
@@ -370,7 +372,7 @@ async def demo_dashboard():
             }
         },
         "authentication_flow": [
-            "1. POST /auth/login with username/password",
+            "1. POST /auth/login with email/password",
             "2. Use returned access_token in Authorization: Bearer <token>",
             "3. Access protected endpoints with token",
             "4. Refresh token with POST /auth/refresh",
@@ -431,13 +433,13 @@ class PublicSearch(Walker):
     async def search_cities(self, here: City):
         if self.query.lower() in here.name.lower():
             # Get current report to check results count
-            current_report = self.get_report()
+            current_report = await self.get_report()
             results_count = sum(
                 1 for item in current_report if isinstance(item, dict) and "id" in item
             )
 
             if results_count < self.limit:
-                self.report(
+                await self.report(
                     {
                         "id": here.id,
                         "name": here.name,
@@ -463,7 +465,6 @@ async def protected_data(request: Request):
         "message": "This is protected data",
         "authentication": "Required - JWT token",
         "user": {
-            "username": current_user.username,
             "email": current_user.email,
             "roles": current_user.roles,
             "permissions": current_user.permissions,
@@ -482,7 +483,7 @@ async def protected_reports(request: Request):
     return {
         "message": "Protected reports data",
         "authentication": "Required - JWT token + read_reports permission",
-        "user": current_user.username,
+        "user": current_user.email,
         "reports": [
             {"id": 1, "name": "Monthly Spatial Analysis", "status": "available"},
             {"id": 2, "name": "Regional Demographics", "status": "available"},
@@ -513,12 +514,12 @@ class ProtectedSpatialQuery(Walker):
     async def spatial_query(self, here: Node):
         current_user = get_current_user(self.request)
         if current_user is None:
-            self.report({"error": "Not authenticated"})
+            await self.report({"error": "Not authenticated"})
             return
 
         # Check if user can access this region
         if not current_user.can_access_region(self.region):
-            self.report(
+            await self.report(
                 {
                     "error": "Access denied to region",
                     "region": self.region,
@@ -531,7 +532,7 @@ class ProtectedSpatialQuery(Walker):
         # Check if user can access this node type
         node_type_name = self.node_type
         if not current_user.can_access_node_type(node_type_name):
-            self.report(
+            await self.report(
                 {
                     "error": "Access denied to node type",
                     "node_type": node_type_name,
@@ -542,14 +543,14 @@ class ProtectedSpatialQuery(Walker):
             return
 
         # Report query metadata once
-        current_report = self.get_report()
+        current_report = await self.get_report()
         if not any(
             isinstance(item, dict) and "query" in item for item in current_report
         ):
-            self.report(
+            await self.report(
                 {
                     "query": {"region": self.region, "node_type": self.node_type},
-                    "user": current_user.username,
+                    "user": current_user.email,
                     "authentication": "JWT token + read_spatial_data permission",
                     "spatial_permissions": {
                         "allowed_regions": current_user.allowed_regions,
@@ -562,7 +563,7 @@ class ProtectedSpatialQuery(Walker):
         # Query based on node type
         if self.node_type == "City" and isinstance(here, City):
             if here.region == self.region:
-                self.report(
+                await self.report(
                     {
                         "id": here.id,
                         "name": here.name,
@@ -575,7 +576,7 @@ class ProtectedSpatialQuery(Walker):
 
         elif self.node_type == "Highway" and isinstance(here, Highway):
             if here.region == self.region:
-                self.report(
+                await self.report(
                     {
                         "id": here.id,
                         "name": here.name,
@@ -591,7 +592,7 @@ class ProtectedSpatialQuery(Walker):
             try:
                 city = await City.get(here.city_id) if here.city_id else None
                 if city and city.region == self.region:
-                    self.report(
+                    await self.report(
                         {
                             "id": here.id,
                             "name": here.name,
@@ -624,19 +625,19 @@ class ProtectedAnalysis(Walker):
     async def analyze_cities(self, here: City):
         current_user = get_current_user(self.request)
         if current_user is None:
-            self.report({"error": "Not authenticated"})
+            await self.report({"error": "Not authenticated"})
             return
 
         # Report analysis metadata once
-        current_report = self.get_report()
+        current_report = await self.get_report()
         if not any(
             isinstance(item, dict) and "analysis_type" in item
             for item in current_report
         ):
-            self.report(
+            await self.report(
                 {
                     "analysis_type": self.analysis_type,
-                    "user": current_user.username,
+                    "user": current_user.email,
                     "authentication": "JWT token + analyze_data permission + analyst/admin role",
                 }
             )
@@ -666,7 +667,7 @@ class ProtectedAnalysis(Walker):
                     "status": "completed",
                 }
 
-            self.report(analysis_result)
+            await self.report(analysis_result)
 
 
 # ==================== ADMIN-ONLY ENDPOINTS ====================
@@ -685,12 +686,11 @@ async def admin_list_users(request: Request):
         return {
             "message": "User management - Admin access only",
             "authentication": "JWT token + admin role required",
-            "admin_user": current_user.username,
+            "admin_user": current_user.email,
             "total_users": len(all_users),
             "users": [
                 {
                     "id": user.id,
-                    "username": user.username,
                     "email": user.email,
                     "is_active": user.is_active,
                     "is_admin": user.is_admin,
@@ -726,7 +726,7 @@ async def admin_system_info(request: Request):
         return {
             "message": "System information - Admin access only",
             "authentication": "JWT token + admin role required",
-            "admin_user": current_user.username,
+            "admin_user": current_user.email,
             "timestamp": datetime.now().isoformat(),
             "database": {"type": "json", "path": "jvdb/auth_demo"},
             "statistics": {
@@ -771,7 +771,7 @@ async def api_key_export_cities(request: Request):
         if jwt_user is None:
             raise HTTPException(status_code=401, detail="Not authenticated")
         auth_method = "JWT Token"
-        user_info = {"username": jwt_user.username, "roles": jwt_user.roles}
+        user_info = {"email": jwt_user.email, "roles": jwt_user.roles}
 
     try:
         cities = await City.all()
@@ -810,7 +810,11 @@ async def reset_demo_data():
     try:
         # Delete all demo data
         demo_users = await User.find(
-            {"context.username": {"$in": ["demo_admin", "demo_user", "regional_user"]}}
+            {
+                "context.email": {
+                    "$in": ["admin@demo.com", "user@demo.com", "regional@demo.com"]
+                }
+            }
         )
         for user in demo_users:
             await user.delete()

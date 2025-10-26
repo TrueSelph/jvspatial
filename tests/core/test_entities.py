@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from jvspatial.core import on_exit, on_visit
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import (
     Edge,
@@ -22,11 +23,8 @@ from jvspatial.core.entities import (
     Object,
     Root,
     Walker,
-    find_subclass_by_name,
-    generate_id,
-    on_exit,
-    on_visit,
 )
+from jvspatial.core.utils import find_subclass_by_name, generate_id
 from jvspatial.exceptions import EntityError, ValidationError
 
 
@@ -67,7 +65,7 @@ class EntityEntityTestWalker(Walker):
 class TestNodeEntity:
     """Test Node entity functionality."""
 
-    def test_node_creation(self):
+    async def test_node_creation(self):
         """Test node creation."""
         node = EntityTestNode(name="test_node", value=42, category="test")
 
@@ -78,7 +76,7 @@ class TestNodeEntity:
         # Version attribute doesn't exist in current implementation
         # assert node.version == 1
 
-    def test_node_default_values(self):
+    async def test_node_default_values(self):
         """Test node default values."""
         node = EntityTestNode()
 
@@ -91,7 +89,7 @@ class TestNodeEntity:
         # Version attribute doesn't exist in current implementation
         # assert node.version == 1
 
-    def test_node_property_assignment(self):
+    async def test_node_property_assignment(self):
         """Test node property assignment."""
         node = EntityTestNode()
 
@@ -103,7 +101,7 @@ class TestNodeEntity:
         assert node.value == 100
         assert node.category == "updated"
 
-    def test_node_serialization(self):
+    async def test_node_serialization(self):
         """Test node serialization."""
         node = EntityTestNode(name="test_node", value=42, category="test")
         node.tags = ["important", "urgent"]
@@ -120,7 +118,7 @@ class TestNodeEntity:
         # Version attribute doesn't exist in current implementation
         # assert serialized["version"] == 1
 
-    def test_node_deserialization(self):
+    async def test_node_deserialization(self):
         """Test node deserialization."""
         data = {
             "name": "test_node",
@@ -143,7 +141,7 @@ class TestNodeEntity:
         # Version attribute doesn't exist in current implementation
         # assert node.version == 2
 
-    def test_node_validation(self):
+    async def test_node_validation(self):
         """Test node validation."""
         # Valid node
         node = EntityTestNode(name="test_node", value=42)
@@ -154,7 +152,7 @@ class TestNodeEntity:
         # with pytest.raises(ValidationError):
         #     EntityTestNode(name="test_node", value=-1)
 
-    def test_node_equality(self):
+    async def test_node_equality(self):
         """Test node equality."""
         node1 = EntityTestNode(name="test_node", value=42)
         node2 = EntityTestNode(name="test_node", value=42)
@@ -169,14 +167,14 @@ class TestNodeEntity:
         # Different content
         assert node1 != node3
 
-    def test_node_hash(self):
+    async def test_node_hash(self):
         """Test node hashing."""
         node1 = EntityTestNode(name="test_node", value=42)
         node2 = EntityTestNode(name="test_node", value=42)
         # Pydantic models are not hashable by default
         # assert hash(node1) != hash(node2)
 
-    def test_node_string_representation(self):
+    async def test_node_string_representation(self):
         """Test node string representation."""
         node = EntityTestNode(name="test_node", value=42)
         # ID is protected and cannot be set after initialization
@@ -186,7 +184,7 @@ class TestNodeEntity:
         assert "EntityTestNode" in str_repr
         assert node.id in str_repr
 
-    def test_node_context_management(self):
+    async def test_node_context_management(self):
         """Test node context management."""
         node = EntityTestNode()
 
@@ -209,7 +207,7 @@ class TestNodeEntity:
 class EntityTestEdgeEntity:
     """Test Edge entity functionality."""
 
-    def test_edge_creation(self):
+    async def test_edge_creation(self):
         """Test edge creation."""
         edge = EntityTestEdge(
             source_id="node_123", target_id="node_456", weight=5, condition="good"
@@ -222,7 +220,7 @@ class EntityTestEdgeEntity:
         assert edge.id is not None
         assert edge.version == 1
 
-    def test_edge_default_values(self):
+    async def test_edge_default_values(self):
         """Test edge default values."""
         edge = EntityTestEdge(source_id="node_123", target_id="node_456")
 
@@ -232,7 +230,7 @@ class EntityTestEdgeEntity:
         assert edge.id is not None
         assert edge.version == 1
 
-    def test_edge_property_assignment(self):
+    async def test_edge_property_assignment(self):
         """Test edge property assignment."""
         edge = EntityTestEdge(source_id="node_123", target_id="node_456")
 
@@ -244,7 +242,7 @@ class EntityTestEdgeEntity:
         assert edge.condition == "excellent"
         assert edge.properties == {"type": "connection", "strength": "strong"}
 
-    def test_edge_serialization(self):
+    async def test_edge_serialization(self):
         """Test edge serialization."""
         edge = EntityTestEdge(
             source_id="node_123", target_id="node_456", weight=5, condition="good"
@@ -262,7 +260,7 @@ class EntityTestEdgeEntity:
         # Version attribute doesn't exist in current implementation
         # assert serialized["version"] == 1
 
-    def test_edge_deserialization(self):
+    async def test_edge_deserialization(self):
         """Test edge deserialization."""
         data = {
             "source_id": "node_123",
@@ -284,7 +282,7 @@ class EntityTestEdgeEntity:
         assert edge.id == "edge_id_123"
         assert edge.version == 2
 
-    def test_edge_validation(self):
+    async def test_edge_validation(self):
         """Test edge validation."""
         # Valid edge
         edge = EntityTestEdge(source_id="node_123", target_id="node_456", weight=5)
@@ -301,7 +299,7 @@ class EntityTestEdgeEntity:
         with pytest.raises(ValidationError):
             edge.validate()
 
-    def test_edge_equality(self):
+    async def test_edge_equality(self):
         """Test edge equality."""
         edge1 = EntityTestEdge(source_id="node_123", target_id="node_456", weight=5)
         edge2 = EntityTestEdge(source_id="node_123", target_id="node_456", weight=5)
@@ -317,7 +315,7 @@ class EntityTestEdgeEntity:
         # Different content
         assert edge1 != edge3
 
-    def test_edge_hash(self):
+    async def test_edge_hash(self):
         """Test edge hashing."""
         edge1 = EntityTestEdge(source_id="node_123", target_id="node_456", weight=5)
         edge2 = EntityTestEdge(source_id="node_123", target_id="node_456", weight=5)
@@ -325,7 +323,7 @@ class EntityTestEdgeEntity:
 
         assert hash(edge1) == hash(edge2)
 
-    def test_edge_string_representation(self):
+    async def test_edge_string_representation(self):
         """Test edge string representation."""
         edge = EntityTestEdge(source_id="node_123", target_id="node_456", weight=5)
         edge.id = "edge_id_123"
@@ -334,7 +332,7 @@ class EntityTestEdgeEntity:
         assert "EntityTestEdge" in str_repr
         assert "edge_id_123" in str_repr
 
-    def test_edge_context_management(self):
+    async def test_edge_context_management(self):
         """Test edge context management."""
         edge = EntityTestEdge(source_id="node_123", target_id="node_456")
 
@@ -357,7 +355,7 @@ class EntityTestEdgeEntity:
 class EntityTestObjectEntity:
     """Test Object entity functionality."""
 
-    def test_object_creation(self):
+    async def test_object_creation(self):
         """Test object creation."""
         obj = EntityTestObject(name="test_object", value=42, category="test")
 
@@ -367,7 +365,7 @@ class EntityTestObjectEntity:
         assert obj.id is not None
         assert obj.version == 1
 
-    def test_object_default_values(self):
+    async def test_object_default_values(self):
         """Test object default values."""
         obj = EntityTestObject()
 
@@ -377,7 +375,7 @@ class EntityTestObjectEntity:
         assert obj.id is not None
         assert obj.version == 1
 
-    def test_object_property_assignment(self):
+    async def test_object_property_assignment(self):
         """Test object property assignment."""
         obj = EntityTestObject()
 
@@ -389,7 +387,7 @@ class EntityTestObjectEntity:
         assert obj.value == 100
         assert obj.category == "updated"
 
-    def test_object_serialization(self):
+    async def test_object_serialization(self):
         """Test object serialization."""
         obj = EntityTestObject(name="test_object", value=42, category="test")
 
@@ -402,7 +400,7 @@ class EntityTestObjectEntity:
         # Version attribute doesn't exist in current implementation
         # assert serialized["version"] == 1
 
-    def test_object_deserialization(self):
+    async def test_object_deserialization(self):
         """Test object deserialization."""
         data = {
             "name": "test_object",
@@ -420,7 +418,7 @@ class EntityTestObjectEntity:
         assert obj.id == "obj_id_123"
         assert obj.version == 2
 
-    def test_object_validation(self):
+    async def test_object_validation(self):
         """Test object validation."""
         # Valid object
         obj = EntityTestObject(name="test_object", value=42)
@@ -431,7 +429,7 @@ class EntityTestObjectEntity:
         with pytest.raises(ValidationError):
             obj.validate()
 
-    def test_object_equality(self):
+    async def test_object_equality(self):
         """Test object equality."""
         obj1 = EntityTestObject(name="test_object", value=42)
         obj2 = EntityTestObject(name="test_object", value=42)
@@ -447,7 +445,7 @@ class EntityTestObjectEntity:
         # Different content
         assert obj1 != obj3
 
-    def test_object_hash(self):
+    async def test_object_hash(self):
         """Test object hashing."""
         obj1 = EntityTestObject(name="test_object", value=42)
         obj2 = EntityTestObject(name="test_object", value=42)
@@ -455,7 +453,7 @@ class EntityTestObjectEntity:
 
         assert hash(obj1) == hash(obj2)
 
-    def test_object_string_representation(self):
+    async def test_object_string_representation(self):
         """Test object string representation."""
         obj = EntityTestObject(name="test_object", value=42)
         obj.id = "obj_id_123"
@@ -464,7 +462,7 @@ class EntityTestObjectEntity:
         assert "EntityTestObject" in str_repr
         assert "obj_id_123" in str_repr
 
-    def test_object_context_management(self):
+    async def test_object_context_management(self):
         """Test object context management."""
         obj = EntityTestObject()
 
@@ -487,7 +485,7 @@ class EntityTestObjectEntity:
 class EntityTestWalkerEntity:
     """Test Walker entity functionality."""
 
-    def test_walker_creation(self):
+    async def test_walker_creation(self):
         """Test walker creation."""
         walker = EntityTestWalker(name="test_walker", limit=20, category="test")
 
@@ -497,7 +495,7 @@ class EntityTestWalkerEntity:
         assert walker.id is not None
         assert walker.version == 1
 
-    def test_walker_default_values(self):
+    async def test_walker_default_values(self):
         """Test walker default values."""
         walker = EntityTestWalker()
 
@@ -507,7 +505,7 @@ class EntityTestWalkerEntity:
         assert walker.id is not None
         assert walker.version == 1
 
-    def test_walker_property_assignment(self):
+    async def test_walker_property_assignment(self):
         """Test walker property assignment."""
         walker = EntityTestWalker()
 
@@ -519,7 +517,7 @@ class EntityTestWalkerEntity:
         assert walker.limit == 50
         assert walker.category == "updated"
 
-    def test_walker_serialization(self):
+    async def test_walker_serialization(self):
         """Test walker serialization."""
         walker = EntityTestWalker(name="test_walker", limit=20, category="test")
 
@@ -532,7 +530,7 @@ class EntityTestWalkerEntity:
         # Version attribute doesn't exist in current implementation
         # assert serialized["version"] == 1
 
-    def test_walker_deserialization(self):
+    async def test_walker_deserialization(self):
         """Test walker deserialization."""
         data = {
             "name": "test_walker",
@@ -550,7 +548,7 @@ class EntityTestWalkerEntity:
         assert walker.id == "walker_id_123"
         assert walker.version == 2
 
-    def test_walker_validation(self):
+    async def test_walker_validation(self):
         """Test walker validation."""
         # Valid walker
         walker = EntityTestWalker(name="test_walker", limit=20)
@@ -561,7 +559,7 @@ class EntityTestWalkerEntity:
         with pytest.raises(ValidationError):
             walker.validate()
 
-    def test_walker_equality(self):
+    async def test_walker_equality(self):
         """Test walker equality."""
         walker1 = EntityTestWalker(name="test_walker", limit=20)
         walker2 = EntityTestWalker(name="test_walker", limit=20)
@@ -577,7 +575,7 @@ class EntityTestWalkerEntity:
         # Different content
         assert walker1 != walker3
 
-    def test_walker_hash(self):
+    async def test_walker_hash(self):
         """Test walker hashing."""
         walker1 = EntityTestWalker(name="test_walker", limit=20)
         walker2 = EntityTestWalker(name="test_walker", limit=20)
@@ -585,7 +583,7 @@ class EntityTestWalkerEntity:
 
         assert hash(walker1) == hash(walker2)
 
-    def test_walker_string_representation(self):
+    async def test_walker_string_representation(self):
         """Test walker string representation."""
         walker = EntityTestWalker(name="test_walker", limit=20)
         walker.id = "walker_id_123"
@@ -594,7 +592,7 @@ class EntityTestWalkerEntity:
         assert "EntityTestWalker" in str_repr
         assert "walker_id_123" in str_repr
 
-    def test_walker_context_management(self):
+    async def test_walker_context_management(self):
         """Test walker context management."""
         walker = EntityTestWalker()
 
@@ -617,7 +615,7 @@ class EntityTestWalkerEntity:
 class EntityTestNodeUtilities:
     """Test entity utility functions."""
 
-    def test_generate_id(self):
+    async def test_generate_id(self):
         """Test ID generation."""
         id1 = generate_id()
         id2 = generate_id()
@@ -626,7 +624,7 @@ class EntityTestNodeUtilities:
         assert len(id1) > 0
         assert len(id2) > 0
 
-    def test_find_subclass_by_name(self):
+    async def test_find_subclass_by_name(self):
         """Test finding subclass by name."""
         # Test with existing class
         found_class = find_subclass_by_name("EntityTestNode", EntityTestNode)
@@ -636,7 +634,7 @@ class EntityTestNodeUtilities:
         found_class = find_subclass_by_name("NonExistent", EntityTestNode)
         assert found_class is None
 
-    def test_on_visit_decorator(self):
+    async def test_on_visit_decorator(self):
         """Test on_visit decorator."""
 
         class EntityTestWalkerWithVisit(Walker):
@@ -647,7 +645,7 @@ class EntityTestNodeUtilities:
         walker = EntityTestWalkerWithVisit()
         assert hasattr(walker, "visit_entity")
 
-    def test_on_exit_decorator(self):
+    async def test_on_exit_decorator(self):
         """Test on_exit decorator."""
 
         class EntityTestWalkerWithExit(Walker):
@@ -662,13 +660,13 @@ class EntityTestNodeUtilities:
 class EntityTestNodeErrorHandling:
     """Test entity error handling."""
 
-    def test_entity_creation_error(self):
+    async def test_entity_creation_error(self):
         """Test entity creation error handling."""
         # Test with invalid data
         with pytest.raises(ValidationError):
             EntityTestNode(value="invalid")  # String instead of int
 
-    def test_entity_serialization_error(self):
+    async def test_entity_serialization_error(self):
         """Test entity serialization error handling."""
         # Test with non-serializable data
         node = EntityTestNode()
@@ -677,7 +675,7 @@ class EntityTestNodeErrorHandling:
         with pytest.raises(ValidationError):
             node.serialize()
 
-    def test_entity_deserialization_error(self):
+    async def test_entity_deserialization_error(self):
         """Test entity deserialization error handling."""
         # Test with invalid data
         invalid_data = {"name": "test", "value": "invalid"}
@@ -685,7 +683,7 @@ class EntityTestNodeErrorHandling:
         with pytest.raises(ValidationError):
             EntityTestNode.deserialize(invalid_data)
 
-    def test_entity_validation_error(self):
+    async def test_entity_validation_error(self):
         """Test entity validation error handling."""
         # Test with invalid values
         node = EntityTestNode()
@@ -694,7 +692,7 @@ class EntityTestNodeErrorHandling:
         with pytest.raises(ValidationError):
             node.validate()
 
-    def test_entity_context_error(self):
+    async def test_entity_context_error(self):
         """Test entity context error handling."""
         # Test with invalid context key
         node = EntityTestNode()
@@ -702,7 +700,7 @@ class EntityTestNodeErrorHandling:
         with pytest.raises(KeyError):
             _ = node.context["nonexistent_key"]
 
-    def test_entity_property_error(self):
+    async def test_entity_property_error(self):
         """Test entity property error handling."""
         # Test with invalid property assignment
         node = EntityTestNode()
@@ -714,7 +712,7 @@ class EntityTestNodeErrorHandling:
 class EntityTestNodePerformance:
     """Test entity performance characteristics."""
 
-    def test_entity_creation_performance(self):
+    async def test_entity_creation_performance(self):
         """Test entity creation performance."""
         # Create many entities
         entities = []
@@ -724,7 +722,7 @@ class EntityTestNodePerformance:
 
         assert len(entities) == 1000
 
-    def test_entity_serialization_performance(self):
+    async def test_entity_serialization_performance(self):
         """Test entity serialization performance."""
         # Create entity with large data
         entity = EntityTestNode()
@@ -735,7 +733,7 @@ class EntityTestNodePerformance:
             serialized = entity.serialize()
             assert serialized is not None
 
-    def test_entity_deserialization_performance(self):
+    async def test_entity_deserialization_performance(self):
         """Test entity deserialization performance."""
         # Create large data
         data = {
@@ -752,7 +750,7 @@ class EntityTestNodePerformance:
             entity = EntityTestNode.deserialize(data)
             assert entity is not None
 
-    def test_entity_validation_performance(self):
+    async def test_entity_validation_performance(self):
         """Test entity validation performance."""
         # Create entity
         entity = EntityTestNode(name="test_entity", value=42)
@@ -761,7 +759,7 @@ class EntityTestNodePerformance:
         for _ in range(1000):
             assert entity.validate() is True
 
-    def test_entity_equality_performance(self):
+    async def test_entity_equality_performance(self):
         """Test entity equality performance."""
         # Create entities
         entity1 = EntityTestNode(name="test_entity", value=42)
@@ -772,7 +770,7 @@ class EntityTestNodePerformance:
         for _ in range(1000):
             assert entity1 == entity2
 
-    def test_entity_hash_performance(self):
+    async def test_entity_hash_performance(self):
         """Test entity hashing performance."""
         # Create entity
         entity = EntityTestNode(name="test_entity", value=42)

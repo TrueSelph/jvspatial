@@ -1,170 +1,312 @@
-# jvspatial Documentation
+# JVspatial Documentation
 
-## Getting Started
+**Version**: 0.2.0
+**Last Updated**: 2025-10-20
 
-- [Installation and Setup](../../README.md#installation)
-- [Quick Start](../../README.md#quick-start)
-- [Core Concepts](core-concepts.md)
-- [Design Decisions](design-decisions.md)
+Welcome to the jvspatial documentation! This guide will help you understand and use the jvspatial library effectively.
 
-## Fundamentals
+---
 
-### Entity Management
-- [Entity Reference](entity-reference.md) - Node and Edge operations
-- [Entity Attributes](attribute-annotations.md) - Field annotations and validation
-- [MongoDB Query Interface](mongodb-query-interface.md) - Query capabilities
-- [Object Pagination](pagination.md) - Efficient data access
+## 📚 **Documentation Index**
 
-### Graph Operations
-- [Graph Traversal](graph-traversal.md) - Walker patterns and algorithms
-- [Walker Queue Operations](walker-queue-operations.md) - Queue management
-- [Walker Trail Tracking](walker-trail-tracking.md) - Path recording
-- [Walker Reporting & Events](walker-reporting-events.md) - Data collection
+### **Getting Started**
 
-## Integration
+| Document | Description | Audience |
+|----------|-------------|----------|
+| [Quick Start Guide](quick-start-guide.md) | Get started in 5 minutes | Beginners |
+| [Examples](examples.md) | Code examples and tutorials | All levels |
+| [Installation Guide](../README.md) | Installation and setup | Beginners |
 
-### API & Server
-- [REST API Guide](rest-api.md) - FastAPI integration
-- [Server API](server-api.md) - Server configuration
-- [Environment Configuration](environment-configuration.md) - Setup options
+### **Core Concepts**
 
-### Storage & Security
-- [File Storage Guide](file-storage-usage.md) - Multi-backend storage
-- [File Storage Architecture](file-storage-architecture.md) - Technical details
-- [Authentication Guide](authentication.md) - Security and access control
-- [Authentication Quickstart](auth-quickstart.md) - 5-minute setup
+| Document | Description | Audience |
+|----------|-------------|----------|
+| [Graph Traversal](graph-traversal.md) | Walker pattern and graph operations | Intermediate |
+| [Entity Reference](entity-reference.md) | Node, Edge, Walker classes | All levels |
+| [Context Management](context-management-guide.md) | GraphContext, ServerContext usage | Intermediate |
+| [Node Operations](node-operations.md) | Working with nodes | All levels |
 
-### Advanced Features
-- [Webhook Architecture](webhook-architecture.md) - Event handling
-- [Webhooks Quickstart](webhooks-quickstart.md) - Basic setup
-- [Scheduler Guide](scheduler.md) - Background tasks
-- [Caching System](caching.md) - Performance optimization
+### **API & Server**
 
-## Development
+| Document | Description | Audience |
+|----------|-------------|----------|
+| [REST API](rest-api.md) | API design and endpoints | All levels |
+| [API Architecture](api-architecture.md) | Server architecture | Advanced |
+| [Server API](server-api.md) | Server configuration | Intermediate |
+| [Decorator Reference](decorator-reference.md) | All decorators explained | All levels |
 
-### Best Practices
-- [Migration Guide](migration.md) - Moving from other systems
-- [Error Handling](error-handling.md) - Exception patterns
-- [Infinite Walk Protection](infinite-walk-protection.md) - Safety limits
-- [Node Operations](node-operations.md) - Working with nodes
+### **Authentication & Security**
 
-### Project Info
-- [Contributing Guide](contributing.md)
-- [Examples](examples.md)
-- [Troubleshooting](troubleshooting.md)
-- [License](license.md)
+| Document | Description | Audience |
+|----------|-------------|----------|
+| [Authentication](authentication.md) | Auth system overview | Intermediate |
+| [Auth Quickstart](auth-quickstart.md) | Get auth working fast | Beginners |
 
-## Migration Checklist
+### **Integrations**
 
-When migrating to jvspatial from another system:
+| Document | Description | Audience |
+|----------|-------------|----------|
+| [Webhooks Architecture](webhook-architecture.md) | Webhook system design | Advanced |
+| [Webhooks Quickstart](webhooks-quickstart.md) | Using webhooks | Intermediate |
+| [Scheduler](scheduler.md) | Background job scheduling | Intermediate |
+| [File Storage](file-storage-architecture.md) | File storage system | Intermediate |
+| [File Storage Usage](file-storage-usage.md) | Using file storage | All levels |
 
-1. **Assessment**
-   - [ ] Identify current data models and relationships
-   - [ ] Map existing queries to jvspatial patterns
-   - [ ] List required integrations (auth, storage, etc.)
+### **Database & Caching**
 
-2. **Core Setup**
-   - [ ] Install jvspatial and dependencies
-   - [ ] Configure database backend
-   - [ ] Set up environment variables
+| Document | Description | Audience |
+|----------|-------------|----------|
+| [MongoDB Query Interface](mongodb-query-interface.md) | Database queries | Intermediate |
+| [Caching](caching.md) | Cache strategies | Intermediate |
 
-3. **Data Migration**
-   - [ ] Convert models to Node/Edge classes
-   - [ ] Create data migration scripts
-   - [ ] Validate data integrity
+### **Advanced Topics**
 
-4. **Integration**
-   - [ ] Set up authentication if needed
-   - [ ] Configure file storage if needed
-   - [ ] Integrate with existing services
+| Document | Description | Audience |
+|----------|-------------|----------|
+| [Architectural Decisions](architectural-decisions.md) | ADRs and design rationale | Advanced |
+| [Module Responsibility Matrix](module-responsibility-matrix.md) | Module organization | Advanced |
+| [Import Patterns](import-patterns.md) | Best practices for imports | Intermediate |
+| [Design Decisions](design-decisions.md) | Design philosophy | Advanced |
+| [Optimization](optimization.md) | Performance tuning | Advanced |
+| [Error Handling](error-handling.md) | Error patterns | Intermediate |
 
-5. **Testing**
-   - [ ] Run migration on test data
-   - [ ] Verify query results
-   - [ ] Test performance
-   - [ ] Validate relationships
+### **Development**
 
-6. **Deployment**
-   - [ ] Plan deployment strategy
-   - [ ] Set up monitoring
-   - [ ] Create rollback plan
-   - [ ] Document changes
+| Document | Description | Audience |
+|----------|-------------|----------|
+| [Contributing](contributing.md) | Contribution guide | Developers |
+| [Troubleshooting](troubleshooting.md) | Common issues | All levels |
+| [Migration Guide](../../MIGRATION_GUIDE_COMMON_TO_UTILS.md) | Upgrading from 0.1.x | Users |
 
-See the [Migration Guide](migration.md) for detailed instructions.
+### **Reference**
 
-## Common Tasks
+| Document | Description | Audience |
+|----------|-------------|----------|
+| [Attribute Annotations](attribute-annotations.md) | @protected, @private | All levels |
+| [Walker Events](walker-reporting-events.md) | Walker event system | Intermediate |
+| [Walker Queue](walker-queue-operations.md) | Queue management | Advanced |
+| [Walker Trail](walker-trail-tracking.md) | Trail tracking | Advanced |
+| [Pagination](pagination.md) | Paginating results | Intermediate |
+| [Environment Config](environment-configuration.md) | Configuration options | All levels |
+| [Infinite Walk Protection](infinite-walk-protection.md) | Preventing infinite loops | Advanced |
 
-### Working with Entities
+---
+
+## 🎯 **Learning Paths**
+
+### **Path 1: Beginner → Intermediate**
+
+1. ✅ [Quick Start Guide](quick-start-guide.md)
+2. ✅ [Examples](examples.md)
+3. ✅ [Entity Reference](entity-reference.md)
+4. ✅ [Graph Traversal](graph-traversal.md)
+5. ✅ [REST API](rest-api.md)
+6. ✅ [Decorator Reference](decorator-reference.md)
+
+### **Path 2: API Development**
+
+1. ✅ [Quick Start Guide](quick-start-guide.md)
+2. ✅ [REST API](rest-api.md)
+3. ✅ [Decorator Reference](decorator-reference.md)
+4. ✅ [Authentication](authentication.md)
+5. ✅ [Server API](server-api.md)
+6. ✅ [Webhooks Quickstart](webhooks-quickstart.md)
+
+### **Path 3: Advanced Architecture**
+
+1. ✅ [Module Responsibility Matrix](module-responsibility-matrix.md)
+2. ✅ [Import Patterns](import-patterns.md)
+3. ✅ [API Architecture](api-architecture.md)
+4. ✅ [Architectural Decisions](architectural-decisions.md)
+5. ✅ [Design Decisions](design-decisions.md)
+6. ✅ [Optimization](optimization.md)
+
+---
+
+## 🔍 **Quick Reference**
+
+### **Common Tasks**
+
+| Task | Document | Section |
+|------|----------|---------|
+| Create a node | [Quick Start](quick-start-guide.md) | Pattern 1 |
+| Define an endpoint | [Quick Start](quick-start-guide.md) | Step 3 |
+| Build a walker | [Graph Traversal](graph-traversal.md) | Basic Walker |
+| Query database | [MongoDB Query](mongodb-query-interface.md) | Query Builder |
+| Add authentication | [Auth Quickstart](auth-quickstart.md) | Setup |
+| Setup caching | [Caching](caching.md) | Configuration |
+| Handle files | [File Storage Usage](file-storage-usage.md) | Basic Usage |
+| Schedule jobs | [Scheduler](scheduler.md) | Basic Tasks |
+
+### **Common Issues**
+
+| Issue | Document | Solution |
+|-------|----------|----------|
+| Import errors | [Troubleshooting](troubleshooting.md) | Import Issues |
+| Context errors | [Context Management](context-management-guide.md) | Usage Patterns |
+| Deprecation warnings | [Migration Guide](../../MIGRATION_GUIDE_COMMON_TO_UTILS.md) | Update Imports |
+| Authentication fails | [Troubleshooting](troubleshooting.md) | Auth Issues |
+
+---
+
+## 📖 **Document Categories**
+
+### **By Complexity**
+
+**Beginner** (⭐):
+- Quick Start Guide
+- Examples
+- Entity Reference
+- Node Operations
+- REST API
+- Auth Quickstart
+- Webhooks Quickstart
+- File Storage Usage
+
+**Intermediate** (⭐⭐):
+- Graph Traversal
+- Context Management
+- Authentication
+- Server API
+- Scheduler
+- MongoDB Query Interface
+- Caching
+- Import Patterns
+- Error Handling
+
+**Advanced** (⭐⭐⭐):
+- API Architecture
+- Module Responsibility Matrix
+- Architectural Decisions
+- Design Decisions
+- Optimization
+- Webhook Architecture
+- File Storage Architecture
+- Walker Queue Operations
+- Walker Trail Tracking
+- Infinite Walk Protection
+
+### **By Topic**
+
+**Core Graph**:
+- Graph Traversal
+- Entity Reference
+- Node Operations
+- Walker Events
+- Walker Queue Operations
+- Walker Trail Tracking
+
+**API Development**:
+- REST API
+- API Architecture
+- Server API
+- Decorator Reference
+- Error Handling
+
+**Authentication & Security**:
+- Authentication
+- Auth Quickstart
+- Attribute Annotations
+
+**Integrations**:
+- Webhooks Architecture
+- Webhooks Quickstart
+- Scheduler
+- File Storage Architecture
+- File Storage Usage
+
+**Data Management**:
+- MongoDB Query Interface
+- Caching
+- Pagination
+
+**Architecture**:
+- Module Responsibility Matrix
+- Import Patterns
+- Architectural Decisions
+- Design Decisions
+
+---
+
+## 🎓 **Glossary**
+
+| Term | Definition |
+|------|------------|
+| **Node** | A data point in the graph |
+| **Edge** | A relationship between nodes |
+| **Walker** | A pattern for traversing the graph |
+| **Context** | Manages database and configuration |
+| **Root** | Entry point to the graph |
+| **Endpoint** | An API route |
+| **Query Builder** | Fluent interface for database queries |
+| **Cache Backend** | Storage for cached data |
+| **Storage Interface** | File storage abstraction |
+| **Decorator** | Function/class modifier |
+
+---
+
+## 🔧 **API Reference**
+
+### **Core Modules**
 
 ```python
-from jvspatial.core import Node, Edge
+# Core entities
+from jvspatial import Object, Node, Edge, Walker, Root
 
-# Create entities
-user = await User.create(name="Alice", email="alice@example.com")
-post = await Post.create(title="Hello", content="World")
-author = await AuthorEdge.create(src=user, dst=post)
+# Graph operations
+from jvspatial.core import GraphContext, on_visit, on_exit
 
-# Query entities
-active_users = await User.find({
-    "context.active": True,
-    "context.last_login": {"$gte": last_week}
-})
+# API
+from jvspatial.api import Server, ServerConfig, endpoint
 
-# Graph traversal
-posts = await user.nodes(
-    node=Post,
-    edge=AuthorEdge,
-    status="published"
-)
+# Database
+from jvspatial.db import get_database, query
+
+# Cache
+from jvspatial.cache import get_cache_backend
+
+# Storage
+from jvspatial.storage.interfaces import LocalFileInterface
+
+# Utils
+from jvspatial.utils import memoize, retry, NodeId
 ```
 
-### REST API Integration
+---
 
-```python
-from jvspatial.api import Server, endpoint
+## 📊 **Version History**
 
-server = Server(title="My API")
+| Version | Date | Changes |
+|---------|------|---------|
+| **0.2.0** | 2025-10-20 | Major reorganization, utils module, new docs |
+| **0.1.x** | 2025-09-xx | Initial release |
 
-@endpoint("/api/users/{user_id}/posts")
-class UserPostsWalker(Walker):
-    @on_visit(User)
-    async def get_posts(self, here: User):
-        posts = await here.nodes(
-            node=Post,
-            edge=AuthorEdge
-        )
-        self.report({"posts": [post.export() for post in posts]})
+---
 
-server.run()
-```
+## 🤝 **Contributing**
 
-### Authentication
+Want to improve the documentation?
 
-```python
-from jvspatial.api.auth import configure_auth, auth_endpoint
+1. Read the [Contributing Guide](contributing.md)
+2. Check for open documentation issues
+3. Submit a pull request
 
-configure_auth(jwt_secret_key="your-secret-key")
+---
 
-@auth_endpoint("/api/protected", permissions=["read_data"])
-async def protected_endpoint():
-    return {"message": "Authenticated access"}
-```
+## 📧 **Support**
 
-### File Storage
+- **Documentation Issues**: Open a GitHub issue
+- **Questions**: GitHub Discussions
+- **Email**: support@jvspatial.com
 
-```python
-from jvspatial.storage import get_file_interface
+---
 
-storage = get_file_interface()
+## 📝 **License**
 
-# Save file
-await storage.save_file("path/to/file.pdf", content)
+See [License](license.md) for details.
 
-# Create temporary URL
-url = await storage.get_signed_url(
-    "path/to/file.pdf",
-    expires_in=3600
-)
-```
+---
 
-See individual guides for more detailed documentation on each topic.
+**Last Updated**: 2025-10-20
+**Version**: 0.2.0
+**Maintainer**: JVspatial Team

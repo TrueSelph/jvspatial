@@ -12,7 +12,7 @@ import pytest
 
 # Test availability checking first
 try:
-    from jvspatial.api.scheduler import SCHEDULE_AVAILABLE
+    from jvspatial.api.integrations.scheduler.scheduler import SCHEDULE_AVAILABLE
 
     SCHEDULER_TESTS_ENABLED = SCHEDULE_AVAILABLE
 except ImportError:
@@ -25,15 +25,18 @@ except ImportError:
 class TestSchedulerIntegration:
     """Test scheduler integration when schedule package is available."""
 
-    def test_scheduler_availability(self):
+    async def test_scheduler_availability(self):
         """Test that scheduler is properly detected as available."""
-        from jvspatial.api.scheduler import SCHEDULE_AVAILABLE
+        from jvspatial.api.integrations.scheduler.scheduler import SCHEDULE_AVAILABLE
 
         assert SCHEDULE_AVAILABLE is True
 
-    def test_scheduler_service_creation(self):
+    async def test_scheduler_service_creation(self):
         """Test creating a scheduler service."""
-        from jvspatial.api.scheduler import SchedulerConfig, SchedulerService
+        from jvspatial.api.integrations.scheduler.scheduler import (
+            SchedulerConfig,
+            SchedulerService,
+        )
 
         config = SchedulerConfig(enabled=True, interval=1)
         scheduler = SchedulerService(config=config)
@@ -42,12 +45,16 @@ class TestSchedulerIntegration:
         assert scheduler.config.interval == 1
         assert scheduler.is_running is False
 
-    def test_on_schedule_decorator(self):
+    async def test_on_schedule_decorator(self):
         """Test the @on_schedule decorator."""
-        from jvspatial.api.scheduler import get_schedule_info, is_scheduled, on_schedule
+        from jvspatial.api.integrations.scheduler.scheduler import (
+            get_schedule_info,
+            is_scheduled,
+            on_schedule,
+        )
 
         @on_schedule("every 10 seconds", description="Test task")
-        def test_task():
+        async def test_task():
             return "test result"
 
         # Test function metadata
@@ -59,12 +66,12 @@ class TestSchedulerIntegration:
         assert schedule_info["description"] == "Test task"
 
         # Test function execution
-        result = test_task()
+        result = await test_task()
         assert result == "test result"
 
-    def test_scheduler_registry(self):
+    async def test_scheduler_registry(self):
         """Test the decorator registry functionality."""
-        from jvspatial.api.scheduler import (
+        from jvspatial.api.integrations.scheduler.scheduler import (
             clear_scheduled_registry,
             get_scheduled_tasks,
             on_schedule,
@@ -86,9 +93,9 @@ class TestSchedulerIntegration:
         # Clean up
         clear_scheduled_registry()
 
-    def test_task_registration_with_scheduler(self):
+    async def test_task_registration_with_scheduler(self):
         """Test registering decorated tasks with scheduler service."""
-        from jvspatial.api.scheduler import (
+        from jvspatial.api.integrations.scheduler.scheduler import (
             SchedulerConfig,
             SchedulerService,
             clear_scheduled_registry,
@@ -119,9 +126,12 @@ class TestSchedulerIntegration:
         # Clean up
         clear_scheduled_registry()
 
-    def test_scheduler_lifecycle(self):
+    async def test_scheduler_lifecycle(self):
         """Test starting and stopping the scheduler."""
-        from jvspatial.api.scheduler import SchedulerConfig, SchedulerService
+        from jvspatial.api.integrations.scheduler.scheduler import (
+            SchedulerConfig,
+            SchedulerService,
+        )
 
         config = SchedulerConfig(
             enabled=True, interval=0.1
@@ -139,9 +149,9 @@ class TestSchedulerIntegration:
         scheduler.stop()
         assert scheduler.is_running is False
 
-    def test_scheduler_status(self):
+    async def test_scheduler_status(self):
         """Test getting scheduler status information."""
-        from jvspatial.api.scheduler import (
+        from jvspatial.api.integrations.scheduler.scheduler import (
             SchedulerConfig,
             SchedulerService,
             clear_scheduled_registry,
@@ -177,7 +187,7 @@ class TestSchedulerIntegration:
     @pytest.mark.asyncio
     async def test_middleware_lifecycle_manager(self):
         """Test the scheduler lifecycle manager."""
-        from jvspatial.api.scheduler import (
+        from jvspatial.api.integrations.scheduler.scheduler import (
             SchedulerConfig,
             SchedulerLifecycleManager,
             SchedulerService,
@@ -201,22 +211,24 @@ class TestSchedulerIntegration:
 class TestSchedulerUnavailable:
     """Test behavior when schedule package is not available."""
 
-    @patch("jvspatial.api.scheduler.SCHEDULE_AVAILABLE", False)
-    def test_import_error_when_unavailable(self):
+    @patch("jvspatial.api.integrations.scheduler.scheduler.SCHEDULE_AVAILABLE", False)
+    async def test_import_error_when_unavailable(self):
         """Test that helpful errors are raised when schedule is unavailable."""
         # This test simulates the schedule package not being available
         # We can't easily test the actual import failure, but we can test
         # that the error factories work correctly
-        from jvspatial.api.scheduler import _missing_dependency_factory
+        from jvspatial.api.integrations.scheduler.scheduler import (
+            _missing_dependency_factory,
+        )
 
         missing_class = _missing_dependency_factory("TestClass")
 
-        with pytest.raises(ImportError, match="schedule.*package is required"):
+        with pytest.raises(ImportError, match="requires the schedule package"):
             missing_class()
 
-    def test_schedule_available_flag(self):
+    async def test_schedule_available_flag(self):
         """Test that the SCHEDULE_AVAILABLE flag is accessible."""
-        from jvspatial.api.scheduler import SCHEDULE_AVAILABLE
+        from jvspatial.api.integrations.scheduler.scheduler import SCHEDULE_AVAILABLE
 
         assert isinstance(SCHEDULE_AVAILABLE, bool)
 
@@ -227,9 +239,9 @@ class TestSchedulerUtilities:
     @pytest.mark.skipif(
         not SCHEDULER_TESTS_ENABLED, reason="Schedule package not available"
     )
-    def test_default_scheduler_management(self):
+    async def test_default_scheduler_management(self):
         """Test setting and getting default scheduler."""
-        from jvspatial.api.scheduler import (
+        from jvspatial.api.integrations.scheduler.scheduler import (
             SchedulerConfig,
             SchedulerService,
             get_default_scheduler,
@@ -255,9 +267,9 @@ class TestSchedulerUtilities:
 class TestFastAPIIntegration:
     """Test integration with FastAPI applications."""
 
-    def test_middleware_creation(self):
+    async def test_middleware_creation(self):
         """Test creating scheduler middleware."""
-        from jvspatial.api.scheduler import (
+        from jvspatial.api.integrations.scheduler.scheduler import (
             SchedulerConfig,
             SchedulerMiddleware,
             SchedulerService,
@@ -270,9 +282,9 @@ class TestFastAPIIntegration:
         middleware = SchedulerMiddleware(None, scheduler)  # None as app for testing
         assert middleware.scheduler_service is scheduler
 
-    def test_add_scheduler_to_app_function(self):
+    async def test_add_scheduler_to_app_function(self):
         """Test the add_scheduler_to_app function."""
-        from jvspatial.api.scheduler import (
+        from jvspatial.api.integrations.scheduler.scheduler import (
             SchedulerConfig,
             SchedulerService,
             add_scheduler_to_app,

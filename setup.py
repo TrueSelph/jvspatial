@@ -54,6 +54,9 @@ setup(
             "psutil>=5.9.0",  # System monitoring
             "python-dotenv>=1.0.0",  # Environment variable management
         ],
+        "cache": [
+            "redis[hiredis]>=5.0.0",  # Redis client with C parser for performance
+        ],
     },
     classifiers=[
         "Development Status :: 4 - Beta",

@@ -28,12 +28,12 @@ from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node, Root, Walker
 from jvspatial.db.factory import get_database
 
-from .response.helpers import create_endpoint_helper
-from .routing.endpoint import EndpointRouter
+from .endpoints.registry import EndpointRegistryService
+from .endpoints.response import create_endpoint_helper
+from .endpoints.router import EndpointRouter
+from .middleware.manager import MiddlewareManager
 from .services.discovery import PackageDiscoveryService
-from .services.endpoint_registry import EndpointRegistryService
 from .services.lifecycle import LifecycleManager
-from .services.middleware import MiddlewareManager
 
 
 class Server:
@@ -232,7 +232,12 @@ class Server:
         """
 
         def decorator(func: Callable) -> Callable:
-            self._middleware_manager.add_middleware(middleware_type, func)
+            # Store the middleware for later async registration
+            # This is a workaround for the async/sync decorator issue
+            self._middleware_manager._custom_middleware.append(
+                {"func": func, "middleware_type": middleware_type}
+            )
+
             return func
 
         return decorator
@@ -255,7 +260,7 @@ class Server:
 
         return decorator
 
-    def on_startup(self: "Server", func: Callable[[], Any]) -> Callable[[], Any]:
+    async def on_startup(self: "Server", func: Callable[[], Any]) -> Callable[[], Any]:
         """Register startup task.
 
         Args:
@@ -266,7 +271,7 @@ class Server:
         """
         return self._lifecycle_manager.add_startup_hook(func)
 
-    def on_shutdown(self: "Server", func: Callable[[], Any]) -> Callable[[], Any]:
+    async def on_shutdown(self: "Server", func: Callable[[], Any]) -> Callable[[], Any]:
         """Register shutdown task.
 
         Args:
@@ -316,6 +321,7 @@ class Server:
             FastAPI: Fully configured application instance
         """
         app = self._create_base_app()
+        # Configure middleware synchronously to avoid "app started" errors
         self._configure_middleware(app)
         self._configure_exception_handlers(app)
         self._register_core_routes(app)
@@ -355,6 +361,8 @@ class Server:
 
     def _configure_middleware(self: "Server", app: FastAPI) -> None:
         """Configure all middleware using MiddlewareManager.
+
+        Works in both sync and async contexts.
 
         Args:
             app: FastAPI application instance to configure
@@ -400,9 +408,9 @@ class Server:
                 # Test database connectivity through GraphContext
                 if self._graph_context:
                     # Use explicit GraphContext
-                    root = await self._graph_context.get_node(Root, "root")
+                    root = await self._graph_context.get(Root, "n:Root:root")
                     if not root:
-                        root = await self._graph_context.create_node(Root)
+                        root = await self._graph_context.create(Root)
                 else:
                     # Use default GraphContext behavior
                     root = await Root.get("n:Root:root")
@@ -567,7 +575,9 @@ class Server:
             f"📝 Registered walker class: {walker_class.__name__} at {path}"
         )
 
-    def unregister_walker_class(self: "Server", walker_class: Type[Walker]) -> bool:
+    async def unregister_walker_class(
+        self: "Server", walker_class: Type[Walker]
+    ) -> bool:
         """Remove a walker class and its endpoint from the server.
 
         Args:
@@ -604,7 +614,9 @@ class Server:
             )
             return False
 
-    def unregister_walker_endpoint(self: "Server", path: str) -> List[Type[Walker]]:
+    async def unregister_walker_endpoint(
+        self: "Server", path: str
+    ) -> List[Type[Walker]]:
         """Remove all walkers registered to a specific path.
 
         Args:
@@ -636,7 +648,9 @@ class Server:
 
         return removed_walkers
 
-    def unregister_endpoint(self: "Server", endpoint: Union[str, Callable]) -> bool:
+    async def unregister_endpoint(
+        self: "Server", endpoint: Union[str, Callable]
+    ) -> bool:
         """Remove a function endpoint from the server.
 
         Args:
@@ -687,7 +701,7 @@ class Server:
 
         return success
 
-    def unregister_endpoint_by_path(self: "Server", path: str) -> int:
+    async def unregister_endpoint_by_path(self: "Server", path: str) -> int:
         """Remove all endpoints (both walker and function) from a specific path.
 
         Args:
@@ -706,7 +720,7 @@ class Server:
 
         return removed_count
 
-    def list_function_endpoints(self: "Server") -> Dict[str, Dict[str, Any]]:
+    async def list_function_endpoints(self: "Server") -> Dict[str, Dict[str, Any]]:
         """Get information about all registered function endpoints.
 
         Returns:
@@ -947,9 +961,12 @@ class Server:
         ) -> Union[Type[Walker], Callable]:
             # Handle Walker class
             if inspect.isclass(target) and issubclass(target, Walker):
-                self.register_walker_class(
-                    target, path, methods=methods or ["POST"], **kwargs
-                )
+                # Store registration info for later async processing
+                target._jvspatial_endpoint_config = {
+                    "path": path,
+                    "methods": methods or ["POST"],
+                    "kwargs": kwargs,
+                }
                 return target
 
             # Handle function endpoint
@@ -957,7 +974,9 @@ class Server:
 
             # Create wrapper if endpoint helper is needed
             if "endpoint" in inspect.signature(func).parameters:
+                import functools
 
+                @functools.wraps(func)
                 async def func_wrapper(*args: Any, **kwargs_inner: Any) -> Any:
                     endpoint_helper = create_endpoint_helper(walker_instance=None)
                     kwargs_inner["endpoint"] = endpoint_helper
@@ -967,11 +986,8 @@ class Server:
                         else func(*args, **kwargs_inner)
                     )
 
-                # Preserve metadata
-                func_wrapper.__name__ = func.__name__
-                func_wrapper.__doc__ = func.__doc__
             else:
-                func_wrapper = func
+                func_wrapper = func  # type: ignore[assignment]
 
             # Register with endpoint registry and router
             try:
@@ -1074,7 +1090,9 @@ def endpoint(
 
         # Create wrapper if endpoint helper is needed
         if "endpoint" in inspect.signature(func).parameters:
-            # Define func_wrapper locally within the if block
+            import functools
+
+            @functools.wraps(func)
             async def func_wrapper(*args: Any, **kwargs_inner: Any) -> Any:
                 endpoint_helper = create_endpoint_helper(walker_instance=None)
                 kwargs_inner["endpoint"] = endpoint_helper
@@ -1084,12 +1102,9 @@ def endpoint(
                     else func(*args, **kwargs_inner)
                 )
 
-            # Preserve metadata
-            func_wrapper.__name__ = func.__name__
-            func_wrapper.__doc__ = func.__doc__
         else:
             # If no wrapper is needed, func_wrapper is just the original func
-            func_wrapper = func
+            func_wrapper = func  # type: ignore[assignment]
 
         # Register with endpoint registry and router
         try:

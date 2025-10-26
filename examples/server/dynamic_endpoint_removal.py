@@ -15,7 +15,8 @@ from contextlib import asynccontextmanager
 import uvicorn
 
 from jvspatial.api.server import Server, endpoint
-from jvspatial.core.entities import Node, Walker, on_visit
+from jvspatial.core.decorators import on_visit
+from jvspatial.core.entities import Node, Walker
 
 # Set up logging
 logging.basicConfig(

@@ -51,7 +51,7 @@ class MonitoringWalker(Walker):
                 },
             )
             self.alerts_sent += 1
-            self.report(
+            await self.report(
                 {
                     "alert_sent": {
                         "node": here.name,
@@ -75,7 +75,7 @@ class LoggingWalker(Walker):
         """Handle alert events from monitoring walkers."""
         self.events_received += 1
 
-        self.report(
+        await self.report(
             {
                 "received_alert": {
                     "from_walker": event_data.get("walker_id", "unknown"),
@@ -91,7 +91,7 @@ class LoggingWalker(Walker):
     @on_visit(AlertNode)
     async def log_node_visit(self, here: AlertNode) -> None:
         """Log visits to alert nodes."""
-        self.report(
+        await self.report(
             {
                 "node_visit": {
                     "node": here.name,
@@ -115,7 +115,7 @@ class AnalyticsWalker(Walker):
         severity = event_data.get("severity", "info")
         self.alert_counts[severity] += 1
 
-        self.report(
+        await self.report(
             {
                 "alert_analysis": {
                     "severity": severity,
@@ -143,7 +143,7 @@ class AnalyticsWalker(Walker):
 
         await self.emit("analytics_complete", summary_data)
 
-        self.report({"final_summary": summary_data})
+        await self.report({"final_summary": summary_data})
 
 
 class ReportWalker(Walker):
@@ -158,7 +158,7 @@ class ReportWalker(Walker):
         """Handle completion of analytics from other walkers."""
         self.analytics_received.append(event_data)
 
-        self.report(
+        await self.report(
             {
                 "analytics_received": {
                     "from_analyzer": event_data.get("analyzer_id", "unknown"),
@@ -293,7 +293,7 @@ async def demonstrate_event_filtering():
             """Only process critical alerts."""
             if event_data.get("severity") == "critical":
                 self.critical_alerts += 1
-                self.report(
+                await self.report(
                     {
                         "critical_alert_handled": {
                             "node": event_data.get("name"),

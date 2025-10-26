@@ -336,7 +336,7 @@ class InteractWalker(Walker):
         await here.save()
 
         # Report action execution
-        self.report(
+        await self.report(
             {
                 "action_executed": {
                     "name": here.name,
@@ -393,7 +393,7 @@ class InteractWalker(Walker):
         print(f"\n✅ Agent interaction completed!")
         print(f"📊 Summary: Executed {executed_count} actions")
 
-        self.report(
+        await self.report(
             {
                 "interaction_summary": {
                     "status": "completed",

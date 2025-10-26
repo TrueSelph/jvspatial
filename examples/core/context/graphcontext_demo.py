@@ -50,7 +50,7 @@ class Tourist(Walker):
     async def visit_city(self, here: City):
         """Visit a city and record the visit."""
         self.cities_visited.append(here.name)
-        self.report({"city_visited": here.name})
+        await self.report({"city_visited": here.name})
         print(f"🏛️  Visiting {here.name} (population: {here.population:,})")
 
     @on_exit

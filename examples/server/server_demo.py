@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse
 from pydantic import Field
 
 from jvspatial.api import create_server, endpoint
-from jvspatial.api.endpoint import EndpointField
+from jvspatial.api.decorators import EndpointField
 from jvspatial.core import Node, Root, Walker, on_exit, on_visit
 
 # ====================== NODE TYPES ======================
@@ -549,7 +549,7 @@ async def get_system_stats():
 async def list_locations(limit: int = 100):
     """List all locations."""
     try:
-        locations = await Location.all()
+        locations: List[Location] = await Location.all()  # type: ignore[assignment]
         locations = locations[:limit]
 
         return {

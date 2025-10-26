@@ -19,7 +19,8 @@ from typing import Optional
 
 from jvspatial.api import create_server, endpoint
 from jvspatial.api.endpoint.decorators import EndpointField
-from jvspatial.core.entities import Node, Root, Walker, on_visit
+from jvspatial.core.decorators import on_visit
+from jvspatial.core.entities import Node, Root, Walker
 
 # ====================== DATA MODELS ======================
 

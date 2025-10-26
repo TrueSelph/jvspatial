@@ -10,14 +10,14 @@ from jvspatial.cache.layered import LayeredCache
 class TestLayeredCache:
     """Test LayeredCache functionality."""
 
-    def test_layered_cache_initialization(self):
+    async def test_layered_cache_initialization(self):
         """Test layered cache initialization."""
         cache = LayeredCache()
         assert cache is not None
         assert cache.l1 is not None
         assert cache.l2 is not None or not cache.l2_available
 
-    def test_layered_cache_default_initialization(self):
+    async def test_layered_cache_default_initialization(self):
         """Test layered cache with default initialization."""
         cache = LayeredCache()
         assert cache is not None

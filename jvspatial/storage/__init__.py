@@ -29,7 +29,7 @@ Example:
     >>>
     >>> # Create URL proxy for secure file access
     >>> manager = get_proxy_manager()
-    >>> proxy = await manager.create_proxy(
+    >>> proxy = manager.create_proxy(
     ...     file_path="uploads/document.pdf",
     ...     expires_in=3600,  # 1 hour
     ...     one_time=True

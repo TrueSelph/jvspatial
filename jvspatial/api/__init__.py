@@ -10,18 +10,21 @@ This module provides:
 
 from .config import ServerConfig
 from .context import ServerContext, get_current_server, set_current_server
-from .decorators.shortcuts import (
+from .decorators.route import (
     admin_endpoint,
     auth_endpoint,
     endpoint,
     webhook_endpoint,
 )
-from .endpoint import EndpointField, EndpointFieldInfo, endpoint_field
-from .response import ResponseHelper, format_response
-from .routing import (
-    BaseRouter,
-    EndpointRouter,
-)
+
+# Note: EndpointField, EndpointFieldInfo, endpoint_field moved to endpoints module
+# from .endpoints import EndpointField, EndpointFieldInfo, endpoint_field
+# from .endpoints import ResponseHelper, format_response
+# Note: Routing moved to endpoints module
+# from .routing import (
+#     BaseRouter,
+#     EndpointRouter,
+# )
 from .server import Server, create_server
 
 __all__ = [

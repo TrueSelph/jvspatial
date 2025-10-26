@@ -228,8 +228,7 @@ configure_auth(
 ```python path=examples/auth_demo.py start=175
 # 3. Regional Analyst with Spatial Restrictions
 regional_user = await User.create(
-    username="regional_user",
-    email="regional@demo.com",
+    email="regional_user@example.com",
     password_hash=User.hash_password("regional123"),
     is_admin=False,
     is_active=True,
@@ -264,7 +263,6 @@ async def protected_data(request: Request):
         "message": "This is protected data",
         "authentication": "Required - JWT token",
         "user": {
-            "username": current_user.username,
             "email": current_user.email,
             "roles": current_user.roles,
             "permissions": current_user.permissions
@@ -281,7 +279,7 @@ async def admin_list_users(request: Request):
     return {
         "message": "User management - Admin access only",
         "authentication": "JWT token + admin role required",
-        "admin_user": current_user.username,
+        "admin_user": current_user.email,
         "total_users": len(all_users),
         "users": [user.export() for user in all_users]
     }

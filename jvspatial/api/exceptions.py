@@ -4,8 +4,12 @@ This module provides a consistent exception hierarchy for all API errors,
 ensuring uniform error responses and better error tracking.
 """
 
+import logging
 from http import HTTPStatus
 from typing import Any, Dict, Optional
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 
 class JVSpatialAPIException(Exception):
@@ -38,7 +42,7 @@ class JVSpatialAPIException(Exception):
         self.details = details or {}
         super().__init__(self.message)
 
-    def to_dict(self) -> Dict[str, Any]:
+    async def to_dict(self) -> Dict[str, Any]:
         """Convert exception to dictionary for JSON response.
 
         Returns:
@@ -379,3 +383,69 @@ __all__ = [
     "ServiceUnavailableError",
     "TimeoutError",
 ]
+
+
+# ============================================================================
+# FastAPI Exception Handlers (merged from error_handlers.py)
+# ============================================================================
+
+logger = logging.getLogger(__name__)
+
+
+async def jvspatial_exception_handler(
+    request: Request, exc: "JVSpatialAPIException"
+) -> JSONResponse:
+    """Handle JVSpatialAPIException instances.
+
+    Args:
+        request: The FastAPI request
+        exc: The exception instance
+
+    Returns:
+        JSON response with error details
+    """
+    # Log the error
+    if exc.status_code >= 500:
+        logger.error(
+            f"API Error [{exc.error_code}]: {exc.message}",
+            extra={
+                "error_code": exc.error_code,
+                "status_code": exc.status_code,
+                "details": exc.details,
+                "path": request.url.path,
+                "method": request.method,
+            },
+            exc_info=True,
+        )
+    else:
+        logger.warning(
+            f"API Error [{exc.error_code}]: {exc.message}",
+            extra={
+                "error_code": exc.error_code,
+                "status_code": exc.status_code,
+                "path": request.url.path,
+                "method": request.method,
+            },
+        )
+
+    # Return standardized error response
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": {
+                "code": exc.error_code,
+                "message": exc.message,
+                "details": exc.details,
+            }
+        },
+    )
+
+
+def register_exception_handlers(app: FastAPI) -> None:
+    """Register exception handlers with a FastAPI application.
+
+    Args:
+        app: The FastAPI application instance
+    """
+    app.add_exception_handler(JVSpatialAPIException, jvspatial_exception_handler)
+    logger.info("Registered jvspatial exception handlers")

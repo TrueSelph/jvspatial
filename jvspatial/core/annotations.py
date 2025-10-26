@@ -30,6 +30,18 @@ from typing import Any, Dict, Set, Type
 from pydantic import Field
 from pydantic.fields import PrivateAttr
 
+
+class AttributeProtectionError(AttributeError):
+    """Exception raised when trying to modify a protected attribute."""
+
+    def __init__(self, attr_name: str, cls_name: str):
+        self.attr_name = attr_name
+        self.cls_name = cls_name
+        super().__init__(
+            f"Cannot modify protected attribute '{attr_name}' of class '{cls_name}' after initialization"
+        )
+
+
 # Global registry for protected and transient attributes per class
 _PROTECTED_ATTRS: Dict[Type, Set[str]] = {}
 _TRANSIENT_ATTRS: Dict[Type, Set[str]] = {}
@@ -44,17 +56,27 @@ class AnnotatedField:
         self.is_transient = False
         self.additional_kwargs: Dict[str, Any] = {}
 
-    def mark_protected(self) -> "AnnotatedField":
+    async def mark_protected(self) -> "AnnotatedField":
         """Mark this field as protected."""
         self.is_protected = True
         return self
 
-    def mark_transient(self) -> "AnnotatedField":
+    def _mark_protected_sync(self) -> "AnnotatedField":
+        """Mark this field as protected (sync version for decorators)."""
+        self.is_protected = True
+        return self
+
+    async def mark_transient(self) -> "AnnotatedField":
         """Mark this field as transient."""
         self.is_transient = True
         return self
 
-    def to_field(self) -> Any:
+    def _mark_transient_sync(self) -> "AnnotatedField":
+        """Mark this field as transient (sync version for decorators)."""
+        self.is_transient = True
+        return self
+
+    async def to_field(self) -> Any:
         """Convert to Pydantic Field with appropriate annotations."""
         # If it's already a Field, copy its complete configuration
         if hasattr(self.field_def, "default"):
@@ -110,6 +132,80 @@ class AnnotatedField:
 
         return Field(**kwargs)
 
+    def _to_field_sync(self) -> Any:
+        """Convert to Pydantic Field with appropriate annotations (sync version for decorators)."""
+        # If it's already a Field, copy its complete configuration
+        if hasattr(self.field_def, "default"):
+            # Start with the original field's complete config
+            kwargs = {}
+
+            # Copy all the important field attributes
+            field_attrs = [
+                "default",
+                "default_factory",
+                "alias",
+                "description",
+                "title",
+                "examples",
+                "exclude",
+                "include",
+                "discriminator",
+                "json_schema_extra",
+                "frozen",
+                "validate_default",
+                "repr",
+                "init",
+                "init_var",
+                "kw_only",
+            ]
+
+            for attr in field_attrs:
+                if hasattr(self.field_def, attr):
+                    value = getattr(self.field_def, attr)
+                    if value is not None:
+                        kwargs[attr] = value
+
+            # Add our protection annotations
+            if self.is_protected:
+                kwargs["description"] = (
+                    kwargs.get("description", "") + " (protected)"
+                ).strip()
+                # Set json_schema_extra for __init_subclass__ to detect
+                if "json_schema_extra" not in kwargs:
+                    kwargs["json_schema_extra"] = {}
+                kwargs["json_schema_extra"]["protected"] = True
+            if self.is_transient:
+                # Don't set exclude=True here - transient fields should be in model_dump
+                # but excluded from export() method
+                # Set json_schema_extra for __init_subclass__ to detect
+                if "json_schema_extra" not in kwargs:
+                    kwargs["json_schema_extra"] = {}
+                kwargs["json_schema_extra"]["transient"] = True
+
+            # Merge additional kwargs
+            kwargs.update(self.additional_kwargs)
+
+            return Field(**kwargs)
+
+        # For non-Field definitions, create a basic Field
+        kwargs = {"default": self.field_def}
+        if self.is_protected:
+            kwargs["description"] = "protected"
+            # Set json_schema_extra for __init_subclass__ to detect
+            kwargs["json_schema_extra"] = {"protected": True}
+        if self.is_transient:
+            # Don't set exclude=True here - transient fields should be in model_dump
+            # but excluded from export() method
+            # Set json_schema_extra for __init_subclass__ to detect
+            if "json_schema_extra" not in kwargs:
+                kwargs["json_schema_extra"] = {}
+            kwargs["json_schema_extra"]["transient"] = True
+
+        # Merge additional kwargs
+        kwargs.update(self.additional_kwargs)
+
+        return Field(**kwargs)
+
 
 def protected(field_def: Any = None, **kwargs: Any) -> Any:
     """Decorator to mark a field as protected - cannot be modified after initial assignment.
@@ -143,20 +239,20 @@ def protected(field_def: Any = None, **kwargs: Any) -> Any:
         # Add any additional kwargs to the AnnotatedField before converting
         if kwargs:
             field_def.additional_kwargs.update(kwargs)
-        return field_def.mark_protected().to_field()
+        return field_def._mark_protected_sync()._to_field_sync()
 
     # Handle Field objects with additional kwargs
     if kwargs and hasattr(field_def, "default"):
         # Merge kwargs into existing Field without losing properties
         annotated = AnnotatedField(field_def)
         annotated.additional_kwargs = kwargs
-        return annotated.mark_protected().to_field()
+        return annotated._mark_protected_sync()._to_field_sync()
 
     # Create AnnotatedField and mark as protected
     annotated = AnnotatedField(field_def)
     if kwargs:
         annotated.additional_kwargs = kwargs
-    return annotated.mark_protected().to_field()
+    return annotated._mark_protected_sync()._to_field_sync()
 
 
 def transient(field_def: Any = None, **kwargs: Any) -> Any:
@@ -191,20 +287,20 @@ def transient(field_def: Any = None, **kwargs: Any) -> Any:
         # Add any additional kwargs to the AnnotatedField before converting
         if kwargs:
             field_def.additional_kwargs.update(kwargs)
-        return field_def.mark_transient().to_field()
+        return field_def._mark_transient_sync()._to_field_sync()
 
     # Handle Field objects with additional kwargs
     if kwargs and hasattr(field_def, "default"):
         # Merge kwargs into existing Field without losing properties
         annotated = AnnotatedField(field_def)
         annotated.additional_kwargs = kwargs
-        return annotated.mark_transient().to_field()
+        return annotated._mark_transient_sync()._to_field_sync()
 
     # Create AnnotatedField and mark as transient
     annotated = AnnotatedField(field_def)
     if kwargs:
         annotated.additional_kwargs = kwargs
-    return annotated.mark_transient().to_field()
+    return annotated._mark_transient_sync()._to_field_sync()
 
 
 def register_protected_attrs(cls: Type, attr_names: Set[str]) -> None:
@@ -292,6 +388,32 @@ def get_transient_attrs(cls: Type) -> Set[str]:
 
 
 def is_protected(cls: Type, attr_name: str) -> bool:
+    """Check if an attribute is protected for a given class.
+
+    Args:
+        cls: Class to check
+        attr_name: Attribute name to check
+
+    Returns:
+        True if attribute is protected, False otherwise
+    """
+    return attr_name in get_protected_attrs(cls)
+
+
+def is_transient(cls: Type, attr_name: str) -> bool:
+    """Check if an attribute is transient for a given class.
+
+    Args:
+        cls: Class to check
+        attr_name: Attribute name to check
+
+    Returns:
+        True if attribute is transient, False otherwise
+    """
+    return attr_name in get_transient_attrs(cls)
+
+
+def is_protected_old(cls: Type, attr_name: str) -> bool:
     """Check if an attribute is protected for a class.
 
     Args:
@@ -302,30 +424,6 @@ def is_protected(cls: Type, attr_name: str) -> bool:
         True if attribute is protected
     """
     return attr_name in get_protected_attrs(cls)
-
-
-def is_transient(cls: Type, attr_name: str) -> bool:
-    """Check if an attribute is transient for a class.
-
-    Args:
-        cls: Class to check
-        attr_name: Name of attribute to check
-
-    Returns:
-        True if attribute is transient
-    """
-    return attr_name in get_transient_attrs(cls)
-
-
-class AttributeProtectionError(Exception):
-    """Raised when trying to modify a protected attribute."""
-
-    def __init__(self, attr_name: str, cls_name: str):
-        self.attr_name = attr_name
-        self.cls_name = cls_name
-        super().__init__(
-            f"Cannot modify protected attribute '{attr_name}' on {cls_name} after initialization"
-        )
 
 
 class ProtectedAttributeMixin:

@@ -32,13 +32,14 @@ class CollectorWalker(Walker):
     async def collect_data(self, here: DataNode) -> None:
         """Collect data from DataNode instances."""
         # Report individual node data
-        self.report(
+        report_data = await self.get_report()
+        await self.report(
             {
                 "node_id": here.id,
                 "name": here.name,
                 "value": here.value,
                 "category": here.category,
-                "collection_order": len(self.get_report()) + 1,
+                "collection_order": len(report_data) + 1,
             }
         )
 
@@ -53,14 +54,14 @@ class CollectorWalker(Walker):
     @on_exit
     async def generate_summary(self) -> None:
         """Generate a summary report when traversal is complete."""
-        report_data = self.get_report()
+        report_data = await self.get_report()
 
         # Calculate summary statistics
         total_nodes = len(report_data)
         avg_value = self.total_collected / total_nodes if total_nodes > 0 else 0
 
         # Report summary
-        self.report(
+        await self.report(
             {
                 "summary": {
                     "total_nodes_visited": total_nodes,
@@ -95,7 +96,7 @@ class AnalyticsWalker(Walker):
         )
 
         # Report the analysis
-        self.report(
+        await self.report(
             {
                 "analysis": {
                     "node_id": here.id,
@@ -121,7 +122,7 @@ class AnalyticsWalker(Walker):
     @on_exit
     async def generate_analytics_summary(self) -> None:
         """Generate analytics summary."""
-        self.report(
+        await self.report(
             {
                 "analytics_summary": {
                     "value_distribution": {

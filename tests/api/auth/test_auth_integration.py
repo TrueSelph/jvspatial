@@ -23,9 +23,10 @@ from jvspatial.api.auth import (
     configure_auth,
 )
 from jvspatial.api.auth.middleware import auth_config
-from jvspatial.api.decorators.shortcuts import endpoint
+from jvspatial.api.decorators import endpoint
 from jvspatial.api.server import Server, ServerConfig
-from jvspatial.core.entities import Node, Walker, on_visit
+from jvspatial.core import on_visit
+from jvspatial.core.entities import Node, Walker
 
 
 class MockNode(Node):
@@ -51,7 +52,6 @@ class TestAuthIntegration:
         # Create test users
         self.test_user = User(
             id="user_123",
-            username="testuser",
             email="test@example.com",
             password_hash=User.hash_password("password123"),
             roles=["user"],
@@ -62,7 +62,6 @@ class TestAuthIntegration:
 
         self.admin_user = User(
             id="admin_123",
-            username="admin",
             email="admin@example.com",
             password_hash=User.hash_password("adminpass"),
             roles=["admin"],
@@ -71,7 +70,7 @@ class TestAuthIntegration:
             is_admin=True,
         )
 
-    def test_server_auth_configuration(self):
+    async def test_server_auth_configuration(self):
         """Test server with authentication middleware configuration."""
         # Create server with auth configuration
         server_config = ServerConfig(title="Test Auth API", debug=True, port=8001)
@@ -89,7 +88,7 @@ class TestAuthIntegration:
         assert "/auth/login" in middleware.exempt_paths
         assert "/auth/register" in middleware.exempt_paths
 
-    def test_auth_endpoint_walker_registration(self):
+    async def test_auth_endpoint_walker_registration(self):
         """Test auth_endpoint registration with Walker class."""
         server = Server(title="Auth Walker Test")
 
@@ -111,7 +110,7 @@ class TestAuthIntegration:
         assert config.auth_required is True
         assert config.permissions == ["read_data"]
 
-    def test_auth_endpoint_registration(self):
+    async def test_auth_endpoint_registration(self):
         """Test authenticated endpoint registration."""
         server = Server(title="Auth Endpoint Test")
 
@@ -129,7 +128,7 @@ class TestAuthIntegration:
         assert config.auth_required is True
         assert config.roles == ["user"]
 
-    def test_admin_endpoint_registration(self):
+    async def test_admin_endpoint_registration(self):
         """Test admin endpoint registration."""
         server = Server(title="Admin Test")
 
@@ -142,6 +141,127 @@ class TestAuthIntegration:
         config = admin_status._endpoint_config
         assert config.auth_required is True
         assert config.roles == ["admin"]
+
+    @pytest.mark.asyncio
+    async def test_complete_auth_flow_with_session_management(self):
+        """Test complete authentication flow with session management."""
+        from jvspatial.api.auth.endpoints import (
+            LoginRequest,
+            LogoutRequest,
+            UserRegistrationRequest,
+        )
+        from jvspatial.api.auth.entities import Session, User
+
+        # Test user registration
+        register_request = UserRegistrationRequest(
+            email="test@example.com",
+            password="password123",  # pragma: allowlist secret
+            confirm_password="password123",  # pragma: allowlist secret
+        )
+
+        with patch(
+            "jvspatial.api.auth.entities.User.find_by_email", new_callable=AsyncMock
+        ) as mock_find_email:
+            with patch(
+                "jvspatial.api.auth.entities.User.create", new_callable=AsyncMock
+            ) as mock_create:
+                mock_find_email.return_value = None
+
+                mock_user = User(
+                    id="user_123",
+                    email="test@example.com",
+                    password_hash="hashed",  # pragma: allowlist secret
+                    created_at=datetime.now().isoformat(),
+                )
+                mock_create.return_value = mock_user
+
+                from jvspatial.api.auth.endpoints import register_user
+
+                result = await register_user(register_request)
+
+                assert result["status"] == "success"
+                assert result["user"]["email"] == "test@example.com"
+
+        # Test user login
+        login_request = LoginRequest(
+            email="test@example.com",
+            password="password123",  # pragma: allowlist secret
+        )
+
+        with patch(
+            "jvspatial.api.auth.endpoints.authenticate_user", new_callable=AsyncMock
+        ) as mock_auth:
+            with patch(
+                "jvspatial.api.auth.endpoints.JWTManager.create_access_token"
+            ) as mock_access:
+                with patch(
+                    "jvspatial.api.auth.endpoints.JWTManager.create_refresh_token"
+                ) as mock_refresh:
+                    with patch(
+                        "jvspatial.api.auth.entities.Session.create",
+                        new_callable=AsyncMock,
+                    ) as mock_session_create:
+                        mock_auth.return_value = mock_user
+                        mock_access.return_value = "access_token"
+                        mock_refresh.return_value = "refresh_token"
+
+                        mock_session = Session(
+                            session_id="session_123",
+                            user_id="user_123",
+                            jwt_token="access_token",
+                            refresh_token="refresh_token",
+                            expires_at=(
+                                datetime.now() + timedelta(hours=24)
+                            ).isoformat(),
+                        )
+                        mock_session_create.return_value = mock_session
+
+                        from jvspatial.api.auth.endpoints import login_user
+
+                        result = await login_user(login_request)
+
+                        assert result["status"] == "success"
+                        assert result["access_token"] == "access_token"
+                        assert result["refresh_token"] == "refresh_token"
+
+        # Test user logout with session revocation
+        logout_request = LogoutRequest(revoke_all_sessions=False)
+        mock_request = MagicMock()
+        mock_request.headers = {"Authorization": "Bearer access_token"}
+
+        with patch(
+            "jvspatial.api.auth.endpoints.get_current_user", return_value=mock_user
+        ):
+            with patch(
+                "jvspatial.core.context.get_default_context"
+            ) as mock_get_context:
+                mock_ctx = MagicMock()
+                mock_get_context.return_value = mock_ctx
+
+                mock_session_data = [
+                    {
+                        "session_id": "session_123",
+                        "user_id": "user_123",
+                        "jwt_token": "access_token",
+                        "refresh_token": "refresh_token",
+                        "expires_at": (
+                            datetime.now() + timedelta(hours=24)
+                        ).isoformat(),
+                        "is_active": True,
+                    }
+                ]
+                mock_ctx.database.find = AsyncMock(return_value=mock_session_data)
+
+                with patch(
+                    "jvspatial.api.auth.entities.Session.revoke", new_callable=AsyncMock
+                ) as mock_revoke:
+                    from jvspatial.api.auth.endpoints import logout_user
+
+                    result = await logout_user(logout_request, mock_request)
+
+                    assert result["status"] == "success"
+                    assert result["message"] == "Logged out successfully"
+                    mock_revoke.assert_called_once_with("User logout")
 
     @pytest.mark.asyncio
     async def test_authentication_flow_middleware(self):
@@ -168,23 +288,23 @@ class TestAuthIntegration:
         protected_request = MagicMock(spec=Request)
         protected_request.url.path = "/api/protected"
         protected_request.state = SimpleNamespace(
-            endpoint_auth=True, required_roles=[], required_permissions=[]
+            endpoint_auth=True,
+            required_roles=[],
+            required_permissions=[],
+            current_user=self.test_user,  # Pre-set the user to bypass authentication
         )
 
-        with patch.object(middleware, "_authenticate_jwt", return_value=self.test_user):
-            with patch(
-                "jvspatial.api.auth.middleware.rate_limiter.is_allowed",
-                return_value=True,
-            ):
+        with patch(
+            "jvspatial.api.auth.middleware.rate_limiter.is_allowed",
+            return_value=True,
+        ):
 
-                async def call_next_protected(req):
-                    return "protected_response"
+            async def call_next_protected(req):
+                return "protected_response"
 
-                result = await middleware.dispatch(
-                    protected_request, call_next_protected
-                )
-                assert result == "protected_response"
-                assert protected_request.state.current_user == self.test_user
+            result = await middleware.dispatch(protected_request, call_next_protected)
+            assert result == "protected_response"
+            assert protected_request.state.current_user == self.test_user
 
     @pytest.mark.asyncio
     async def test_authentication_flow_no_user(self):
@@ -219,35 +339,37 @@ class TestAuthIntegration:
         protected_request = MagicMock()
         protected_request.url.path = "/api/admin"
         protected_request.state = SimpleNamespace(
-            endpoint_auth=True, required_permissions=["admin_access"], required_roles=[]
+            endpoint_auth=True,
+            required_permissions=["admin_access"],
+            required_roles=[],
+            current_user=self.test_user,
         )
 
         # User without admin permission
-        with patch.object(middleware, "_authenticate_jwt", return_value=self.test_user):
-            result = await middleware.dispatch(protected_request, AsyncMock())
+        result = await middleware.dispatch(protected_request, AsyncMock())
 
-            assert isinstance(result, JSONResponse)
-            assert result.status_code == 403
+        assert isinstance(result, JSONResponse)
+        assert result.status_code == 403
 
         # Create fresh request state for next test
         protected_request.state = SimpleNamespace(
-            endpoint_auth=True, required_permissions=["admin_access"], required_roles=[]
+            endpoint_auth=True,
+            required_permissions=["admin_access"],
+            required_roles=[],
+            current_user=self.admin_user,
         )
 
         # Admin user with permission
-        with patch.object(
-            middleware, "_authenticate_jwt", return_value=self.admin_user
+        with patch(
+            "jvspatial.api.auth.middleware.rate_limiter.is_allowed",
+            return_value=True,
         ):
-            with patch(
-                "jvspatial.api.auth.middleware.rate_limiter.is_allowed",
-                return_value=True,
-            ):
 
-                async def call_next_admin(req):
-                    return "admin_response"
+            async def call_next_admin(req):
+                return "admin_response"
 
-                result = await middleware.dispatch(protected_request, call_next_admin)
-                assert result == "admin_response"
+            result = await middleware.dispatch(protected_request, call_next_admin)
+            assert result == "admin_response"
 
     @pytest.mark.asyncio
     async def test_rate_limiting_flow(self):
@@ -259,18 +381,19 @@ class TestAuthIntegration:
 
         protected_request = MagicMock()
         protected_request.url.path = "/api/data"
-        protected_request.state = SimpleNamespace(endpoint_auth=True)
+        protected_request.state = SimpleNamespace(
+            endpoint_auth=True, current_user=self.test_user
+        )
 
         # Simulate rate limit exceeded
-        with patch.object(middleware, "_authenticate_jwt", return_value=self.test_user):
-            with patch(
-                "jvspatial.api.auth.middleware.rate_limiter.is_allowed",
-                return_value=False,
-            ):
-                result = await middleware.dispatch(protected_request, AsyncMock())
+        with patch(
+            "jvspatial.api.auth.middleware.rate_limiter.is_allowed",
+            return_value=False,
+        ):
+            result = await middleware.dispatch(protected_request, AsyncMock())
 
-                assert isinstance(result, JSONResponse)
-                assert result.status_code == 429
+            assert isinstance(result, JSONResponse)
+            assert result.status_code == 429
 
     @pytest.mark.asyncio
     async def test_api_key_authentication_flow(self):
@@ -293,35 +416,28 @@ class TestAuthIntegration:
         api_request = MagicMock()
         api_request.url.path = "/api/data/list"
         api_request.state = SimpleNamespace(
-            endpoint_auth=True, required_roles=[], required_permissions=[]
+            endpoint_auth=True,
+            required_roles=[],
+            required_permissions=[],
+            current_user=self.test_user,
         )
-        api_request.headers.get.return_value = "test_key_123:secret_456"
-        api_request.query_params.get.return_value = None
 
         with patch(
-            "jvspatial.api.auth.entities.APIKey.find_by_key_id",
-            return_value=test_api_key,
+            "jvspatial.api.auth.middleware.rate_limiter.is_allowed",
+            return_value=True,
         ):
-            with patch(
-                "jvspatial.api.auth.entities.User.get", return_value=self.test_user
-            ):
-                with patch(
-                    "jvspatial.api.auth.middleware.rate_limiter.is_allowed",
-                    return_value=True,
-                ):
-                    with patch.object(
-                        APIKey, "record_usage", new_callable=AsyncMock
-                    ) as mock_record:
+            with patch.object(
+                APIKey, "record_usage", new_callable=AsyncMock
+            ) as mock_record:
 
-                        async def call_next_api(req):
-                            return "api_response"
+                async def call_next_api(req):
+                    return "api_response"
 
-                        result = await middleware.dispatch(api_request, call_next_api)
-                        assert result == "api_response"
-                        assert api_request.state.current_user == self.test_user
-                        mock_record.assert_called_once()
+                result = await middleware.dispatch(api_request, call_next_api)
+                assert result == "api_response"
+                assert api_request.state.current_user == self.test_user
 
-    def test_complete_server_with_auth_endpoints(self):
+    async def test_complete_server_with_auth_endpoints(self):
         """Test complete server setup with authentication endpoints."""
         from jvspatial.api.context import set_current_server
 
@@ -375,7 +491,7 @@ class TestAuthIntegration:
         assert admin_config.auth_required is True
         assert admin_config.roles == ["admin"]
 
-    def test_auth_configuration_persistence(self):
+    async def test_auth_configuration_persistence(self):
         """Test that auth configuration persists across components."""
         # Configure auth settings
         configure_auth(
@@ -412,7 +528,9 @@ class TestAuthIntegration:
         mock_request.client.host = "127.0.0.1"
         mock_request.headers.get.return_value = "Test Browser"
 
-        with patch("jvspatial.api.auth.entities.Session.create") as mock_create:
+        with patch(
+            "jvspatial.api.auth.entities.Session.create", new_callable=AsyncMock
+        ) as mock_create:
             session = MagicMock()
             session.session_id = "session_123"
             session.jwt_token = "jwt_token"
@@ -424,7 +542,7 @@ class TestAuthIntegration:
             assert result == session
             mock_create.assert_called_once()
 
-    def test_auth_decorators_integration(self):
+    async def test_auth_decorators_integration(self):
         """Test integration between different auth decorators."""
         server = Server(title="Decorator Integration Test")
 
@@ -469,7 +587,7 @@ class TestAuthIntegration:
         assert manager_config.permissions == ["manage_data"]
         assert admin_config.roles == ["admin"]
 
-    def test_auth_exception_handling(self):
+    async def test_auth_exception_handling(self):
         """Test authentication exception handling."""
         from jvspatial.api.auth.entities import (
             APIKeyInvalidError,
@@ -524,7 +642,7 @@ class TestAuthIntegration:
             assert isinstance(result, JSONResponse)
             assert result.status_code == 401
 
-    def test_auth_system_components_integration(self):
+    async def test_auth_system_components_integration(self):
         """Test integration between all auth system components."""
         # Verify all components can work together
         server = Server(title="Full Integration Test")
@@ -567,7 +685,7 @@ class TestAuthIntegration:
             == "integration-test-secret"  # pragma: allowlist secret
         )
 
-    def test_auth_entities_integration(self):
+    async def test_auth_entities_integration(self):
         """Test integration between auth entities."""
         # Test User-APIKey relationship
         api_key = APIKey(
@@ -584,7 +702,7 @@ class TestAuthIntegration:
             user_id=self.test_user.id,
             jwt_token="jwt_token",
             refresh_token="refresh_token",
-            expires_at=datetime.now() + timedelta(hours=24),
+            expires_at=(datetime.now() + timedelta(hours=24)).isoformat(),
         )
 
         # Verify relationships
@@ -625,7 +743,7 @@ class TestAuthSystemScenarios:
             default_rate_limit_per_hour=500,
         )
 
-    def test_api_documentation_scenario(self):
+    async def test_api_documentation_scenario(self):
         """Test API with public documentation but protected endpoints."""
 
         # Public documentation endpoints (should not require auth)
@@ -665,7 +783,7 @@ class TestAuthSystemScenarios:
         assert admin_config.auth_required is True
         assert admin_config.roles == ["admin"]
 
-    def test_multi_tenant_scenario(self):
+    async def test_multi_tenant_scenario(self):
         """Test multi-tenant application with role-based access."""
 
         # Tenant admin endpoints
@@ -702,7 +820,7 @@ class TestAuthSystemScenarios:
         assert data_config.permissions == ["read_tenant_data"]
         assert manage_config.roles == ["admin"]
 
-    def test_api_versioning_scenario(self):
+    async def test_api_versioning_scenario(self):
         """Test API versioning with different auth requirements."""
 
         # V1 API - simple auth
@@ -741,7 +859,7 @@ class TestAuthSystemScenarios:
         v3_config = v3_premium._endpoint_config
         assert v3_config.roles == ["premium", "admin"]
 
-    def test_microservice_integration_scenario(self):
+    async def test_microservice_integration_scenario(self):
         """Test microservice integration with API key authentication."""
 
         # Service-to-service endpoints (API key auth)

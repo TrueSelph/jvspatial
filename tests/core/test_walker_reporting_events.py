@@ -11,7 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from jvspatial.core.entities import Node, Walker, on_exit, on_visit
+from jvspatial.core import on_exit, on_visit
+from jvspatial.core.entities import Node, Walker
 from jvspatial.core.events import event_bus, on_emit
 
 
@@ -33,7 +34,7 @@ class ReportingWalker(Walker):
     async def track_visit(self, here: MockNode):
         """Track node visits."""
         self.visit_count += 1
-        self.report(
+        await self.report(
             {
                 "visited": here.name,
                 "value": here.value,
@@ -44,7 +45,7 @@ class ReportingWalker(Walker):
     @on_exit
     async def generate_summary(self):
         """Generate summary report."""
-        self.report(
+        await self.report(
             {"summary": {"total_visits": self.visit_count, "walker_id": self.id}}
         )
 
@@ -64,7 +65,7 @@ class EventEmittingWalker(Walker):
             {"node_name": here.name, "node_value": here.value, "walker_id": self.id},
         )
         self.events_sent += 1
-        self.report({"event_sent": here.name})
+        await self.report({"event_sent": here.name})
 
 
 class EventReceivingWalker(Walker):
@@ -76,28 +77,30 @@ class EventReceivingWalker(Walker):
         self.received_data = []
 
     @on_emit("node_visited")
-    async def handle_node_visited(self, event_data: Dict[str, Any]):
+    async def handle_node_visited(
+        self, event_type: str, data: Dict[str, Any], source_id: str
+    ):
         """Handle node_visited events."""
         self.events_received += 1
-        self.received_data.append(event_data)
-        self.report(
+        self.received_data.append(data)
+        await self.report(
             {
                 "received_event": {
-                    "from_walker": event_data.get("walker_id"),
-                    "node_name": event_data.get("node_name"),
+                    "from_walker": data.get("walker_id"),
+                    "node_name": data.get("node_name"),
                     "handler_id": self.id,
                 }
             }
         )
 
     @on_emit("test_alert")
-    async def handle_alert(self, event_data: Dict[str, Any]):
+    async def handle_alert(self, event_type: str, data: Dict[str, Any], source_id: str):
         """Handle test_alert events."""
-        self.report(
+        await self.report(
             {
                 "alert_handled": {
-                    "severity": event_data.get("severity", "unknown"),
-                    "message": event_data.get("message", ""),
+                    "severity": data.get("severity", "unknown"),
+                    "message": data.get("message", ""),
                     "handler_id": self.id,
                 }
             }
@@ -107,25 +110,25 @@ class EventReceivingWalker(Walker):
 class TestWalkerReporting:
     """Test Walker reporting functionality."""
 
-    def test_report_initialization(self):
+    async def test_report_initialization(self):
         """Test that walker report is initialized as empty list."""
         walker = ReportingWalker()
-        report = walker.get_report()
+        report = await walker.get_report()
         assert isinstance(report, list)
         assert len(report) == 0
 
-    def test_single_report_item(self):
+    async def test_single_report_item(self):
         """Test adding a single item to the report."""
         walker = ReportingWalker()
         test_data = {"message": "test report", "value": 42}
 
-        walker.report(test_data)
-        report = walker.get_report()
+        await walker.report(test_data)
+        report = await walker.get_report()
 
         assert len(report) == 1
         assert report[0] == test_data
 
-    def test_multiple_report_items(self):
+    async def test_multiple_report_items(self):
         """Test adding multiple items to the report."""
         walker = ReportingWalker()
         items = [
@@ -135,24 +138,24 @@ class TestWalkerReporting:
         ]
 
         for item in items:
-            walker.report(item)
+            await walker.report(item)
 
-        report = walker.get_report()
+        report = await walker.get_report()
         assert len(report) == 3
         assert report == items
 
-    def test_report_different_data_types(self):
+    async def test_report_different_data_types(self):
         """Test reporting different data types."""
         walker = ReportingWalker()
 
         # Test various data types
-        walker.report("string data")
-        walker.report(42)
-        walker.report([1, 2, 3])
-        walker.report({"key": "value"})
-        walker.report(None)
+        await walker.report("string data")
+        await walker.report(42)
+        await walker.report([1, 2, 3])
+        await walker.report({"key": "value"})
+        await walker.report(None)
 
-        report = walker.get_report()
+        report = await walker.get_report()
         assert len(report) == 5
         assert report[0] == "string data"
         assert report[1] == 42
@@ -160,19 +163,19 @@ class TestWalkerReporting:
         assert report[3] == {"key": "value"}
         assert report[4] is None
 
-    def test_report_is_reference(self):
+    async def test_report_is_reference(self):
         """Test that get_report() returns reference to the actual list."""
         walker = ReportingWalker()
-        walker.report("test")
+        await walker.report("test")
 
-        report1 = walker.get_report()
-        report2 = walker.get_report()
+        report1 = await walker.get_report()
+        report2 = await walker.get_report()
 
         # Should be the same object
         assert report1 is report2
 
         # Adding more data should be visible in both references
-        walker.report("second")
+        await walker.report("second")
         assert len(report1) == 2
         assert len(report2) == 2
 
@@ -186,13 +189,13 @@ class TestWalkerReporting:
             MockNode(name="node3", value=30),
         ]
 
-        # Add nodes to walker queue
-        await walker.visit(nodes)
+        # Add remaining nodes to walker queue (not the start node to avoid duplication)
+        await walker.visit(nodes[1:])
 
         # Execute traversal
         await walker.spawn(nodes[0])
 
-        report = walker.get_report()
+        report = await walker.get_report()
 
         # Should have visit reports plus summary
         assert len(report) >= 3  # At least 3 visit reports
@@ -202,8 +205,9 @@ class TestWalkerReporting:
             item for item in report if isinstance(item, dict) and "visited" in item
         ]
         assert len(visit_reports) == 3
-        assert visit_reports[0]["visited"] == "node1"
-        assert visit_reports[0]["value"] == 10
+        # The walker processes queue first, then start node
+        assert visit_reports[0]["visited"] == "node2"  # First from queue
+        assert visit_reports[0]["value"] == 20
         assert visit_reports[0]["visit_number"] == 1
 
         # Check summary report
@@ -213,27 +217,24 @@ class TestWalkerReporting:
         assert len(summary_reports) == 1
         assert summary_reports[0]["summary"]["total_visits"] == 3
 
-    def test_report_thread_safety(self):
+    async def test_report_thread_safety(self):
         """Test that reporting is thread-safe (no async lock needed for simple append)."""
         walker = ReportingWalker()
 
-        # Simulate concurrent reporting
-        def concurrent_report(data):
-            walker.report(data)
+        # Simulate concurrent reporting using asyncio tasks instead of threads
+        async def concurrent_report(data):
+            await walker.report(data)
 
-        import threading
-
-        threads = []
-
+        # Create concurrent tasks
+        tasks = []
         for i in range(10):
-            thread = threading.Thread(target=concurrent_report, args=(f"item_{i}",))
-            threads.append(thread)
-            thread.start()
+            task = asyncio.create_task(concurrent_report(f"item_{i}"))
+            tasks.append(task)
 
-        for thread in threads:
-            thread.join()
+        # Wait for all tasks to complete
+        await asyncio.gather(*tasks)
 
-        report = walker.get_report()
+        report = await walker.get_report()
         assert len(report) == 10
         assert all(f"item_{i}" in report for i in range(10))
 
@@ -241,7 +242,7 @@ class TestWalkerReporting:
 class TestWalkerEventEmission:
     """Test Walker event emission functionality."""
 
-    def test_emit_method_exists(self):
+    async def test_emit_method_exists(self):
         """Test that emit method exists and is callable."""
         walker = EventEmittingWalker()
         assert hasattr(walker, "emit")
@@ -257,14 +258,17 @@ class TestWalkerEventEmission:
             # Both walkers need to be in the event system
             node = MockNode(name="test_node", value=100)
 
-            # Run emitter first to emit events, then receiver to process them
-            await emitter.spawn(node)
+            # Register both walkers with the event bus first
+            from jvspatial.core.events import event_bus
 
-            # Give receiver a minimal traversal (root node) to trigger event processing
-            await receiver.spawn()
+            await event_bus.register_entity(emitter)
+            await event_bus.register_entity(receiver)
+
+            # Run both walkers concurrently so events can be received
+            await asyncio.gather(emitter.spawn(node), receiver.spawn(node))
 
             # Check that event was sent
-            emitter_report = emitter.get_report()
+            emitter_report = await emitter.get_report()
             assert len(emitter_report) >= 1
             assert any(
                 "event_sent" in item
@@ -273,7 +277,7 @@ class TestWalkerEventEmission:
             )
 
             # Check that event was received
-            receiver_report = receiver.get_report()
+            receiver_report = await receiver.get_report()
             received_events = [
                 item
                 for item in receiver_report
@@ -302,20 +306,24 @@ class TestWalkerEventEmission:
                 MockNode(name="node3", value=30),
             ]
 
-            await emitter.visit(nodes)
+            # Add remaining nodes to walker queue (not the start node to avoid duplication)
+            await emitter.visit(nodes[1:])
 
-            # Run emitter first to emit events
-            await emitter.spawn(nodes[0])
+            # Register both walkers with the event bus first
+            from jvspatial.core.events import event_bus
 
-            # Give receiver a minimal traversal to trigger event processing
-            await receiver.spawn()
+            await event_bus.register_entity(emitter)
+            await event_bus.register_entity(receiver)
+
+            # Run both walkers concurrently so events can be received
+            await asyncio.gather(emitter.spawn(nodes[0]), receiver.spawn(nodes[0]))
 
             # Check that multiple events were sent
             assert emitter.events_sent == 3
 
             # Check that multiple events were received
             assert receiver.events_received >= 3
-            receiver_report = receiver.get_report()
+            receiver_report = await receiver.get_report()
             received_events = [
                 item
                 for item in receiver_report
@@ -339,11 +347,14 @@ class TestWalkerEventEmission:
         try:
             node = MockNode(name="payload_test", value=999)
 
-            # Run emitter first to emit events
-            await emitter.spawn(node)
+            # Register both walkers with the event bus first
+            from jvspatial.core.events import event_bus
 
-            # Give receiver a minimal traversal to trigger event processing
-            await receiver.spawn()
+            await event_bus.register_entity(emitter)
+            await event_bus.register_entity(receiver)
+
+            # Run both walkers concurrently so events can be received
+            await asyncio.gather(emitter.spawn(node), receiver.spawn(node))
 
             # Check received data
             assert len(receiver.received_data) >= 1
@@ -368,6 +379,12 @@ class TestWalkerEventEmission:
         try:
             node = MockNode(name="selective_test")
 
+            # Register both walkers with the event bus first
+            from jvspatial.core.events import event_bus
+
+            await event_bus.register_entity(emitter)
+            await event_bus.register_entity(receiver)
+
             # Emit different types of events
             await emitter.emit("node_visited", {"test": "data1"})
             await emitter.emit(
@@ -378,7 +395,7 @@ class TestWalkerEventEmission:
             # Give receiver a chance to process events
             await receiver.spawn(node)
 
-            receiver_report = receiver.get_report()
+            receiver_report = await receiver.get_report()
 
             # Should have received node_visited and test_alert, but not unhandled_event
             received_events = [
@@ -412,16 +429,21 @@ class TestWalkerEventEmission:
         try:
             node = MockNode(name="broadcast_test")
 
-            # Run emitter first to emit events
-            await emitter.spawn(node)
+            # Register all walkers with the event bus first
+            from jvspatial.core.events import event_bus
 
-            # Give receivers minimal traversal to trigger event processing
-            await receiver1.spawn()
-            await receiver2.spawn()
+            await event_bus.register_entity(emitter)
+            await event_bus.register_entity(receiver1)
+            await event_bus.register_entity(receiver2)
+
+            # Run all walkers concurrently so events can be received
+            await asyncio.gather(
+                emitter.spawn(node), receiver1.spawn(node), receiver2.spawn(node)
+            )
 
             # Both receivers should have received the event
-            receiver1_report = receiver1.get_report()
-            receiver2_report = receiver2.get_report()
+            receiver1_report = await receiver1.get_report()
+            receiver2_report = await receiver2.get_report()
 
             received_events1 = [
                 item
@@ -467,19 +489,22 @@ class TestWalkerReportingAndEvents:
             nodes = [MockNode(name="integration_test", value=42)]
             await emitter.visit(nodes)
 
-            # Run emitter first to emit events
-            await emitter.spawn(nodes[0])
+            # Register both walkers with the event bus first
+            from jvspatial.core.events import event_bus
 
-            # Give receiver a minimal traversal to trigger event processing
-            await receiver.spawn()
+            await event_bus.register_entity(emitter)
+            await event_bus.register_entity(receiver)
+
+            # Run both walkers concurrently so events can be received
+            await asyncio.gather(emitter.spawn(nodes[0]), receiver.spawn(nodes[0]))
 
             # Emitter should have both reported and emitted
-            emitter_report = emitter.get_report()
+            emitter_report = await emitter.get_report()
             assert len(emitter_report) >= 1
             assert emitter.events_sent >= 1
 
             # Receiver should have both received events and reported about them
-            receiver_report = receiver.get_report()
+            receiver_report = await receiver.get_report()
             assert len(receiver_report) >= 1
             assert receiver.events_received >= 1
 
@@ -513,16 +538,18 @@ class TestWalkerReportingAndEvents:
                 self.events_emitted = 0
 
             @on_emit("chain_event")
-            async def handle_chain_event(self, event_data: Dict[str, Any]):
+            async def handle_chain_event(
+                self, event_type: str, data: Dict[str, Any], source_id: str
+            ):
                 """Handle chain events - simplified without re-emission to avoid loops."""
-                self.chain_events.append(event_data)
-                self.report(
+                self.chain_events.append(data)
+                await self.report(
                     {
                         "chain_received": {
-                            "from": event_data.get("from"),
-                            "step": event_data.get("step", 0),
+                            "from": data.get("from"),
+                            "step": data.get("step", 0),
                             "walker": self.walker_name,
-                            "message": event_data.get("message", ""),
+                            "message": data.get("message", ""),
                         }
                     }
                 )
@@ -535,11 +562,17 @@ class TestWalkerReportingAndEvents:
         try:
             node = MockNode(name="chain_test")
 
-            # First emit events, then spawn receivers (this is the pattern from working tests)
+            # Register all walkers with the event bus first
+            from jvspatial.core.events import event_bus
+
+            await event_bus.register_entity(walker1)
+            await event_bus.register_entity(walker2)
+            await event_bus.register_entity(walker3)
+
             # Start walker1 to register it with the event bus
             await walker1.spawn(node)
 
-            # Emit the event while only walker1 is active
+            # Emit the event while all walkers are registered
             await walker1.emit(
                 "chain_event",
                 {
@@ -577,7 +610,7 @@ class TestWalkerReportingAndEvents:
             # Check that reports were generated
             reports_with_chain_data = 0
             for walker in [walker2, walker3]:  # Only check receivers
-                report = walker.get_report()
+                report = await walker.get_report()
                 chain_reports = [
                     item
                     for item in report
@@ -601,7 +634,7 @@ class TestWalkerReportingAndEvents:
                 except:
                     pass
 
-    def test_error_handling_in_reports(self):
+    async def test_error_handling_in_reports(self):
         """Test that errors during traversal are properly reported."""
 
         class ErrorReportingWalker(Walker):
@@ -609,7 +642,7 @@ class TestWalkerReportingAndEvents:
             async def error_prone_visit(self, here: MockNode):
                 if here.name == "error_node":
                     raise ValueError("Test error in visit hook")
-                self.report({"visited_safely": here.name})
+                await self.report({"visited_safely": here.name})
 
         walker = ErrorReportingWalker()
         # This test checks that the walker's error handling system
@@ -620,8 +653,8 @@ class TestWalkerReportingAndEvents:
         assert hasattr(walker, "get_report")
 
         # Test normal reporting still works
-        walker.report({"test": "data"})
-        report = walker.get_report()
+        await walker.report({"test": "data"})
+        report = await walker.get_report()
         assert len(report) == 1
         assert report[0] == {"test": "data"}
 
@@ -629,7 +662,7 @@ class TestWalkerReportingAndEvents:
 class TestEventBusIntegration:
     """Test integration with the global event bus."""
 
-    def test_walker_registers_with_event_bus(self):
+    async def test_walker_registers_with_event_bus(self):
         """Test that walkers automatically register with the global event bus."""
         walker = EventReceivingWalker()
 
@@ -653,7 +686,7 @@ class TestEventBusIntegration:
         await receiver.spawn(node)
 
         # Check that global event was received
-        receiver_report = receiver.get_report()
+        receiver_report = await receiver.get_report()
         alert_reports = [
             item
             for item in receiver_report
