@@ -1,108 +1,85 @@
 """
-jvspatial - Async object-spatial Python library.
+jvspatial - Enhanced async object-spatial Python library.
 
 jvspatial is an asynchronous, object-spatial Python library designed for building
-robust persistence and business logic application layers. Inspired by Jaseci's
-object-spatial paradigm and leveraging Python's async capabilities.
+robust persistence and business logic application layers. This enhanced version
+maintains the original inheritance hierarchy while providing simplified APIs.
 
 Key Features:
-- Typed node/edge modeling via Pydantic
-- Precise control over graph traversal
-- Multi-backend persistence (JSON, MongoDB, etc.)
-- Integrated REST API endpoints
+- Maintained inheritance hierarchy: Object → Node → Edge/Walker
+- Enhanced classes with simplified decorator support
+- Simplified decorator system (@attribute, @endpoint)
+- Direct instantiation (no complex factories)
+- Essential CRUD operations
+- Unified configuration system
 - Async/await architecture
 
 Main Exports (Import from top level):
-    Core Entities:
+    Core Entities (Maintaining Original Hierarchy):
         - Object: Base class for all entities
-        - Node: Graph nodes with spatial data
-        - Edge: Relationships between nodes
-        - Walker: Graph traversal and pathfinding
-        - Root: Singleton root node
+        - Node: Graph nodes with spatial data (inherits from Object)
+        - Edge: Relationships between nodes (inherits from Object)
+        - Walker: Graph traversal and pathfinding (inherits from Object)
+        - Root: Singleton root node (inherits from Node)
         - GraphContext: Graph database context
 
     Decorators:
-        - on_visit: Register visit hooks for graph traversal
-        - on_exit: Register exit hooks for graph traversal
-        - on_emit: Register event handlers
+        - attribute: Unified attribute decorator (@attribute(protected=True))
+        - endpoint: Unified endpoint decorator (@endpoint("/api/users"))
 
     API:
         - Server: FastAPI server for graph operations
-        - ServerConfig: Server configuration
+        - Config: Unified configuration system
 
     Database & Cache:
-        - Database: Database interface
-        - get_database: Database factory function
-        - Query: Query builder
-        - get_cache: Cache factory function
-        - CacheBackend: Cache interface
+        - Database: Simplified database interface
+        - create_database: Direct database creation
+        - create_cache: Direct cache creation
 
     Utilities:
         - serialize_datetime: Serialize datetime objects
         - deserialize_datetime: Deserialize datetime objects
 
-    Modules:
-        - exceptions: Custom exception classes
-        - storage: File storage interfaces
-
 Example:
-    >>> from jvspatial import Object, Node, Edge, Walker, Server
-    >>>
-    >>> # Create a node
-    >>> node = Node()
-    >>>
-    >>> # Create a walker
-    >>> walker = Walker()
-    >>>
-    >>> # Create a server
-    >>> server = Server(title="My API", db_type="json", db_path="./data")
+    # Using enhanced classes with maintained hierarchy
+    from jvspatial import Node, Walker, Server, Config, create_database
+
+    # Node inherits from Object with all original functionality
+    node = Node(id="test-node")
+
+    # Walker inherits from Object with all original functionality
+    walker = Walker()
+    await walker.spawn(node)
 """
 
 __version__ = "0.2.0"
 
-# Modules
-from . import exceptions, storage
-
 # API server
-from .api import (
-    Server,
-    ServerConfig,
-)
-from .cache import (
-    CacheBackend,
-    get_cache_backend,
-)
+from .api import Server
+from .api.decorators.route import endpoint
+from .cache import create_cache
 
-# Decorators
-# Core entities
-from .core import (
-    Edge,
-    GraphContext,
-    Node,
-    Object,
-    Root,
-    Walker,
-    on_emit,
-    on_exit,
-    on_visit,
-)
+# Unified configuration
+from .config import Config
 
-# Database & Cache
-from .db import (
-    Database,
-    QueryBuilder,
-    get_database,
-)
+# Simplified decorators
+from .core.annotations import attribute
+from .core.context import GraphContext
+
+# Unified entity system
+from .core.entities import Edge, Node, Object, Root, Walker
+
+# Simplified database and cache
+from .db import Database, create_database
 
 # Utilities
-from .utils.serialization import (
-    deserialize_datetime,
-    serialize_datetime,
-)
+from .utils.serialization import deserialize_datetime, serialize_datetime
 
 __all__ = [
     # Version
     "__version__",
+    # Unified configuration
+    "Config",
     # Core entities
     "Object",
     "Node",
@@ -110,23 +87,16 @@ __all__ = [
     "Walker",
     "Root",
     "GraphContext",
-    # Decorators
-    "on_visit",
-    "on_exit",
-    "on_emit",
+    # Simplified decorators
+    "attribute",
+    "endpoint",
     # API
     "Server",
-    "ServerConfig",
     # Database & Cache
     "Database",
-    "get_database",
-    "QueryBuilder",
-    "get_cache_backend",
-    "CacheBackend",
+    "create_database",
+    "create_cache",
     # Utilities
     "serialize_datetime",
     "deserialize_datetime",
-    # Modules
-    "exceptions",
-    "storage",
 ]

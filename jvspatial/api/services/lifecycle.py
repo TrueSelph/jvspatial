@@ -144,11 +144,9 @@ class LifecycleManager:
 
     async def _discover_packages(self) -> None:
         """Discover and register packages if enabled."""
-        if self.server._discovery_service.enabled:
+        if self.server.discovery_service.enabled:
             try:
-                discovered_count = (
-                    self.server._discovery_service.discover_and_register()
-                )
+                discovered_count = self.server.discovery_service.discover_and_register()
                 if discovered_count > 0:
                     self._logger.info(
                         f"{LogIcons.DISCOVERY} Package discovery complete: "
@@ -201,7 +199,7 @@ class LifecycleManager:
                 self._logger.error(f"{LogIcons.ERROR} Shutdown task failed: {e}")
 
     @asynccontextmanager
-    async def lifespan(self, app: FastAPI) -> AsyncGenerator[None, None]:
+    def lifespan(self, app: FastAPI) -> AsyncGenerator[None, None]:
         """Async context manager for FastAPI lifespan.
 
         This context manager handles the complete application lifecycle:
@@ -214,13 +212,17 @@ class LifecycleManager:
         Yields:
             None (application running state)
         """
-        # Startup
-        await self.startup()
 
-        yield  # Application is running
+        async def _lifespan():
+            # Startup
+            await self.startup()
 
-        # Shutdown
-        await self.shutdown()
+            yield  # Application is running
+
+            # Shutdown
+            await self.shutdown()
+
+        return _lifespan()
 
     @property
     def is_running(self) -> bool:

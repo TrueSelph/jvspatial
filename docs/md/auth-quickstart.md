@@ -2,6 +2,9 @@
 
 Get your jvspatial API secured in 5 minutes with comprehensive authentication including JWT tokens, API keys, and role-based access control.
 
+> **💡 Standard Example**: For a complete authenticated API implementation with CRUD operations, pagination, and best practices, see:
+> **📁 [`examples/api/authenticated_endpoints_example.py`](../../examples/api/authenticated_endpoints_example.py)**
+
 ## Prerequisites
 
 - jvspatial installed: `pip install jvspatial`
@@ -11,32 +14,25 @@ Get your jvspatial API secured in 5 minutes with comprehensive authentication in
 
 ### Create Your Authenticated Server
 
+> **Note**: When `auth_enabled=True`, the server **automatically registers** authentication endpoints (`/auth/register`, `/auth/login`, `/auth/logout`). When `auth_enabled=False`, these endpoints are **NOT registered**.
+
 ```python
 # auth_server.py
-from jvspatial.api import create_server
-from jvspatial.api.auth import configure_auth, AuthenticationMiddleware
+from jvspatial.api import Server
 
-# 1. Configure authentication
-configure_auth(
-    jwt_secret_key="your-super-secret-key-change-in-production",
-    jwt_expiration_hours=24,
-    rate_limit_enabled=True
-)
-
-# 2. Create server
-server = create_server(
+# Create server with authentication enabled
+# This automatically registers /auth/register, /auth/login, /auth/logout
+server = Server(
     title="My Secure API",
     description="Authenticated spatial data API",
     version="1.0.0",
     db_type="json",
-    db_path="myapp_db"
+    db_path="myapp_db",
+    auth_enabled=True,  # Enables authentication and registers auth endpoints
+    jwt_auth_enabled=True,
+    jwt_secret="your-super-secret-key-change-in-production",
+    jwt_expire_minutes=1440  # 24 hours
 )
-
-# 3. Add authentication middleware
-server.app.add_middleware(AuthenticationMiddleware)
-
-# 4. All authentication endpoints are automatically included!
-# /auth/register, /auth/login, /auth/refresh, etc.
 
 if __name__ == "__main__":
     server.run()

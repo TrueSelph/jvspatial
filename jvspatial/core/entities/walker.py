@@ -16,7 +16,7 @@ from typing import (
     Union,
 )
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from .node import Node
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 from jvspatial.exceptions import JVSpatialError
 
-from ..annotations import ProtectedAttributeMixin, private, protected
+from ..annotations import AttributeMixin, attribute
 from ..events import event_bus
 from ..utils import generate_id
 from .walker_components.event_system import WalkerEventSystem
@@ -81,7 +81,7 @@ class WalkerVisitingContext:
             self.node.set_visitor(None)
 
 
-class Walker(ProtectedAttributeMixin, BaseModel):
+class Walker(AttributeMixin, BaseModel):
     """Base class for graph walkers that traverse nodes along edges.
 
     Walkers are designed to traverse the graph by visiting nodes and following edges.
@@ -116,24 +116,28 @@ class Walker(ProtectedAttributeMixin, BaseModel):
     """
 
     model_config = ConfigDict(extra="allow")
-    type_code: str = Field(default="w")
-    id: str = protected("", description="Unique identifier for the walker")
+    type_code: str = attribute(transient=True, default="w")
+    id: str = attribute(protected=True, description="Unique identifier for the walker")
 
     # Reporting system
-    _report: List[Any] = private(default_factory=list)
+    _report: List[Any] = attribute(private=True, default_factory=list)
 
     # Event system
-    _event_handlers: Dict[str, List[Callable]] = private(default_factory=dict)
+    _event_handlers: Dict[str, List[Callable]] = attribute(
+        private=True, default_factory=dict
+    )
 
     # Walker core attributes
-    _current_node: Optional[Union["Node", "Edge"]] = private(default=None)
+    _current_node: Optional[Union["Node", "Edge"]] = attribute(
+        private=True, default=None
+    )
     _visit_hooks: ClassVar[
         Dict[Union[Type[Union["Node", "Edge"]], str, None], List[Callable]]
     ] = {}
-    _paused: bool = private(default=False)
+    _paused: bool = attribute(private=True, default=False)
 
     # Trail tracking
-    _trail_tracker: WalkerTrail = private(default_factory=WalkerTrail)
+    _trail_tracker: WalkerTrail = attribute(private=True, default_factory=WalkerTrail)
 
     # Trail-related methods (sync for pure computations, async for I/O)
     def get_trail(self) -> List[str]:
@@ -173,6 +177,42 @@ class Walker(ProtectedAttributeMixin, BaseModel):
     def get_trail_length(self) -> int:
         """Get the length of the trail (pure computation)."""
         return self._trail_tracker.get_length()
+
+    def is_visited(self, node: Union[str, "Node", "Edge"]) -> bool:
+        """Check if a node has been visited before (excluding current visit).
+
+        Args:
+            node: Node ID (str) or Node/Edge instance to check
+
+        Returns:
+            True if the node appears in the trail more than once (visited before),
+            False if this is the first visit or not in trail
+
+        Examples:
+            # Check by node ID
+            if walker.is_visited("n:City:abc123"):
+                print("Already visited before")
+
+            # Check by node instance
+            if walker.is_visited(city_node):
+                print("Already visited before")
+        """
+        # Extract node ID if node is an object
+        node_id = node.id if hasattr(node, "id") else node
+
+        # Get trail and extract node IDs
+        trail = self.get_trail()
+        node_ids = []
+        for step in trail:
+            if isinstance(step, dict):
+                node_ids.append(step.get("node", ""))
+            else:
+                node_ids.append(str(step))
+
+        # Check if node ID appears more than once
+        # (meaning it was visited before this current visit)
+        count = node_ids.count(node_id)
+        return count > 1  # More than once means visited before
 
     def get_recent_trail(self, count: int) -> List[str]:
         """Get the most recent trail entries (pure computation)."""
@@ -646,7 +686,12 @@ class Walker(ProtectedAttributeMixin, BaseModel):
         target_name = target_type.__name__
 
         # Get hooks for this specific type
-        hooks = self._visit_hooks.get(target_type, [])
+        hooks = list(self._visit_hooks.get(target_type, []))
+
+        # Include hooks registered for base classes (support subclass matching)
+        for base in target_type.mro()[1:]:  # skip the exact class (already added)
+            if base in self._visit_hooks:
+                hooks.extend(self._visit_hooks.get(base, []))
 
         # Get hooks for string name (forward references)
         hooks.extend(self._visit_hooks.get(target_name, []))
@@ -654,8 +699,12 @@ class Walker(ProtectedAttributeMixin, BaseModel):
         # Get general hooks (None key)
         hooks.extend(self._visit_hooks.get(None, []))
 
-        # Execute hooks
+        # Execute hooks (ensure stable order and no duplicates)
+        seen = set()
         for hook in hooks:
+            if hook in seen:
+                continue
+            seen.add(hook)
             try:
                 if asyncio.iscoroutinefunction(hook):
                     await hook(self, target)
@@ -688,17 +737,25 @@ class Walker(ProtectedAttributeMixin, BaseModel):
                 except Exception as e:
                     await self.report(f"Error in exit hook: {e}")
 
-    async def spawn(self, start_node: Union["Node", "Edge"]) -> "Walker":
+    async def spawn(
+        self, start_node: Optional[Union["Node", "Edge"]] = None
+    ) -> "Walker":
         """Spawn a new walker instance and start traversal from the given node.
 
         Args:
-            start_node: The node to start traversal from
+            start_node: The node to start traversal from (defaults to root if not provided)
 
         Returns:
             The walker instance (self)
         """
         # Register with global event bus
         await event_bus.register_entity(self)
+
+        # If no start_node provided, default to root
+        if start_node is None:
+            from .root import Root
+
+            start_node = await Root.get(None)  # type: ignore[assignment]
 
         # Add the start node to the queue and begin traversal
         # Only add if not already in queue to avoid duplicates
@@ -762,36 +819,78 @@ class Walker(ProtectedAttributeMixin, BaseModel):
         return self
 
     def export(
-        self: "Walker", exclude_transient: bool = True, **kwargs: Any
+        self: "Walker",
+        exclude_transient: bool = True,
+        exclude: Optional[Union[set, Dict[str, Any]]] = None,
+        for_persistence: bool = False,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Export walker to a dictionary for persistence.
+        """Export walker to a dictionary.
+
+        Uses the standard Object.export() method. By default, returns a clean
+        flat dictionary suitable for API responses.
+        Set for_persistence=True to get the nested database format.
 
         Args:
-            exclude_transient: Whether to exclude @transient fields (default: True)
-            **kwargs: Additional arguments passed to base export
+            exclude_transient: Whether to automatically exclude transient fields (default: True)
+            exclude: Additional fields to exclude (can be a set of field names or a dict)
+            for_persistence: If True, returns nested persistence format with id, name, context (default: False)
+            **kwargs: Additional arguments passed to base export/model_dump()
 
         Returns:
-            Dictionary representation of the walker
+            Dictionary representation of the walker:
+            - If for_persistence=False: Clean flat dictionary (standard format)
+            - If for_persistence=True: Nested format with id, name, context for database storage
         """
-        context_data = self.model_dump(
-            exclude={
-                "id",
+        if for_persistence:
+            # Legacy persistence format - nested structure for database storage
+            context_data = super().export(
+                exclude={
+                    "id",
+                    "_report",
+                    "_event_handlers",
+                    "_current_node",
+                    "_paused",
+                    "_queue",
+                    "queue",
+                },
+                exclude_none=False,
+                exclude_transient=exclude_transient,
+                **kwargs,
+            )
+
+            # Include _data if it exists
+            if hasattr(self, "_data"):
+                context_data["_data"] = self._data
+
+            return {
+                "id": self.id,
+                "name": self.__class__.__name__,
+                "context": context_data,
+            }
+        else:
+            # Standard export - clean flat dictionary for API responses
+            # Exclude internal walker fields by default
+            default_exclude = {
+                "type_code",
+                "_graph_context",
+                "_data",
+                "_initializing",
                 "_report",
                 "_event_handlers",
                 "_current_node",
                 "_paused",
                 "_queue",
                 "queue",
-            },
-            exclude_none=False,
-        )
+            }
+            if exclude:
+                exclude_set = (
+                    set(exclude) if isinstance(exclude, (set, dict)) else set()
+                )
+                exclude_set.update(default_exclude)
+            else:
+                exclude_set = default_exclude
 
-        # Include _data if it exists
-        if hasattr(self, "_data"):
-            context_data["_data"] = self._data
-
-        return {
-            "id": self.id,
-            "name": self.__class__.__name__,
-            "context": context_data,
-        }
+            return super().export(
+                exclude_transient=exclude_transient, exclude=exclude_set, **kwargs
+            )

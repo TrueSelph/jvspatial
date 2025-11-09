@@ -24,7 +24,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import Field, PrivateAttr
 
-from jvspatial.api.server import Server, ServerConfig
+from jvspatial.api.server import Server
+from jvspatial.config import Config
 from jvspatial.core import on_exit, on_visit
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import (
@@ -579,12 +580,15 @@ class TestValidationAndSanitization:
             name="public", value=42, sensitive_data="secret", private_field="private"
         )
 
-        # Export should not include sensitive data in API context
+        # Export should not include sensitive data in API context (flat dictionary by default)
         exported = node.export()
 
-        # Verify structure (actual exclusion would depend on field configuration)
-        assert "name" in exported["context"]
-        assert "value" in exported["context"]
+        # Verify structure - export() returns flat dictionary for API by default
+        assert "name" in exported
+        assert exported["name"] == "public"
+        assert "value" in exported
+        assert exported["value"] == 42
+        # By default, export() returns flat dictionary (not nested with "context")
 
 
 class TestPerformanceEdgeCases:
@@ -731,16 +735,17 @@ class TestRecoveryAndResilience:
     async def test_configuration_validation(self):
         """Test validation of configuration parameters."""
         # Test server configuration validation
-        config = ServerConfig(port=-1, page_size=0)  # Invalid port  # Invalid page size
+        from pydantic import ValidationError
 
-        # Should create config but might have validation issues
-        assert config.port == -1
+        # Should raise ValidationError for invalid port
+        with pytest.raises(ValidationError, match="Port must be between 1 and 65535"):
+            config = Config(port=-1)  # Invalid port
 
         # Test database configuration
         from jvspatial.db.jsondb import JsonDB
 
         # Should handle invalid paths gracefully by raising exception
-        with pytest.raises(RuntimeError, match="Cannot create database directory"):
+        with pytest.raises(OSError, match="Read-only file system"):
             db = JsonDB(base_path="/invalid/path/that/does/not/exist")
 
 

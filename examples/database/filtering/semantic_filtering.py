@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from jvspatial.core import Edge, Node
-from jvspatial.db import get_database
+from jvspatial.db import create_database
 
 
 class City(Node):
@@ -143,7 +143,7 @@ async def demonstrate_semantic_filtering():
     )
 
     print(
-        f"Created {await City.count()} cities and {await Highway.count() + await Railroad.count()} connections"
+        f"Created {len(await City.find({}))} cities and {len(await Highway.find({})) + len(await Railroad.find({}))} connections"
     )
 
     # DEMONSTRATE SEMANTIC FILTERING

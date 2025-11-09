@@ -5,28 +5,17 @@ Database Switching Example
 Demonstrates various ways to dynamically switch databases in jvspatial:
 1. Per-operation database switching
 2. Context-based switching
-3. Default database switching
+3. Default context switching
 4. Environment-based switching
 5. Application lifecycle switching
 """
 
 import asyncio
 import os
-import sys
-from pathlib import Path
 from typing import Any, Dict
 
-# Add the current project to the Python path for development
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from jvspatial.core import Edge, GraphContext, Node
-from jvspatial.db import (
-    Database,
-    get_database,
-    get_default_database_type,
-    register_database,
-    set_default_database,
-)
+from jvspatial.core import Edge, GraphContext, Node, set_default_context
+from jvspatial.db import Database
 
 
 # Simple mock database for demonstration
@@ -68,11 +57,6 @@ class MockDatabase(Database):
         return results
 
 
-def mock_configurator(kwargs) -> MockDatabase:
-    name = kwargs.get("name", "mock_db")
-    return MockDatabase(name)
-
-
 class Person(Node):
     name: str = ""
     age: int = 0
@@ -84,27 +68,29 @@ async def demonstrate_database_switching():
     print("🔀 Database Switching Demonstration")
     print("=" * 50)
 
-    # Register mock databases
-    register_database("mock", MockDatabase, mock_configurator)
-
     # Method 1: Per-Operation Database Switching
     print("\n1️⃣  Per-Operation Database Switching")
     print("-" * 40)
 
     # Create different database instances
-    dev_db = get_database("mock", name="Development")
-    test_db = get_database("mock", name="Testing")
-    prod_db = get_database("mock", name="Production")
+    dev_db = MockDatabase(name="Development")
+    test_db = MockDatabase(name="Testing")
+    prod_db = MockDatabase(name="Production")
 
     # Use different databases for different operations
     dev_ctx = GraphContext(database=dev_db)
     test_ctx = GraphContext(database=test_db)
     prod_ctx = GraphContext(database=prod_db)
 
-    # Create the same person in different databases
-    alice_dev = await dev_ctx.create(Person, name="Alice", age=30)
-    alice_test = await test_ctx.create(Person, name="Alice", age=30)
-    alice_prod = await prod_ctx.create(Person, name="Alice", age=30)
+    # Set default context for entity-centric operations
+    set_default_context(dev_ctx)
+    alice_dev = await Person.create(name="Alice", age=30)
+
+    set_default_context(test_ctx)
+    alice_test = await Person.create(name="Alice", age=30)
+
+    set_default_context(prod_ctx)
+    alice_prod = await Person.create(name="Alice", age=30)
 
     print("✅ Same data operations on different databases")
 
@@ -121,8 +107,11 @@ async def demonstrate_database_switching():
         else:
             ctx = GraphContext(database=prod_db)
 
+        # Set context for entity-centric operations
+        set_default_context(ctx)
+
         # Same logic, different database
-        person = await ctx.get(Person, user_id)
+        person = await Person.get(user_id)
         if person:
             print(f"📊 Processing {person.name} in {environment} environment")
         return person
@@ -132,23 +121,18 @@ async def demonstrate_database_switching():
     await process_user_data(alice_test.id, "test")
     await process_user_data(alice_prod.id, "prod")
 
-    # Method 3: Default Database Switching
-    print("\n3️⃣  Default Database Switching")
+    # Method 3: Default Context Switching
+    print("\n3️⃣  Default Context Switching")
     print("-" * 40)
 
-    print(f"Current default: {get_default_database_type()}")
+    # Create a new default context
+    default_db = MockDatabase(name="Default")
+    default_ctx = GraphContext(database=default_db)
+    set_default_context(default_ctx)
 
-    # Switch default at runtime
-    set_default_database("mock")
-    print(f"New default: {get_default_database_type()}")
-
-    # New contexts will use the new default
-    default_ctx = GraphContext()  # Uses current default database
-    bob = await default_ctx.create(Person, name="Bob", age=25)
-    print("✅ Created Bob using new default database")
-
-    # Switch back to JSON as default
-    set_default_database("json")
+    # Entity-centric operations use the default context
+    bob = await Person.create(name="Bob", age=25)
+    print("✅ Created Bob using default context")
 
     # Method 4: Environment-Based Switching
     print("\n4️⃣  Environment-Based Database Switching")
@@ -159,11 +143,11 @@ async def demonstrate_database_switching():
         env = os.getenv("APP_ENV", "development")
 
         if env == "production":
-            return get_database("mock", name="Production-ENV")
+            return MockDatabase(name="Production-ENV")
         elif env == "testing":
-            return get_database("mock", name="Testing-ENV")
+            return MockDatabase(name="Testing-ENV")
         else:
-            return get_database("mock", name="Development-ENV")
+            return MockDatabase(name="Development-ENV")
 
     # Test different environments
     environments = ["development", "testing", "production"]
@@ -172,8 +156,9 @@ async def demonstrate_database_switching():
         os.environ["APP_ENV"] = env
         db = get_database_for_environment()
         ctx = GraphContext(database=db)
+        set_default_context(ctx)
 
-        charlie = await ctx.create(Person, name=f"Charlie-{env}", age=35)
+        charlie = await Person.create(name=f"Charlie-{env}", age=35)
         print(f"✅ Created Charlie in {env} environment")
 
     # Clean up environment
@@ -189,28 +174,37 @@ async def demonstrate_database_switching():
             self.current_db = None
             self.context = None
 
-        async def initialize(self, db_type: str, **config):
+        async def initialize(self, database: Database):
             """Initialize with a specific database."""
-            self.current_db = get_database(db_type, **config)
+            self.current_db = database
             self.context = GraphContext(database=self.current_db)
-            print(f"🚀 Application initialized with {db_type}")
-
-        async def switch_database(self, db_type: str, **config):
-            """Switch to a different database."""
+            set_default_context(self.context)
             print(
-                f"🔄 Switching from {self.current_db.name if hasattr(self.current_db, 'name') else 'current'} to {db_type}"
+                f"🚀 Application initialized with {database.name if hasattr(database, 'name') else type(database).__name__}"
             )
 
-            # Create new database and context
-            new_db = get_database(db_type, **config)
-            new_context = GraphContext(database=new_db)
+        async def switch_database(self, database: Database):
+            """Switch to a different database."""
+            db_name = (
+                database.name if hasattr(database, "name") else type(database).__name__
+            )
+            current_name = (
+                self.current_db.name
+                if hasattr(self.current_db, "name")
+                else type(self.current_db).__name__
+            )
+            print(f"🔄 Switching from {current_name} to {db_name}")
+
+            # Create new context
+            new_context = GraphContext(database=database)
 
             # Optional: Migrate data (simplified example)
             await self._migrate_data(self.context, new_context)
 
             # Switch
-            self.current_db = new_db
+            self.current_db = database
             self.context = new_context
+            set_default_context(new_context)
             print("✅ Database switch completed")
 
         async def _migrate_data(self, old_ctx: GraphContext, new_ctx: GraphContext):
@@ -222,17 +216,17 @@ async def demonstrate_database_switching():
     # Demonstrate application lifecycle switching
     app = ApplicationManager()
 
-    await app.initialize("mock", name="Initial-DB")
+    await app.initialize(MockDatabase(name="Initial-DB"))
 
-    # Create some data
-    initial_person = await app.context.create(Person, name="Diana", age=40)
+    # Create some data using entity-centric operations
+    initial_person = await Person.create(name="Diana", age=40)
     print(f"✅ Created Diana: {initial_person.id}")
 
     # Switch databases during runtime
-    await app.switch_database("mock", name="New-DB")
+    await app.switch_database(MockDatabase(name="New-DB"))
 
     # Create more data in new database
-    new_person = await app.context.create(Person, name="Eve", age=28)
+    new_person = await Person.create(name="Eve", age=28)
     print(f"✅ Created Eve in new database: {new_person.id}")
 
     # Method 6: Configuration-Driven Switching
@@ -244,10 +238,10 @@ async def demonstrate_database_switching():
 
         def __init__(self):
             self.configs = {
-                "cache": {"type": "mock", "name": "Cache-DB"},
-                "analytics": {"type": "mock", "name": "Analytics-DB"},
-                "user_data": {"type": "mock", "name": "UserData-DB"},
-                "audit": {"type": "mock", "name": "Audit-DB"},
+                "cache": {"name": "Cache-DB"},
+                "analytics": {"name": "Analytics-DB"},
+                "user_data": {"name": "UserData-DB"},
+                "audit": {"name": "Audit-DB"},
             }
             self.databases = {}
             self.contexts = {}
@@ -255,15 +249,16 @@ async def demonstrate_database_switching():
         async def initialize(self):
             """Initialize all configured databases."""
             for purpose, config in self.configs.items():
-                db_type = config.pop("type")
-                self.databases[purpose] = get_database(db_type, **config)
+                db_name = config.get("name", f"{purpose}_db")
+                self.databases[purpose] = MockDatabase(name=db_name)
                 self.contexts[purpose] = GraphContext(database=self.databases[purpose])
                 print(f"🔧 Initialized {purpose} database")
 
         async def save_user(self, user_data: dict):
             """Save user to user_data database."""
             ctx = self.contexts["user_data"]
-            user = await ctx.create(Person, **user_data)
+            set_default_context(ctx)
+            user = await Person.create(**user_data)
             print(f"👤 Saved user to user_data database")
             return user
 
@@ -291,7 +286,7 @@ async def demonstrate_database_switching():
     print(f"\nKey takeaways:")
     print(f"  • Databases can be switched per-operation")
     print(f"  • Context objects encapsulate database usage")
-    print(f"  • Default database can be changed at runtime")
+    print(f"  • Default context can be changed at runtime using set_default_context()")
     print(f"  • Environment variables enable dynamic configuration")
     print(f"  • Application lifecycle switching supports hot-swapping")
     print(f"  • Configuration-driven approach separates concerns")

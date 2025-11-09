@@ -43,7 +43,7 @@ server = create_server(
     version="1.0.0",
     debug=True,
     db_type="json",
-    db_path="jvdb/simple_dynamic",
+    db_path="./jvdb",
 )
 
 print(f"📋 Server created: {server.config.title}")

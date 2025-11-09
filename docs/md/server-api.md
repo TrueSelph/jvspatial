@@ -18,25 +18,72 @@ The jvspatial Server class provides a powerful, object-oriented abstraction for 
 12. [Examples](#examples)
 13. [API Reference](#api-reference)
 
+## 🎯 **Standard Implementation Examples**
+
+**We strongly recommend starting with these standard examples** as they demonstrate best practices and complete patterns:
+
+### **Authenticated API Example** (Full CRUD with Auth)
+📁 **File**: [`examples/api/authenticated_endpoints_example.py`](../../examples/api/authenticated_endpoints_example.py)
+
+**Complete example** showing:
+- Server setup with authentication (`auth_enabled=True`)
+- CRUD operations (Create, Read, Update, Delete)
+- Entity-centric database operations
+- Pagination with `ObjectPager`
+- Permission-based access control
+- Response schemas with examples
+- Automatic auth endpoints registration
+
+### **Unauthenticated API Example** (Public Read-Only)
+📁 **File**: [`examples/api/unauthenticated_endpoints_example.py`](../../examples/api/unauthenticated_endpoints_example.py)
+
+**Complete example** showing:
+- Server setup without authentication (`auth_enabled=False`)
+- Public read-only endpoints
+- Pagination and filtering
+- No authentication endpoints (login/register/logout are NOT registered)
+
+**Use these examples as templates** when building your custom jvspatial APIs!
+
+### When to Use Which Example
+
+- **Use Authenticated API Example** when:
+  - You need user authentication
+  - You need CRUD operations
+  - You need access control (permissions/roles)
+  - You're building a private or protected API
+
+- **Use Unauthenticated API Example** when:
+  - You're building a public API
+  - You only need read operations
+  - You're serving public content
+  - Authentication is handled externally or not needed
+
+---
+
 ## Quick Start
 
+Here's a minimal example to get started quickly. For production-ready implementations, see the [standard examples](#-standard-implementation-examples) above.
+
 ```python
-from jvspatial.api import Server, create_server, endpoint
-from jvspatial.api.endpoint import EndpointField
+from jvspatial.api import Server, endpoint
+from jvspatial.api import Server, endpoint
+from jvspatial.api.decorators import EndpointField
 from jvspatial.core import Walker, Node, on_visit
 
 # Create a server instance
-server = create_server(
+server = Server(
     title="My Spatial API",
     description="A spatial data management API",
     version="1.0.0",
     debug=True,
     db_type="json",
-    db_path="jvdb/my_api"
+    db_path="./jvdb",
+    auth_enabled=False  # Set to True to enable authentication
 )
 
 # Define a Walker endpoint
-@endpoint("/process")
+@endpoint("/process", methods=["POST"])
 class ProcessData(Walker):
     data: str = EndpointField(description="Data to process")
 
@@ -226,17 +273,21 @@ class ResourceEndpoint(Walker):
 
 ### Runtime Registration
 
-Register walker endpoints programmatically while the server is running:
+Register endpoints programmatically while the server is running:
 
 ```python
-from jvspatial.api import create_server
+from jvspatial.api import Server, endpoint
 
-server = create_server(title="Dynamic API")
+server = Server(title="Dynamic API", db_type="json", db_path="./jvdb")
 
 # Start server
 server.run()  # In production, this would be running
 
 # Later, in another module or after package installation:
+from jvspatial.api import endpoint
+from jvspatial.api.decorators import EndpointField
+
+@endpoint("/new-endpoint", methods=["POST"])
 class NewWalker(Walker):
     data: str = EndpointField(description="Data to process")
 
@@ -244,26 +295,7 @@ class NewWalker(Walker):
     async def process(self, here):
         self.response["result"] = self.data
 
-# Register the walker dynamically
-server.register_walker_class(NewWalker, "/new-endpoint", methods=["POST"])
-```
-
-### Package Discovery
-
-Enable automatic discovery of walker packages:
-
-```python
-server = create_server(title="Discovery API")
-
-# Enable package discovery with patterns
-server.enable_package_discovery(
-    enabled=True,
-    patterns=['*_walkers', '*_endpoints', 'myapp_*']
-)
-
-# Manually refresh to discover new packages
-count = server.refresh_endpoints()
-print(f"Discovered {count} new endpoints")
+# The @endpoint decorator automatically registers with the current server
 ```
 
 ### Shared Server Instances
@@ -272,14 +304,14 @@ Use shared server instances across modules:
 
 ```python
 # main.py
-from jvspatial.api import create_server
+from jvspatial.api import Server
 
-server = create_server(title="Shared API")  # Becomes default server
+server = Server(title="Shared API", db_type="json", db_path="./jvdb")  # Becomes default server
 
 # other_module.py
-from jvspatial.api import register_walker_to_default
+from jvspatial.api import endpoint
 
-@register_walker_to_default("/module-endpoint")
+@endpoint("/module-endpoint", methods=["POST"])
 class ModuleWalker(Walker):
     # Walker implementation
     pass
@@ -389,13 +421,13 @@ print(f"Removed {len(removed_walkers)} walkers")
 **NEW**: Remove function endpoints registered with `@server.route()` or `@endpoint`:
 
 ```python
-# Remove by function reference
-@server.route("/status")
+# Function endpoint
+@endpoint("/status", methods=["GET"])
 def get_status():
     return {"status": "ok"}
 
 # Later, remove the function endpoint
-success = server.unregister_endpoint(get_status)
+success = await server.unregister_endpoint(get_status)
 if success:
     print("Function endpoint removed")
 
@@ -409,9 +441,11 @@ if success:
 def package_func():
     return {"message": "Package function"}
 
-# Remove using default server
-default_server = get_default_server()
-success = default_server.unregister_endpoint(package_func)
+# Remove using current server
+from jvspatial.api import get_current_server
+current_server = get_current_server()
+if current_server:
+    success = await current_server.unregister_endpoint(package_func)
 ```
 
 ### Comprehensive Path-Based Removal
@@ -531,30 +565,21 @@ async def upload_file(file: UploadFile = File(...)):
 Access server instances from anywhere:
 
 ```python
-from jvspatial.api import (
-    get_default_server,
-    set_default_server,
-    walker_endpoint,
-    endpoint
-)
+from jvspatial.api import endpoint, get_current_server
 
-# Get the current default server
-server = get_default_server()
+# Get the current server from context
+server = get_current_server()
 if server:
-    print(f"Default server: {server.config.title}")
+    print(f"Current server: {server.config.title}")
 
-# Set a specific server as default
-set_default_server(my_server)
-
-# Register Walker to default server from anywhere
-@walker_endpoint("/global-walker")
-class GlobalWalker(Walker):
-    pass
-
-# Register function to default server from anywhere
+# Endpoints automatically register with the current server
 @endpoint("/global-function", methods=["GET"])
 async def global_function():
     return {"message": "Hello from global function"}
+
+@endpoint("/global-walker", methods=["POST"])
+class GlobalWalker(Walker):
+    pass
 ```
 
 ## Custom Routes
@@ -725,7 +750,7 @@ class Item(Node):
     description: str
     price: float
 
-@server.walker("/items/create")
+@endpoint("/items/create", methods=["POST"])
 class CreateItem(Walker):
     name: str = EndpointField(min_length=1, max_length=100)
     description: str = EndpointField(default="")
@@ -741,7 +766,7 @@ class CreateItem(Walker):
         await here.connect(item)
         self.response = {"item_id": item.id, "status": "created"}
 
-@server.route("/items", methods=["GET"])
+@endpoint("/items", methods=["GET"])
 async def list_items():
     items = await Item.all()
     return {"items": [item.export() for item in items]}
@@ -777,7 +802,7 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-@server.walker("/locations/nearby")
+@endpoint("/locations/nearby", methods=["POST"])
 class FindNearbyLocations(Walker):
     latitude: float = EndpointField(ge=-90.0, le=90.0)
     longitude: float = EndpointField(ge=-180.0, le=180.0)
@@ -846,28 +871,37 @@ class Server:
 
 **Enhanced Endpoint Unregistration Methods:**
 
-- `unregister_walker_class(walker_class: Type[Walker]) -> bool`
-  - Remove a walker class and its endpoint from the server (with app rebuilding)
+- `register_walker_class(walker_class: Type[Walker], path: str, methods: Optional[List[str]] = None, **kwargs) -> None`
+  - Programmatically register a walker class as an endpoint
 
-- `unregister_endpoint(endpoint: Union[str, Callable]) -> bool`
-  - Remove a function endpoint by path string or function reference (with app rebuilding)
+- `async unregister_walker_class(walker_class: Type[Walker]) -> bool`
+  - Remove a walker class and its endpoint from the server
 
-- `unregister_endpoint_by_path(path: str) -> int`
-  - Remove all endpoints (both walkers and functions) from a specific path
-
-- `unregister_walker_endpoint(path: str) -> List[Type[Walker]]`
+- `async unregister_walker_endpoint(path: str) -> List[Type[Walker]]`
   - Remove all walkers registered to a specific path
 
-**Enhanced Endpoint Listing Methods:**
+- `async unregister_endpoint(endpoint: Union[str, Callable]) -> bool`
+  - Remove a function endpoint by path string or function reference
+
+- `async unregister_endpoint_by_path(path: str) -> int`
+  - Remove all endpoints (both walkers and functions) from a specific path
+
+**Endpoint Listing Methods:**
 
 - `list_walker_endpoints() -> Dict[str, Dict[str, Any]]`
   - Get information about all registered walkers
 
-- `list_function_endpoints() -> Dict[str, Dict[str, Any]]`
+- `async list_function_endpoints() -> Dict[str, Dict[str, Any]]`
   - Get information about all registered function endpoints
 
 - `list_all_endpoints() -> Dict[str, Any]`
   - Get comprehensive information about all endpoints (walkers and functions)
+
+- `enable_package_discovery(enabled: bool = True, patterns: Optional[List[str]] = None) -> None`
+  - Enable or disable automatic package discovery
+
+- `refresh_endpoints() -> int`
+  - Refresh and discover new endpoints from packages (server must be running)
 
 **Server Management Methods:**
 
@@ -902,9 +936,12 @@ class Server:
 - `add_node_type(node_class: Type[Node])`
   - Register a Node type (for documentation)
 
-### Global Server Functions
+### Helper Functions
 
 ```python
+from jvspatial.api import create_server, get_current_server
+
+# Create a Server instance with common configuration
 def create_server(
     title: str = "jvspatial API",
     description: str = "API built with jvspatial framework",
@@ -912,35 +949,13 @@ def create_server(
     **config_kwargs: Any
 ) -> Server
 ```
-Creates a Server instance with common configuration.
+Creates a Server instance and automatically sets it as the current server.
 
 ```python
-def get_default_server() -> Optional[Server]
+# Get the current server from context
+def get_current_server() -> Optional[Server]
 ```
-Get the default server instance.
-
-```python
-def set_default_server(server: Server) -> None
-```
-Set the default server instance.
-
-```python
-def walker_endpoint(
-    path: str,
-    methods: Optional[List[str]] = None,
-    **kwargs: Any
-) -> Callable[[Type[Walker]], Type[Walker]]
-```
-Register a walker to the default server instance (for package development).
-
-```python
-def endpoint(
-    path: str,
-    methods: Optional[List[str]] = None,
-    **kwargs: Any
-) -> Callable[[Callable], Callable]
-```
-Register a regular function as an endpoint on the default server.
+The current server is automatically set when a Server is instantiated. The `@endpoint` decorator uses the current server for registration.
 
 ### Built-in Endpoints
 
@@ -978,11 +993,14 @@ config = ServerConfig(
 )
 server = Server(config=config)
 
-# Also good
+# Also good - using create_server helper
+from jvspatial.api import create_server
+
 server = create_server(
     title="My API",
     debug=False,
     db_type="mongodb",
+    db_path="./jvdb",
     cors_origins=["https://myapp.com"]
 )
 ```
@@ -991,15 +1009,15 @@ server = create_server(
 
 ```python
 # Group related endpoints
-@server.walker("/users/create")
+@endpoint("/users/create", methods=["POST"])
 class CreateUser(Walker):
     pass
 
-@server.walker("/users/update")
+@endpoint("/users/update", methods=["PUT"])
 class UpdateUser(Walker):
     pass
 
-@server.walker("/users/search")
+@endpoint("/users/search", methods=["POST"])
 class SearchUsers(Walker):
     pass
 ```
@@ -1008,7 +1026,7 @@ class SearchUsers(Walker):
 
 ```python
 # Good - with validation and documentation
-@server.walker("/items/create")
+@endpoint("/items/create", methods=["POST"])
 class CreateItem(Walker):
     name: str = EndpointField(
         description="Item name",
@@ -1065,48 +1083,34 @@ async def initialize_data():
         print("Created admin user")
 ```
 
-## Migration from Direct FastAPI
+## Server Class Benefits
 
-If you're migrating from a direct FastAPI implementation:
-
-### Before (Direct FastAPI)
+The `Server` class provides a cleaner, more maintainable approach for building jvspatial APIs:
 
 ```python
-from fastapi import FastAPI
-from jvspatial.api.endpoint.router import EndpointRouter
+from jvspatial.api import Server, endpoint
 
-app = FastAPI(title="My API")
-api = EndpointRouter()
+server = Server(
+    title="My API",
+    db_type="json",
+    db_path="./jvdb"
+)
 
-@api.endpoint("/process")
+@endpoint("/process", methods=["POST"])
 class ProcessData(Walker):
     # Walker implementation
-    pass
-
-app.include_router(api.router)
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-```
-
-### After (Server Class)
-
-```python
-from jvspatial.api.server import create_server
-
-server = create_server(title="My API")
-
-@server.walker("/process")
-class ProcessData(Walker):
-    # Same Walker implementation
     pass
 
 if __name__ == "__main__":
     server.run()
 ```
 
-The Server class provides a cleaner, more maintainable approach while preserving all the power of jvspatial and FastAPI.
+**Key Benefits:**
+- Automatic database setup and context management
+- Built-in authentication and middleware support
+- Automatic OpenAPI documentation generation
+- Lifecycle management with startup/shutdown hooks
+- Entity-centric operations out of the box
 
 ## See Also
 

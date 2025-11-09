@@ -12,14 +12,13 @@ import asyncio
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
-from jvspatial.api import Server
-from jvspatial.api.auth.decorators import auth_endpoint
-from jvspatial.api.endpoint.decorators import EndpointField
-from jvspatial.core.entities import Node, Walker
-from jvspatial.core.storage import StorageManager
-from jvspatial.core.storage.backends import LocalStorage, S3Storage
+from jvspatial.api import Server, endpoint
+from jvspatial.api.decorators import EndpointField
+from jvspatial.core.decorators import on_visit
+from jvspatial.core.entities import Node, Root, Walker
+from jvspatial.storage import create_storage, get_proxy_manager
 
 
 # Define storage-aware entities
@@ -39,96 +38,80 @@ class FileWalker(Walker):
     """Walker for managing stored files."""
 
     async def store_file(
-        self, file_path: str, storage_type: str = "local"
+        self, file_path: str, file_content: bytes, storage_type: str = "local"
     ) -> StoredFile:
         """Store a file and create its node.
 
         Args:
-            file_path: Path to local file to store
-            storage_type: Storage backend to use
+            file_path: Path where file should be stored
+            file_content: File content as bytes
+            storage_type: Storage backend to use ('local' or 's3')
         """
-        # Get file info
-        local_path = Path(file_path)
-        if not local_path.exists():
-            raise FileNotFoundError(f"File not found: {file_path}")
-
         # Determine mime type
         import mimetypes
 
         mime_type, _ = mimetypes.guess_type(file_path)
 
-        # Store file
-        storage = self.server.get_storage(storage_type)
-        if storage is None:
-            raise ValueError(f"Storage type not configured: {storage_type}")
+        # Get storage interface
+        if storage_type == "local":
+            storage = create_storage(provider="local", root_dir=".files")
+        elif storage_type == "s3":
+            storage = create_storage(
+                provider="s3",
+                bucket_name=os.getenv("AWS_BUCKET_NAME", "jvspatial-files"),
+                region_name=os.getenv("AWS_REGION", "us-east-1"),
+                access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+                secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+                endpoint_url=os.getenv("AWS_ENDPOINT_URL"),
+            )
+        else:
+            raise ValueError(f"Unsupported storage type: {storage_type}")
 
-        storage_path = await storage.store_file(file_path, mime_type=mime_type)
+        # Save file
+        await storage.save_file(file_path, file_content)
 
         # Create node
         stored_file = await StoredFile.create(
-            filename=local_path.name,
-            file_path=storage_path,
+            filename=Path(file_path).name,
+            file_path=file_path,
             mime_type=mime_type or "application/octet-stream",
-            size=local_path.stat().st_size,
+            size=len(file_content),
             uploaded_at=datetime.now(),
             storage_type=storage_type,
         )
 
         # Set public URL if available
-        if hasattr(storage, "get_public_url"):
-            stored_file.public_url = await storage.get_public_url(storage_path)
+        public_url = await storage.get_file_url(file_path)
+        if public_url:
+            stored_file.public_url = public_url
             await stored_file.save()
 
         return stored_file
 
 
-@auth_endpoint("/api/files/upload", methods=["POST"])
+@endpoint("/api/files/upload", methods=["POST"], auth=True)
 class FileUploader(FileWalker):
     """Upload files to storage."""
 
+    file_path: str = EndpointField(description="Path where file should be stored")
+    file_content: bytes = EndpointField(
+        description="File content as bytes (base64 encoded)"
+    )
     storage_type: str = EndpointField(
         default="local", description="Storage backend to use (local or s3)"
     )
 
-    make_public: bool = EndpointField(
-        default=False, description="Make the file publicly accessible"
-    )
-
-    async def on_start(self):
+    @on_visit(Root)
+    async def upload_file(self, here: Root):
         """Handle file upload."""
-        # Get the uploaded file from request
-        upload = await self.endpoint.request.form()
-        if "file" not in upload:
-            return self.endpoint.bad_request(
-                message="No file provided", details={"field": "file"}
-            )
-
-        uploaded_file = upload["file"]
-
-        # Save uploaded file temporarily
-        temp_path = f"/tmp/{uploaded_file.filename}"
-        with open(temp_path, "wb") as f:
-            data = await uploaded_file.read()
-            f.write(data)
-
         try:
             # Store file using appropriate backend
             stored_file = await self.store_file(
-                temp_path, storage_type=self.storage_type
+                self.file_path, self.file_content, storage_type=self.storage_type
             )
 
-            # Make public if requested
-            if self.make_public:
-                storage = self.server.get_storage(self.storage_type)
-                if hasattr(storage, "make_public"):
-                    await storage.make_public(stored_file.file_path)
-                    stored_file.public_url = await storage.get_public_url(
-                        stored_file.file_path
-                    )
-                    await stored_file.save()
-
-            # Report success
-            return self.endpoint.success(
+            # Return success
+            return await self.endpoint.success(
                 data={
                     "file_id": stored_file.id,
                     "filename": stored_file.filename,
@@ -137,13 +120,13 @@ class FileUploader(FileWalker):
                 },
                 message="File uploaded successfully",
             )
+        except Exception as e:
+            return await self.endpoint.error(
+                message=f"Failed to upload file: {str(e)}", status_code=500
+            )
 
-        finally:
-            # Clean up temp file
-            os.unlink(temp_path)
 
-
-@auth_endpoint("/api/files/list", methods=["GET"])
+@endpoint("/api/files/list", methods=["GET"], auth=True)
 class FileList(FileWalker):
     """List stored files."""
 
@@ -155,17 +138,18 @@ class FileList(FileWalker):
         default=False, description="Only show public files"
     )
 
-    async def on_start(self):
+    @on_visit(Root)
+    async def list_files(self, here: Root):
         """List files matching criteria."""
-        query = {}
+        query: Dict[str, Any] = {}
         if self.storage_type:
             query["storage_type"] = self.storage_type
         if self.public_only:
-            query["public_url"] = {"$ne": None}
+            query["public_url"] = {"$ne": None}  # type: ignore[dict-item]
 
-        files = await StoredFile.all(**query)
+        files = await StoredFile.find(query)
 
-        return self.endpoint.success(
+        return await self.endpoint.success(
             data={
                 "files": [
                     {
@@ -181,38 +165,63 @@ class FileList(FileWalker):
         )
 
 
-@auth_endpoint("/api/files/{file_id}/download")
+@endpoint("/api/files/{file_id}/download", methods=["GET"], auth=True)
 class FileDownloader(FileWalker):
     """Download stored files."""
 
-    async def on_start(self, file_id: str):
+    file_id: str = EndpointField(description="File ID to download")
+
+    @on_visit(Root)
+    async def download_file(self, here: Root):
         """Download a specific file."""
         # Get file info
-        stored_file = await StoredFile.get(file_id)
+        stored_file = await StoredFile.get(self.file_id)
         if not stored_file:
-            return self.endpoint.not_found(
-                message="File not found", details={"file_id": file_id}
+            return await self.endpoint.not_found(
+                message="File not found", details={"file_id": self.file_id}
             )
 
         # Get storage backend
-        storage = self.server.get_storage(stored_file.storage_type)
-        if storage is None:
-            return self.endpoint.server_error(
-                message=f"Storage type not configured: {stored_file.storage_type}"
-            )
+        try:
+            if stored_file.storage_type == "local":
+                storage = create_storage(provider="local", root_dir=".files")
+            elif stored_file.storage_type == "s3":
+                storage = create_storage(
+                    provider="s3",
+                    bucket_name=os.getenv("AWS_BUCKET_NAME", "jvspatial-files"),
+                    region_name=os.getenv("AWS_REGION", "us-east-1"),
+                    access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+                    secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+                    endpoint_url=os.getenv("AWS_ENDPOINT_URL"),
+                )
+            else:
+                return await self.endpoint.error(
+                    message=f"Unsupported storage type: {stored_file.storage_type}",
+                    status_code=500,
+                )
 
-        # Stream file
-        stream = await storage.get_file(stored_file.file_path)
-        if not stream:
-            return self.endpoint.not_found(
-                message="File content not found",
-                details={"path": stored_file.file_path},
-            )
+            # Get file content
+            content = await storage.get_file(stored_file.file_path)
+            if content is None:
+                return await self.endpoint.not_found(
+                    message="File content not found",
+                    details={"path": stored_file.file_path},
+                )
 
-        # Return file download response
-        return self.endpoint.stream_file(
-            stream, filename=stored_file.filename, mime_type=stored_file.mime_type
-        )
+            # Return file content (in a real implementation, you'd stream this)
+            return await self.endpoint.success(
+                data={
+                    "file_id": stored_file.id,
+                    "filename": stored_file.filename,
+                    "content": content.hex(),  # Return as hex for JSON response
+                    "mime_type": stored_file.mime_type,
+                },
+                message="File retrieved successfully",
+            )
+        except Exception as e:
+            return await self.endpoint.error(
+                message=f"Failed to retrieve file: {str(e)}", status_code=500
+            )
 
 
 def create_server():
@@ -221,41 +230,23 @@ def create_server():
         title="Storage Example API",
         description="API demonstrating storage backends",
         version="1.0.0",
+        file_storage_enabled=True,
+        file_storage_provider="local",
+        file_storage_root=".files",
+        proxy_enabled=True,
     )
-
-    # Configure storage
-    storage = StorageManager()
-
-    # Local storage in .files directory
-    storage.register(
-        "local", LocalStorage(root_dir=".files", base_url="http://localhost:8000/files")
-    )
-
-    # S3 storage (if configured)
-    if os.getenv("AWS_ACCESS_KEY_ID"):
-        storage.register(
-            "s3",
-            S3Storage(
-                bucket=os.getenv("AWS_BUCKET_NAME", "jvspatial-files"),
-                region=os.getenv("AWS_REGION", "us-east-1"),
-                access_key=os.getenv("AWS_ACCESS_KEY_ID"),
-                secret_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-                endpoint_url=os.getenv("AWS_ENDPOINT_URL"),
-            ),
-        )
-
-    server.storage = storage
     return server
 
 
-async def main():
+def main():
     """Run the storage example."""
     print("Setting up server...")
     server = create_server()
 
     print("\nStorage backends configured:")
-    for name in server.storage.backends:
-        print(f"- {name}")
+    print("- local (default)")
+    if os.getenv("AWS_ACCESS_KEY_ID"):
+        print("- s3 (AWS credentials found)")
 
     print("\nAvailable endpoints:")
     print("POST /api/files/upload - Upload files")
@@ -263,8 +254,11 @@ async def main():
     print("GET  /api/files/{id}/download - Download files")
 
     print("\nStarting server...")
+    # server.run() uses uvicorn which manages its own event loop
     server.run()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # server.run() manages its own event loop via uvicorn
+    # No need for asyncio.run() here
+    main()

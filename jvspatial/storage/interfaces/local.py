@@ -127,6 +127,196 @@ class LocalFileInterface(FileStorageInterface):
 
         return full_path
 
+    async def create_version(
+        self,
+        file_path: str,
+        content: bytes,
+        version: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Create a new version of a file.
+
+        Args:
+            file_path: Path to the file
+            content: File content
+            version: Optional version identifier (auto-generated if not provided)
+            metadata: Optional metadata for the version
+
+        Returns:
+            Version identifier
+        """
+        import uuid
+        from datetime import datetime
+
+        # Generate version if not provided
+        if version is None:
+            version = (
+                f"v{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+            )
+
+        # Create version directory (use .versions suffix to avoid conflicts)
+        version_dir = self.root_dir / f"{file_path}.versions"
+        await to_thread(version_dir.mkdir, parents=True, exist_ok=True)
+
+        # Save version file
+        version_file = version_dir / f"{version}.bin"
+        await to_thread(version_file.write_bytes, content)
+
+        # Save version metadata
+        version_metadata = {
+            "version": version,
+            "created_at": datetime.utcnow().isoformat(),
+            "size": len(content),
+            "checksum": hashlib.sha256(content).hexdigest(),
+            "metadata": metadata or {},
+        }
+
+        metadata_file = version_dir / f"{version}.meta.json"
+        import json
+
+        await to_thread(
+            metadata_file.write_text, json.dumps(version_metadata, indent=2)
+        )
+
+        # Update latest version pointer
+        latest_file = self.root_dir / f"{file_path}.latest"
+        await to_thread(latest_file.write_text, version)
+
+        logger.info(f"Created version {version} for file {file_path}")
+        return {
+            "version_id": version,
+            "path": file_path,
+            "created_at": version_metadata["created_at"],
+            "size": version_metadata["size"],
+        }
+
+    async def get_version(self, file_path: str, version: str) -> Dict[str, Any]:
+        """Retrieve a specific version of a file.
+
+        Args:
+            file_path: Path to the file
+            version: Version identifier
+
+        Returns:
+            Dictionary with version information and content
+        """
+        version_file = self.root_dir / f"{file_path}.versions" / f"{version}.bin"
+
+        if not await to_thread(version_file.exists):
+            return None
+
+        content = await to_thread(version_file.read_bytes)
+
+        # Try to get metadata
+        metadata_file = self.root_dir / f"{file_path}.versions" / f"{version}.meta.json"
+        metadata = {}
+        if await to_thread(metadata_file.exists):
+            try:
+                import json
+
+                metadata_content = await to_thread(metadata_file.read_text)
+                metadata = json.loads(metadata_content)
+            except Exception as e:
+                logger.warning(f"Failed to read metadata for version {version}: {e}")
+
+        return {
+            "version_id": version,
+            "path": file_path,
+            "content": content,
+            "size": len(content),
+            **metadata,
+        }
+
+    async def list_versions(self, file_path: str) -> List[Dict[str, Any]]:
+        """List all versions of a file.
+
+        Args:
+            file_path: Path to the file
+
+        Returns:
+            List of version information dictionaries
+        """
+        versions_dir = self.root_dir / f"{file_path}.versions"
+
+        if not await to_thread(versions_dir.exists):
+            return []
+
+        versions = []
+
+        # Get all version files
+        version_files = await to_thread(lambda: list(versions_dir.glob("*.meta.json")))
+
+        for metadata_file in version_files:
+            try:
+                import json
+
+                metadata_content = await to_thread(metadata_file.read_text)
+                version_data = json.loads(metadata_content)
+                # Ensure version_id is included
+                version_data["version_id"] = version_data.get(
+                    "version", metadata_file.stem.replace(".meta", "")
+                )
+                versions.append(version_data)
+            except Exception as e:
+                logger.warning(f"Failed to read version metadata {metadata_file}: {e}")
+
+        # Sort by creation date (newest first)
+        versions.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+
+        return versions
+
+    async def delete_version(self, file_path: str, version: str) -> bool:
+        """Delete a specific version of a file.
+
+        Args:
+            file_path: Path to the file
+            version: Version identifier to delete
+
+        Returns:
+            True if version was deleted, False otherwise
+        """
+        versions_dir = self.root_dir / f"{file_path}.versions"
+
+        if not await to_thread(versions_dir.exists):
+            return False
+
+        version_file = versions_dir / f"{version}.bin"
+        metadata_file = versions_dir / f"{version}.meta.json"
+
+        deleted = False
+
+        if await to_thread(version_file.exists):
+            await to_thread(version_file.unlink)
+            deleted = True
+
+        if await to_thread(metadata_file.exists):
+            await to_thread(metadata_file.unlink)
+
+        logger.info(f"Deleted version {version} for file {file_path}")
+        return deleted
+
+    async def get_latest_version(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """Get the latest version identifier for a file.
+
+        Args:
+            file_path: Path to the file
+
+        Returns:
+            Latest version information dictionary, or None if no versions exist
+        """
+        latest_file = self.root_dir / f"{file_path}.latest"
+
+        if not await to_thread(latest_file.exists):
+            return None
+
+        try:
+            latest_version_id = await to_thread(latest_file.read_text)
+            # Get the full version info
+            return await self.get_version(file_path, latest_version_id)
+        except Exception as e:
+            logger.warning(f"Failed to read latest version for {file_path}: {e}")
+            return None
+
     async def save_file(
         self, file_path: str, content: bytes, metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:

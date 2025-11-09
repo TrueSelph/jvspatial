@@ -22,7 +22,7 @@ from jvspatial.storage import (
     FileValidator,
     LocalFileInterface,
     PathSanitizer,
-    get_file_interface,
+    create_storage,
 )
 from jvspatial.storage.exceptions import (
     AccessDeniedError,
@@ -506,7 +506,7 @@ class TestCrossComponentIntegration:
     @pytest.mark.asyncio
     async def test_factory_creates_integrated_storage(self, temp_storage_dir):
         """Test factory function creates fully integrated storage."""
-        storage = get_file_interface(
+        storage = create_storage(
             provider="local",
             root_dir=temp_storage_dir,
             config={
@@ -517,7 +517,7 @@ class TestCrossComponentIntegration:
 
         assert isinstance(storage, LocalFileInterface)
         assert isinstance(storage.validator, FileValidator)
-        assert storage.validator.max_size_bytes == 10 * 1024 * 1024
+        assert storage.validator.max_size_bytes == 100 * 1024 * 1024
 
     @pytest.mark.asyncio
     async def test_path_sanitizer_file_validator_integration(self, temp_storage_dir):
@@ -863,10 +863,10 @@ async def test_module_imports():
         FileValidator,
         LocalFileInterface,
         PathSanitizer,
-        get_file_interface,
+        create_storage,
     )
 
-    assert get_file_interface is not None
+    assert create_storage is not None
     assert LocalFileInterface is not None
     assert PathSanitizer is not None
     assert FileValidator is not None

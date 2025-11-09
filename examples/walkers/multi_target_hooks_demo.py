@@ -10,9 +10,12 @@ This example demonstrates the new multi-target @on_visit decorator features:
 """
 
 import asyncio
+import os
 from typing import List
 
 from jvspatial.core import Edge, Node, Walker, on_exit, on_visit
+from jvspatial.core.context import GraphContext, set_default_context
+from jvspatial.db import create_database
 
 # =============================================================================
 # NODE TYPES
@@ -84,11 +87,12 @@ class TouristWalker(Walker):
     budget: float = 1000.0
     cities_visited: int = 0
 
-    @on_visit(City)  # Single target - only cities
-    async def visit_city(self, here):
+    # Explicit city visits (matches City and subclasses like SmartCity)
+    @on_visit(City)
+    async def visit_city(self, here: City):
         self.cities_visited += 1
         self.budget -= 50.0  # Spending money in the city
-        self.report(
+        await self.report(
             {
                 "city_visited": {
                     "name": here.name,
@@ -98,18 +102,23 @@ class TouristWalker(Walker):
                 }
             }
         )
+        # Continue traversal to connected cities
+        neighbors = await here.nodes()
+        if neighbors:
+            await self.visit(neighbors)
 
         # Note: Edge traversal is now automatic when moving between connected nodes
         # No need to manually handle edge traversal
 
-    @on_visit(Highway)  # Tourist using highway transportation
-    async def travel_highway(self, here):
+    # Explicit highway visits (matches Highway and subclasses like SmartHighway)
+    @on_visit(Highway)
+    async def travel_highway(self, here: Highway):
         travel_cost = (
             here.toll_cost
             + (here.distance_km if hasattr(here, "distance_km") else 0) * 0.1
         )
         self.budget -= travel_cost
-        self.report(
+        await self.report(
             {
                 "transportation_used": {
                     "type": "Highway",
@@ -119,6 +128,18 @@ class TouristWalker(Walker):
                 }
             }
         )
+        # SmartHighway-specific info for tourists
+        if isinstance(here, SmartHighway):
+            await self.report(
+                {
+                    "scenic_info": {
+                        "highway": here.name,
+                        "scenic_rating": 8,
+                        "rest_stops": 3,
+                        "tourist_rate": here.toll_cost * 1.1,
+                    }
+                }
+            )
 
 
 class LogisticsWalker(Walker):
@@ -127,8 +148,9 @@ class LogisticsWalker(Walker):
     cargo_capacity: float = 25000.0
     current_cargo: float = 0.0
 
-    @on_visit(Warehouse, Port)  # Multi-target - both warehouses and ports
-    async def handle_logistics_facility(self, here):
+    # Explicit facility visits (matches Warehouse/Port and subclasses like SmartWarehouse)
+    @on_visit(Warehouse, Port)
+    async def handle_logistics_facility(self, here: Node):
         facility_type = here.__class__.__name__
 
         if facility_type == "Warehouse":
@@ -141,9 +163,9 @@ class LogisticsWalker(Walker):
         elif facility_type == "Port":
             # International shipping operations
             if here.has_customs:
-                self.report({"customs_clearance": here.name})
+                await self.report({"customs_clearance": here.name})
 
-        self.report(
+        await self.report(
             {
                 "facility_visited": {
                     "name": here.name,
@@ -155,12 +177,17 @@ class LogisticsWalker(Walker):
                 }
             }
         )
+        # Continue traversal to connected nodes (facilities or routes)
+        next_nodes = await here.nodes()
+        if next_nodes:
+            await self.visit(next_nodes)
 
-        # Note: Transportation edges are traversed automatically when moving between facilities
-        # Edge hooks will be triggered transparently during traversal
+    # Note: Transportation edges are traversed automatically when moving between facilities
+    # Edge hooks will be triggered transparently during traversal
 
-    @on_visit(ShippingRoute, Railroad, Highway)  # Multi-target transportation
-    async def use_transportation(self, here):
+    # Explicit transportation edges (matches base and subclasses)
+    @on_visit(ShippingRoute, Railroad, Highway)
+    async def use_transportation(self, here: Edge):
         transport_type = here.__class__.__name__
         cost = 0.0
 
@@ -173,7 +200,7 @@ class LogisticsWalker(Walker):
         elif transport_type == "Highway":
             cost = here.toll_cost + 100.0  # Toll plus fuel
 
-        self.report(
+        await self.report(
             {
                 "transportation_used": {
                     "type": transport_type,
@@ -183,6 +210,23 @@ class LogisticsWalker(Walker):
                 }
             }
         )
+        # SmartHighway-specific details for logistics
+        if isinstance(here, SmartHighway):
+            estimated_time = (
+                f"{here.distance_km / (here.speed_limit * 0.9):.1f} hours"
+                if hasattr(here, "distance_km")
+                else "N/A"
+            )
+            await self.report(
+                {
+                    "highway_service": {
+                        "highway": here.name,
+                        "commercial_rate": here.toll_cost * 0.8,
+                        "priority_lane_access": True,
+                        "estimated_time": estimated_time,
+                    }
+                }
+            )
 
 
 class InspectionWalker(Walker):
@@ -205,7 +249,7 @@ class InspectionWalker(Walker):
         if has_violation:
             self.violations_found += 1
 
-        self.report(
+        await self.report(
             {
                 "facility_inspection": {
                     "facility": here.name,
@@ -215,6 +259,29 @@ class InspectionWalker(Walker):
                 }
             }
         )
+        # Smart facility auto-reports
+        if isinstance(here, SmartCity):
+            await self.report(
+                {
+                    "auto_report": {
+                        "city": here.name,
+                        "compliance_score": 95,
+                        "last_inspection": "2024-01-15",
+                        "status": "EXCELLENT",
+                    }
+                }
+            )
+        if isinstance(here, SmartWarehouse):
+            await self.report(
+                {
+                    "automated_compliance": {
+                        "warehouse": here.name,
+                        "safety_systems": "ACTIVE",
+                        "temperature_controlled": True,
+                        "last_maintenance": "2024-02-01",
+                    }
+                }
+            )
 
         # Note: Connected routes are inspected automatically during traversal
         # Edge inspection hooks will be triggered transparently
@@ -228,7 +295,7 @@ class InspectionWalker(Walker):
             safety_scores = {"Highway": 85, "Railroad": 92, "ShippingRoute": 78}
             safety_score = safety_scores.get(route_type, 70)
 
-            self.report(
+            await self.report(
                 {
                     "route_inspection": {
                         "route": here.name,
@@ -248,74 +315,13 @@ class InspectionWalker(Walker):
 class SmartCity(City):
     """Smart city that responds differently to different walker types"""
 
-    @on_visit(TouristWalker)
-    async def welcome_tourist(self, visitor):
-        # Offer tourist discounts and recommendations
-        visitor.report(
-            {
-                "special_offer": {
-                    "city": self.name,
-                    "offer": "20% discount at local attractions",
-                    "bonus_points": self.tourism_score * 10,
-                }
-            }
-        )
-
-        # Smart city provides optimal route recommendations
-        if hasattr(visitor, "budget") and visitor.budget < 200:
-            visitor.report(
-                f"Low budget warning in {self.name} - consider budget accommodations"
-            )
-
-    @on_visit(InspectionWalker)
-    async def prepare_for_inspection(self, visitor):
-        # Smart city auto-reports compliance metrics
-        visitor.report(
-            {
-                "auto_report": {
-                    "city": self.name,
-                    "compliance_score": 95,
-                    "last_inspection": "2024-01-15",
-                    "status": "EXCELLENT",
-                }
-            }
-        )
+    pass
 
 
 class SmartWarehouse(Warehouse):
     """Smart warehouse with automated systems"""
 
-    @on_visit(LogisticsWalker, InspectionWalker)  # Multi-target response
-    async def handle_authorized_visitor(self, visitor):
-        visitor_type = visitor.__class__.__name__
-
-        if visitor_type == "LogisticsWalker":
-            # Provide real-time inventory data
-            visitor.report(
-                {
-                    "inventory_data": {
-                        "warehouse": self.name,
-                        "current_stock": self.current_stock,
-                        "available_capacity": self.capacity - self.current_stock,
-                        "optimal_load": min(
-                            visitor.cargo_capacity, self.capacity - self.current_stock
-                        ),
-                    }
-                }
-            )
-
-        elif visitor_type == "InspectionWalker":
-            # Provide automated compliance reports
-            visitor.report(
-                {
-                    "automated_compliance": {
-                        "warehouse": self.name,
-                        "safety_systems": "ACTIVE",
-                        "temperature_controlled": True,
-                        "last_maintenance": "2024-02-01",
-                    }
-                }
-            )
+    pass
 
 
 # =============================================================================
@@ -326,39 +332,7 @@ class SmartWarehouse(Warehouse):
 class SmartHighway(Highway):
     """Smart highway with dynamic tolling and traffic management"""
 
-    @on_visit(LogisticsWalker)
-    async def handle_commercial_traffic(self, visitor):
-        # Commercial vehicles get different rates and priority lanes
-        visitor.report(
-            {
-                "highway_service": {
-                    "highway": self.name,
-                    "commercial_rate": self.toll_cost
-                    * 0.8,  # 20% discount for logistics
-                    "priority_lane_access": True,
-                    "estimated_time": (
-                        f"{self.distance_km / (self.speed_limit * 0.9):.1f} hours"
-                        if hasattr(self, "distance_km")
-                        else "N/A"
-                    ),
-                }
-            }
-        )
-
-    @on_visit(TouristWalker)
-    async def handle_tourist_traffic(self, visitor):
-        # Tourists get scenic route information
-        visitor.report(
-            {
-                "scenic_info": {
-                    "highway": self.name,
-                    "scenic_rating": 8,
-                    "rest_stops": 3,
-                    "tourist_rate": self.toll_cost
-                    * 1.1,  # Small premium for scenic routes
-                }
-            }
-        )
+    pass
 
 
 # =============================================================================
@@ -387,36 +361,36 @@ async def create_demo_network():
         name="Port of Los Angeles", cargo_capacity=100000, has_customs=True
     )
 
-    # Create transportation network
-    ny_chicago_highway = await SmartHighway.create(
-        left=new_york,
-        right=chicago,
+    # Create transportation network using node.connect() method
+    ny_chicago_highway = await new_york.connect(
+        chicago,
+        edge=SmartHighway,
         name="I-80",
         lanes=6,
         speed_limit=75,
         toll_cost=25.0,
     )
 
-    chicago_warehouse_road = await Highway.create(
-        left=chicago,
-        right=chicago_warehouse,
+    chicago_warehouse_road = await chicago.connect(
+        chicago_warehouse,
+        edge=Highway,
         name="Industrial Parkway",
         lanes=4,
         speed_limit=45,
         toll_cost=5.0,
     )
 
-    chicago_la_railroad = await Railroad.create(
-        left=chicago,
-        right=los_angeles,
+    chicago_la_railroad = await chicago.connect(
+        los_angeles,
+        edge=Railroad,
         name="Southwest Chief",
         tracks=2,
         electrified=False,
     )
 
-    la_port_road = await Highway.create(
-        left=los_angeles,
-        right=la_port,
+    la_port_road = await los_angeles.connect(
+        la_port,
+        edge=Highway,
         name="Harbor Freeway",
         lanes=8,
         speed_limit=55,
@@ -440,10 +414,10 @@ async def run_walker_demo(walker, start_location, walker_name):
     print(f"\n🚶 Running {walker_name} Demo")
     print("=" * 50)
 
-    await walker.spawn(start=start_location)
+    await walker.spawn(start_location)
 
     print(f"📊 {walker_name} Results:")
-    report = walker.get_report()
+    report = await walker.get_report()
 
     # Group report items by type
     report_types = {}
@@ -475,6 +449,12 @@ async def run_walker_demo(walker, start_location, walker_name):
 
 async def main():
     """Main demo function"""
+    # Initialize database context
+    db_type = os.getenv("JVSPATIAL_DB_TYPE", "json")
+    database = create_database(db_type=db_type, base_path="./jvdb")
+    ctx = GraphContext(database=database)
+    set_default_context(ctx)
+
     print("🌟 Enhanced @on_visit Decorator Demo")
     print("=====================================")
     print()

@@ -1,31 +1,27 @@
-"""Attribute protection and annotation system for jvspatial entities.
+"""Simplified decorator system for jvspatial entities.
 
-This module provides a comprehensive system for annotating and protecting object attributes:
-
-1. @protected decorator: Prevents modification after initial assignment
-2. @transient decorator: Excludes from serialization/export operations
-3. @private decorator: Pydantic private attributes (underscore fields)
-4. Compound usage: @protected @transient for both behaviors
-
-The system integrates with Pydantic models and provides clear error messages
-when protection violations occur.
+This module provides a single @attribute decorator that replaces the complex
+decorator system with a simplified approach.
 
 Examples:
-    class Entity(ProtectedAttributeMixin, BaseModel):
+    class Entity(BaseModel):
         # Protected attribute - cannot be modified after initialization
-        id: str = protected("", description="Unique identifier")
+        id: str = attribute(protected=True, description="Unique identifier")
 
         # Transient attribute - excluded from exports
-        temp_data: dict = transient(Field(default_factory=dict))
+        cache: dict = attribute(transient=True, default_factory=dict)
 
-        # Private attribute - Pydantic private (underscore fields)
-        _internal_cache: dict = private(default_factory=dict)
+        # Both protected and transient
+        internal: dict = attribute(protected=True, transient=True, default_factory=dict)
 
-        # Both protected and transient using compound decorators
-        internal_state: dict = protected(transient(Field(default_factory=dict)))
+        # Private attribute (underscore field)
+        _private_data: dict = attribute(private=True, default_factory=dict)
+
+        # Regular attribute with validation
+        name: str = attribute(min_length=1, max_length=100)
 """
 
-from typing import Any, Dict, Set, Type
+from typing import Any, Dict, Optional, Set, Type
 
 from pydantic import Field
 from pydantic.fields import PrivateAttr
@@ -47,295 +43,120 @@ _PROTECTED_ATTRS: Dict[Type, Set[str]] = {}
 _TRANSIENT_ATTRS: Dict[Type, Set[str]] = {}
 
 
-class AnnotatedField:
-    """Field wrapper that tracks protection and transient annotations."""
+def attribute(
+    default: Any = ...,
+    *,
+    # Protection flags
+    protected: bool = False,
+    transient: bool = False,
+    private: bool = False,
+    # Standard Pydantic Field parameters
+    description: Optional[str] = None,
+    title: Optional[str] = None,
+    examples: Optional[list] = None,
+    gt: Optional[float] = None,
+    ge: Optional[float] = None,
+    lt: Optional[float] = None,
+    le: Optional[float] = None,
+    min_length: Optional[int] = None,
+    max_length: Optional[int] = None,
+    pattern: Optional[str] = None,
+    **kwargs: Any,
+) -> Any:
+    """Unified attribute decorator for jvspatial entities.
 
-    def __init__(self, field_def: Any):
-        self.field_def = field_def
-        self.is_protected = False
-        self.is_transient = False
-        self.additional_kwargs: Dict[str, Any] = {}
+    This decorator replaces the old decorator system with a single
+    unified interface that supports all attribute behaviors.
 
-    async def mark_protected(self) -> "AnnotatedField":
-        """Mark this field as protected."""
-        self.is_protected = True
-        return self
+    Args:
+        default: Default value for the attribute
+        protected: If True, attribute cannot be modified after initialization
+        transient: If True, attribute is excluded from export/serialization
+        private: If True, creates a Pydantic private attribute (underscore field)
+        description: Description for the attribute
+        title: Title for the attribute
+        examples: Example values for documentation
+        gt, ge, lt, le: Numeric constraints
+        min_length, max_length: String length constraints
+        pattern: Regex pattern for string validation
+        **kwargs: Additional Pydantic Field parameters
 
-    def _mark_protected_sync(self) -> "AnnotatedField":
-        """Mark this field as protected (sync version for decorators)."""
-        self.is_protected = True
-        return self
+    Returns:
+        Field or PrivateAttr configured with the specified behavior
 
-    async def mark_transient(self) -> "AnnotatedField":
-        """Mark this field as transient."""
-        self.is_transient = True
-        return self
+    Examples:
+        # Protected attribute
+        id: str = attribute(protected=True, description="Unique identifier")
 
-    def _mark_transient_sync(self) -> "AnnotatedField":
-        """Mark this field as transient (sync version for decorators)."""
-        self.is_transient = True
-        return self
+        # Transient attribute
+        cache: dict = attribute(transient=True, default_factory=dict)
 
-    async def to_field(self) -> Any:
-        """Convert to Pydantic Field with appropriate annotations."""
-        # If it's already a Field, copy its complete configuration
-        if hasattr(self.field_def, "default"):
-            # Start with the original field's complete config
-            kwargs = {}
+        # Both protected and transient
+        internal: dict = attribute(protected=True, transient=True, default_factory=dict)
 
-            # Copy all the important field attributes
-            field_attrs = [
-                "default",
-                "default_factory",
-                "alias",
-                "description",
-                "title",
-                "examples",
-                "exclude",
-                "include",
-                "discriminator",
-                "json_schema_extra",
-                "frozen",
-                "validate_default",
-                "repr",
-                "init",
-                "init_var",
-                "kw_only",
-            ]
+        # Private attribute
+        _private_data: dict = attribute(private=True, default_factory=dict)
 
-            for attr in field_attrs:
-                if hasattr(self.field_def, attr):
-                    value = getattr(self.field_def, attr)
-                    if value is not None or attr in ["default"]:  # Allow None defaults
-                        kwargs[attr] = value
-
-            # Merge additional kwargs without overwriting existing Field properties
-            # Only apply additional_kwargs if the key doesn't already have a value
-            for key, value in self.additional_kwargs.items():
-                if key not in kwargs or kwargs[key] is None:
-                    kwargs[key] = value
+        # Regular attribute with validation
+        name: str = attribute(min_length=1, max_length=100, description="Entity name")
+    """
+    # Handle private attributes (underscore fields)
+    if private:
+        if "default_factory" in kwargs:
+            return PrivateAttr(default_factory=kwargs["default_factory"])
         else:
-            # It's a raw value, treat as default
-            kwargs = {"default": self.field_def}
-            # Add all additional kwargs for raw values
-            kwargs.update(self.additional_kwargs)
+            return PrivateAttr(default=default)
 
-        # Add/update annotations in json_schema_extra
-        json_extra = kwargs.get("json_schema_extra", {})
-        if self.is_protected:
+    # Build Field parameters
+    field_kwargs = {
+        "description": description,
+        "title": title,
+        "examples": examples,
+        "gt": gt,
+        "ge": ge,
+        "lt": lt,
+        "le": le,
+        "min_length": min_length,
+        "max_length": max_length,
+        "pattern": pattern,
+        **kwargs,
+    }
+
+    # Remove None values
+    field_kwargs = {k: v for k, v in field_kwargs.items() if v is not None}
+
+    # Set default value
+    if default is not ...:
+        field_kwargs["default"] = default
+
+    # Add protection/transient metadata to json_schema_extra
+    if protected or transient:
+        json_extra = field_kwargs.get("json_schema_extra", {})
+        if protected:
             json_extra["protected"] = True
-        if self.is_transient:
+        if transient:
             json_extra["transient"] = True
+        field_kwargs["json_schema_extra"] = json_extra
 
-        if json_extra:
-            kwargs["json_schema_extra"] = json_extra
-
-        return Field(**kwargs)
-
-    def _to_field_sync(self) -> Any:
-        """Convert to Pydantic Field with appropriate annotations (sync version for decorators)."""
-        # If it's already a Field, copy its complete configuration
-        if hasattr(self.field_def, "default"):
-            # Start with the original field's complete config
-            kwargs = {}
-
-            # Copy all the important field attributes
-            field_attrs = [
-                "default",
-                "default_factory",
-                "alias",
-                "description",
-                "title",
-                "examples",
-                "exclude",
-                "include",
-                "discriminator",
-                "json_schema_extra",
-                "frozen",
-                "validate_default",
-                "repr",
-                "init",
-                "init_var",
-                "kw_only",
-            ]
-
-            for attr in field_attrs:
-                if hasattr(self.field_def, attr):
-                    value = getattr(self.field_def, attr)
-                    if value is not None:
-                        kwargs[attr] = value
-
-            # Add our protection annotations
-            if self.is_protected:
-                kwargs["description"] = (
-                    kwargs.get("description", "") + " (protected)"
-                ).strip()
-                # Set json_schema_extra for __init_subclass__ to detect
-                if "json_schema_extra" not in kwargs:
-                    kwargs["json_schema_extra"] = {}
-                kwargs["json_schema_extra"]["protected"] = True
-            if self.is_transient:
-                # Don't set exclude=True here - transient fields should be in model_dump
-                # but excluded from export() method
-                # Set json_schema_extra for __init_subclass__ to detect
-                if "json_schema_extra" not in kwargs:
-                    kwargs["json_schema_extra"] = {}
-                kwargs["json_schema_extra"]["transient"] = True
-
-            # Merge additional kwargs
-            kwargs.update(self.additional_kwargs)
-
-            return Field(**kwargs)
-
-        # For non-Field definitions, create a basic Field
-        kwargs = {"default": self.field_def}
-        if self.is_protected:
-            kwargs["description"] = "protected"
-            # Set json_schema_extra for __init_subclass__ to detect
-            kwargs["json_schema_extra"] = {"protected": True}
-        if self.is_transient:
-            # Don't set exclude=True here - transient fields should be in model_dump
-            # but excluded from export() method
-            # Set json_schema_extra for __init_subclass__ to detect
-            if "json_schema_extra" not in kwargs:
-                kwargs["json_schema_extra"] = {}
-            kwargs["json_schema_extra"]["transient"] = True
-
-        # Merge additional kwargs
-        kwargs.update(self.additional_kwargs)
-
-        return Field(**kwargs)
-
-
-def protected(field_def: Any = None, **kwargs: Any) -> Any:
-    """Decorator to mark a field as protected - cannot be modified after initial assignment.
-
-    Args:
-        field_def: Field definition (default value, Field object, or AnnotatedField)
-        **kwargs: Additional Field arguments (description, alias, etc.)
-
-    Returns:
-        AnnotatedField or Field with protection metadata
-
-    Examples:
-        # Simple usage
-        id: str = protected("", description="Unique identifier")
-
-        # Compound usage
-        data: dict = protected(transient(Field(default_factory=dict)))
-
-        # With Field and arguments
-        name: str = protected(Field(default=""), description="Entity name", min_length=1)
-    """
-    if field_def is None:
-        # Called as @protected() - return decorator function
-        def decorator(actual_field_def: Any) -> Any:
-            return protected(actual_field_def, **kwargs)
-
-        return decorator
-
-    # Handle compound decorator usage
-    if isinstance(field_def, AnnotatedField):
-        # Add any additional kwargs to the AnnotatedField before converting
-        if kwargs:
-            field_def.additional_kwargs.update(kwargs)
-        return field_def._mark_protected_sync()._to_field_sync()
-
-    # Handle Field objects with additional kwargs
-    if kwargs and hasattr(field_def, "default"):
-        # Merge kwargs into existing Field without losing properties
-        annotated = AnnotatedField(field_def)
-        annotated.additional_kwargs = kwargs
-        return annotated._mark_protected_sync()._to_field_sync()
-
-    # Create AnnotatedField and mark as protected
-    annotated = AnnotatedField(field_def)
-    if kwargs:
-        annotated.additional_kwargs = kwargs
-    return annotated._mark_protected_sync()._to_field_sync()
-
-
-def transient(field_def: Any = None, **kwargs: Any) -> Any:
-    """Decorator to mark a field as transient - excluded from export/serialization operations.
-
-    Args:
-        field_def: Field definition (default value, Field object, or AnnotatedField)
-        **kwargs: Additional Field arguments (description, etc.)
-
-    Returns:
-        AnnotatedField or Field with transient metadata
-
-    Examples:
-        # Simple usage
-        temp_data: dict = transient(Field(default_factory=dict))
-
-        # Compound usage
-        cache: dict = transient(protected(Field(default_factory=dict)))
-
-        # With Field and description
-        debug_info: str = transient(Field(default=""), description="Debug information")
-    """
-    if field_def is None:
-        # Called as @transient() - return decorator function
-        def decorator(actual_field_def: Any) -> Any:
-            return transient(actual_field_def, **kwargs)
-
-        return decorator
-
-    # Handle compound decorator usage
-    if isinstance(field_def, AnnotatedField):
-        # Add any additional kwargs to the AnnotatedField before converting
-        if kwargs:
-            field_def.additional_kwargs.update(kwargs)
-        return field_def._mark_transient_sync()._to_field_sync()
-
-    # Handle Field objects with additional kwargs
-    if kwargs and hasattr(field_def, "default"):
-        # Merge kwargs into existing Field without losing properties
-        annotated = AnnotatedField(field_def)
-        annotated.additional_kwargs = kwargs
-        return annotated._mark_transient_sync()._to_field_sync()
-
-    # Create AnnotatedField and mark as transient
-    annotated = AnnotatedField(field_def)
-    if kwargs:
-        annotated.additional_kwargs = kwargs
-    return annotated._mark_transient_sync()._to_field_sync()
+    return Field(**field_kwargs)
 
 
 def register_protected_attrs(cls: Type, attr_names: Set[str]) -> None:
-    """Register protected attribute names for a class.
-
-    Args:
-        cls: Class to register attributes for
-        attr_names: Set of attribute names to protect
-    """
+    """Register protected attribute names for a class."""
     if cls not in _PROTECTED_ATTRS:
         _PROTECTED_ATTRS[cls] = set()
     _PROTECTED_ATTRS[cls].update(attr_names)
 
 
 def register_transient_attrs(cls: Type, attr_names: Set[str]) -> None:
-    """Register transient attribute names for a class.
-
-    Args:
-        cls: Class to register attributes for
-        attr_names: Set of attribute names to mark as transient
-    """
+    """Register transient attribute names for a class."""
     if cls not in _TRANSIENT_ATTRS:
         _TRANSIENT_ATTRS[cls] = set()
     _TRANSIENT_ATTRS[cls].update(attr_names)
 
 
 def get_protected_attrs(cls: Type) -> Set[str]:
-    """Get all protected attribute names for a class and its parents.
-
-    Args:
-        cls: Class to check
-
-    Returns:
-        Set of protected attribute names
-    """
+    """Get all protected attribute names for a class and its parents."""
     protected = set()
 
     # Collect from class hierarchy
@@ -358,14 +179,7 @@ def get_protected_attrs(cls: Type) -> Set[str]:
 
 
 def get_transient_attrs(cls: Type) -> Set[str]:
-    """Get all transient attribute names for a class and its parents.
-
-    Args:
-        cls: Class to check
-
-    Returns:
-        Set of transient attribute names
-    """
+    """Get all transient attribute names for a class and its parents."""
     transient_set = set()
 
     # Collect from class hierarchy
@@ -388,53 +202,21 @@ def get_transient_attrs(cls: Type) -> Set[str]:
 
 
 def is_protected(cls: Type, attr_name: str) -> bool:
-    """Check if an attribute is protected for a given class.
-
-    Args:
-        cls: Class to check
-        attr_name: Attribute name to check
-
-    Returns:
-        True if attribute is protected, False otherwise
-    """
+    """Check if an attribute is protected for a given class."""
     return attr_name in get_protected_attrs(cls)
 
 
 def is_transient(cls: Type, attr_name: str) -> bool:
-    """Check if an attribute is transient for a given class.
-
-    Args:
-        cls: Class to check
-        attr_name: Attribute name to check
-
-    Returns:
-        True if attribute is transient, False otherwise
-    """
+    """Check if an attribute is transient for a given class."""
     return attr_name in get_transient_attrs(cls)
 
 
-def is_protected_old(cls: Type, attr_name: str) -> bool:
-    """Check if an attribute is protected for a class.
+class AttributeMixin:
+    """Mixin class that provides attribute protection and transient functionality.
 
-    Args:
-        cls: Class to check
-        attr_name: Name of attribute to check
-
-    Returns:
-        True if attribute is protected
-    """
-    return attr_name in get_protected_attrs(cls)
-
-
-class ProtectedAttributeMixin:
-    """Mixin class that provides attribute protection functionality.
-
-    This mixin automatically integrates with @protected and @transient decorators.
+    This mixin automatically integrates with the @attribute decorator.
     It overrides __setattr__ to prevent modification of protected attributes after
     initialization, and enhances export methods to respect transient annotations.
-
-    The mixin automatically manages the _initializing flag to enable protection
-    after object construction is complete.
     """
 
     def __init__(self, *args: Any, **kwargs: Any):
@@ -491,10 +273,10 @@ class ProtectedAttributeMixin:
         super().__setattr__(name, value)
 
     def export(self, exclude_transient: bool = True, **kwargs) -> Dict[str, Any]:
-        """Enhanced export that automatically respects @transient annotations.
+        """Enhanced export that automatically respects transient annotations.
 
         Args:
-            exclude_transient: Whether to exclude @transient fields (default: True)
+            exclude_transient: Whether to exclude transient fields (default: True)
             **kwargs: Additional arguments passed to model_dump()
 
         Returns:
@@ -552,40 +334,7 @@ def export_with_transient_exclusion(
     return result_data
 
 
-# Note: with_protection decorator is no longer needed!
-# The ProtectedAttributeMixin now automatically handles registration
-# via __init_subclass__, making decoration unnecessary.
-
-
-def private(default: Any = None, **kwargs: Any) -> Any:
-    """Decorator for Pydantic private attributes (fields with leading underscore).
-
-    This is a wrapper around Pydantic's PrivateAttr, designed for fields that start
-    with underscore (_). Private attributes are automatically excluded from serialization
-    and are not part of the model's public API.
-
-    For regular fields that need both protected and transient behaviors, use the
-    compound syntax: protected(transient(Field(...)))
-
-    Args:
-        default: Default value for the private attribute
-        **kwargs: Additional arguments, primarily 'default_factory' for callable defaults
-
-    Returns:
-        PrivateAttr configured with the provided default or factory
-
-    Examples:
-        # Private attribute with default value
-        _counter: int = private(default=0)
-
-        # Private attribute with factory
-        _cache: dict = private(default_factory=dict)
-        _data: dict = private(default_factory=dict)
-
-        # For non-underscore fields, use compound decorators:
-        internal: dict = protected(transient(Field(default_factory=dict)))
-    """
-    if "default_factory" in kwargs:
-        return PrivateAttr(default_factory=kwargs["default_factory"])
-    else:
-        return PrivateAttr(default=default)
+__all__ = [
+    "AttributeMixin",
+    "attribute",
+]

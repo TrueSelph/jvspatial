@@ -111,11 +111,88 @@ class BaseRouter:
             endpoint._required_permissions = source_obj._required_permissions  # type: ignore[attr-defined]
             endpoint._required_roles = source_obj._required_roles  # type: ignore[attr-defined]
 
+        # Check if endpoint has authentication configuration
+        endpoint_config = getattr(endpoint, "_jvspatial_endpoint_config", None)
+        source_config = (
+            getattr(source_obj, "_jvspatial_endpoint_config", None)
+            if source_obj is not None
+            else None
+        )
+        auth_required = kwargs.get("auth", False) or (
+            endpoint_config and endpoint_config.get("auth_required", False)
+        )
+
+        # Handle response schema: read from endpoint config, else fallback to source object config (e.g., walker class)
+        response_schema = None
+        from jvspatial.api.endpoints.response import ResponseSchema
+
+        response_def = None
+        if endpoint_config and endpoint_config.get("response"):
+            response_def = endpoint_config.get("response")
+        elif source_config and source_config.get("response"):
+            response_def = source_config.get("response")
+        if isinstance(response_def, ResponseSchema):
+            # Use a stable name if possible
+            model_name = f"{getattr(source_obj, '__name__', getattr(endpoint, '__name__', 'Response'))}Response"
+            response_schema = response_def.to_pydantic_model(model_name)
+
+        # Prepare FastAPI route parameters
+        fastapi_kwargs = {
+            k: v
+            for k, v in kwargs.items()
+            if k
+            not in [
+                "auth",
+                "permissions",
+                "roles",
+                "webhook",
+                "signature_required",
+                "response",
+            ]
+        }
+
+        # Add response model if defined
+        if response_schema:
+            fastapi_kwargs["response_model"] = response_schema
+
+        # Add security requirements for OpenAPI if auth is required
+        if auth_required:
+            from jvspatial.api.auth.openapi_config import (
+                get_endpoint_security_requirements,
+            )
+
+            permissions = (
+                kwargs.get("permissions", [])
+                or (endpoint_config and endpoint_config.get("permissions", []))
+                or []
+            )
+            roles = (
+                kwargs.get("roles", [])
+                or (endpoint_config and endpoint_config.get("roles", []))
+                or []
+            )
+
+            # Add security to the route
+            fastapi_kwargs["responses"] = fastapi_kwargs.get("responses", {})
+            fastapi_kwargs["responses"].update(
+                {
+                    401: {"description": "Authentication required"},
+                    403: {"description": "Insufficient permissions"},
+                }
+            )
+
+            # Add security requirements to OpenAPI extra
+            security_requirements = get_endpoint_security_requirements(
+                permissions=permissions, roles=roles
+            )
+            fastapi_kwargs["openapi_extra"] = fastapi_kwargs.get("openapi_extra", {})
+            fastapi_kwargs["openapi_extra"]["security"] = security_requirements
+
         self.router.add_api_route(
             path=path,
             endpoint=endpoint,
             methods=methods,
-            **kwargs,
+            **fastapi_kwargs,
         )
 
     def include_router(self, router: APIRouter, **kwargs: Any) -> None:
@@ -181,18 +258,30 @@ class EndpointRouter(BaseRouter):
         # Import here to avoid circular dependency
         from .response import format_response as create_formatted_response
 
-        resp = create_formatted_response(
-            data=data,
-            success=success,
-            message=message,
-            error=error,
-            detail=detail,
-            code=code,
-            status=status,
-        )
-        # Convert Pydantic model to dict for FastAPI JSON serialization
-        resp_dict = resp.model_dump() if hasattr(resp, "model_dump") else dict(resp)
-        return cast(Dict[str, Any], resp_dict)
+        # Only pass supported arguments to the simple formatter.
+        if success:
+            resp = create_formatted_response(
+                data=data,
+                message=message,
+                success=True,
+            )
+            return cast(Dict[str, Any], resp)
+
+        # Error path: construct structured error dict directly
+        error_resp: Dict[str, Any] = {"success": False}
+        if error is not None:
+            error_resp["error"] = error
+        if detail is not None:
+            error_resp["detail"] = detail
+        if code is not None:
+            error_resp["code"] = code
+        if status is not None:
+            error_resp["status"] = status
+        if message is not None:
+            error_resp["message"] = message
+        if data is not None:
+            error_resp["data"] = data
+        return error_resp
 
     def endpoint(
         self,
@@ -309,57 +398,127 @@ class EndpointRouter(BaseRouter):
                 walker = walker_cls(**kwargs)
                 walker.endpoint = ResponseHelper(walker_instance=walker)
 
-                # Handle start node
-                if start_node:
-                    start = await get_default_context().get(Node, start_node)
-                    if not start:
-                        self.raise_error(
-                            404,
-                            f"Start node '{start_node}' not found",
-                        )
-                else:
-                    start = None
-
                 # Execute walker
-                if start is None:
-                    raise HTTPException(
-                        status_code=400, detail="No valid start node provided"
+                # Check if walker has direct execution methods (API-style walkers)
+                if hasattr(walker, "analyze_users"):
+                    # Direct method execution for user analysis walkers
+                    result = await walker.analyze_users()
+                    # If a response schema is defined, return the flat result to match the model
+                    has_response_schema = bool(
+                        getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                            "response"
+                        )
                     )
-                result = await walker.spawn(start)
-
-                # Process response
-                reports = await result.get_report()
-                if not reports:
-                    return self.format_response()
-
-                # Merge reports
-                response = {}
-                for report in reports:
-                    if not isinstance(report, dict):
-                        continue
-
-                    # Check for error reports
-                    if (
-                        isinstance(report.get("status"), int)
-                        and report["status"] >= 400
-                    ):
-                        error_msg = str(
-                            report.get("error")
-                            or report.get("detail")
-                            or "Unknown error"
+                    return (
+                        result
+                        if has_response_schema
+                        else self.format_response(data=result)
+                    )
+                elif hasattr(walker, "process_documents"):
+                    # Direct method execution for document processing walkers
+                    result = await walker.process_documents()
+                    has_response_schema = bool(
+                        getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                            "response"
                         )
-                        self.raise_error(
-                            report["status"],
-                            error_msg,
+                    )
+                    return (
+                        result
+                        if has_response_schema
+                        else self.format_response(data=result)
+                    )
+                elif hasattr(walker, "analyze_products"):
+                    # Direct method execution for product analysis walkers
+                    result = await walker.analyze_products()
+                    has_response_schema = bool(
+                        getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                            "response"
                         )
+                    )
+                    return (
+                        result
+                        if has_response_schema
+                        else self.format_response(data=result)
+                    )
+                elif hasattr(walker, "generate_report"):
+                    # Direct method execution for report generation walkers
+                    result = await walker.generate_report()
+                    has_response_schema = bool(
+                        getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                            "response"
+                        )
+                    )
+                    return (
+                        result
+                        if has_response_schema
+                        else self.format_response(data=result)
+                    )
+                else:
+                    # Only resolve start node when performing traditional traversal
+                    if start_node:
+                        start = await get_default_context().get(Node, start_node)
+                        if not start:
+                            self.raise_error(
+                                404,
+                                f"Start node '{start_node}' not found",
+                            )
+                    else:
+                        # Default to root node if no start node provided
+                        start = await get_default_context().get(Node, "n:Root:root")
+                        if not start:
+                            self.raise_error(
+                                500,
+                                "Root node not found - database may not be properly initialized",
+                            )
+                    # Traditional graph traversal walker
+                    result = await walker.spawn(start)
 
-                    response.update(report)
+                    # Process response
+                    reports = await result.get_report()
+                    if not reports:
+                        return self.format_response()
 
-                return self.format_response(data=response)
+                    # Merge reports
+                    response = {}
+                    for report in reports:
+                        if not isinstance(report, dict):
+                            continue
+
+                        # Check for error reports
+                        if (
+                            isinstance(report.get("status"), int)
+                            and report["status"] >= 400
+                        ):
+                            error_msg = str(
+                                report.get("error")
+                                or report.get("detail")
+                                or "Unknown error"
+                            )
+                            self.raise_error(
+                                report["status"],
+                                error_msg,
+                            )
+
+                        response.update(report)
+
+                    has_response_schema = bool(
+                        getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                            "response"
+                        )
+                    )
+                    return (
+                        response
+                        if has_response_schema
+                        else self.format_response(data=response)
+                    )
 
             except ValidationError as e:
                 self.raise_error(422, str(e))
                 raise  # Unreachable, but helps type checkers
+            except Exception as e:  # pragma: no cover
+                # Ensure walker endpoint errors are consistently reported
+                self.raise_error(500, f"Walker execution error: {e}")
+                raise
 
         # Dynamically set function signature to expose query params
         import inspect as _inspect
@@ -388,7 +547,7 @@ class EndpointRouter(BaseRouter):
         self,
         path: str,
         walker_cls: Type[Walker],
-        param_model: Type[Any],
+        param_model: Optional[Type[Any]],
         methods: List[str],
         **kwargs: Any,
     ) -> None:
@@ -397,99 +556,366 @@ class EndpointRouter(BaseRouter):
         Args:
             path: URL path
             walker_cls: Walker class
-            param_model: Parameter model
+            param_model: Parameter model (None if no parameters)
             methods: HTTP methods
             **kwargs: Additional route parameters
         """
         # Import here to avoid circular dependency
         from .response import ResponseHelper
 
-        async def post_handler(params: Any = DEFAULT_BODY) -> Dict[str, Any]:
-            """Handle POST request."""
-            # Copy auth metadata from walker class to handler
-            from typing import Any, cast
+        if param_model is not None:
+            # Walker has parameters - create handler with parameter model
+            async def post_handler(
+                params: Any = DEFAULT_BODY,  # type: ignore[assignment]
+            ) -> Dict[str, Any]:  # noqa: B008
+                """Handle POST request for Walker endpoint."""
+                # Copy auth metadata from walker class to handler
+                from typing import Any, cast
 
-            handler = cast(Any, post_handler)  # cast to Any to allow attribute setting
-            handler._auth_required = getattr(walker_cls, "_auth_required", False)
-            handler._required_permissions = getattr(
-                walker_cls, "_required_permissions", []
-            )
-            handler._required_roles = getattr(walker_cls, "_required_roles", [])
-            try:
-                # Extract parameters
-                if isinstance(params, dict):
-                    data = params
-                elif hasattr(params, "model_dump"):
-                    data = params.model_dump()
-                else:
-                    data = {
-                        k: getattr(params, k)
-                        for k in dir(params)
-                        if not k.startswith("_")
-                    }
+                handler = cast(
+                    Any, post_handler
+                )  # cast to Any to allow attribute setting
+                handler._auth_required = getattr(walker_cls, "_auth_required", False)
+                handler._required_permissions = getattr(
+                    walker_cls, "_required_permissions", []
+                )
+                handler._required_roles = getattr(walker_cls, "_required_roles", [])
 
-                # Handle start node
-                start_node = data.pop("start_node", None)
+                # Also set the endpoint configuration for OpenAPI
+                handler._jvspatial_endpoint_config = {
+                    "path": path,
+                    "methods": methods,
+                    "auth_required": getattr(walker_cls, "_auth_required", False),
+                    "permissions": getattr(walker_cls, "_required_permissions", []),
+                    "roles": getattr(walker_cls, "_required_roles", []),
+                    "response": getattr(
+                        walker_cls, "_jvspatial_endpoint_config", {}
+                    ).get("response"),
+                    "is_function": False,
+                }
 
-                # Create walker instance
-                walker = walker_cls(**data)
-                walker.endpoint = ResponseHelper(walker_instance=walker)
+                # Set proper metadata for OpenAPI
+                handler.__doc__ = (
+                    walker_cls.__doc__ or f"Execute {walker_cls.__name__} Walker"
+                )
+                handler.__name__ = f"{walker_cls.__name__}_endpoint"
+                try:
+                    # Extract parameters
+                    if isinstance(params, dict):
+                        data = params
+                    elif hasattr(params, "model_dump"):
+                        data = params.model_dump()
+                    else:
+                        data = {
+                            k: getattr(params, k)
+                            for k in dir(params)
+                            if not k.startswith("_")
+                        }
 
-                # Handle start node
-                if start_node:
-                    start = await get_default_context().get(Node, start_node)
-                    if not start:
-                        self.raise_error(
-                            404,
-                            f"Start node '{start_node}' not found",
-                        )
-                else:
-                    start = None
-
-                # Execute walker
-                if start is None:
-                    raise HTTPException(
-                        status_code=400, detail="No valid start node provided"
+                    # Handle start node
+                    start_node = (
+                        data.pop("start_node", None) if isinstance(data, dict) else None
                     )
-                result = await walker.spawn(start)
 
-                # Process response
-                reports = await result.get_report()
-                if not reports:
-                    return self.format_response()
+                    # Create walker instance
+                    walker = walker_cls(**data)
+                    walker.endpoint = ResponseHelper(walker_instance=walker)
 
-                # Merge reports
-                response = {}
-                for report in reports:
-                    if not isinstance(report, dict):
-                        continue
-
-                    # Check for error reports
-                    if (
-                        isinstance(report.get("status"), int)
-                        and report["status"] >= 400
-                    ):
-                        error_msg = str(
-                            report.get("error")
-                            or report.get("detail")
-                            or "Unknown error"
+                    # Execute walker
+                    # Check if walker has direct execution methods (API-style walkers)
+                    if hasattr(walker, "analyze_users"):
+                        # Direct method execution for user analysis walkers
+                        result = await walker.analyze_users()
+                        has_response_schema = bool(
+                            getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                                "response"
+                            )
                         )
-                        self.raise_error(
-                            report["status"],
-                            error_msg,
+                        return (
+                            result
+                            if has_response_schema
+                            else self.format_response(data=result)
+                        )
+                    elif hasattr(walker, "process_documents"):
+                        # Direct method execution for document processing walkers
+                        result = await walker.process_documents()
+                        has_response_schema = bool(
+                            getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                                "response"
+                            )
+                        )
+                        return (
+                            result
+                            if has_response_schema
+                            else self.format_response(data=result)
+                        )
+                    elif hasattr(walker, "check_status"):
+                        # Direct method execution for status check walkers
+                        result = await walker.check_status()
+                        has_response_schema = bool(
+                            getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                                "response"
+                            )
+                        )
+                        return (
+                            result
+                            if has_response_schema
+                            else self.format_response(data=result)
+                        )
+                    elif hasattr(walker, "analyze_products"):
+                        # Direct method execution for product analysis walkers
+                        result = await walker.analyze_products()
+                        has_response_schema = bool(
+                            getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                                "response"
+                            )
+                        )
+                        return (
+                            result
+                            if has_response_schema
+                            else self.format_response(data=result)
+                        )
+                    elif hasattr(walker, "generate_report"):
+                        # Direct method execution for report generation walkers
+                        result = await walker.generate_report()
+                        has_response_schema = bool(
+                            getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                                "response"
+                            )
+                        )
+                        return (
+                            result
+                            if has_response_schema
+                            else self.format_response(data=result)
+                        )
+                    else:
+                        # Only resolve start node when performing traditional traversal
+                        if start_node:
+                            start = await get_default_context().get(Node, start_node)
+                            if not start:
+                                self.raise_error(
+                                    404,
+                                    f"Start node '{start_node}' not found",
+                                )
+                        else:
+                            # Default to root node if no start node provided
+                            start = await get_default_context().get(Node, "n:Root:root")
+                            if not start:
+                                self.raise_error(
+                                    500,
+                                    "Root node not found - database may not be properly initialized",
+                                )
+                        # Traditional graph traversal walker
+                        result = await walker.spawn(start)
+
+                        # Process response
+                        reports = await result.get_report()
+                        if not reports:
+                            return self.format_response()
+
+                        # Merge reports
+                        response = {}
+                        for report in reports:
+                            if not isinstance(report, dict):
+                                continue
+
+                            # Check for error reports
+                            if (
+                                isinstance(report.get("status"), int)
+                                and report["status"] >= 400
+                            ):
+                                error_msg = str(
+                                    report.get("error")
+                                    or report.get("detail")
+                                    or "Unknown error"
+                                )
+                                self.raise_error(
+                                    report["status"],
+                                    error_msg,
+                                )
+
+                            response.update(report)
+
+                        has_response_schema = bool(
+                            getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                                "response"
+                            )
+                        )
+                        return (
+                            response
+                            if has_response_schema
+                            else self.format_response(data=response)
                         )
 
-                    response.update(report)
+                except ValidationError as e:
+                    self.raise_error(422, str(e))
+                    raise  # Unreachable, but helps type checkers
+                except Exception as e:  # pragma: no cover
+                    # Ensure walker endpoint errors are consistently reported
+                    self.raise_error(500, f"Walker execution error: {e}")
+                    raise
 
-                return self.format_response(data=response)
+        else:
+            # Walker has no parameters - create handler without parameter model
+            async def post_handler() -> Dict[str, Any]:  # type: ignore[misc]
+                """Handle POST request for Walker endpoint with no parameters."""
+                # Copy auth metadata from walker class to handler
+                from typing import Any, cast
 
-            except ValidationError as e:
-                self.raise_error(422, str(e))
-                raise  # Unreachable, but helps type checkers
+                handler = cast(
+                    Any, post_handler
+                )  # cast to Any to allow attribute setting
+                handler._auth_required = getattr(walker_cls, "_auth_required", False)
+                handler._required_permissions = getattr(
+                    walker_cls, "_required_permissions", []
+                )
+                handler._required_roles = getattr(walker_cls, "_required_roles", [])
+
+                # Also set the endpoint configuration for OpenAPI
+                handler._jvspatial_endpoint_config = {
+                    "path": path,
+                    "methods": methods,
+                    "auth_required": getattr(walker_cls, "_auth_required", False),
+                    "permissions": getattr(walker_cls, "_required_permissions", []),
+                    "roles": getattr(walker_cls, "_required_roles", []),
+                    "response": getattr(
+                        walker_cls, "_jvspatial_endpoint_config", {}
+                    ).get("response"),
+                    "is_function": False,
+                }
+
+                # Set proper metadata for OpenAPI
+                handler.__doc__ = (
+                    walker_cls.__doc__ or f"Execute {walker_cls.__name__} Walker"
+                )
+                handler.__name__ = f"{walker_cls.__name__}_endpoint"
+                try:
+                    # Create walker instance with no parameters
+                    walker = walker_cls()
+                    walker.endpoint = ResponseHelper(walker_instance=walker)
+
+                    # Execute walker
+                    # Check if walker has direct execution methods (API-style walkers)
+                    if hasattr(walker, "analyze_users"):
+                        # Direct method execution for user analysis walkers
+                        result = await walker.analyze_users()
+                        has_response_schema = bool(
+                            getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                                "response"
+                            )
+                        )
+                        return (
+                            result
+                            if has_response_schema
+                            else self.format_response(data=result)
+                        )
+                    elif hasattr(walker, "process_documents"):
+                        # Direct method execution for document processing walkers
+                        result = await walker.process_documents()
+                        has_response_schema = bool(
+                            getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                                "response"
+                            )
+                        )
+                        return (
+                            result
+                            if has_response_schema
+                            else self.format_response(data=result)
+                        )
+                    elif hasattr(walker, "check_status"):
+                        # Direct method execution for status check walkers
+                        result = await walker.check_status()
+                        has_response_schema = bool(
+                            getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                                "response"
+                            )
+                        )
+                        return (
+                            result
+                            if has_response_schema
+                            else self.format_response(data=result)
+                        )
+                    elif hasattr(walker, "analyze_products"):
+                        # Direct method execution for product analysis walkers
+                        result = await walker.analyze_products()
+                        has_response_schema = bool(
+                            getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                                "response"
+                            )
+                        )
+                        return (
+                            result
+                            if has_response_schema
+                            else self.format_response(data=result)
+                        )
+                    elif hasattr(walker, "generate_report"):
+                        # Direct method execution for report generation walkers
+                        result = await walker.generate_report()
+                        has_response_schema = bool(
+                            getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                                "response"
+                            )
+                        )
+                        return (
+                            result
+                            if has_response_schema
+                            else self.format_response(data=result)
+                        )
+                    else:
+                        # Default to root node only when performing traversal
+                        start = await get_default_context().get(Node, "n:Root:root")
+                        if not start:
+                            self.raise_error(
+                                500,
+                                "Root node not found - database may not be properly initialized",
+                            )
+                        # Traditional graph traversal walker
+                        result = await walker.spawn(start)
+
+                        # Process response
+                        reports = await result.get_report()
+                        if not reports:
+                            return self.format_response()
+
+                        # Merge reports
+                        response = {}
+                        for report in reports:
+                            if not isinstance(report, dict):
+                                continue
+
+                            # Check for error reports
+                            if (
+                                isinstance(report.get("status"), int)
+                                and report["status"] >= 400
+                            ):
+                                error_msg = str(
+                                    report.get("error")
+                                    or report.get("detail")
+                                    or "Unknown error"
+                                )
+                                self.raise_error(
+                                    report["status"],
+                                    error_msg,
+                                )
+
+                            response.update(report)
+
+                        has_response_schema = bool(
+                            getattr(walker_cls, "_jvspatial_endpoint_config", {}).get(
+                                "response"
+                            )
+                        )
+                        return (
+                            response
+                            if has_response_schema
+                            else self.format_response(data=response)
+                        )
+
+                except ValidationError as e:
+                    self.raise_error(422, str(e))
+                    raise  # Unreachable, but helps type checkers
 
         # Add route
-        post_handler.__annotations__["params"] = param_model
-
         self.add_route(
             path=path,
             endpoint=post_handler,

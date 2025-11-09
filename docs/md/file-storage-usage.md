@@ -264,10 +264,10 @@ Files are organized by date:
 #### Example
 
 ```python
-from jvspatial.storage import get_file_interface
+from jvspatial.storage import create_storage
 
-# Get local storage interface
-storage = get_file_interface(
+# Create local storage interface
+storage = create_storage(
     provider="local",
     root_dir=".files"
 )

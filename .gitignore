@@ -211,3 +211,5 @@ __marimo__/
 # Files
 .files
 .test_files
+*.dot
+*.mermaid

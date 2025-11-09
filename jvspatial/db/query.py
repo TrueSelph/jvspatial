@@ -1,17 +1,192 @@
-"""MongoDB-style query parser and utilities.
+"""MongoDB-style query parser and utilities with built-in optimization.
 
 Provides a unified query interface that translates MongoDB-style queries
 into operations that can be executed on any database backend.
+Includes built-in query optimization for improved performance.
 """
 
 import re
+import time
 from typing import Any, Callable, Dict, List, Optional, Union
 
 # Unified evaluation and builder in a single module
 
 
 class QueryEngine:
-    """Unified MongoDB-style query engine for all backends."""
+    """Unified MongoDB-style query engine with built-in optimization for all backends."""
+
+    def __init__(self, enable_optimization: bool = True):
+        """Initialize the query engine.
+
+        Args:
+            enable_optimization: Whether to enable built-in query optimization
+        """
+        self.enable_optimization = enable_optimization
+        self._query_cache: Dict[str, Any] = {}
+        self._optimization_stats = {
+            "optimized_queries": 0,
+            "cache_hits": 0,
+            "optimization_time": 0.0,
+        }
+
+    def optimize_query(self, query: Dict[str, Any]) -> Dict[str, Any]:
+        """Optimize query for better performance.
+
+        Args:
+            query: Query dictionary to optimize
+
+        Returns:
+            Optimized query dictionary
+        """
+        if not self.enable_optimization:
+            return query
+
+        start_time = time.time()
+
+        try:
+            # Check query cache first
+            query_key = str(sorted(query.items()))
+            if query_key in self._query_cache:
+                self._optimization_stats["cache_hits"] += 1
+                return self._query_cache[query_key]
+
+            # Apply optimizations
+            optimized_query = query.copy()
+
+            # Optimize AND clauses
+            if "$and" in optimized_query:
+                optimized_query["$and"] = self._optimize_and_clause(
+                    optimized_query["$and"]
+                )
+
+            # Optimize field selection
+            if "$select" in optimized_query:
+                optimized_query["$select"] = self._optimize_field_selection(
+                    optimized_query["$select"]
+                )
+
+            # Add indexing hints
+            optimized_query = self._add_indexing_hints(optimized_query)
+
+            # Cache the optimized query
+            self._query_cache[query_key] = optimized_query
+
+            # Update stats
+            self._optimization_stats["optimized_queries"] += 1
+            self._optimization_stats["optimization_time"] += time.time() - start_time
+
+            return optimized_query
+
+        except Exception:
+            # If optimization fails, return original query
+            return query
+
+    def _optimize_and_clause(
+        self, and_clause: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Optimize AND clauses for better performance.
+
+        Args:
+            and_clause: List of AND conditions
+
+        Returns:
+            Optimized AND clause list
+        """
+        # Sort by selectivity (more selective conditions first)
+        return sorted(and_clause, key=self._get_selectivity_score, reverse=True)
+
+    def _get_selectivity_score(self, condition: Dict[str, Any]) -> float:
+        """Calculate selectivity score for a condition.
+
+        Args:
+            condition: Query condition
+
+        Returns:
+            Selectivity score (higher = more selective)
+        """
+        score = 0.0
+
+        for field, value in condition.items():
+            if field.startswith("$"):
+                continue
+
+            # Equality conditions are more selective
+            if isinstance(value, (str, int, float, bool)):
+                score += 1.0
+            # Range conditions are moderately selective
+            elif isinstance(value, dict) and any(
+                op in value for op in ["$gt", "$lt", "$gte", "$lte"]
+            ):
+                score += 0.5
+            # Array conditions are less selective
+            elif isinstance(value, (list, dict)):
+                score += 0.3
+
+        return score
+
+    def _optimize_field_selection(self, fields: List[str]) -> List[str]:
+        """Optimize field selection for better performance.
+
+        Args:
+            fields: List of fields to select
+
+        Returns:
+            Optimized field list
+        """
+        # Remove duplicate fields
+        unique_fields = list(dict.fromkeys(fields))
+
+        # Sort fields by frequency of use (if we had usage stats)
+        # For now, just return unique fields
+        return unique_fields
+
+    def _add_indexing_hints(self, query: Dict[str, Any]) -> Dict[str, Any]:
+        """Add indexing hints to the query.
+
+        Args:
+            query: Query dictionary
+
+        Returns:
+            Query with indexing hints
+        """
+        # Add hints for common query patterns
+        hints = []
+
+        for field, value in query.items():
+            if field.startswith("$"):
+                continue
+
+            # Add hint for equality or range conditions
+            if isinstance(value, (str, int, float, bool)) or (
+                isinstance(value, dict)
+                and any(op in value for op in ["$gt", "$lt", "$gte", "$lte"])
+            ):
+                hints.append(field)
+
+        if hints:
+            query["$hint"] = hints
+
+        return query
+
+    def get_optimization_stats(self) -> Dict[str, Any]:
+        """Get query optimization statistics.
+
+        Returns:
+            Optimization statistics dictionary
+        """
+        return self._optimization_stats.copy()
+
+    def clear_query_cache(self) -> None:
+        """Clear the query cache."""
+        self._query_cache.clear()
+
+    def reset_stats(self) -> None:
+        """Reset optimization statistics."""
+        self._optimization_stats = {
+            "optimized_queries": 0,
+            "cache_hits": 0,
+            "optimization_time": 0.0,
+        }
 
     @staticmethod
     def get_field_value(document: Dict[str, Any], field: str) -> Any:

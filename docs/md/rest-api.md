@@ -7,6 +7,195 @@ jvspatial provides seamless **FastAPI integration** with automatic OpenAPI docum
 
 Both approaches leverage the current **entity-centric design** with MongoDB-style queries and support the library's core features like ObjectPager and semantic filtering.
 
+## 🎯 **Standard Implementation Examples**
+
+**We strongly recommend starting with these standard examples** as they demonstrate best practices for building jvspatial APIs:
+
+### **Authenticated API Example** (Complete CRUD)
+📁 **File**: [`examples/api/authenticated_endpoints_example.py`](../../examples/api/authenticated_endpoints_example.py)
+
+This example demonstrates:
+- Complete CRUD operations with authentication
+- Permission and role-based access control
+- Entity-centric operations (`UserNode.get()`, `ProductNode.create()`, etc.)
+- Pagination with `ObjectPager`
+- Response schemas with examples
+- Walker-based analytics endpoints
+
+**Key Pattern**:
+```python
+server = Server(
+    title="Authenticated CRUD API",
+    auth_enabled=True,  # Enables /auth/register, /auth/login, /auth/logout
+    jwt_auth_enabled=True,
+    db_type="json"
+)
+
+@endpoint("/users", methods=["GET"], auth=True, permissions=["read_users"])
+async def list_users(page: int = 1, per_page: int = 10):
+    pager = ObjectPager(UserNode, page_size=per_page)
+    users = await pager.get_page(page=page)
+    return {"users": [user.export() for user in users], ...}
+```
+
+### **Unauthenticated API Example** (Public Read-Only)
+📁 **File**: [`examples/api/unauthenticated_endpoints_example.py`](../../examples/api/unauthenticated_endpoints_example.py)
+
+This example demonstrates:
+- Public endpoints (no authentication)
+- Read-only operations (GET endpoints)
+- Pagination and filtering
+- **No authentication endpoints registered** (login/register/logout are NOT created)
+
+**Key Pattern**:
+```python
+server = Server(
+    title="Public API",
+    auth_enabled=False,  # No auth endpoints will be registered
+    db_type="json"
+)
+
+@endpoint("/articles", methods=["GET"])
+async def list_articles(page: int = 1, per_page: int = 10):
+    pager = ObjectPager(ArticleNode, page_size=per_page)
+    articles = await pager.get_page(page=page)
+    return {"articles": [article.export() for article in articles], ...}
+```
+
+### When to Use Which Example
+
+- **Use Authenticated API Example** when:
+  - You need user authentication
+  - You need CRUD operations
+  - You need access control (permissions/roles)
+  - You're building a private or protected API
+
+- **Use Unauthenticated API Example** when:
+  - You're building a public API
+  - You only need read operations
+  - You're serving public content
+  - Authentication is handled externally or not needed
+
+---
+
+## Key Implementation Principles
+
+When building custom jvspatial APIs, follow these standard patterns:
+
+### 1. Entity-Centric Operations
+
+Always use entity-centric methods for database operations:
+
+```python
+# Get by ID
+user = await UserNode.get(id)
+
+# Find with query
+users = await UserNode.find(query)
+
+# Create new entity
+user = await UserNode.create(name="John", email="john@example.com")
+
+# Save changes
+await user.save()
+
+# Delete entity
+await user.delete()
+```
+
+### 2. Pagination
+
+Always use `ObjectPager` for list endpoints:
+
+```python
+from jvspatial.core.pager import ObjectPager
+
+@endpoint("/users", methods=["GET"])
+async def list_users(page: int = 1, per_page: int = 10):
+    pager = ObjectPager(UserNode, page_size=per_page)
+    users = await pager.get_page(page=page)
+    pagination_info = pager.to_dict()
+
+    return {
+        "users": [user.export() for user in users],
+        **pagination_info
+    }
+```
+
+### 3. Response Schemas
+
+Define response schemas for all endpoints to provide clear API documentation:
+
+```python
+from jvspatial.api.endpoints.response import ResponseField, success_response
+
+@endpoint(
+    "/users",
+    methods=["GET"],
+    response=success_response(
+        data={
+            "users": ResponseField(
+                field_type=list,
+                description="List of users",
+                example=[{"id": "1", "name": "John"}]
+            ),
+            "total": ResponseField(
+                field_type=int,
+                description="Total count",
+                example=42
+            )
+        }
+    )
+)
+async def list_users():
+    # Implementation
+    pass
+```
+
+### 4. Export Pattern
+
+Use `entity.export()` for API responses - it automatically excludes transient fields and provides a clean, flat dictionary suitable for API responses:
+
+```python
+@endpoint("/users/{user_id}", methods=["GET"])
+async def get_user(user_id: str):
+    user = await UserNode.get(user_id)
+    return {"user": user.export()}
+```
+
+### 5. Authentication Behavior
+
+Understanding how `auth_enabled` affects endpoint registration:
+
+- **`auth_enabled=True`**: Server automatically registers `/auth/register`, `/auth/login`, `/auth/logout`
+- **`auth_enabled=False`**: These endpoints are **NOT** registered (no login/register/logout available)
+
+When creating authenticated endpoints, use the `auth` parameter:
+
+```python
+@endpoint("/users", methods=["GET"], auth=True, permissions=["read_users"])
+async def list_users():
+    # Requires authentication and read_users permission
+    pass
+```
+
+### 6. Error Handling
+
+Use FastAPI's `HTTPException` for standard HTTP errors:
+
+```python
+from fastapi import HTTPException
+
+@endpoint("/users/{user_id}", methods=["GET"])
+async def get_user(user_id: str):
+    user = await UserNode.get(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"user": user.export()}
+```
+
+---
+
 ## Quick Start with Server Class
 
 The recommended approach uses the modern `Server` class with entity-centric operations:
@@ -106,7 +295,7 @@ For maximum flexibility, use the modern `@endpoint` decorator (works for both fu
 ### Walker Endpoints with Entity Operations
 
 ```python
-from jvspatial.api import walker_endpoint, endpoint
+from jvspatial.api import endpoint
 from jvspatial.api.endpoint.router import EndpointField
 from jvspatial.core import Walker, Node, on_visit
 from fastapi import HTTPException
@@ -184,7 +373,7 @@ class CreateProduct(Walker):
 
 ## Enhanced Response Handling with endpoint.response()
 
-The `@walker_endpoint` and `@endpoint` decorators now automatically inject semantic response helpers for clean, flexible HTTP responses:
+The `@endpoint` decorator automatically injects semantic response helpers for clean, flexible HTTP responses:
 
 ### Walker Endpoints with Semantic Responses
 
@@ -425,30 +614,15 @@ All methods support:
 - `details`: Additional error/context information
 - `headers`: Custom HTTP headers
 
-### Migration from Manual Response Building
+### Using Semantic Response Helpers
 
-**Before (manual response building):**
+The `@endpoint` decorator automatically injects semantic response helpers. Use them for clean, consistent HTTP responses:
+
 ```python
-@endpoint("/api/example")
+@endpoint("/api/example", methods=["POST"])
 class ExampleWalker(Walker):
     async def process(self, here):
-        if error_condition:
-            self.response = {
-                "error": "Something went wrong",
-                "status": 400
-            }
-        else:
-            self.response = {
-                "data": result,
-                "message": "Success"
-            }
-```
-
-**After (semantic responses):**
-```python
-@endpoint("/api/example")
-class ExampleWalker(Walker):
-    async def process(self, here):
+        # Use semantic response helpers
         if error_condition:
             return self.endpoint.bad_request(
                 message="Something went wrong",
@@ -460,6 +634,274 @@ class ExampleWalker(Walker):
             message="Success"
         )
 ```
+
+## Response Schema Definition
+
+jvspatial provides a programmatic way to define expected response schemas for endpoints decorated with `@endpoint`. This allows you to specify the structure and documentation of API responses, which will be reflected in the OpenAPI/Swagger UI.
+
+### Key Components
+
+#### ResponseField
+
+`ResponseField` defines individual fields in a response schema:
+
+```python
+from jvspatial.api.endpoints.response import ResponseField
+
+ResponseField(
+    field_type: Type[Any],      # The Python type of the field
+    description: str = "",       # Description for documentation
+    example: Any = None,         # Single example value
+    examples: List[Any] = None,  # Multiple example values
+    **kwargs                     # Additional Pydantic Field arguments
+)
+```
+
+#### ResponseSchema
+
+`ResponseSchema` defines the complete response structure:
+
+```python
+from jvspatial.api.endpoints.response import ResponseSchema
+
+ResponseSchema(
+    success: bool = True,                      # Whether this is a success response
+    message: Optional[str] = None,             # Optional message field
+    data: Optional[Dict[str, ResponseField]] = None,   # Data fields for success
+    error: Optional[Dict[str, ResponseField]] = None,  # Error fields for errors
+    **kwargs                                   # Additional fields
+)
+```
+
+#### Helper Functions
+
+Convenience functions for creating response schemas:
+
+```python
+from jvspatial.api.endpoints.response import (
+    success_response,
+    error_response,
+    response_schema
+)
+
+# Success response helper
+success_response(
+    data={...},
+    message="Optional message",
+    **kwargs
+)
+
+# Error response helper
+error_response(
+    error={...},
+    message="Optional message",
+    **kwargs
+)
+
+# Generic response helper
+response_schema(
+    success=True,
+    data={...},
+    error={...},
+    **kwargs
+)
+```
+
+### Basic Function Endpoint with Response Schema
+
+```python
+from typing import Dict, Any
+from jvspatial.api import endpoint
+from jvspatial.api.endpoints.response import ResponseField, success_response
+
+@endpoint(
+    "/health",
+    methods=["GET"],
+    response=success_response(
+        data={
+            "status": ResponseField(
+                field_type=str,
+                description="Health status of the service",
+                example="healthy"
+            ),
+            "timestamp": ResponseField(
+                field_type=str,
+                description="Current timestamp",
+                example="2024-01-01T00:00:00Z"
+            ),
+            "version": ResponseField(
+                field_type=str,
+                description="Service version",
+                example="1.0.0"
+            )
+        }
+    )
+)
+async def health_check() -> Dict[str, Any]:
+    """Health check endpoint."""
+    return {
+        "status": "healthy",
+        "timestamp": "2024-01-01T00:00:00Z",
+        "version": "1.0.0"
+    }
+```
+
+### Function with Complex Response
+
+```python
+from typing import List
+
+@endpoint(
+    "/search",
+    methods=["POST"],
+    auth=True,
+    response=success_response(
+        data={
+            "query": ResponseField(
+                field_type=str,
+                description="The search query",
+                example="example query"
+            ),
+            "results": ResponseField(
+                field_type=List[Dict[str, Any]],
+                description="Search results",
+                example=[{"id": "1", "title": "Result 1"}]
+            ),
+            "total_count": ResponseField(
+                field_type=int,
+                description="Total number of results",
+                example=42
+            )
+        }
+    )
+)
+async def search_data(query: str, limit: int = 10) -> Dict[str, Any]:
+    """Search endpoint."""
+    return {
+        "query": query,
+        "results": [...],
+        "total_count": 42
+    }
+```
+
+### Walker Endpoint with Response Schema
+
+```python
+from jvspatial.core import Walker
+
+@endpoint(
+    "/status",
+    methods=["POST"],
+    response=success_response(
+        data={
+            "status": ResponseField(
+                field_type=str,
+                description="System operational status",
+                example="operational"
+            ),
+            "services": ResponseField(
+                field_type=List[str],
+                description="Available services",
+                example=["database", "cache", "storage"]
+            )
+        }
+    )
+)
+class StatusWalker(Walker):
+    """Status check walker."""
+
+    async def check_status(self) -> Dict[str, Any]:
+        return {
+            "status": "operational",
+            "services": ["database", "cache", "storage"]
+        }
+```
+
+### Error Response Schema
+
+```python
+from jvspatial.api.endpoints.response import error_response
+
+@endpoint(
+    "/risky-operation",
+    methods=["POST"],
+    response=error_response(
+        error={
+            "error_code": ResponseField(
+                field_type=str,
+                description="Error code",
+                example="INVALID_INPUT"
+            ),
+            "error_message": ResponseField(
+                field_type=str,
+                description="Human-readable error message",
+                example="Invalid input provided"
+            )
+        }
+    )
+)
+async def risky_operation() -> Dict[str, Any]:
+    """Operation that might fail."""
+    pass
+```
+
+### OpenAPI/Swagger Integration
+
+When you define a response schema using this system:
+
+1. **Type Information**: Field types are properly reflected in the OpenAPI schema
+2. **Descriptions**: Field descriptions appear in Swagger UI documentation
+3. **Examples**: Example values are shown in the Swagger UI for testing
+4. **Validation**: Response models are validated by FastAPI/Pydantic
+
+### Benefits
+
+1. **Self-Documenting**: Response structure is clearly defined alongside the endpoint
+2. **Type Safety**: Pydantic validates response structure
+3. **Better Documentation**: Swagger UI shows clear, detailed response schemas
+4. **IDE Support**: Type hints improve IDE autocomplete and type checking
+5. **Consistency**: Standardized approach across all endpoints
+
+### Implementation Details
+
+The response schema system works by:
+
+1. The `@endpoint` decorator stores the `ResponseSchema` in the endpoint configuration
+2. During route registration, the router checks for a response schema
+3. If found, it converts the `ResponseSchema` to a Pydantic model using `to_pydantic_model()`
+4. The Pydantic model is passed to FastAPI as the `response_model` parameter
+5. FastAPI generates the OpenAPI schema from the Pydantic model
+
+### Response Schema Example
+
+With response schemas defined, your API responses are properly documented:
+
+```json
+{
+  "success": true,
+  "status": "healthy",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "version": "1.0.0"
+}
+```
+
+The Swagger UI will show:
+- Field names
+- Field types
+- Field descriptions
+- Example values
+- Required vs optional fields
+
+### Notes
+
+- Response schemas are optional - endpoints without them will have generic response documentation
+- The `success` field is automatically included in all response models
+- Use `success_response()` for most success cases
+- Use `error_response()` for error cases
+- Complex nested structures are supported through proper type hints
+- The response schema doesn't enforce the actual return value, but provides documentation and validation
+
+---
 
 ### Function Endpoints for Simple Operations
 
@@ -647,7 +1089,7 @@ class AdvancedProductSearch(Walker):
 
 ```python
 from jvspatial.core import Node, Edge, Walker, on_visit
-from jvspatial.api import walker_endpoint, Server
+from jvspatial.api import endpoint, Server
 from jvspatial.api.endpoint.router import EndpointField
 from typing import List, Optional
 
@@ -903,11 +1345,11 @@ class ExampleWalker(Walker):
         exclude_endpoint=True  # Completely excluded from endpoint
     )
 
-    # Deprecated field with migration guidance
-    old_parameter: Optional[str] = EndpointField(
+    # Mark field as deprecated in API documentation
+    legacy_field: Optional[str] = EndpointField(
         default=None,
-        endpoint_deprecated=True,  # Marked as deprecated in docs
-        description="DEPRECATED: Use 'userId' instead"
+        endpoint_deprecated=True,
+        description="Use 'userId' instead"
     )
 ```
 
@@ -1059,55 +1501,57 @@ class UpdateUser(Walker):
 
 ### 1. Entity-Centric Design
 
+Use entity-centric operations for all database interactions:
+
 ```python
-# Good: Use entity-centric operations
-@endpoint("/api/users/search")
+@endpoint("/api/users/search", methods=["POST"])
 class SearchUsers(Walker):
+    active_only: bool = EndpointField(default=True, description="Filter active users")
+
     @on_visit(Node)
     async def search(self, here: Node):
         # Direct entity operations
-        users = await User.find({"context.active": True})
+        query = {"context.active": True} if self.active_only else {}
+        users = await User.find(query)
         total = await User.count()
 
-# Bad: Direct database access
-class OldSearchUsers(Walker):
-    @on_visit(Node)
-    async def search(self, here: Node):
-        # Don't do this - bypasses entity layer
-        db = get_database()
-        users = await db.find("user", {"active": True})
+        self.response = {
+            "users": [user.export() for user in users],
+            "total": total
+        }
 ```
 
 ### 2. MongoDB-Style Queries
 
+Use MongoDB-style queries for efficient database-level filtering:
+
 ```python
-# Good: Use MongoDB-style queries for complex filtering
-@endpoint("/api/products/advanced-search")
+@endpoint("/api/products/advanced-search", methods=["POST"])
 class AdvancedSearch(Walker):
+    category: str = EndpointField(description="Product category")
+    min_price: float = EndpointField(description="Minimum price", ge=0)
+    max_price: float = EndpointField(description="Maximum price", ge=0)
+    name_pattern: str = EndpointField(description="Name search pattern")
+
     @on_visit(Node)
     async def search(self, here: Node):
         query = {
             "$and": [
-                {"context.category": "electronics"},
-                {"context.price": {"$gte": 100, "$lte": 1000}},
-                {"context.name": {"$regex": "laptop", "$options": "i"}}
+                {"context.category": self.category},
+                {"context.price": {"$gte": self.min_price, "$lte": self.max_price}},
+                {"context.name": {"$regex": self.name_pattern, "$options": "i"}}
             ]
         }
         products = await Product.find(query)
-
-# Bad: Python-level filtering
-class BadSearch(Walker):
-    @on_visit(Node)
-    async def search(self, here: Node):
-        all_products = await Product.all()  # Loads everything
-        filtered = [p for p in all_products if p.price >= 100]  # Inefficient
+        self.response = {"products": [p.export() for p in products]}
 ```
 
 ### 3. Use Object Pagination for Large Datasets
 
+Use `ObjectPager` for efficient, database-level pagination:
+
 ```python
-# Good: Use ObjectPager for efficient pagination
-@endpoint("/api/users/list")
+@endpoint("/api/users/list", methods=["GET"])
 class ListUsers(Walker):
     page: int = EndpointField(default=1, ge=1)
     page_size: int = EndpointField(default=20, ge=1, le=100)
@@ -1169,9 +1613,10 @@ class UserConnections(Walker):
 
 ### 5. Error Handling and Validation
 
+Implement comprehensive error handling with proper HTTP status codes:
+
 ```python
-# Good: Comprehensive error handling
-@endpoint("/api/users/create")
+@endpoint("/api/users/create", methods=["POST"])
 class CreateUser(Walker):
     name: str = EndpointField(min_length=1, max_length=100)
     email: str = EndpointField(pattern=r'^[^@]+@[^@]+\.[^@]+$')
@@ -1220,8 +1665,9 @@ class CreateUser(Walker):
 
 ### 6. Proper API Documentation
 
+Provide rich documentation with examples and descriptions:
+
 ```python
-# Good: Rich documentation with examples
 @endpoint("/api/products/search", methods=["POST"])
 class ProductSearch(Walker):
     """Search products with advanced filtering and pagination.
@@ -1258,33 +1704,31 @@ The jvspatial REST API includes comprehensive authentication support with JWT to
 ### Quick Authentication Setup
 
 ```python
-from jvspatial.api import create_server
-from jvspatial.api.auth import configure_auth, AuthenticationMiddleware
+from jvspatial.api import Server
 
-# Configure authentication
-configure_auth(
-    jwt_secret_key="your-secret-key",
-    jwt_expiration_hours=24,
-    rate_limit_enabled=True
+# Create server with authentication enabled
+server = Server(
+    title="Authenticated API",
+    auth_enabled=True,
+    jwt_auth_enabled=True,
+    jwt_secret="your-secret-key",
+    jwt_expire_minutes=1440,  # 24 hours
+    db_type="json",
+    db_path="./jvdb"
 )
-
-# Create server with authentication
-server = create_server(title="Authenticated API")
-server.app.add_middleware(AuthenticationMiddleware)
 ```
 
 ### Endpoint Protection Levels
 
 ```python
-from jvspatial.api import endpoint  # Public endpoints
-from jvspatial.api.auth import auth_endpoint, admin_endpoint
+from jvspatial.api import endpoint
 
 # 1. Public endpoints - no authentication required
-@endpoint("/public/data")
+@endpoint("/public/data", methods=["GET"])
 async def public_data():
     return {"message": "Anyone can access"}
 
-@endpoint("/public/search")
+@endpoint("/public/search", methods=["POST"])
 class PublicSearch(Walker):
     @on_visit(Node)
     async def search(self, here: Node):
@@ -1292,11 +1736,11 @@ class PublicSearch(Walker):
         pass
 
 # 2. Authenticated endpoints - login required
-@auth_endpoint("/protected/user-data")
+@endpoint("/protected/user-data", methods=["GET"], auth=True)
 async def user_data():
     return {"message": "Must be logged in"}
 
-@auth_endpoint("/protected/spatial-query")
+@endpoint("/protected/spatial-query", methods=["POST"], auth=True)
 class ProtectedSpatialQuery(Walker):
     @on_visit(Node)
     async def query(self, here: Node):
@@ -1304,28 +1748,25 @@ class ProtectedSpatialQuery(Walker):
         pass
 
 # 3. Permission-based endpoints
-@auth_endpoint("/reports/generate", permissions=["generate_reports"])
+@endpoint("/reports/generate", methods=["POST"], auth=True, permissions=["generate_reports"])
 async def generate_report():
     return {"message": "Requires generate_reports permission"}
 
 # 4. Role-based endpoints
-@auth_endpoint("/admin/settings", roles=["admin"])
+@endpoint("/admin/settings", methods=["GET"], auth=True, roles=["admin"])
 async def admin_settings():
     return {"message": "Admin role required"}
-
-# 5. Admin-only endpoints (shortcut)
-@admin_endpoint("/admin/users")
-async def manage_users():
-    return {"message": "Admin access only"}
 ```
 
 ### Authentication in Walker Endpoints
 
 ```python
-from jvspatial.api.auth import auth_walker_endpoint, get_current_user
+from jvspatial.api import endpoint
 
-@auth_endpoint(
+@endpoint(
     "/spatial/analysis",
+    methods=["POST"],
+    auth=True,
     permissions=["analyze_spatial_data"],
     roles=["analyst", "admin"]
 )
@@ -1334,21 +1775,13 @@ class SpatialAnalysis(Walker):
 
     @on_visit(City)
     async def analyze_cities(self, here: City):
-        current_user = get_current_user(self.request)
+        # Authentication is automatically handled by the @endpoint decorator
+        # User information is available through the request context if needed
 
-        # Check spatial permissions
-        if not current_user.can_access_region(self.region):
-            self.response = {"error": "Access denied to region"}
-            return
-
-        if not current_user.can_access_node_type("City"):
-            return  # Skip inaccessible node types
-
-        # Perform analysis for authorized user
+        # Perform analysis
         self.response = {
             "analysis": f"Spatial analysis of {here.name}",
-            "user": current_user.email,
-            "permissions": current_user.permissions
+            "region": self.region
         }
 ```
 
@@ -1377,30 +1810,16 @@ All authentication endpoints are automatically registered:
 
 ### API Key Authentication
 
+API keys are managed through the authentication service when `auth_enabled=True`:
+
 ```python
-# Create API key endpoint
-@auth_endpoint("/create-service-key", methods=["POST"])
-async def create_service_key(request: Request):
-    from jvspatial.api.auth import APIKey, get_current_user
-
-    user = get_current_user(request)
-    api_key = await APIKey.create(
-        name="Data Export Service",
-        key_id="export-service-1",
-        key_hash=APIKey.hash_key("secret-key-123"),
-        user_id=user.id,
-        allowed_endpoints=["/api/export/*"],
-        rate_limit_per_hour=5000
-    )
-
-    return {
-        "key_id": api_key.key_id,
-        "secret": "secret-key-123",  # Only shown once
-        "allowed_endpoints": api_key.allowed_endpoints
-    }
+# API key management endpoints are automatically provided:
+# - POST /auth/api-keys - Create API key (requires authentication)
+# - GET /auth/api-keys - List user's API keys (requires authentication)
+# - DELETE /auth/api-keys/{key_id} - Revoke API key (requires authentication)
 
 # Use API key in requests:
-# curl -H "X-API-Key: secret-key-123" http://localhost:8000/api/export/data
+# curl -H "X-API-Key: your-api-key" http://localhost:8000/api/protected/endpoint
 ```
 
 ### Spatial Permissions
@@ -1408,79 +1827,53 @@ async def create_service_key(request: Request):
 Users can be restricted to specific regions and node types:
 
 ```python
-@auth_endpoint("/geo/query", permissions=["read_spatial"])
+@endpoint("/geo/query", methods=["POST"], auth=True, permissions=["read_spatial"])
 class GeoQuery(Walker):
     target_region: str = EndpointField(examples=["north_america", "europe"])
 
     @on_visit(Node)
     async def geo_search(self, here: Node):
-        current_user = get_current_user(self.request)
+        # Authentication and permissions are automatically checked by the @endpoint decorator
+        # Process nodes based on query parameters
 
-        # Spatial region access control
-        if hasattr(here, 'region') and not current_user.can_access_region(here.region):
-            return  # Skip inaccessible regions
-
-        # Node type access control
-        if not current_user.can_access_node_type(here.__class__.__name__):
-            return  # Skip inaccessible node types
-
-        # Process accessible nodes
         if "results" not in self.response:
-            self.response = {"results": [], "user_permissions": {
-                "allowed_regions": current_user.allowed_regions,
-                "allowed_node_types": current_user.allowed_node_types
-            }}
+            self.response = {"results": []}
 
         self.response["results"].append(here.export())
 ```
 
 ### Rate Limiting
 
-Automatic rate limiting per user:
+Rate limiting is configured through the Server configuration:
 
 ```python
-# Configure global rate limits
-configure_auth(
-    rate_limit_enabled=True,
-    default_rate_limit_per_hour=1000
+server = Server(
+    title="My API",
+    auth_enabled=True,
+    # Rate limiting is handled automatically when auth is enabled
+    db_type="json",
+    db_path="./jvdb"
 )
 
-# Per-user rate limits
-user.rate_limit_per_hour = 5000  # Premium user
-await user.save()
+# Per-user rate limits can be configured in user models
+# (See authentication documentation for details)
 ```
 
 ### Enhanced Response Handling with Authentication
 
 ```python
-@auth_endpoint("/secure/process", permissions=["process_data"])
+@endpoint("/secure/process", methods=["POST"], auth=True, permissions=["process_data"])
 class SecureProcessor(Walker):
     @on_visit(Node)
     async def secure_process(self, here: Node):
-        current_user = get_current_user(self.request)
+        # Authentication and permissions are automatically checked by the @endpoint decorator
+        # Process data with automatic access control
 
-        # Authentication-aware error handling
-        if not current_user.has_permission("advanced_processing"):
-            return self.endpoint.forbidden(
-                message="Advanced processing requires additional permissions",
-                details={"required_permission": "advanced_processing"}
-            )
-
-        # Rate limit check
-        if self._is_rate_limited(current_user):
-            return self.endpoint.error(
-                message="Rate limit exceeded",
-                status_code=429,
-                headers={"Retry-After": "3600"}
-            )
-
-        # Process with user context
-        result = await self._process_with_user_permissions(here, current_user)
+        result = await self._process_data(here)
 
         return self.endpoint.success(
             data=result,
-            message="Processing completed",
-            headers={"X-User-ID": current_user.id}
+            message="Processing completed"
         )
 ```
 
@@ -1499,48 +1892,13 @@ class SecureProcessor(Walker):
 9. **Security**: Enterprise-grade authentication with JWT and API keys
 10. **Spatial Permissions**: Region and node type access control
 
-## Migration from Legacy Patterns
-
-If migrating from older REST API patterns:
-
-### Before (Legacy)
-```python
-# Old pattern - manual FastAPI setup
-from fastapi import FastAPI
-app = FastAPI()
-
-@app.post("/search")
-async def search_products(query: str):
-    # Manual database operations
-    db = get_database()
-    results = await db.find("products", {"name": query})
-    return results
-```
-
-### After (Current)
-```python
-# New pattern - entity-centric with server class
-from jvspatial.api import Server, endpoint
-
-server = Server(title="Product API")
-
-@endpoint("/api/products/search")
-class SearchProducts(Walker):
-    query: str = EndpointField(description="Search query")
-
-    @on_visit(Node)
-    async def search(self, here: Node):
-        # Entity-centric operations
-        products = await Product.find({
-            "context.name": {"$regex": self.query, "$options": "i"}
-        })
-        self.response = {"products": [p.export() for p in products]}
-```
-
 ## See Also
 
 - [Server API Documentation](server-api.md) - Complete Server class reference
 - [Entity Reference](entity-reference.md) - API reference for entities
+- [Response Schema Definition](#response-schema-definition) - Defining response schemas for endpoints
+- [Standard Implementation Examples](#-standard-implementation-examples) - Start here for building APIs
+- [Key Implementation Principles](#key-implementation-principles) - Best practices and patterns
 - [MongoDB-Style Query Interface](mongodb-query-interface.md) - Query syntax for endpoints
 - [Object Pagination Guide](pagination.md) - Paginating API results
 - [Examples](examples.md) - API examples and patterns

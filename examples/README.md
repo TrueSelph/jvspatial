@@ -1,5 +1,13 @@
 # jvspatial Examples
 
+> **🎯 Standard API Examples**: For building custom jvspatial APIs, start with:
+> - **[Authenticated API Example](api/authenticated_endpoints_example.py)** - Complete CRUD with authentication
+> - **[Unauthenticated API Example](api/unauthenticated_endpoints_example.py)** - Public read-only API
+>
+> See [API Examples README](api/README.md) for details.
+
+# jvspatial Examples
+
 This directory contains examples demonstrating various features of jvspatial.
 
 ## Example Categories
@@ -20,18 +28,15 @@ These examples have been updated to use the report() pattern and current import 
 - `multi_target_hooks_demo.py` - Multiple target hook handling
 
 ### 📊 Core Examples
-- `crud_demo.py` - Basic CRUD operations
-- `orm_demo.py` - ORM functionality
 - `walker_traversal_demo.py` - Basic walker traversals
 - `enhanced_nodes_filtering.py` - Advanced node filtering
-- `modern_query_interface.py` - Modern query interface usage
+- `query_interface_example.py` - Query interface usage
 - `object_pagination_demo.py` - Object pagination
-- `traversal_demo.py` - Graph traversal patterns
 - `semantic_filtering.py` - Semantic-based filtering
 - `unified_query_interface_example.py` - Unified query interface
 - `custom_database_example.py` - Custom database integration
-- `custom_database_registry_example.py` - Database registry usage
 - `database_switching_example.py` - Dynamic database switching
+- `database/multi_database_example.py` - **Multi-database support** - Managing multiple databases with prime database for core persistence
 - `walker_events_demo.py` - Walker event handling
 - `walker_reporting_demo.py` - Walker reporting functionality
 
@@ -70,7 +75,8 @@ cp .env.example .env
 
 3. Run any example:
 ```bash
-python examples/core/crud_demo.py
+python examples/database/custom_database_example.py
+python examples/walkers/walker_traversal_demo.py
 ```
 
 ## Testing

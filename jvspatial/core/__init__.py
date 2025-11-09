@@ -23,6 +23,11 @@ from .entities import (
     Walker,
 )
 from .events import on_emit
+from .graph import (
+    export_graph,
+    generate_graph_dot,
+    generate_graph_mermaid,
+)
 from .pager import ObjectPager, paginate_by_field, paginate_objects
 from .utils import find_subclass_by_name, generate_id, serialize_datetime
 
@@ -46,6 +51,10 @@ __all__ = [
     "generate_id",
     "find_subclass_by_name",
     "serialize_datetime",
+    # Graph Visualization
+    "export_graph",
+    "generate_graph_dot",
+    "generate_graph_mermaid",
     # Context (advanced usage)
     "GraphContext",
     "get_default_context",

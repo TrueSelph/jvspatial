@@ -58,7 +58,7 @@ For applications requiring specific database configuration:
 import asyncio
 from jvspatial.core.entities import Node, Edge
 from jvspatial.core.context import GraphContext
-from jvspatial.db.factory import get_database
+from jvspatial.db import create_database
 
 class Company(Node):
     name: str
@@ -70,10 +70,9 @@ class Partnership(Edge):
 
 async def main():
     # Create custom database
-    db = get_database(
+    db = create_database(
         db_type="json",
-        base_path="./business_data",
-        auto_create=True
+        base_path="./business_data"
     )
 
     # Create GraphContext
@@ -107,15 +106,15 @@ For applications managing multiple databases or environments:
 ```python
 import asyncio
 from jvspatial.core.context import GraphContext
-from jvspatial.db.factory import get_database
+from jvspatial.db import create_database
 
 async def main():
     # Production database
-    prod_db = get_database(db_type="json", base_path="./prod_data")
+    prod_db = create_database(db_type="json", base_path="./prod_data")
     prod_ctx = GraphContext(database=prod_db)
 
     # Development database
-    dev_db = get_database(db_type="json", base_path="./dev_data")
+    dev_db = create_database(db_type="json", base_path="./dev_data")
     dev_ctx = GraphContext(database=dev_db)
 
     # Create entities in different contexts
@@ -141,7 +140,7 @@ def __init__(self, database: Database) -> None
 ```
 
 **Parameters:**
-- `database`: Database instance from `jvspatial.db.factory.get_database()`
+- `database`: Database instance from `jvspatial.db.create_database()`
 
 #### Node Operations
 
@@ -283,6 +282,29 @@ async def delete_edge(self, edge: Object) -> bool
 
 Deletes an edge from the database.
 
+### Graph Visualization
+
+Export your graph structure in renderable formats:
+
+```python
+# Export as DOT format (Graphviz)
+dot_graph = await context.export_graph(
+    format="dot",
+    output_file="graph.dot",
+    rankdir="LR",
+    node_shape="box"
+)
+
+# Export as Mermaid format
+mermaid_graph = await context.export_graph(
+    format="mermaid",
+    output_file="graph.mermaid",
+    direction="LR"
+)
+```
+
+For detailed information, see [Graph Visualization](graph-visualization.md).
+
 ### Entity Integration
 
 All jvspatial entities automatically integrate with GraphContext:
@@ -313,28 +335,27 @@ await edge.destroy()
 
 #### JSON Database (Default)
 ```python
-from jvspatial.db.factory import get_database
+from jvspatial.db import create_database
 
-db = get_database(
+db = create_database(
     db_type="json",
-    base_path="./my_data",      # Directory for JSON files
-    auto_create=True            # Create directory if it doesn't exist
+    base_path="./my_data"      # Directory for JSON files
 )
 ```
 
 #### MongoDB Database
 ```python
-db = get_database(
+db = create_database(
     db_type="mongodb",
     connection_string="mongodb://localhost:27017",
-    database_name="my_app"
+    db_name="my_app"
 )
 ```
 
 #### Memory Database (Testing)
 ```python
 # For testing - data is not persisted
-db = get_database(
+db = create_database(
     db_type="json",
     base_path=":memory:"
 )
@@ -342,14 +363,14 @@ db = get_database(
 
 ### Database Factory Function
 
-The `get_database()` function provides a unified interface:
+The `create_database()` function provides a unified interface:
 
 ```python
-def get_database(
+def create_database(
     db_type: str,
     base_path: str | None = None,
     connection_string: str | None = None,
-    database_name: str | None = None,
+    db_name: str | None = None,
     auto_create: bool = True
 ) -> Database
 ```
@@ -466,7 +487,7 @@ If you're migrating from a previous version that used scattered database managem
 # Old: Scattered database management
 from jvspatial.core.entities import set_db
 
-db = get_database("json", "./data")
+db = create_database("json", base_path="./data")
 set_db(db)
 
 user = await User.create(name="Alice")
@@ -477,7 +498,7 @@ user = await User.create(name="Alice")
 # New: Clean GraphContext management
 from jvspatial.core.context import GraphContext
 
-db = get_database("json", "./data")
+db = create_database("json", base_path="./data")
 ctx = GraphContext(database=db)
 
 # Option 1: Use context directly
@@ -505,6 +526,37 @@ All existing entity methods continue to work:
 
 The main difference is that database management is now centralized and configurable through GraphContext.
 
+## Multi-Database Support
+
+jvspatial supports managing multiple databases with a prime database for core persistence operations (authentication, session management). See the [Multi-Database Example](../../examples/database/multi_database_example.py) for a complete demonstration.
+
+### Key Features
+
+- **Prime Database**: Always used for authentication and session management
+- **Multiple Databases**: Register and switch between application databases
+- **Easy Switching**: Use `switch_database(name)` or `DatabaseManager.set_current_database(name)`
+- **Database Removal**: Use `unregister_database(name)` to remove non-prime databases
+
+### Quick Example
+
+```python
+from jvspatial.db import create_database, get_database_manager, switch_database, unregister_database
+
+# Prime database is automatically created
+manager = get_database_manager()
+prime_db = manager.get_prime_database()  # For auth/sessions
+
+# Create and register additional database
+app_db = create_database("json", base_path="./app_data", register=True, name="app")
+
+# Switch between databases
+switch_database("app")  # For application data
+switch_database("prime")  # Back to prime
+
+# Remove a database
+unregister_database("app")
+```
+
 ## Best Practices
 
 ### 1. Choose the Right Pattern
@@ -512,6 +564,7 @@ The main difference is that database management is now centralized and configura
 - **Automatic GraphContext**: For simple applications with single database
 - **Explicit GraphContext**: For applications needing database control
 - **Multiple Contexts**: For multi-tenant or multi-environment applications
+- **Multi-Database**: For applications needing separate databases for different data domains
 
 ### 2. Testing
 
@@ -529,13 +582,13 @@ async def test_context():
 # Use configuration for database settings
 import os
 from jvspatial.core.context import GraphContext
-from jvspatial.db.factory import get_database
+from jvspatial.db import create_database
 
 def get_app_context() -> GraphContext:
     db_type = os.getenv("JVSPATIAL_DB_TYPE", "json")
     base_path = os.getenv("JVSPATIAL_JSONDB_PATH", "./jvdb")
 
-    db = get_database(db_type=db_type, base_path=base_path)
+    db = create_database(db_type=db_type, base_path=base_path)
     return GraphContext(database=db)
 ```
 
@@ -546,7 +599,7 @@ def get_app_context() -> GraphContext:
 from fastapi import Depends
 
 async def get_graph_context() -> GraphContext:
-    db = get_database("json", "./api_data")
+    db = create_database("json", base_path="./api_data")
     return GraphContext(database=db)
 
 @app.post("/users")
@@ -580,7 +633,7 @@ async def safe_create_user(ctx: GraphContext, **kwargs):
 #### 1. "No database configured" Error
 ```python
 # Solution: Ensure GraphContext is properly configured
-ctx = GraphContext(database=get_database("json", "./data"))
+ctx = GraphContext(database=create_database("json", base_path="./data"))
 ```
 
 #### 2. Entity Not Found
@@ -596,7 +649,7 @@ if user is None:
 # Use isolated test contexts
 @pytest.fixture
 async def clean_context():
-    db = get_database("json", base_path=":memory:")
+    db = create_database("json", base_path=":memory:")
     return GraphContext(database=db)
 ```
 
@@ -648,7 +701,7 @@ GraphContext supports caching at the database level:
 
 ```python
 # Some databases support caching configuration
-db = get_database(
+db = create_database(
     db_type="json",
     base_path="./data",
     cache_enabled=True  # If supported by database

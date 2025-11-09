@@ -46,13 +46,13 @@ def create_file_storage_server():
         description="Demo of jvspatial file storage capabilities",
         file_storage_enabled=True,
         file_storage_provider="local",  # or "s3"
-        file_storage_root=".demo_files",
+        file_storage_root=".files",
         file_storage_base_url="http://localhost:8000",
         file_storage_max_size=50 * 1024 * 1024,  # 50MB
         proxy_enabled=True,
         proxy_default_expiration=3600,  # 1 hour
         db_type="json",
-        db_path="./demo_data",
+        db_path="./jvdb",
     )
 
     # Option 2: S3 file storage (commented)
@@ -66,7 +66,7 @@ def create_file_storage_server():
     #     s3_secret_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
     #     proxy_enabled=True,
     #     db_type="json",
-    #     db_path="./demo_data"
+    #     db_path="./jvdb"
     # )
 
     return server
@@ -89,31 +89,32 @@ class UploadDocument(Walker):
     @on_visit(Root)
     async def process_upload(self, here: Root):
         """Upload file and optionally create proxy URL."""
-        from jvspatial.storage import get_file_interface, get_proxy_manager
+        from jvspatial.storage import create_storage, get_proxy_manager
 
         # Get file interface
-        file_interface = get_file_interface(provider="local", root_dir=".demo_files")
+        file_interface = create_storage(provider="local", root_dir=".files")
 
         # Save file
         await file_interface.save_file(self.file_path, self.file_data)
 
         result: Dict[str, Any] = {
-            "success": True,
             "file_path": self.file_path,
-            "file_url": file_interface.get_file_url(self.file_path),
+            "file_url": await file_interface.get_file_url(self.file_path),
         }
 
         # Create proxy if requested
         if self.create_proxy:
             proxy_manager = get_proxy_manager()
-            proxy_url = await proxy_manager.create_proxy(
+            proxy = await proxy_manager.create_proxy(
                 file_path=self.file_path,
                 expires_in=self.proxy_expires_in,
                 metadata={"uploaded_by": "UploadDocument walker"},
             )
-            result["proxy_url"] = proxy_url
+            result["proxy_url"] = f"/p/{proxy.code}"
 
-        self.response = result
+        return await self.endpoint.success(
+            data=result, message="File uploaded successfully"
+        )
 
 
 # Example 3: Walker that Creates Shareable Links
@@ -128,18 +129,17 @@ class CreateShareLink(Walker):
     @on_visit(Root)
     async def create_link(self, here: Root):
         """Create a proxy URL for sharing."""
-        from jvspatial.storage import get_file_interface, get_proxy_manager
+        from jvspatial.storage import create_storage, get_proxy_manager
 
         # Verify file exists
-        file_interface = get_file_interface(provider="local", root_dir=".demo_files")
+        file_interface = create_storage(provider="local", root_dir=".files")
 
         if not await file_interface.file_exists(self.file_path):
-            self.response = {"error": "File not found"}  # type: Dict[str, Any]
-            return
+            return await self.endpoint.not_found(message="File not found")
 
         # Create proxy
         proxy_manager = get_proxy_manager()
-        proxy_url = await proxy_manager.create_proxy(
+        proxy = await proxy_manager.create_proxy(
             file_path=self.file_path,
             expires_in=self.expires_in,
             one_time=self.one_time,
@@ -149,11 +149,14 @@ class CreateShareLink(Walker):
             },
         )
 
-        self.response = {
-            "share_url": proxy_url,
-            "expires_in": self.expires_in,
-            "one_time": self.one_time,
-        }
+        return await self.endpoint.success(
+            data={
+                "share_url": f"/p/{proxy.code}",
+                "expires_in": self.expires_in,
+                "one_time": self.one_time,
+            },
+            message="Share link created successfully",
+        )
 
 
 # Example 4: Walker that Processes Files
@@ -166,16 +169,15 @@ class ProcessFile(Walker):
     @on_visit(Root)
     async def process(self, here: Root):
         """Read and process file content."""
-        from jvspatial.storage import get_file_interface
+        from jvspatial.storage import create_storage
 
-        file_interface = get_file_interface(provider="local", root_dir=".demo_files")
+        file_interface = create_storage(provider="local", root_dir=".files")
 
         # Get file content
         content = await file_interface.get_file(self.file_path)
 
         if content is None:
-            self.response = {"error": "File not found"}
-            return
+            return await self.endpoint.not_found(message="File not found")
 
         # Get file metadata
         metadata = await file_interface.get_metadata(self.file_path)
@@ -186,16 +188,19 @@ class ProcessFile(Walker):
             for k, v in (metadata or {}).items()
         }
 
-        self.response = {
-            "file_path": str(self.file_path),
-            "size": str(len(content)),
-            "metadata": str(cleaned_metadata),
-            "content_preview": (
-                content[:100].decode("utf-8", errors="ignore")
-                if len(content) > 0
-                else ""
-            ),
-        }
+        return await self.endpoint.success(
+            data={
+                "file_path": str(self.file_path),
+                "size": len(content),
+                "metadata": cleaned_metadata,
+                "content_preview": (
+                    content[:100].decode("utf-8", errors="ignore")
+                    if len(content) > 0
+                    else ""
+                ),
+            },
+            message="File processed successfully",
+        )
 
 
 # Example 5: Walker that Lists Files
@@ -208,19 +213,22 @@ class ListFiles(Walker):
     @on_visit(Root)
     async def list_directory(self, here: Root):
         """List all files in a directory."""
-        from jvspatial.storage import get_file_interface
+        from jvspatial.storage import create_storage
 
-        file_interface = get_file_interface(provider="local", root_dir=".demo_files")
+        file_interface = create_storage(provider="local", root_dir=".files")
 
         try:
             files = await file_interface.list_files(self.directory)
-            self.response = {
-                "directory": self.directory,
-                "files": files,
-                "count": len(files),
-            }
+            return await self.endpoint.success(
+                data={
+                    "directory": self.directory,
+                    "files": files,
+                    "count": len(files),
+                },
+                message="Files listed successfully",
+            )
         except Exception as e:
-            self.response = {"error": str(e)}
+            return await self.endpoint.error(message=str(e), status_code=500)
 
 
 # Example 6: Walker that Manages File Lifecycle
@@ -234,9 +242,9 @@ class FileLifecycle(Walker):
     @on_visit(Root)
     async def manage_lifecycle(self, here: Root):
         """Demonstrate full file management lifecycle."""
-        from jvspatial.storage import get_file_interface, get_proxy_manager
+        from jvspatial.storage import create_storage, get_proxy_manager
 
-        file_interface = get_file_interface(provider="local", root_dir=".demo_files")
+        file_interface = create_storage(provider="local", root_dir=".files")
         proxy_manager = get_proxy_manager()
 
         steps = []
@@ -249,7 +257,7 @@ class FileLifecycle(Walker):
                 "step": "upload",
                 "status": "success",
                 "path": upload_path,
-                "url": file_interface.get_file_url(upload_path),
+                "url": await file_interface.get_file_url(upload_path),
             }
         )
 
@@ -261,8 +269,8 @@ class FileLifecycle(Walker):
             {
                 "step": "create_temp_link",
                 "status": "success",
-                "proxy_url": temp_proxy,
-                "expires_in": 3600,
+                "proxy_url": f"/p/{temp_proxy.code}",
+                "expires_in": 3600,  # type: ignore[dict-item]
             }
         )
 
@@ -277,27 +285,29 @@ class FileLifecycle(Walker):
             {
                 "step": "create_onetime_link",
                 "status": "success",
-                "proxy_url": onetime_proxy,
-                "one_time": True,
+                "proxy_url": f"/p/{onetime_proxy.code}",
+                "one_time": True,  # type: ignore[dict-item]
             }
         )
 
         # Step 4: Get file metadata
         metadata = await file_interface.get_metadata(upload_path)
         steps.append(
-            {"step": "get_metadata", "status": "success", "metadata": metadata}
+            {"step": "get_metadata", "status": "success", "metadata": metadata}  # type: ignore[dict-item]
         )
 
         # Step 5: Verify file exists
         exists = await file_interface.file_exists(upload_path)
-        steps.append({"step": "verify_exists", "status": "success", "exists": exists})
+        steps.append({"step": "verify_exists", "status": "success", "exists": exists})  # type: ignore[dict-item]
 
-        self.response = {
-            "lifecycle_demo": "complete",
-            "file_path": upload_path,
-            "steps": steps,
-            "note": "File and proxies created successfully. Use DELETE endpoint to clean up.",
-        }
+        return await self.endpoint.success(
+            data={
+                "lifecycle_demo": "complete",
+                "file_path": upload_path,
+                "steps": steps,
+            },
+            message="File lifecycle demo completed successfully",
+        )
 
 
 # Main execution

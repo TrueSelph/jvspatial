@@ -95,9 +95,10 @@ async def collect_metrics() -> None:
     memory = psutil.virtual_memory()
 
     # Count active jobs using MongoDB-style query
-    active_jobs = await ScheduledJob.count({
+    active_jobs_list = await ScheduledJob.find({
         "context.status": {"$in": ["pending", "running"]}
     })
+    active_jobs = len(active_jobs_list)
 
     # Create metrics record
     await SystemMetrics.create(
@@ -151,9 +152,14 @@ async def get_scheduler_status() -> Dict[str, Any]:
     status = server.scheduler_service.get_status()
 
     # Get job statistics using entity queries
-    total_jobs = await ScheduledJob.count()
-    completed_jobs = await ScheduledJob.count({"context.status": "completed"})
-    failed_jobs = await ScheduledJob.count({"context.status": "failed"})
+    total_jobs_list = await ScheduledJob.find({})
+    total_jobs = len(total_jobs_list)
+
+    completed_jobs_list = await ScheduledJob.find({"context.status": "completed"})
+    completed_jobs = len(completed_jobs_list)
+
+    failed_jobs_list = await ScheduledJob.find({"context.status": "failed"})
+    failed_jobs = len(failed_jobs_list)
 
     return {
         "scheduler": status,
@@ -329,10 +335,14 @@ async def analyze_job_patterns():
     })
 
     # Count jobs by status
+    completed_list = await ScheduledJob.find({"context.status": "completed"})
+    failed_list = await ScheduledJob.find({"context.status": "failed"})
+    total_list = await ScheduledJob.find({})
+
     job_counts = {
-        "completed": await ScheduledJob.count({"context.status": "completed"}),
-        "failed": await ScheduledJob.count({"context.status": "failed"}),
-        "total": await ScheduledJob.count()
+        "completed": len(completed_list),
+        "failed": len(failed_list),
+        "total": len(total_list)
     }
 
     # Find slow jobs
@@ -351,24 +361,26 @@ async def adaptive_processor():
     """Adjust processing frequency based on system load."""
 
     # Get recent system metrics
-    metrics = await SystemMetrics.find_one({
+    metrics_list = await SystemMetrics.find({
         "$and": [
             {"context.timestamp": {"$gte": datetime.now().timestamp() - 300}},
             {"context.metric_type": "cpu_usage"}
         ]
     })
+    metrics = metrics_list[0] if metrics_list else None
 
     if metrics and metrics.value > 80:
         logger.warning("🔥 High CPU usage detected, skipping intensive processing")
         return
 
     # Check for recent failures
-    recent_failures = await ScheduledJob.count({
+    recent_failures_list = await ScheduledJob.find({
         "$and": [
             {"context.status": "failed"},
             {"context.execution_time": {"$gte": datetime.now().timestamp() - 3600}}
         ]
     })
+    recent_failures = len(recent_failures_list)
 
     if recent_failures > 5:
         logger.error("⚠️ Too many recent failures, pausing processing")
@@ -484,13 +496,14 @@ async def resilient_data_sync():
 logger.info(f"Starting data sync {sync_id}")
 
         # Check for existing sync operations
-        existing_sync = await ScheduledJob.find_one({
+        existing_sync_list = await ScheduledJob.find({
             "$and": [
                 {"context.job_name": "resilient_data_sync"},
                 {"context.status": "running"},
                 {"context.execution_time": {"$gte": (datetime.now() - timedelta(hours=1)).timestamp()}}
             ]
         })
+        existing_sync = existing_sync_list[0] if existing_sync_list else None
 
         if existing_sync:
 logger.warning(f"Sync already running, skipping {sync_id}")
@@ -531,13 +544,14 @@ logger.error(f"Data sync {sync_id} failed: {str(e)}")
         await update_job_status(job_record.id, "failed", str(e))
 
         # Check failure patterns for circuit breaker
-        recent_failures = await ScheduledJob.count({
+        recent_failures_list = await ScheduledJob.find({
             "$and": [
                 {"context.job_name": "resilient_data_sync"},
                 {"context.status": {"$in": ["failed", "timeout"]}},
                 {"context.execution_time": {"$gte": (datetime.now() - timedelta(hours=2)).timestamp()}}
             ]
         })
+        recent_failures = len(recent_failures_list)
 
         if recent_failures >= 3:
 logger.critical("Circuit breaker activated for data sync")
@@ -676,13 +690,14 @@ async def monitor_system():
 @on_schedule("every 10 minutes", description="Task with circuit breaker")
 async def task_with_circuit_breaker():
     # Check recent failures
-    failure_count = await ScheduledJob.count({
+    failure_list = await ScheduledJob.find({
         "$and": [
             {"context.job_name": "task_with_circuit_breaker"},
             {"context.status": "failed"},
             {"context.execution_time": {"$gte": (datetime.now() - timedelta(hours=1)).timestamp()}}
         ]
     })
+    failure_count = len(failure_list)
 
     if failure_count >= 3:
         logger.warning("🔒 Circuit breaker open, skipping execution")

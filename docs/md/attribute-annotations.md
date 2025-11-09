@@ -1,31 +1,32 @@
 # Attribute Annotation System
 
-The jvspatial framework provides an elegant annotation system for marking entity attributes with special behaviors using `@protected` and `@transient` decorators.
+The jvspatial framework provides an elegant annotation system for marking entity attributes with special behaviors using the `@attribute` decorator.
 
 ## Overview
 
-- **`@protected`**: Prevents modification after initial assignment during object construction
-- **`@transient`**: Excludes fields from serialization/export operations
+- **`@attribute(protected=True)`**: Prevents modification after initial assignment during object construction
+- **`@attribute(transient=True)`**: Excludes fields from serialization/export operations
+- **`@attribute(private=True)`**: Marks fields as private/internal use only
 - **Compound decorators**: Combine both annotations for fields that are both immutable and non-persistent
 
 ## Quick Example
 
 ```python
 from pydantic import BaseModel, Field
-from jvspatial.core.annotations import protected, transient, ProtectedAttributeMixin
+from jvspatial.core.annotations import attribute, AttributeMixin
 
-class MyEntity(ProtectedAttributeMixin, BaseModel):
+class MyEntity(AttributeMixin, BaseModel):
     # Protected - cannot be modified after initialization
-    id: str = protected("", description="Unique identifier")
+    id: str = attribute(protected=True, description="Unique identifier")
 
     # Normal - can be freely modified
     name: str = "Default Name"
 
     # Transient - excluded from exports
-    cache: dict = transient(Field(default_factory=dict))
+    cache: dict = attribute(transient=True, default_factory=dict)
 
     # Both protected and transient
-    internal_state: dict = protected(transient(Field(default_factory=dict)))
+    internal_state: dict = attribute(protected=True, transient=True, default_factory=dict)
 ```
 
 ## Core Concepts

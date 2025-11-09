@@ -1,16 +1,16 @@
 """Base Object class for jvspatial entities."""
 
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from jvspatial.core.context import GraphContext
 
-from ..annotations import ProtectedAttributeMixin, private, protected
+from ..annotations import AttributeMixin, attribute
 from ..utils import generate_id
 
 
-class Object(ProtectedAttributeMixin, BaseModel):
+class Object(AttributeMixin, BaseModel):
     """Base object with persistence capabilities.
 
     Attributes:
@@ -21,11 +21,11 @@ class Object(ProtectedAttributeMixin, BaseModel):
         _initializing: Initialization flag (transient)
     """
 
-    id: str = protected("", description="Unique identifier for the object")
-    type_code: str = Field(default="o")
-    _initializing: bool = private(default=True)
-    _data: dict = private(default_factory=dict)
-    _graph_context: Optional["GraphContext"] = private(default=None)
+    id: str = attribute(protected=True, description="Unique identifier for the object")
+    type_code: str = attribute(transient=True, default="o")
+    _initializing: bool = attribute(private=True, default=True)
+    _data: dict = attribute(private=True, default_factory=dict)
+    _graph_context: Optional["GraphContext"] = attribute(private=True, default=None)
 
     async def set_context(self: "Object", context: "GraphContext") -> None:
         """Set the GraphContext for this object.
@@ -92,29 +92,61 @@ class Object(ProtectedAttributeMixin, BaseModel):
         return obj
 
     def export(
-        self: "Object", exclude_transient: bool = True, **kwargs: Any
+        self: "Object",
+        exclude_transient: bool = True,
+        exclude: Optional[Union[set, Dict[str, Any]]] = None,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Export the object to a dictionary for persistence.
+        """Export the object to a dictionary using model_dump() as the base.
 
-        This method now automatically respects @transient annotations and
-        excludes transient fields from the exported data.
+        This is the standard, transparent method for dumping Object contents
+        and all of its derivatives. It automatically handles transient properties
+        and allows custom exclusions.
 
         Args:
-            exclude_transient: Whether to exclude @transient fields (default: True)
-            **kwargs: Additional arguments passed to model_dump()
+            exclude_transient: Whether to automatically exclude transient fields (default: True)
+            exclude: Additional fields to exclude (can be a set of field names or a dict)
+            **kwargs: Additional arguments passed to model_dump() (e.g., exclude_none, mode, etc.)
 
         Returns:
-            Dictionary representation excluding transient fields if requested
+            Dictionary representation of the object, excluding transient and specified fields
+
+        Examples:
+            # Standard export (excludes transient fields)
+            data = obj.export()
+
+            # Export including transient fields
+            data = obj.export(exclude_transient=False)
+
+            # Export with custom exclusions
+            data = obj.export(exclude={"internal_field", "debug_field"})
+
+            # Export with model_dump options
+            data = obj.export(exclude_none=True, mode="json")
         """
         if hasattr(self, "model_dump"):
-            # Build exclude set for transient fields
-            exclude_set = set(kwargs.get("exclude", set()))
+            # Build exclude set starting with any provided exclusions
+            exclude_set = set(exclude) if exclude else set()
+
+            # Merge with any exclude from kwargs (model_dump format)
+            if "exclude" in kwargs:
+                kwargs_exclude = kwargs.pop("exclude")
+                if isinstance(kwargs_exclude, (set, dict)):
+                    exclude_set.update(
+                        kwargs_exclude
+                        if isinstance(kwargs_exclude, set)
+                        else kwargs_exclude.keys()
+                    )
+
+            # Add transient fields if requested
             if exclude_transient:
                 exclude_set.update(self._get_transient_attrs())
 
+            # Pass exclude to model_dump if we have anything to exclude
             if exclude_set:
                 kwargs["exclude"] = exclude_set
 
+            # Use model_dump with all options
             result: Dict[str, Any] = self.model_dump(**kwargs)
             return result
         else:
@@ -126,6 +158,24 @@ class Object(ProtectedAttributeMixin, BaseModel):
         from ..annotations import get_transient_attrs
 
         return get_transient_attrs(self.__class__)
+
+    @classmethod
+    def _get_top_level_fields(cls: Type["Object"]) -> set:
+        """Get fields that are stored at top level in persistence format.
+
+        Override this method in subclasses to declare which fields are stored
+        at the top level (outside "context") when for_persistence=True.
+
+        Returns:
+            Set of field names stored at top level (default: empty set)
+
+        Examples:
+            # In Edge subclass:
+            @classmethod
+            def _get_top_level_fields(cls):
+                return {"source", "target", "bidirectional"}
+        """
+        return set()
 
     def _export_with_transient_exclusion(
         self, exclude_transient: bool = True
@@ -196,21 +246,66 @@ class Object(ProtectedAttributeMixin, BaseModel):
         return await context.get(cls, obj_id)
 
     @classmethod
-    async def find(cls: Type["Object"], query: Dict[str, Any]) -> List["Object"]:
+    async def find(
+        cls: Type["Object"], query: Optional[Dict[str, Any]] = None, **kwargs: Any
+    ) -> List["Object"]:
         """Find objects matching the query.
 
+        Supports both dictionary queries and keyword arguments for property-based filtering.
+        Property queries can use either direct property names or "context.property" format.
+
         Args:
-            query: Query dictionary to match against
+            query: Query dictionary (optional). If None, uses kwargs for filtering.
+                  Can include property names directly or use "context.property" format.
+            **kwargs: Property-based filters (e.g., email="test@example.com")
 
         Returns:
             List of matching objects
+
+        Examples:
+            # Find by property
+            users = await User.find(email="test@example.com")
+
+            # Find with query dict
+            users = await User.find({"context.email": "test@example.com"})
+
+            # Find all of a type
+            users = await User.find()
+
+            # Multiple criteria
+            users = await User.find(role="admin", department="engineering")
         """
         from ..context import get_default_context
 
         context = get_default_context()
         type_code = context._get_entity_type_code(cls)
         collection = context._get_collection_name(type_code)
-        results = await context.database.find(collection, query)
+
+        # Build database query
+        if query is None:
+            query = {}
+
+        # Add class name filter for type safety
+        db_query = {"name": cls.__name__}
+
+        # Process kwargs and query - convert property names to database format
+        combined_filters = {**query, **kwargs}
+
+        # Get top-level fields for this entity type (fields stored at root level in persistence)
+        top_level_fields = cls._get_top_level_fields()
+
+        for key, value in combined_filters.items():
+            if key == "name":
+                # Skip "name" as it's already set for class filtering
+                continue
+            elif key.startswith("context.") or key in top_level_fields:
+                # Already in database format or top-level field
+                db_query[key] = value
+            else:
+                # Property name - convert to database format
+                db_query[f"context.{key}"] = value
+
+        results = await context.database.find(collection, db_query)
 
         objects = []
         for data in results:

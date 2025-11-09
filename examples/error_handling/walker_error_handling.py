@@ -15,7 +15,6 @@ from pydantic import Field
 
 from jvspatial.core import Node, Root, Walker, on_visit
 from jvspatial.exceptions import (
-    ValidationError,
     WalkerExecutionError,
     WalkerTimeoutError,
 )
@@ -83,7 +82,11 @@ class TaskProcessor(Walker):
         if task.priority > 3:
             # Simulate timeout for high-priority tasks
             await asyncio.sleep(2)
-            raise WalkerTimeoutError("Task processing timed out", timeout_seconds=2)
+            raise WalkerTimeoutError(
+                walker_class=self.__class__.__name__,
+                timeout_seconds=2,
+                details={"task_id": task.id, "task_title": task.title},
+            )
         elif task.status == "failed":
             # Simulate processing error
             raise WalkerExecutionError(
@@ -229,7 +232,7 @@ async def demonstrate_basic_error_handling():
         walker = TaskProcessor(timeout_seconds=5)
         await walker.spawn(root)
 
-        report = walker.get_report()
+        report = await walker.get_report()
         completed = [r for r in report if "task_completed" in r]
         errors = [r for r in report if "task_error" in r]
 
@@ -247,7 +250,7 @@ async def demonstrate_basic_error_handling():
         print(f"  • Timeout: {e.timeout_seconds}s")
 
         # Access partial results
-        partial_report = walker.get_report()
+        partial_report = await walker.get_report()
         print(f"  • Processed {len(partial_report)} tasks before timeout")
 
     except WalkerExecutionError as e:
@@ -270,7 +273,7 @@ async def demonstrate_safe_walker():
         print(f"❌ Failed tasks: {walker.error_count}")
         print(f"🔄 Total retries: {walker.retry_count}")
 
-        report = walker.get_report()
+        report = await walker.get_report()
         permanent_failures = [r for r in report if "permanent_failure" in r]
 
         if permanent_failures:

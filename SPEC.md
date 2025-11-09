@@ -21,7 +21,15 @@ from dotenv import load_dotenv
 load_dotenv()  # Load .env file
 
 from jvspatial.core import GraphContext
-ctx = GraphContext()  # Uses configured database
+from jvspatial.db import create_database, get_database_manager
+
+# Option 1: Create database explicitly
+db = create_database("json", base_path="./jvdb")
+ctx = GraphContext(database=db)
+
+# Option 2: Use current database from manager (defaults to prime)
+manager = get_database_manager()
+ctx = GraphContext(database=manager.get_current_database())
 ```
 
 ### Environment Variables
@@ -93,11 +101,16 @@ await entity.save()  # save() required to persist changes + update cache
 await entity.delete()
 
 # Counting and aggregation (not cached)
-count = await Entity.count({"context.department": "engineering"})
-departments = await Entity.distinct("department")
+# Note: Object.count() doesn't exist - use len() with find() instead
+results = await Entity.find({"context.department": "engineering"})
+count = len(results)
+
+# For distinct values, query and extract manually
+all_entities = await Entity.find({})
+departments = set(e.department for e in all_entities if hasattr(e, 'department'))
 ```
 
-**Note**: Caching is automatic and transparent. Individual entity retrievals by ID (`Entity.get(id)`) are cached. Queries (`find()`, `all()`, `count()`) always hit the database as they can change frequently.
+**Note**: Caching is automatic and transparent. Individual entity retrievals by ID (`Entity.get(id)`) are cached. Queries (`find()`, `all()`) always hit the database as they can change frequently. For counting, use `len(await Entity.find(...))` instead of a non-existent `count()` method.
 
 ### save() Operation Rules
 **✅ save() is ONLY required when:**
@@ -109,12 +122,132 @@ departments = await Entity.distinct("department")
 2. Using `.delete()` method (automatically persists deletion)
 3. Just reading/querying entities
 
-**❌ AVOID: Direct GraphContext methods**
+**❌ AVOID: Direct database access (use entity methods instead)**
 ```python
-# Don't do this
-db = get_database()
+# Don't do this - use entity methods instead
+from jvspatial.db import create_database
+db = create_database("json")
 entities = await db.find("object", {"name": "Entity"})
+
+# ✅ Do this instead - use entity-centric methods
+entities = await Entity.find({"context.name": "Entity"})
 ```
+
+## 🗄️ Multi-Database Support
+
+jvspatial supports managing multiple databases within the same application, with a prime database for core persistence operations (authentication, session management) and additional databases for application-specific data.
+
+### Basic Multi-Database Usage
+
+```python
+from jvspatial.db import (
+    create_database,
+    get_database_manager,
+    get_prime_database,
+    get_current_database,
+    switch_database,
+    unregister_database,
+)
+from jvspatial.core.context import GraphContext
+
+# Get database manager (singleton)
+manager = get_database_manager()
+
+# Prime database is automatically created for core operations
+prime_db = get_prime_database()  # Used for auth, sessions, system data
+
+# Create and register additional database
+app_db = create_database(
+    "json",
+    base_path="./app_data",
+    register=True,
+    name="app"
+)
+
+# Switch to application database
+switch_database("app")
+current_db = get_current_database()  # Now returns app_db
+
+# Use with GraphContext
+app_ctx = GraphContext(database=current_db)
+
+# Switch back to prime database
+switch_database("prime")
+
+# Unregister non-prime database when no longer needed
+unregister_database("app")
+```
+
+### Prime Database
+
+The prime database is always used for:
+- User authentication
+- Session management
+- System-level configuration
+- Core persistence operations
+
+It cannot be unregistered and is always available as the default.
+
+### Database Isolation
+
+Each database maintains complete isolation:
+- Entities in one database are not visible in another
+- Switching databases changes the context for all operations
+- Prime database ensures core operations always have a stable database
+
+**📖 For comprehensive multi-database documentation:** [Graph Context Guide](docs/md/graph-context.md) and [Multi-Database Example](examples/database/multi_database_example.py)
+
+## 🔧 Custom Database Integration
+
+jvspatial supports seamless extension with custom database backends through a registration system.
+
+### Registering Custom Database Types
+
+```python
+from jvspatial.db import Database, register_database_type, create_database, list_database_types
+
+# Define custom database implementation
+class CustomDatabase(Database):
+    async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        # Implementation
+        pass
+
+    async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
+        # Implementation
+        pass
+
+    async def delete(self, collection: str, id: str) -> None:
+        # Implementation
+        pass
+
+    async def find(self, collection: str, query: Dict[str, Any]) -> List[Dict[str, Any]]:
+        # Implementation
+        pass
+
+# Factory function for creating instances
+def create_custom_db(**kwargs: Any) -> CustomDatabase:
+    return CustomDatabase(**kwargs)
+
+# Register the custom database type
+register_database_type("custom", create_custom_db)
+
+# Now use it like built-in types
+db = create_database("custom", connection_string="custom://...")
+
+# List all available database types
+types = list_database_types()
+# Returns: {"json": "JSON file-based database", "mongodb": "MongoDB database", "custom": "Custom database: create_custom_db"}
+```
+
+### Custom Database Requirements
+
+Custom databases must:
+1. Inherit from `Database` abstract base class
+2. Implement all abstract methods: `save()`, `get()`, `delete()`, `find()`
+3. Optionally implement `count()` and `find_one()` (default implementations provided)
+4. Provide a factory function for creation
+
+**📖 For comprehensive custom database documentation:** [Custom Database Guide](docs/md/custom-database-guide.md) and [Custom Database Example](examples/database/custom_database_example.py)
 
 ## 🔍 MongoDB-Style Query Patterns
 
@@ -323,7 +456,7 @@ async def run_safe_walker():
         result = await walker.spawn(start_user)
 
         # Get results and errors
-        report = result.get_report()
+        report = await result.get_report()
         errors = [r for r in report if isinstance(r, dict) and "error" in r]
         logger.info(f"Processed with {len(errors)} errors")
 
@@ -2064,7 +2197,9 @@ class CreateUserWalker(Walker):
             )
 
         # Check for conflicts
-        existing_user = await User.find_one({"context.email": self.email})
+        # Note: Object.find_one() doesn't exist - use find() and get first result
+        users = await User.find({"context.email": self.email})
+        existing_user = users[0] if users else None
         if existing_user:
             return self.endpoint.conflict(
                 message="User with this email already exists",
@@ -2906,7 +3041,7 @@ class CompletionWalker(Walker):
 
 # Usage - disengage() creates permanent termination
 walker = CompletionWalker()
-root = await Root.get()
+root = await Root.get(None)
 
 # Start and run to completion (or error)
 walker = await walker.spawn(root)
@@ -2970,7 +3105,7 @@ class BatchProcessor(Walker):
 
 # Usage - pause and resume cycle
 walker = BatchProcessor()
-root = await Root.get()
+root = await Root.get(None)
 
 # Start processing - will pause after first batch
 walker = await walker.spawn(root)
@@ -3071,7 +3206,7 @@ class SmartProcessor(Walker):
 
 # Usage with external control
 walker = SmartProcessor()
-root = await Root.get()
+root = await Root.get(None)
 
 # Start processing
 print("🚀 Starting smart processing...")
@@ -3200,7 +3335,7 @@ class DataCollectionWalker(Walker):
     @on_exit
     async def generate_summary(self):
         """Generate final summary in the report."""
-        report_items = self.get_report()
+        report_items = await self.get_report()
 
         self.report({
             "summary": {
@@ -3215,7 +3350,7 @@ walker = DataCollectionWalker()
 result_walker = await walker.spawn()  # spawn() returns the walker instance
 
 # Access collected data directly as a simple list
-report = result_walker.get_report()
+report = await result_walker.get_report()
 print(f"Total items collected: {len(report)}")
 
 # Iterate through all collected data
@@ -3271,7 +3406,7 @@ class AnalyticsWalker(Walker):
     @on_exit
     async def generate_analytics_report(self):
         """Generate comprehensive analytics."""
-        all_data = self.get_report()
+        all_data = await self.get_report()
 
         # Analyze collected data
         user_analyses = [item for item in all_data
@@ -3387,8 +3522,8 @@ tasks = [
 walkers = await asyncio.gather(*tasks)
 
 # Check reports from both walkers
-alert_report = alert_walker.get_report()
-monitoring_report = monitoring_walker.get_report()
+alert_report = await alert_walker.get_report()
+monitoring_report = await monitoring_walker.get_report()
 
 print(f"Alerts sent: {len([r for r in alert_report if 'alert_sent' in str(r)])}")
 print(f"Alerts processed: {monitoring_walker.alerts_received}")
@@ -3505,7 +3640,7 @@ results = await asyncio.gather(*tasks)
 
 # Check final reports
 for walker in all_walkers:
-    report = walker.get_report()
+    report = await walker.get_report()
     print(f"Walker {walker.id}: {len(report)} items in report")
 ```
 
@@ -3513,7 +3648,7 @@ for walker in all_walkers:
 
 **Reporting System:**
 - `walker.report(any_data)` - Add any data to walker's report
-- `walker.get_report()` - Get simple list of all reported items
+- `await walker.get_report()` - Get simple list of all reported items (async)
 - No complex nested structures - direct access to your data
 - Support for any data type (strings, dicts, lists, numbers, etc.)
 
@@ -3526,7 +3661,7 @@ for walker in all_walkers:
 
 **Best Practices:**
 - Use `self.report()` to add data, never return values from decorated methods
-- Access reports after traversal: `report = walker.get_report()`
+- Access reports after traversal: `report = await walker.get_report()`
 - Use events for walker-to-walker communication during traversal
 - Filter reported data by checking item structure/content
 - Leverage `@on_exit` hooks for final summaries and cleanup
@@ -3616,14 +3751,14 @@ class TrailTrackingWalker(Walker):
 
 # Usage example
 walker = TrailTrackingWalker()
-root = await Root.get()
+root = await Root.get(None)
 await walker.spawn(root)
 
 # Access trail data
 final_trail = walker.get_trail()
 print(f"Final trail: {final_trail}")
 # Access the trail report from walker's collected data
-report = walker.get_report()
+report = await walker.get_report()
 trail_reports = [item for item in report if isinstance(item, dict) and 'trail_report' in str(item)]
 print(f"Trail report: {trail_reports[0] if trail_reports else 'No trail report found'}")
 ```
@@ -3737,12 +3872,15 @@ class AdvancedTrailWalker(Walker):
         total_steps = self.get_trail_length()
         unique_nodes = len(set(self.get_trail()))
 
+        # Get report once for all analysis
+        report = await self.get_report()
+
         comprehensive_analysis = {
             'trail_summary': {
                 'total_steps': total_steps,
                 'unique_nodes_visited': unique_nodes,
                 'path_efficiency': unique_nodes / total_steps if total_steps > 0 else 0,
-                'cycles_detected': len([item for item in walker.get_report() if isinstance(item, dict) and 'cycle_detected' in item]),
+                'cycles_detected': len([item for item in report if isinstance(item, dict) and 'cycle_detected' in item]),
                 'trail_enabled': self.trail_enabled,
                 'trail_limit': self.max_trail_length
             },
@@ -3752,8 +3890,8 @@ class AdvancedTrailWalker(Walker):
                 'slowest_step': max(self.performance_metrics, key=lambda x: x['processing_time']) if self.performance_metrics else None
             },
             'audit_summary': {
-                'total_audit_entries': len([item for item in self.get_report() if isinstance(item, dict) and 'audit_entry' in item]),
-                'user_accesses': len([item for item in self.get_report() if isinstance(item, dict) and 'audit_entry' in item and item.get('audit_entry', {}).get('action') == 'USER_ACCESS'])
+                'total_audit_entries': len([item for item in report if isinstance(item, dict) and 'audit_entry' in item]),
+                'user_accesses': len([item for item in report if isinstance(item, dict) and 'audit_entry' in item and item.get('audit_entry', {}).get('action') == 'USER_ACCESS'])
             }
         }
 
@@ -3763,7 +3901,7 @@ class AdvancedTrailWalker(Walker):
         print("\n📈 Comprehensive Analysis Complete:")
         print(f"  - Path efficiency: {comprehensive_analysis['trail_summary']['path_efficiency']:.2%}")
         print(f"  - Average processing time: {avg_processing_time:.3f}s")
-        print(f"  - Cycles detected: {len([item for item in self.get_report() if isinstance(item, dict) and 'cycle_detected' in item])}")
+        print(f"  - Cycles detected: {len([item for item in report if isinstance(item, dict) and 'cycle_detected' in item])}")
 
     async def analyze_document(self, doc):
         """Simulate document analysis."""
@@ -3777,11 +3915,11 @@ walker = AdvancedTrailWalker()
 walker.debug_mode = True
 
 # Spawn and run analysis
-root = await Root.get()
+root = await Root.get(None)
 await walker.spawn(root)
 
 # Access comprehensive results from walker's report
-report = walker.get_report()
+report = await walker.get_report()
 analysis = next((item for item in report if isinstance(item, dict) and 'trail_summary' in item), {})
 cycles = [item for item in report if isinstance(item, dict) and 'cycle_detected' in item]
 audit_entries = [item for item in report if isinstance(item, dict) and 'audit_entry' in item]
@@ -4414,7 +4552,7 @@ docs/
 examples/
 ├── basic/                          # Simple usage examples
 ├── advanced/                      # Complex scenarios
-├── modern_query_interface.py      # Comprehensive entity-centric CRUD operations
+├── query_interface_example.py      # Comprehensive entity-centric CRUD operations
 ├── semantic_filtering.py          # Advanced semantic filtering with Node.nodes()
 └── migration/                     # Migration guides (if needed)
 ```
@@ -4427,7 +4565,7 @@ examples/
 4. **Ensure examples are runnable** and well-documented
 5. **Remove or archive obsolete examples**
 6. **Update key reference examples:**
-   - `modern_query_interface.py` - Showcase latest entity-centric patterns
+   - `query_interface_example.py` - Showcase latest entity-centric patterns
    - `semantic_filtering.py` - Demonstrate advanced Node.nodes() filtering
    - Basic examples - Keep simple, focused, and beginner-friendly
    - Advanced examples - Show complex real-world scenarios
@@ -4613,7 +4751,9 @@ async def test_error_handling():
         await TestUser.get("nonexistent-id")
 
     # Test safe retrieval
-    user = await TestUser.find_one({"context.email": "nonexistent@test.com"})
+    # Note: Object.find_one() doesn't exist - use find() and get first result
+    users = await TestUser.find({"context.email": "nonexistent@test.com"})
+    user = users[0] if users else None
     assert user is None
 
     # Test validation errors (if validation is implemented)
@@ -4703,7 +4843,9 @@ async def test_full_workflow():
     await dept.delete()
 
     # Verify deletion
-    deleted_manager = await TestUser.find_one({"context.email": "jane@company.com"})
+    # Note: Object.find_one() doesn't exist - use find() and get first result
+    users = await TestUser.find({"context.email": "jane@company.com"})
+    deleted_manager = users[0] if users else None
     assert deleted_manager is None
 ```
 
@@ -4768,7 +4910,9 @@ user = await User.create(name="Alice", email="alice@company.com", department="en
 
 # ✅ Entity queries with MongoDB-style operators
 users = await User.find({"context.active": True})
-user = await User.find_one({"context.email": email})
+# Note: Object.find_one() doesn't exist - use find() and get first result
+users_by_email = await User.find({"context.email": email})
+user = users_by_email[0] if users_by_email else None
 senior_engineers = await User.find({
     "$and": [
         {"context.department": "engineering"},
@@ -4778,8 +4922,13 @@ senior_engineers = await User.find({
 tech_users = await User.find({"context.skills": {"$in": ["python", "javascript"]}})
 
 # ✅ Counting and aggregation
-count = await User.count({"context.department": "engineering"})
-departments = await User.distinct("department")
+# Note: Object.count() doesn't exist - use len() with find() instead
+results = await User.find({"context.department": "engineering"})
+count = len(results)
+
+# Note: Object.distinct() doesn't exist - query and extract manually
+all_users = await User.find({})
+departments = set(u.department for u in all_users if hasattr(u, 'department'))
 
 # ✅ Entity updates
 user.name = "Alice Johnson"
@@ -4855,15 +5004,18 @@ except DatabaseError as e:
 ### Avoided Patterns
 
 ```python path=null start=null
-# ❌ Direct database access (discouraged)
-db = get_database()
-await db.create("node", data)
-await db.find("node", {"name": "User"})
+# ❌ Direct database access (discouraged - use entity methods)
+from jvspatial.db import create_database
+db = create_database("json")
+await db.save("node", data)  # Use entity.save() instead
+await db.find("node", {"name": "User"})  # Use Entity.find() instead
 
-# ❌ GraphContext methods (discouraged)
-ctx = GraphContext(db)
-await ctx.create_node(data)
-await ctx.get_edges(node_id)
+# ❌ GraphContext methods for simple operations (use entity methods)
+from jvspatial.core import GraphContext
+ctx = GraphContext(database=db)
+# Prefer entity-centric methods:
+# await Node.create(...) instead of ctx.create_node(...)
+# await node.get_edges() instead of ctx.get_edges(node_id)
 
 # ❌ Non-standard query formats
 await User.find({"age": 25})  # Missing context. prefix
@@ -5006,9 +5158,11 @@ async def collect_metrics():
     memory = psutil.virtual_memory()
 
     # Count active jobs using MongoDB-style query
-    active_jobs = await ScheduledJob.count({
+    # Note: Object.count() doesn't exist - use len() with find() instead
+    active_jobs_list = await ScheduledJob.find({
         "context.status": {"$in": ["pending", "running"]}
     })
+    active_jobs = len(active_jobs_list)
 
     # Create metrics record
     await SystemMetrics.create(
@@ -5067,9 +5221,15 @@ if hasattr(server, 'scheduler_service') and server.scheduler_service:
 async def get_scheduler_status() -> Dict[str, Any]:
     """Get scheduler status with entity-centric job statistics."""
     # Get job statistics using entity queries
-    total_jobs = await ScheduledJob.count()
-    completed_jobs = await ScheduledJob.count({"context.status": "completed"})
-    failed_jobs = await ScheduledJob.count({"context.status": "failed"})
+    # Note: Object.count() doesn't exist - use len() with find() instead
+    all_jobs = await ScheduledJob.find({})
+    total_jobs = len(all_jobs)
+
+    completed_jobs_list = await ScheduledJob.find({"context.status": "completed"})
+    completed_jobs = len(completed_jobs_list)
+
+    failed_jobs_list = await ScheduledJob.find({"context.status": "failed"})
+    failed_jobs = len(failed_jobs_list)
 
     return {
         "scheduler": "running",

@@ -4,14 +4,14 @@ import os
 
 import pytest
 
-from jvspatial.cache.factory import create_default_cache, get_cache_backend
+from jvspatial.cache.factory import create_cache, create_default_cache
 from jvspatial.cache.memory import MemoryCache
 
 
 @pytest.mark.asyncio
-async def test_get_cache_backend_explicit_memory():
+async def test_create_cache_explicit_memory():
     """Test explicit memory cache creation."""
-    cache = get_cache_backend("memory", cache_size=500)
+    cache = create_cache("memory", cache_size=500)
 
     assert isinstance(cache, MemoryCache)
     assert cache.max_size == 500
@@ -27,7 +27,7 @@ async def test_get_cache_backend_default_memory(monkeypatch):
     monkeypatch.setenv("JVSPATIAL_CACHE_BACKEND", "memory")
     monkeypatch.setenv("JVSPATIAL_CACHE_SIZE", "2000")
 
-    cache = get_cache_backend()
+    cache = create_default_cache()
 
     assert isinstance(cache, MemoryCache)
     assert cache.max_size == 2000
@@ -41,7 +41,7 @@ async def test_get_cache_backend_no_env_defaults_to_memory(monkeypatch):
     monkeypatch.delenv("JVSPATIAL_REDIS_URL", raising=False)
     monkeypatch.delenv("JVSPATIAL_CACHE_SIZE", raising=False)
 
-    cache = get_cache_backend()
+    cache = create_default_cache()
 
     assert isinstance(cache, MemoryCache)
     # Should use default size of 1000
@@ -52,7 +52,7 @@ async def test_get_cache_backend_no_env_defaults_to_memory(monkeypatch):
 async def test_get_cache_backend_invalid_backend():
     """Test error handling for invalid backend type."""
     with pytest.raises(ValueError) as exc_info:
-        get_cache_backend("invalid_backend")
+        create_cache("invalid_backend")
 
     assert "Unknown cache backend" in str(exc_info.value)
     assert "invalid_backend" in str(exc_info.value)
@@ -61,7 +61,7 @@ async def test_get_cache_backend_invalid_backend():
 @pytest.mark.asyncio
 async def test_get_cache_backend_cache_size_zero():
     """Test creating disabled cache with size 0."""
-    cache = get_cache_backend("memory", cache_size=0)
+    cache = create_cache("memory", cache_size=0)
 
     assert isinstance(cache, MemoryCache)
     assert cache.max_size == 0
@@ -87,7 +87,7 @@ async def test_get_cache_backend_env_cache_size(monkeypatch):
     """Test that JVSPATIAL_CACHE_SIZE env var is respected."""
     monkeypatch.setenv("JVSPATIAL_CACHE_SIZE", "5000")
 
-    cache = get_cache_backend("memory")
+    cache = create_default_cache()
 
     assert cache.max_size == 5000
 
@@ -97,7 +97,7 @@ async def test_get_cache_backend_explicit_overrides_env(monkeypatch):
     """Test that explicit cache_size overrides environment."""
     monkeypatch.setenv("JVSPATIAL_CACHE_SIZE", "5000")
 
-    cache = get_cache_backend("memory", cache_size=3000)
+    cache = create_cache("memory", cache_size=3000)
 
     # Explicit parameter should win
     assert cache.max_size == 3000
@@ -108,7 +108,7 @@ async def test_cache_backend_case_insensitive(monkeypatch):
     """Test that backend names are case-insensitive."""
     monkeypatch.setenv("JVSPATIAL_CACHE_BACKEND", "MEMORY")
 
-    cache = get_cache_backend()
+    cache = create_cache()
 
     assert isinstance(cache, MemoryCache)
 
@@ -117,7 +117,7 @@ async def test_cache_backend_case_insensitive(monkeypatch):
 async def test_cache_factory_integration():
     """Test full integration of cache factory."""
     # Create cache with explicit config
-    cache = get_cache_backend("memory", cache_size=100)
+    cache = create_cache("memory", cache_size=100)
 
     # Use it
     await cache.set("key1", "value1")

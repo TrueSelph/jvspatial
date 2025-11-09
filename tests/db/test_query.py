@@ -469,3 +469,125 @@ class TestQueryErrorHandling:
         assert hasattr(QueryOperator, "EQ")
         assert hasattr(QueryOperator, "GT")
         assert hasattr(QueryOperator, "AND")
+
+
+class TestQueryOptimization:
+    """Test query optimization features."""
+
+    async def test_query_optimization_enabled_by_default(self):
+        """Test that query optimization is enabled by default."""
+        from jvspatial.db.query import QueryEngine
+
+        # Create QueryEngine instance
+        engine = QueryEngine()
+
+        # Test optimization features
+        assert engine.enable_optimization is True
+        assert engine._query_cache is not None
+        assert engine._optimization_stats is not None
+
+    async def test_query_optimization_can_be_disabled(self):
+        """Test that query optimization can be disabled."""
+        from jvspatial.db.query import QueryEngine
+
+        # Create QueryEngine with optimization disabled
+        engine = QueryEngine(enable_optimization=False)
+
+        assert engine.enable_optimization is False
+        assert engine._query_cache is not None  # Cache still exists but disabled
+
+    async def test_query_optimization_stats(self):
+        """Test query optimization statistics collection."""
+        from jvspatial.db.query import QueryEngine
+
+        engine = QueryEngine()
+
+        # Get initial stats
+        stats = engine.get_optimization_stats()
+
+        assert "cache_hits" in stats
+        assert "optimized_queries" in stats
+        assert "optimization_time" in stats
+
+    async def test_query_cache_functionality(self):
+        """Test query cache functionality."""
+        from jvspatial.db.query import QueryEngine
+
+        engine = QueryEngine()
+
+        # Test cache operations
+        test_query = {"name": "test", "value": {"$gt": 10}}
+
+        # First call should miss cache
+        optimized1 = engine.optimize_query(test_query)
+        assert optimized1 is not None
+
+        # Second call should hit cache
+        optimized2 = engine.optimize_query(test_query)
+        assert optimized2 is not None
+
+        # Check cache stats
+        stats = engine.get_optimization_stats()
+        assert stats["cache_hits"] >= 1
+        assert stats["optimized_queries"] >= 1
+
+    async def test_query_optimization_techniques(self):
+        """Test various query optimization techniques."""
+        from jvspatial.db.query import QueryEngine
+
+        engine = QueryEngine()
+
+        # Test AND clause optimization
+        and_query = {"$and": [{"name": "test"}, {"value": {"$gt": 10}}]}
+        optimized = engine.optimize_query(and_query)
+        assert optimized is not None
+
+        # Test field selection optimization
+        field_query = {"name": "test", "value": {"$gt": 10}, "unused_field": "value"}
+        optimized = engine.optimize_query(field_query)
+        assert optimized is not None
+
+        # Test indexing hints
+        indexed_query = {"name": "test", "category": "prod"}
+        optimized = engine.optimize_query(indexed_query)
+        assert optimized is not None
+
+    async def test_query_cache_management(self):
+        """Test query cache management."""
+        from jvspatial.db.query import QueryEngine
+
+        engine = QueryEngine()
+
+        # Add some queries to cache
+        test_queries = [{"name": "test1"}, {"name": "test2"}, {"value": {"$gt": 10}}]
+
+        for query in test_queries:
+            engine.optimize_query(query)
+
+        # Clear cache
+        engine.clear_query_cache()
+
+        # Verify cache is cleared
+        stats = engine.get_optimization_stats()
+        assert stats["cache_hits"] == 0
+        assert (
+            stats["optimized_queries"] >= 3
+        )  # Should have optimized the queries above
+
+    async def test_query_optimization_reset(self):
+        """Test query optimization reset functionality."""
+        from jvspatial.db.query import QueryEngine
+
+        engine = QueryEngine()
+
+        # Add some queries
+        engine.optimize_query({"name": "test"})
+        engine.optimize_query({"value": {"$gt": 10}})
+
+        # Reset stats
+        engine.reset_stats()
+
+        # Verify stats are reset
+        stats = engine.get_optimization_stats()
+        assert stats["optimized_queries"] == 0
+        assert stats["cache_hits"] == 0

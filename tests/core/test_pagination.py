@@ -372,7 +372,7 @@ class TestObjectPagerMetadata:
         pager.has_previous = True
         pager.has_next = True
 
-        metadata = await pager.to_dict()
+        metadata = pager.to_dict()
 
         expected_keys = [
             "total_items",

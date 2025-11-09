@@ -16,16 +16,17 @@ from typing import (
 
 from pydantic import Field
 
-from jvspatial.exceptions import GraphError, ValidationError
+from jvspatial.exceptions import ValidationError
 
-from ..annotations import private
-from ..utils import serialize_datetime
+from ..annotations import attribute
 from .edge import Edge
 from .object import Object
 
 if TYPE_CHECKING:
     from ..context import GraphContext
-    from .walker import Walker
+
+# Import Walker at runtime for __init_subclass__ validation
+from .walker import Walker
 
 
 class Node(Object):
@@ -38,12 +39,19 @@ class Node(Object):
         edge_ids: List of connected edge IDs
     """
 
-    type_code: str = Field(default="n")
+    type_code: str = attribute(transient=True, default="n")
     id: str = Field(..., description="Unique identifier for the node")
-    _visitor_ref: Optional[weakref.ReferenceType] = private(default=None)
+    _visitor_ref: Optional[weakref.ReferenceType] = attribute(
+        private=True, default=None
+    )
     is_root: bool = False
     edge_ids: List[str] = Field(default_factory=list)
     _visit_hooks: ClassVar[Dict[Optional[Type["Walker"]], List[Callable]]] = {}
+
+    @classmethod
+    def _get_top_level_fields(cls: Type["Node"]) -> set:
+        """Get top-level fields for Node persistence format."""
+        return {"edges"}  # edge_ids is stored as "edges" in persistence
 
     def __init_subclass__(cls: Type["Node"]) -> None:
         """Initialize subclass by registering visit hooks."""
@@ -99,14 +107,30 @@ class Node(Object):
     ) -> "Edge":
         """Connect this node to another node.
 
+        Creates a default directed Edge if no edge type is specified. The edge
+        is created with direction='out' by default (forward connection).
+
         Args:
             other: Target node to connect to
-            edge: Edge class to use for connection (defaults to base Edge)
-            direction: Connection direction ('out', 'in', 'both')
-            **kwargs: Additional edge properties
+            edge: Edge class to use for connection. If omitted or None, defaults
+                  to the base Edge class, creating a generic directed edge.
+            direction: Connection direction ('out', 'in', 'both').
+                       Defaults to 'out' for forward connections (unidirectional).
+                       Use 'both' for bidirectional connections.
+            **kwargs: Additional edge properties (e.g., name, distance)
 
         Returns:
             Created edge instance
+
+        Examples:
+            # Create a default directed edge (most common case)
+            await node1.connect(node2, name="relationship")
+
+            # Create a custom edge type
+            await node1.connect(node2, Highway, distance=100, lanes=4)
+
+            # Bidirectional connection
+            await node1.connect(node2, direction="both", name="mutual")
         """
         if edge is None:
             edge = Edge
@@ -168,7 +192,9 @@ class Node(Object):
         edge properties, node types, and edge types using MongoDB aggregation pipelines.
 
         Args:
-            direction: Connection direction ('out', 'in', 'both')
+            direction: Connection direction ('out', 'in', 'both').
+                       Defaults to 'out' for forward traversal only (outgoing edges).
+                       Use 'both' to include both incoming and outgoing connections.
             node: Node filtering - supports multiple formats:
                   - String: 'City' (filter by type)
                   - List of strings: ['City', 'Town'] (multiple types)
@@ -216,8 +242,13 @@ class Node(Object):
         context = await self.get_context()
 
         # Build optimized database query using aggregation pipeline
-        return await self._execute_optimized_nodes_query(
-            context, direction, node, edge, limit, kwargs
+        return await self._node_query(
+            context=context,
+            direction=direction,
+            node_filter=node,
+            edge_filter=edge,
+            limit=limit,
+            **kwargs,
         )
 
     async def node(
@@ -270,6 +301,176 @@ class Node(Object):
             **kwargs,
         )
         return nodes[0] if nodes else None
+
+    async def _node_query(
+        self,
+        context: "GraphContext",
+        direction: str = "out",
+        node_filter: Optional[
+            Union[str, List[Union[str, Dict[str, Dict[str, Any]]]]]
+        ] = None,
+        edge_filter: Optional[
+            Union[
+                str,
+                Type["Edge"],
+                List[Union[str, Type["Edge"], Dict[str, Dict[str, Any]]]],
+            ]
+        ] = None,
+        limit: Optional[int] = None,
+        **kwargs: Any,
+    ) -> List["Node"]:
+        """Execute optimized database query to find connected nodes.
+
+        Args:
+            context: GraphContext instance for database operations
+            direction: Connection direction ('out', 'in', 'both')
+            node_filter: Node filtering criteria
+            edge_filter: Edge filtering criteria
+            limit: Maximum number of nodes to return
+            **kwargs: Simple property filters for connected nodes
+
+        Returns:
+            List of connected nodes matching the criteria
+        """
+        # Find edges connected to this node
+        from .edge import Edge as EdgeClass
+
+        edges = []
+
+        if direction in ["out", "both"]:
+            # Find outgoing edges
+            outgoing_edges = await context.find_edges_between(
+                source_id=self.id,
+                edge_class=edge_filter if isinstance(edge_filter, type) else None,
+            )
+            edges.extend(outgoing_edges)
+
+        if direction in ["in", "both"]:
+            # Find incoming edges (where this node is the target)
+            edge_cls = edge_filter if isinstance(edge_filter, type) else EdgeClass
+            query = {"target": self.id}
+            if isinstance(edge_filter, type):
+                query["name"] = edge_filter.__name__
+
+            edge_results = await context.database.find("edge", query)
+            for edge_data in edge_results:
+                try:
+                    edge_obj: Optional["Edge"] = await context._deserialize_entity(
+                        edge_cls, edge_data
+                    )
+                    if edge_obj:
+                        edges.append(edge_obj)
+                except Exception:
+                    continue
+
+        # Get unique connected node IDs
+        connected_node_ids = set()
+        for edge in edges:
+            if direction in ["out", "both"] and hasattr(edge, "target"):
+                connected_node_ids.add(edge.target)
+            if direction in ["in", "both"] and hasattr(edge, "source"):
+                connected_node_ids.add(edge.source)
+
+        # Find the actual nodes
+        connected_nodes = []
+        for node_id in connected_node_ids:
+            try:
+                # Try to get the node from the database
+                node_data = await context.database.get("node", node_id)
+                if node_data:
+                    # Deserialize the node
+                    node_obj = await context._deserialize_entity(Node, node_data)
+                    if node_obj:
+                        connected_nodes.append(node_obj)
+            except Exception:
+                continue  # Skip invalid nodes
+
+        # Apply node type filtering
+        if node_filter is not None:
+            filtered_nodes = []
+            for node_obj in connected_nodes:
+                if self._matches_node_filter(node_obj, node_filter):
+                    filtered_nodes.append(node_obj)
+            connected_nodes = filtered_nodes
+
+        # Apply property filtering from kwargs
+        if kwargs:
+            filtered_nodes = []
+            for node_obj in connected_nodes:
+                if self._matches_property_filter(node_obj, kwargs):
+                    filtered_nodes.append(node_obj)
+            connected_nodes = filtered_nodes
+
+        # Apply limit
+        if limit is not None:
+            connected_nodes = connected_nodes[:limit]
+
+        return connected_nodes
+
+    def _matches_node_filter(
+        self,
+        node_obj: "Node",
+        node_filter: Union[str, List[Union[str, Dict[str, Dict[str, Any]]]]],
+    ) -> bool:
+        """Check if a node matches the node filter criteria.
+
+        Args:
+            node_obj: Node object to test
+            node_filter: Filter criteria (string, list of strings, or list of dicts)
+
+        Returns:
+            True if node matches the filter
+        """
+        if isinstance(node_filter, str):
+            # Simple string filter - match by class name
+            return node_obj.__class__.__name__ == node_filter
+
+        elif isinstance(node_filter, list):
+            for filter_item in node_filter:
+                if isinstance(filter_item, str):
+                    # String in list - match by class name
+                    if node_obj.__class__.__name__ == filter_item:
+                        return True
+                elif isinstance(filter_item, dict):
+                    # Dict filter - match by class name and criteria
+                    for class_name, criteria in filter_item.items():
+                        if (
+                            node_obj.__class__.__name__ == class_name
+                            and self._matches_property_filter(node_obj, criteria)
+                        ):
+                            return True
+
+        return False
+
+    def _matches_property_filter(
+        self, node_obj: "Node", criteria: Dict[str, Any]
+    ) -> bool:
+        """Check if a node matches property filter criteria.
+
+        Args:
+            node_obj: Node object to test
+            criteria: Property filter criteria
+
+        Returns:
+            True if node matches all criteria
+        """
+        for key, expected_value in criteria.items():
+            # Handle nested property access (e.g., "context.population")
+            if key.startswith("context."):
+                actual_value = getattr(node_obj, key[8:], None)
+            else:
+                actual_value = getattr(node_obj, key, None)
+
+            # Handle MongoDB-style operators
+            if isinstance(expected_value, dict):
+                if not self._match_criteria(actual_value, expected_value):
+                    return False
+            else:
+                # Simple equality check
+                if actual_value != expected_value:
+                    return False
+
+        return True
 
     def _match_criteria(
         self, value: Any, criteria: Dict[str, Any], compiled_regex: Optional[Any] = None
@@ -363,328 +564,6 @@ class Node(Object):
 
         return True
 
-    async def _execute_optimized_nodes_query(
-        self,
-        context: "GraphContext",
-        direction: str,
-        node_filter: Optional[Union[str, List[Union[str, Dict[str, Dict[str, Any]]]]]],
-        edge_filter: Optional[
-            Union[
-                str,
-                Type["Edge"],
-                List[Union[str, Type["Edge"], Dict[str, Dict[str, Any]]]],
-            ]
-        ],
-        limit: Optional[int],
-        kwargs: Dict[str, Any],
-    ) -> List["Node"]:
-        """Execute optimized database query for connected nodes with filtering."""
-        try:
-            # For now, use an optimized approach that works with all database types
-            return await self._execute_semantic_filtering(
-                context, direction, node_filter, edge_filter, limit, kwargs
-            )
-        except Exception as e:
-            # Log the warning and fallback to basic approach
-            print(f"Warning: Optimized query failed ({e}), using basic approach")
-            try:
-                # Fallback to basic node retrieval
-                return await self._execute_basic_nodes_query(context, direction, limit)
-            except Exception as fallback_error:
-                raise GraphError(
-                    "Failed to execute node query with both optimized and basic approaches",
-                    details={
-                        "original_error": str(e),
-                        "fallback_error": str(fallback_error),
-                        "direction": direction,
-                    },
-                )
-
-    async def _execute_semantic_filtering(
-        self,
-        context: "GraphContext",
-        direction: str,
-        node_filter: Optional[Union[str, List[Union[str, Dict[str, Dict[str, Any]]]]]],
-        edge_filter: Optional[
-            Union[
-                str,
-                Type["Edge"],
-                List[Union[str, Type["Edge"], Dict[str, Dict[str, Any]]]],
-            ]
-        ],
-        limit: Optional[int],
-        kwargs: Dict[str, Any],
-    ) -> List["Node"]:
-        """Execute semantic filtering with database-level optimization where possible."""
-        # Step 1: Build and execute edge query
-        edge_query = self._build_edge_query(direction, edge_filter)
-        edges_data = await context.database.find("edge", edge_query)
-
-        if not edges_data:
-            return []
-
-        # Step 2: Extract target node IDs and maintain order
-        target_ids = []
-        edge_order = {}
-
-        for idx, edge_data in enumerate(edges_data):
-            # Determine target node ID based on direction
-            if edge_data["source"] == self.id:
-                target_id = edge_data["target"]
-            else:
-                target_id = edge_data["source"]
-
-            if target_id not in target_ids:
-                target_ids.append(target_id)
-                # Preserve edge connection order
-                if edge_data["id"] in self.edge_ids:
-                    edge_order[target_id] = self.edge_ids.index(edge_data["id"])
-                else:
-                    edge_order[target_id] = 1000 + idx
-
-        # Apply limit early for efficiency
-        if limit:
-            target_ids = target_ids[:limit]
-
-        if not target_ids:
-            return []
-
-        # Step 3: Build and execute node query with filtering
-        node_query = self._build_node_query(target_ids, node_filter, kwargs)
-        nodes_data = await context.database.find("node", node_query)
-
-        # Step 4: Deserialize nodes and maintain order
-        node_map = {}
-        for node_data in nodes_data:
-            try:
-                node_obj = await context._deserialize_entity(Node, node_data)
-                if node_obj is not None:
-                    node_map[node_obj.id] = node_obj
-            except Exception:
-                continue
-
-        # Step 5: Return nodes in connection order
-        ordered_nodes = []
-        for target_id in sorted(target_ids, key=lambda x: edge_order.get(x, 1000)):
-            if target_id in node_map:
-                ordered_nodes.append(node_map[target_id])
-
-        return ordered_nodes
-
-    def _build_edge_query(
-        self,
-        direction: str,
-        edge_filter: Optional[
-            Union[
-                str,
-                Type["Edge"],
-                List[Union[str, Type["Edge"], Dict[str, Dict[str, Any]]]],
-            ]
-        ],
-    ) -> Dict[str, Any]:
-        """Build optimized database query for edges."""
-        query: Dict[str, Any] = {}
-
-        # Add direction filtering
-        if direction == "out":
-            query["source"] = self.id
-        elif direction == "in":
-            query["target"] = self.id
-        else:  # "both"
-            query["$or"] = [{"source": self.id}, {"target": self.id}]
-
-        # Add edge type filtering
-        edge_types = self._parse_edge_types(edge_filter)
-        if edge_types:
-            query["name"] = {"$in": edge_types}
-
-        # Add edge property filtering from dicts
-        edge_props = self._parse_edge_properties_from_filter(edge_filter)
-        if edge_props:
-            query.update(edge_props)
-
-        return query
-
-    def _build_node_query(
-        self,
-        target_ids: List[str],
-        node_filter: Optional[Union[str, List[Union[str, Dict[str, Dict[str, Any]]]]]],
-        kwargs: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Build optimized database query for nodes."""
-        query: Dict[str, Any] = {"id": {"$in": target_ids}}
-
-        # Add node type filtering
-        node_types = self._parse_node_types(node_filter)
-        if node_types:
-            query["name"] = {"$in": node_types}
-
-        # Add node property filtering from kwargs (semantic simplicity)
-        for key, value in kwargs.items():
-            # Add context. prefix for node properties
-            if not key.startswith("context.") and not key.startswith(
-                ("id", "name", "edges")
-            ):
-                query[f"context.{key}"] = value
-            else:
-                query[key] = value
-
-        # Add node property filtering from dicts
-        node_props = self._parse_node_properties_from_filter(node_filter)
-        if node_props:
-            query.update(node_props)
-
-        return query
-
-    def _parse_edge_types(
-        self,
-        edge_filter: Optional[
-            Union[
-                str,
-                Type["Edge"],
-                List[Union[str, Type["Edge"], Dict[str, Dict[str, Any]]]],
-            ]
-        ],
-    ) -> List[str]:
-        """Extract edge type names from various filter formats."""
-        if not edge_filter:
-            return []
-
-        edge_types = []
-        if isinstance(edge_filter, str):
-            edge_types.append(edge_filter)
-        elif inspect.isclass(edge_filter):
-            edge_types.append(edge_filter.__name__)
-        elif isinstance(edge_filter, list):
-            for item in edge_filter:
-                if isinstance(item, str):
-                    edge_types.append(item)
-                elif inspect.isclass(item):
-                    edge_types.append(item.__name__)
-                elif isinstance(item, dict):
-                    edge_types.extend(item.keys())
-
-        return edge_types
-
-    def _parse_edge_properties_from_filter(
-        self,
-        edge_filter: Optional[
-            Union[
-                str,
-                Type["Edge"],
-                List[Union[str, Type["Edge"], Dict[str, Dict[str, Any]]]],
-            ]
-        ],
-    ) -> Dict[str, Any]:
-        """Extract edge property filters from dict-based edge filters."""
-        props = {}
-
-        if isinstance(edge_filter, list):
-            for item in edge_filter:
-                if isinstance(item, dict):
-                    for _edge_type, conditions in item.items():
-                        if isinstance(conditions, dict):
-                            props.update(conditions)
-
-        return props
-
-    def _parse_node_types(
-        self,
-        node_filter: Optional[Union[str, List[Union[str, Dict[str, Dict[str, Any]]]]]],
-    ) -> List[str]:
-        """Extract node type names from various filter formats."""
-        if not node_filter:
-            return []
-
-        node_types = []
-        if isinstance(node_filter, str):
-            node_types.append(node_filter)
-        elif isinstance(node_filter, list):
-            for item in node_filter:
-                if isinstance(item, str):
-                    node_types.append(item)
-                elif isinstance(item, dict):
-                    node_types.extend(item.keys())
-
-        return node_types
-
-    def _parse_node_properties_from_filter(
-        self,
-        node_filter: Optional[Union[str, List[Union[str, Dict[str, Dict[str, Any]]]]]],
-    ) -> Dict[str, Any]:
-        """Extract node property filters from dict-based node filters."""
-        props = {}
-
-        if isinstance(node_filter, list):
-            for item in node_filter:
-                if isinstance(item, dict):
-                    for _node_type, conditions in item.items():
-                        if isinstance(conditions, dict):
-                            props.update(conditions)
-
-        return props
-
-    async def _execute_basic_nodes_query(
-        self, context: "GraphContext", direction: str, limit: Optional[int]
-    ) -> List["Node"]:
-        """Execute basic fallback approach for node retrieval.
-
-        CRITICAL: This method ONLY uses edges that are explicitly connected
-        to the current node (stored in self.edge_ids).
-        """
-        if not self.edge_ids:
-            return []  # No connected edges, no connected nodes
-
-        # Get ONLY edges that are connected to this node
-        edge_query = {"id": {"$in": self.edge_ids}}
-        edges_data = await context.database.find("edge", edge_query)
-
-        # Convert to edge objects and filter by direction
-        target_ids = []
-        for edge_data in edges_data:
-            edge_source = edge_data["source"]
-            edge_target = edge_data["target"]
-
-            # Skip if edge is not actually connected to this node (safety check)
-            if edge_source != self.id and edge_target != self.id:
-                continue
-
-            # Apply direction filtering and get target node ID
-            target_id = None
-            if direction == "out" and edge_source == self.id:
-                target_id = edge_target
-            elif direction == "in" and edge_target == self.id:
-                target_id = edge_source
-            elif direction == "both":
-                if edge_source == self.id:
-                    target_id = edge_target
-                elif edge_target == self.id:
-                    target_id = edge_source
-
-            if target_id and target_id not in target_ids:
-                target_ids.append(target_id)
-
-        # Apply limit
-        if limit:
-            target_ids = target_ids[:limit]
-
-        if not target_ids:
-            return []
-
-        # Get target nodes
-        nodes_data = await context.database.find("node", {"id": {"$in": target_ids}})
-        nodes = []
-        for data in nodes_data:
-            try:
-                node_obj = await context._deserialize_entity(Node, data)
-                if node_obj is not None:
-                    nodes.append(node_obj)
-            except Exception:
-                continue
-
-        return nodes
-
-    # Convenient semantic methods for better API
     async def neighbors(
         self,
         node: Optional[Union[str, List[Union[str, Dict[str, Dict[str, Any]]]]]] = None,
@@ -854,31 +733,72 @@ class Node(Object):
         return node
 
     def export(
-        self: "Node", exclude_transient: bool = True, **kwargs: Any
+        self: "Node",
+        exclude_transient: bool = True,
+        exclude: Optional[Union[set, Dict[str, Any]]] = None,
+        for_persistence: bool = False,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Export node to a dictionary for persistence.
+        """Export node to a dictionary.
+
+        Uses the standard Object.export() method. By default, returns a clean
+        flat dictionary suitable for API responses.
+        Set for_persistence=True to get the nested database format.
 
         Args:
-            exclude_transient: Whether to exclude @transient fields (default: True)
-            **kwargs: Additional arguments passed to base export
+            exclude_transient: Whether to automatically exclude transient fields (default: True)
+            exclude: Additional fields to exclude (can be a set of field names or a dict)
+            for_persistence: If True, returns nested persistence format with id, name, context, edges (default: False)
+            **kwargs: Additional arguments passed to base export/model_dump()
 
         Returns:
-            Dictionary representation of the node
+            Dictionary representation of the node:
+            - If for_persistence=False: Clean flat dictionary (standard format)
+            - If for_persistence=True: Nested format with id, name, context, edges for database storage
         """
-        context_data = self.model_dump(
-            exclude={"id", "_visitor_ref", "is_root", "edge_ids"}, exclude_none=False
-        )
+        if for_persistence:
+            # Legacy persistence format - nested structure for database storage
+            context_data = super().export(
+                exclude={"id", "_visitor_ref", "is_root", "edge_ids"},
+                exclude_none=False,
+                exclude_transient=exclude_transient,
+                **kwargs,
+            )
 
-        # Include _data if it exists
-        if hasattr(self, "_data"):
-            context_data["_data"] = self._data
+            # Include _data if it exists
+            if hasattr(self, "_data"):
+                context_data["_data"] = self._data
 
-        # Serialize datetime objects to ensure JSON compatibility
-        context_data = serialize_datetime(context_data)
+            # Serialize datetime objects to ensure JSON compatibility
+            from jvspatial.utils.serialization import serialize_datetime
 
-        return {
-            "id": self.id,
-            "name": self.__class__.__name__,
-            "context": context_data,
-            "edges": self.edge_ids,
-        }
+            context_data = serialize_datetime(context_data)
+
+            return {
+                "id": self.id,
+                "name": self.__class__.__name__,
+                "context": context_data,
+                "edges": self.edge_ids,
+            }
+        else:
+            # Standard export - clean flat dictionary for API responses
+            # Exclude internal node fields by default
+            default_exclude = {
+                "type_code",
+                "_graph_context",
+                "_data",
+                "_initializing",
+                "edge_ids",
+                "visitor",
+            }
+            if exclude:
+                exclude_set = (
+                    set(exclude) if isinstance(exclude, (set, dict)) else set()
+                )
+                exclude_set.update(default_exclude)
+            else:
+                exclude_set = default_exclude
+
+            return super().export(
+                exclude_transient=exclude_transient, exclude=exclude_set, **kwargs
+            )

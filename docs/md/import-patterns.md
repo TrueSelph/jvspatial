@@ -83,11 +83,11 @@ from jvspatial.api.endpoints.decorators import endpoint_field  # Wrong module
 
 ```python
 # ✅ Best: Import from core
-from jvspatial.core import on_visit, on_exit, protected, private
+from jvspatial.core import on_visit, on_exit, attribute
 
 # ✅ Also good: Import from specific modules
 from jvspatial.core.decorators import on_visit, on_exit
-from jvspatial.core.annotations import protected, private
+from jvspatial.core.annotations import attribute
 
 # ❌ Avoid: Import from main package (not re-exported)
 from jvspatial import on_visit  # Not available at top level
@@ -101,13 +101,10 @@ from jvspatial import on_visit  # Not available at top level
 
 ```python
 # ✅ Best: Import factory function
-from jvspatial.db import get_database
+from jvspatial.db import create_database
 
 # ✅ For specific backends
-from jvspatial.db import JsonDB, MongoDB
-
-# ✅ For query building
-from jvspatial.db import query, QueryBuilder
+from jvspatial.db import Database, JsonDatabase, MongoDBDatabase
 
 # ❌ Avoid: Import base classes directly
 from jvspatial.db.database import Database  # Only for subclassing
@@ -116,17 +113,13 @@ from jvspatial.db.database import Database  # Only for subclassing
 ### **Example: Database Usage**
 
 ```python
-from jvspatial.db import get_database, query
+from jvspatial.db import create_database
 
-# Get database instance
-db = get_database()
+# Create database instance
+db = create_database("json", base_path="./data")
 
-# Use query builder
-results = await db.find(
-    query("Node")
-    .where("age").greater_than(18)
-    .where("status").equals("active")
-)
+# Or for MongoDB
+db = create_database("mongodb", db_name="mydb", connection_string="mongodb://localhost:27017")
 ```
 
 ---
@@ -278,7 +271,7 @@ from jvspatial.utils import GlobalContext
 from jvspatial.utils import GlobalContext
 
 db_context = GlobalContext(
-    factory=lambda: get_database(),
+    factory=lambda: create_database("json", base_path="./data"),
     name="database_context"
 )
 
@@ -320,8 +313,8 @@ from jvspatial.api import (
 
 # JVspatial - Database
 from jvspatial.db import (
-    get_database,
-    query,
+    create_database,
+    Database,
 )
 
 # JVspatial - Cache
@@ -433,7 +426,7 @@ from jvspatial.api import Server
 | Field decorators | `jvspatial.api.decorators` | `from jvspatial.api.decorators import endpoint_field` |
 | Graph decorators | `jvspatial.core` | `from jvspatial.core import on_visit` |
 | Server | `jvspatial.api` | `from jvspatial.api import Server` |
-| Database | `jvspatial.db` | `from jvspatial.db import get_database` |
+| Database | `jvspatial.db` | `from jvspatial.db import create_database` |
 | Cache | `jvspatial.cache` | `from jvspatial.cache import get_cache_backend` |
 | Storage | `jvspatial.storage.interfaces` | `from jvspatial.storage.interfaces import LocalFileInterface` |
 | Utils decorators | `jvspatial.utils` | `from jvspatial.utils import memoize` |

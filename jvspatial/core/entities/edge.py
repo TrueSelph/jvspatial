@@ -1,18 +1,31 @@
 """Edge class for jvspatial graph relationships."""
 
 import inspect
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional, Type
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    List,
+    Optional,
+    Type,
+    Union,
+)
 
 from pydantic import Field
 
 from jvspatial.exceptions import ValidationError
 
-from ..utils import find_subclass_by_name, generate_id, serialize_datetime
+from ..annotations import attribute
+from ..utils import find_subclass_by_name, generate_id
 from .object import Object
 
 if TYPE_CHECKING:
     from .node import Node
-    from .walker import Walker
+
+# Import Walker at runtime for __init_subclass__ validation
+from .walker import Walker
 
 
 class Edge(Object):
@@ -27,11 +40,16 @@ class Edge(Object):
         _is_visit_hook: Dict mapping method names to visit hook flags
     """
 
-    type_code: str = Field(default="e")
+    type_code: str = attribute(transient=True, default="e")
     id: str = Field(..., description="Unique identifier for the edge")
     source: str
     target: str
     bidirectional: bool = True
+
+    @classmethod
+    def _get_top_level_fields(cls: Type["Edge"]) -> set:
+        """Get top-level fields for Edge persistence format."""
+        return {"source", "target", "bidirectional"}
 
     # Visit hooks for edges
     _visit_hooks: ClassVar[Dict[Optional[Type["Walker"]], List[Callable]]] = {}
@@ -130,36 +148,70 @@ class Edge(Object):
         self._initializing = False
 
     def export(
-        self: "Edge", exclude_transient: bool = True, **kwargs: Any
+        self: "Edge",
+        exclude_transient: bool = True,
+        exclude: Optional[Union[set, Dict[str, Any]]] = None,
+        for_persistence: bool = False,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Export edge to a dictionary for persistence.
+        """Export edge to a dictionary.
+
+        Uses the standard Object.export() method. By default, returns a clean
+        flat dictionary suitable for API responses.
+        Set for_persistence=True to get the nested database format.
 
         Args:
-            exclude_transient: Whether to exclude @transient fields (default: True)
-            **kwargs: Additional arguments passed to base export
+            exclude_transient: Whether to automatically exclude transient fields (default: True)
+            exclude: Additional fields to exclude (can be a set of field names or a dict)
+            for_persistence: If True, returns nested persistence format with id, name, context, source, target, bidirectional (default: False)
+            **kwargs: Additional arguments passed to base export/model_dump()
 
         Returns:
-            Dictionary representation of the edge
+            Dictionary representation of the edge:
+            - If for_persistence=False: Clean flat dictionary (standard format)
+            - If for_persistence=True: Nested format with id, name, context, source, target, bidirectional for database storage
         """
-        context = self.model_dump(
-            exclude={"id", "source", "target", "bidirectional"}, exclude_none=False
-        )
+        if for_persistence:
+            # Legacy persistence format - nested structure for database storage
+            context = super().export(
+                exclude={"id", "source", "target", "bidirectional"},
+                exclude_none=False,
+                exclude_transient=exclude_transient,
+                **kwargs,
+            )
 
-        # Include _data if it exists
-        if hasattr(self, "_data"):
-            context["_data"] = self._data
+            # Include _data if it exists
+            if hasattr(self, "_data"):
+                context["_data"] = self._data
 
-        # Serialize datetime objects to ensure JSON compatibility
-        context = serialize_datetime(context)
+            # Serialize datetime objects to ensure JSON compatibility
+            from jvspatial.utils.serialization import serialize_datetime
 
-        return {
-            "id": self.id,
-            "name": self.__class__.__name__,
-            "context": context,
-            "source": self.source,
-            "target": self.target,
-            "bidirectional": self.bidirectional,
-        }
+            context = serialize_datetime(context)
+
+            return {
+                "id": self.id,
+                "name": self.__class__.__name__,
+                "context": context,
+                "source": self.source,
+                "target": self.target,
+                "bidirectional": self.bidirectional,
+            }
+        else:
+            # Standard export - clean flat dictionary for API responses
+            # Exclude internal edge fields by default
+            default_exclude = {"type_code", "_graph_context", "_data", "_initializing"}
+            if exclude:
+                exclude_set = (
+                    set(exclude) if isinstance(exclude, (set, dict)) else set()
+                )
+                exclude_set.update(default_exclude)
+            else:
+                exclude_set = default_exclude
+
+            return super().export(
+                exclude_transient=exclude_transient, exclude=exclude_set, **kwargs
+            )
 
     @classmethod
     async def get(cls: Type["Edge"], id: str) -> Optional["Edge"]:

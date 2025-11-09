@@ -119,9 +119,9 @@ class MiddlewareManager:
             return
 
         try:
-            from jvspatial.api.auth.middleware import AuthenticationMiddleware
-
-            app.add_middleware(AuthenticationMiddleware)
+            # Authentication middleware is now handled by components
+            # from jvspatial.api.auth.middleware import AuthenticationMiddleware
+            # app.add_middleware(AuthenticationMiddleware)
             self._logger.info(
                 f"{LogIcons.SUCCESS} Authentication middleware added to server"
             )

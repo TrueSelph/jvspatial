@@ -11,12 +11,12 @@ from datetime import datetime
 from typing import Optional
 
 from pydantic import EmailStr, Field
+from pydantic import ValidationError as PydanticValidationError
 
 from jvspatial.core import Node
 from jvspatial.exceptions import (
     EntityNotFoundError,
     JVSpatialError,
-    ValidationError,
 )
 
 
@@ -42,15 +42,24 @@ async def demonstrate_entity_errors():
             email="invalid-email",  # Invalid email
             age=200,  # Age out of range
         )
-    except ValidationError as e:
-        print(f"❌ Validation failed: {e.message}")
-        if e.field_errors:
-            for field, error in e.field_errors.items():
-                print(f"  • {field}: {error}")
+    except PydanticValidationError as e:
+        print(f"❌ Validation failed: {e}")
+        # Pydantic ValidationError has errors() method that returns list of errors
+        for error in e.errors():
+            field = ".".join(str(loc) for loc in error.get("loc", []))
+            message = error.get("msg", "Validation error")
+            print(f"  • {field}: {message}")
 
     try:
         # Try to fetch non-existent user
+        # Note: Object.get() returns None if not found, doesn't raise exception
         user = await User.get("non_existent_id")
+        if user is None:
+            raise EntityNotFoundError(
+                entity_type="User",
+                entity_id="non_existent_id",
+                details={"message": "User not found in database"},
+            )
     except EntityNotFoundError as e:
         print(f"\n❌ Entity not found: {e.message}")
         print(f"  • Entity type: {e.entity_type}")

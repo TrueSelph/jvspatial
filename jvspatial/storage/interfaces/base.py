@@ -1,8 +1,8 @@
-"""Abstract base class for file storage providers.
+"""Abstract base class for file storage providers with built-in versioning support.
 
 This module defines the FileStorageInterface that all storage providers
 must implement, ensuring consistent behavior across different backends
-(local filesystem, S3, Azure, GCP, etc.).
+(local filesystem, S3, Azure, GCP, etc.) with built-in file versioning.
 """
 
 import logging
@@ -13,17 +13,19 @@ logger = logging.getLogger(__name__)
 
 
 class FileStorageInterface(ABC):
-    """Abstract base class for file storage backends.
+    """Abstract base class for file storage backends with built-in versioning support.
 
     All storage providers must implement these methods with proper
     security, validation, and error handling. This interface ensures
     consistent behavior across different storage backends.
+    Includes built-in file versioning as a core feature.
 
     Implementations must handle:
         - Path validation and sanitization
         - Proper error handling and logging
         - Thread-safe operations
         - Resource cleanup
+        - File versioning and management
 
     Note:
         All paths passed to these methods should already be sanitized
@@ -36,6 +38,77 @@ class FileStorageInterface(ABC):
         ...         # Implementation here
         ...         pass
     """
+
+    @abstractmethod
+    async def create_version(
+        self,
+        file_path: str,
+        content: bytes,
+        version: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Create a new version of a file.
+
+        Args:
+            file_path: Path to the file
+            content: File content
+            version: Optional version identifier (auto-generated if not provided)
+            metadata: Optional metadata for the version
+
+        Returns:
+            Version identifier
+        """
+        pass
+
+    @abstractmethod
+    async def get_version(self, file_path: str, version: str) -> bytes:
+        """Retrieve a specific version of a file.
+
+        Args:
+            file_path: Path to the file
+            version: Version identifier
+
+        Returns:
+            File content for the specified version
+        """
+        pass
+
+    @abstractmethod
+    async def list_versions(self, file_path: str) -> List[Dict[str, Any]]:
+        """List all versions of a file.
+
+        Args:
+            file_path: Path to the file
+
+        Returns:
+            List of version information dictionaries
+        """
+        pass
+
+    @abstractmethod
+    async def delete_version(self, file_path: str, version: str) -> bool:
+        """Delete a specific version of a file.
+
+        Args:
+            file_path: Path to the file
+            version: Version identifier to delete
+
+        Returns:
+            True if version was deleted, False otherwise
+        """
+        pass
+
+    @abstractmethod
+    async def get_latest_version(self, file_path: str) -> Optional[str]:
+        """Get the latest version identifier for a file.
+
+        Args:
+            file_path: Path to the file
+
+        Returns:
+            Latest version identifier, or None if no versions exist
+        """
+        pass
 
     @abstractmethod
     async def save_file(

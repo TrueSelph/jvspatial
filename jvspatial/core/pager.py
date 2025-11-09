@@ -211,7 +211,7 @@ class ObjectPager:
         """
         return self.current_page > 1
 
-    async def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         """Get pagination information as a dictionary.
 
         Perfect for UI frameworks that need pagination metadata.

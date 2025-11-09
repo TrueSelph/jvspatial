@@ -1,79 +1,142 @@
-# API Examples
+# jvspatial API Examples
 
-This directory contains examples showcasing the jvspatial API capabilities. Most API examples are now in the `examples/server` directory, which contains more comprehensive examples of API server functionality.
+This directory contains **standard reference implementations** for building custom jvspatial APIs. These examples serve as the recommended starting point for all jvspatial API development.
 
-Please refer to `examples/server/README.md` for detailed API examples, including:
+## 🎯 Standard Implementation Examples
 
-- Server configuration and setup
-- Endpoint decoration
-- Response handling
-- Error management
-- Dynamic endpoint registration
-- FastAPI integration
+### 1. **Authenticated Endpoints Example** ⭐
+📁 **File**: [`authenticated_endpoints_example.py`](authenticated_endpoints_example.py)
 
-## Authenticated Endpoints
+**Complete CRUD API with authentication and authorization**
 
-### authenticated_endpoints_example.py
+This is the **standard example** for building authenticated APIs with jvspatial. It demonstrates:
 
-Demonstrates how to use authentication decorators to create secure API endpoints:
+- ✅ Complete CRUD operations (Create, Read, Update, Delete)
+- ✅ JWT-based authentication (`auth_enabled=True`)
+- ✅ **Automatic authentication endpoints** (`/auth/register`, `/auth/login`, `/auth/logout`)
+- ✅ Permission and role-based access control
+- ✅ Entity-centric database operations
+- ✅ Pagination with `ObjectPager`
+- ✅ Response schemas with examples
+- ✅ Walker-based analytics endpoints
 
-**Decorators covered:**
-- `@auth_endpoint` - Authenticated endpoints (for both functions and Walker classes)
-- `@admin_endpoint` - Admin-only endpoints (for both functions and Walker classes)
+**When to use**: Build your authenticated API using this as a template.
 
-**Features demonstrated:**
-- Role-based access control (RBAC)
-- Permission-based access control
-- Combining roles and permissions
-- Multiple authentication patterns
-- Walker graph traversal with authentication
-- Proper naming conventions (`here` for visited nodes)
-
-**Key concepts:**
-- Authentication decorators automatically handle auth validation
-- Middleware integration for credential checking
-- Role checking: user must have AT LEAST ONE required role
-- Permission checking: user must have ALL required permissions
-- Proper error responses (401 Unauthorized, 403 Forbidden)
-
-**Usage:**
-```python
-from jvspatial.api import auth_endpoint
-from jvspatial.core import Node, Walker, on_visit
-
-# Simple authenticated endpoint
-@auth_endpoint("/api/profile", methods=["GET"])
-async def get_profile(endpoint):
-    return endpoint.success(data={"profile": "data"})
-
-# Endpoint with permissions
-@auth_endpoint("/api/data", permissions=["read_data"])
-async def read_data(endpoint):
-    return endpoint.success(data={"data": "protected"})
-
-# Endpoint with roles
-@auth_endpoint("/api/report", roles=["analyst", "admin"])
-async def generate_report(endpoint):
-    return endpoint.success(data={"report": "generated"})
-
-# Walker endpoint with authentication
-@auth_endpoint("/api/analyze", permissions=["analyze_data"])
-class AnalyzeWalker(Walker):
-    @on_visit(Node)
-    async def analyze(self, here: Node):
-        # Process authenticated graph traversal
-        self.report({"analyzed": here.id})
-```
-
-**Important notes:**
-- The example demonstrates decorator usage only
-- For a working server, authentication middleware must be configured
-- Users must be created with appropriate roles and permissions
-- See the example file for complete setup instructions
-
-Run the example:
+**Run it**:
 ```bash
-python authenticated_endpoints_example.py
+python examples/api/authenticated_endpoints_example.py
 ```
 
-Note: The example will display information about the decorators but won't start a server by default. Uncomment `server.run()` to start the server (requires full auth setup).
+**Access**: `http://127.0.0.1:8000/docs`
+
+### 2. **Unauthenticated Endpoints Example** ⭐
+📁 **File**: [`unauthenticated_endpoints_example.py`](unauthenticated_endpoints_example.py)
+
+**Public read-only API without authentication**
+
+This is the **standard example** for building public/unauthenticated APIs with jvspatial. It demonstrates:
+
+- ✅ Public endpoints (no authentication required)
+- ✅ Read-only operations (GET endpoints)
+- ✅ Listing with pagination and filtering
+- ✅ Entity-centric retrieval operations
+- ✅ Response schemas with examples
+- ✅ **No authentication endpoints** (`auth_enabled=False` means `/auth/*` routes are NOT registered)
+
+**When to use**: Build your public API or read-only service using this as a template.
+
+**Run it**:
+```bash
+python examples/api/unauthenticated_endpoints_example.py
+```
+
+**Access**: `http://127.0.0.1:8000/docs`
+
+## Key Differences
+
+| Feature | Authenticated Example | Unauthenticated Example |
+|---------|----------------------|------------------------|
+| **Authentication** | ✅ Enabled (`auth_enabled=True`) | ❌ Disabled (`auth_enabled=False`) |
+| **Auth Endpoints** | ✅ Automatically registered (`/auth/register`, `/auth/login`, `/auth/logout`) | ❌ **NOT registered** |
+| **Operations** | Create, Read, Update, Delete | Read only (GET endpoints) |
+| **Access Control** | Permission and role-based | Public (no access control) |
+| **Use Case** | Private/protected APIs | Public content APIs |
+
+## Implementation Patterns
+
+Both examples demonstrate the following **standard patterns**:
+
+### 1. Entity-Centric Operations
+```python
+# ✅ Standard pattern
+user = await UserNode.get(user_id)
+users = await UserNode.find(query)
+user = await UserNode.create(name="John", email="john@example.com")
+await user.save()
+await user.delete()
+```
+
+### 2. Pagination
+```python
+# ✅ Standard pattern
+pager = ObjectPager(UserNode, page_size=per_page)
+users = await pager.get_page(page=page)
+pagination_info = pager.to_dict()
+return {"users": [user.export() for user in users], **pagination_info}
+```
+
+### 3. Response Schemas
+```python
+# ✅ Standard pattern
+@endpoint(
+    "/users",
+    methods=["GET"],
+    response=success_response(
+        data={
+            "users": ResponseField(List[Dict[str, Any]], "List of users", example=[...]),
+            "total": ResponseField(int, "Total count", example=100),
+        }
+    )
+)
+```
+
+### 4. Export Pattern
+```python
+# ✅ Standard pattern
+return {"user": user.export()}  # Automatically handles transient fields
+```
+
+## Documentation
+
+For detailed documentation on API implementation standards, see:
+
+- **[API Implementation Standards](../../docs/md/API_IMPLEMENTATION_STANDARDS.md)** - Comprehensive guide
+- **[Examples Documentation](../../docs/md/examples.md)** - All available examples
+- **[REST API Guide](../../docs/md/rest-api.md)** - API design patterns
+- **[Server API Guide](../../docs/md/server-api.md)** - Server configuration
+
+## Quick Reference
+
+### Starting a New Authenticated API
+
+1. Copy `authenticated_endpoints_example.py` as your starting point
+2. Modify the data models (`UserNode`, `ProductNode`, etc.)
+3. Customize the endpoints to match your domain
+4. Adjust permissions and roles as needed
+5. Run and test at `http://127.0.0.1:8000/docs`
+
+### Starting a New Public API
+
+1. Copy `unauthenticated_endpoints_example.py` as your starting point
+2. Modify the data models (`ArticleNode`, `BookNode`, etc.)
+3. Customize the endpoints to match your domain
+4. Add filtering and pagination as needed
+5. Run and test at `http://127.0.0.1:8000/docs`
+
+## Other Examples
+
+This directory also contains additional example files for specific use cases:
+
+- `diagnostic_auth_swagger.py` - Diagnostic tools for authentication
+
+For more examples covering other jvspatial features, see the main [examples directory](../README.md).

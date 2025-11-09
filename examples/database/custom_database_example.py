@@ -2,19 +2,24 @@
 Example of extending jvspatial with a custom database implementation.
 
 This demonstrates how developers can create their own database adapters
-that integrate seamlessly with the jvspatial framework.
+that integrate seamlessly with the jvspatial framework, including:
+1. Implementing the Database abstract class
+2. Registering custom database types with the factory system
+3. Using custom databases with create_database() and multi-database management
+
+For comprehensive documentation, see: docs/md/custom-database-guide.md
 """
 
 import asyncio
 from typing import Any, Dict, List, Optional
 
-from jvspatial.core.context import GraphContext
+from jvspatial.core.context import GraphContext, set_default_context
 from jvspatial.core.entities import Node
 from jvspatial.db import (
     Database,
-    get_database,
-    list_available_databases,
-    register_database,
+    create_database,
+    list_database_types,
+    register_database_type,
 )
 
 
@@ -110,35 +115,81 @@ class City(Node):
     population: int = 0
 
 
+def create_memory_db(**kwargs: Any) -> MemoryDatabase:
+    """Factory function for creating MemoryDatabase instances.
+
+    This factory function is used when registering the database type
+    with jvspatial's factory system.
+    """
+    return MemoryDatabase(**kwargs)
+
+
 async def main():
-    """Demonstrate custom database usage."""
+    """Demonstrate custom database usage with registry integration."""
 
-    # Register our custom database implementation
-    register_database("memory", MemoryDatabase)
+    print("=" * 60)
+    print("Custom Database Example")
+    print("=" * 60)
 
-    print("Available database types:", list(list_available_databases().keys()))
-
-    # Create a custom database instance
-    memory_db = get_database(db_type="memory")
-
-    # Create a graph context using our custom database
+    # Method 1: Direct instantiation (works but not integrated with factory)
+    print("\n1. Direct instantiation...")
+    memory_db = MemoryDatabase()
     context = GraphContext(database=memory_db)
+    set_default_context(context)
 
-    # Create some nodes using the custom database
-    city1 = await context.create_node(City, name="New York", population=8000000)
-    city2 = await context.create_node(City, name="Los Angeles", population=4000000)
+    city1 = await City.create(name="New York", population=8000000)
+    city2 = await City.create(name="Los Angeles", population=4000000)
+    print(f"   ✅ Created cities: {city1.name}, {city2.name}")
 
-    print(f"Created cities: {city1.name}, {city2.name}")
+    retrieved_city = await City.get(city1.id)
+    if retrieved_city:
+        print(
+            f"   ✅ Retrieved city: {retrieved_city.name} (pop: {retrieved_city.population})"
+        )
 
-    # Retrieve nodes from the custom database
-    retrieved_city = await context.get_node(City, city1.id)
-    print(f"Retrieved city: {retrieved_city.name} (pop: {retrieved_city.population})")
-
-    # Demonstrate that the custom database stores data correctly
     all_nodes = await memory_db.find("node", {})
-    print(f"Total nodes in custom database: {len(all_nodes)}")
+    print(f"   ✅ Total nodes in custom database: {len(all_nodes)}")
 
+    # Method 2: Register and use with factory system (recommended)
+    print("\n2. Registering custom database type...")
+    register_database_type("memory", create_memory_db)
+    print("   ✅ Registered 'memory' database type")
+
+    # List available database types
+    print("\n3. Available database types:")
+    types = list_database_types()
+    for db_type, description in types.items():
+        print(f"   - {db_type}: {description}")
+
+    # Method 3: Use with create_database() (seamless integration)
+    print("\n4. Using registered database with create_database()...")
+    memory_db2 = create_database("memory")
+    context2 = GraphContext(database=memory_db2)
+    set_default_context(context2)
+
+    city3 = await City.create(name="Chicago", population=2700000)
+    print(f"   ✅ Created city using factory: {city3.name}")
+
+    # Method 4: Use with multi-database management
+    print("\n5. Using with multi-database management...")
+    from jvspatial.db import get_database_manager
+
+    manager = get_database_manager()
+    memory_db3 = create_database("memory", register=True, name="memory_app")
+    manager.set_current_database("memory_app")
+
+    city4 = await City.create(name="Houston", population=2300000)
+    print(f"   ✅ Created city in registered database: {city4.name}")
+
+    # Verify isolation
+    current_db = manager.get_current_database()
+    all_cities = await current_db.find("node", {})
+    print(f"   ✅ Cities in registered database: {len(all_cities)}")
+
+    print("\n" + "=" * 60)
     print("✅ Custom database implementation working correctly!")
+    print("=" * 60)
+    print("\nFor comprehensive documentation, see: docs/md/custom-database-guide.md")
 
 
 if __name__ == "__main__":

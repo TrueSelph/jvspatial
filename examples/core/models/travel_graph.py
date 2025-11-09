@@ -498,7 +498,8 @@ async def main() -> None:
     print("\n=== SPATIAL ANALYSIS DEMONSTRATIONS ===")
 
     # Get a reference city for spatial queries
-    chicago = await City.find_one({"context.name": "Chicago"})
+    chicago_results = await City.find({"context.name": "Chicago"})
+    chicago = chicago_results[0] if chicago_results else None
     if not chicago:
         print("❌ Chicago not found for spatial analysis")
         return
@@ -550,7 +551,8 @@ async def main() -> None:
     freight_train2 = FreightTrain()
 
     # Run both walkers simultaneously from different starting points
-    kansas_city = await City.find_one({"context.name": "Kansas City"})
+    kansas_city_results = await City.find({"context.name": "Kansas City"})
+    kansas_city = kansas_city_results[0] if kansas_city_results else None
     if kansas_city:
         print(
             "Running Tourist from Chicago and FreightTrain from Kansas City simultaneously..."

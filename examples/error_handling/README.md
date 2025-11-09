@@ -32,47 +32,69 @@ Demonstrates Walker-specific error handling:
 ### Exception Hierarchy
 All jvspatial exceptions inherit from `JVSpatialError`:
 ```python
-from jvspatial import exceptions
 from jvspatial.exceptions import (
     JVSpatialError,         # Base exception
-    ValidationError,        # Data validation errors
     EntityNotFoundError,    # Entity lookup failures
     DatabaseError,          # Database operation failures
     WalkerExecutionError,   # Walker runtime errors
 )
 ```
 
+**Note**: Pydantic validation errors are raised as `pydantic.ValidationError`, not `jvspatial.exceptions.ValidationError`. Import it separately:
+```python
+from pydantic import ValidationError as PydanticValidationError
+```
+
 ### Best Practices
 1. **Use Specific Exceptions**: Catch specific exceptions before general ones
 ```python
+from pydantic import ValidationError as PydanticValidationError
+
 try:
     result = await operation()
-except ValidationError as e:
-    # Handle validation error
+except PydanticValidationError as e:
+    # Handle Pydantic validation error
+    for error in e.errors():
+        field = ".".join(str(loc) for loc in error.get("loc", []))
+        print(f"{field}: {error.get('msg')}")
 except EntityNotFoundError as e:
     # Handle not found error
 except JVSpatialError as e:
     # Handle any other jvspatial error
 ```
 
-2. **Error Context**: Access error details when available
+2. **Entity Not Found Handling**: `Object.get()` returns `None` if not found, doesn't raise exception
 ```python
-except ValidationError as e:
+user = await User.get(user_id)
+if user is None:
+    raise EntityNotFoundError(
+        entity_type="User",
+        entity_id=user_id,
+        details={"message": "User not found"}
+    )
+```
+
+3. **Error Context**: Access error details when available
+```python
+except EntityNotFoundError as e:
     print(f"Error: {e.message}")
-    if e.field_errors:
-        for field, error in e.field_errors.items():
-            print(f"{field}: {error}")
+    print(f"Entity type: {e.entity_type}, ID: {e.entity_id}")
+    if e.details:
+        print(f"Details: {e.details}")
 ```
 
-3. **Graceful Degradation**: Implement fallback strategies
+4. **Graceful Degradation**: Implement fallback strategies
 ```python
+from jvspatial.db.factory import create_database
+
 try:
-    db = await setup_primary_database()
-except ConnectionError:
-    db = await setup_fallback_database()
+    db = create_database("mongodb", uri="mongodb://localhost:27017")
+except (ConnectionError, ValueError):
+    # Fallback to JSON database
+    db = create_database("json", base_path="./jvdb")
 ```
 
-4. **Safe Transactions**: Use try/except in database operations
+5. **Safe Transactions**: Use try/except in database operations
 ```python
 try:
     await entity.save()
@@ -80,7 +102,7 @@ except DatabaseError as e:
     await handle_rollback()
 ```
 
-5. **Walker Safety**: Handle walker-specific errors
+6. **Walker Safety**: Handle walker-specific errors
 ```python
 try:
     await walker.spawn(root)

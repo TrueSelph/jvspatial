@@ -20,6 +20,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
+from jvspatial.api.components import AppBuilder, EndpointManager, ErrorHandler
 from jvspatial.api.context import set_current_server
 from jvspatial.api.decorators import EndpointField
 from jvspatial.api.endpoints.router import EndpointRouter
@@ -135,6 +136,10 @@ class TestServerInitialization:
         assert server.config.port == 8000
         assert server.config.cors_enabled is True
         assert isinstance(server.endpoint_router, EndpointRouter)
+        # Test new components
+        assert isinstance(server.app_builder, AppBuilder)
+        assert isinstance(server.endpoint_manager, EndpointManager)
+        assert isinstance(server.error_handler, ErrorHandler)
 
     async def test_server_with_config_dict(self):
         """Test server initialization with config dictionary."""
@@ -175,8 +180,8 @@ class TestWalkerEndpointDecorator:
         class TestAPIWalker(Walker):
             param: str = EndpointField(description="Test parameter")
 
-        # Check walker is registered using endpoint registry
-        assert test_server._endpoint_registry.has_walker(TestAPIWalker)
+        # Check walker is registered using endpoint manager
+        assert test_server.endpoint_manager.get_registry().has_walker(TestAPIWalker)
 
     async def test_walker_endpoint_with_methods(self, test_server):
         """Test endpoint with specific HTTP methods."""
@@ -185,7 +190,9 @@ class TestWalkerEndpointDecorator:
         class MethodWalker(Walker):
             data: str = EndpointField(description="Input data")
 
-        endpoint_info = test_server._endpoint_registry.get_walker_info(MethodWalker)
+        endpoint_info = test_server.endpoint_manager.get_registry().get_walker_info(
+            MethodWalker
+        )
         assert endpoint_info.methods == ["GET", "POST"]
 
     async def test_walker_endpoint_with_metadata(self, test_server):
@@ -195,7 +202,9 @@ class TestWalkerEndpointDecorator:
         class MetaWalker(Walker):
             value: int = EndpointField(description="Test value")
 
-        endpoint_info = test_server._endpoint_registry.get_walker_info(MetaWalker)
+        endpoint_info = test_server.endpoint_manager.get_registry().get_walker_info(
+            MetaWalker
+        )
         assert endpoint_info.kwargs["tags"] == ["testing"]
         assert endpoint_info.kwargs["summary"] == "Test endpoint"
 
@@ -210,10 +219,10 @@ class TestWalkerEndpointDecorator:
         class Walker2(Walker):
             param2: int = EndpointField(description="Parameter 2")
 
-        walkers = test_server._endpoint_registry.list_walkers()
+        walkers = test_server.endpoint_manager.get_registry().list_walkers()
         assert len(walkers) == 2
-        assert test_server._endpoint_registry.has_walker(Walker1)
-        assert test_server._endpoint_registry.has_walker(Walker2)
+        assert test_server.endpoint_manager.get_registry().has_walker(Walker1)
+        assert test_server.endpoint_manager.get_registry().has_walker(Walker2)
 
 
 class TestEndpointDecorator:
@@ -227,8 +236,8 @@ class TestEndpointDecorator:
             """Test function endpoint."""
             return {"message": "Hello from function"}
 
-        # Check function is registered using endpoint registry
-        assert test_server._endpoint_registry.has_function(test_function)
+        # Check function is registered using endpoint manager
+        assert test_server.endpoint_manager.get_registry().has_function(test_function)
 
     async def test_function_endpoint_with_parameters(self, test_server):
         """Test function endpoint with parameters."""
@@ -239,7 +248,9 @@ class TestEndpointDecorator:
             return {"name": name, "value": value}
 
         # Check endpoint info
-        endpoint_info = test_server._endpoint_registry.get_function_info(param_function)
+        endpoint_info = test_server.endpoint_manager.get_registry().get_function_info(
+            param_function
+        )
         assert endpoint_info is not None
         assert endpoint_info.methods == ["POST"]
 
@@ -257,7 +268,9 @@ class TestEndpointDecorator:
             return {"status": "ok"}
 
         # Check endpoint info
-        endpoint_info = test_server._endpoint_registry.get_function_info(meta_function)
+        endpoint_info = test_server.endpoint_manager.get_registry().get_function_info(
+            meta_function
+        )
         assert endpoint_info is not None
         assert endpoint_info.kwargs.get("tags") == ["functions"]
         assert endpoint_info.kwargs.get("summary") == "Test function"
@@ -594,7 +607,7 @@ class TestLifecycleHooks:
         app = test_server._create_app()
 
         # Manually trigger startup events for testing using lifecycle manager
-        for task in test_server._lifecycle_manager._startup_hooks:
+        for task in test_server.lifecycle_manager._startup_hooks:
             if asyncio.iscoroutinefunction(task):
                 await task()
             else:
@@ -621,7 +634,7 @@ class TestLifecycleHooks:
         await test_server.on_shutdown(shutdown_hook2)
 
         # Simulate shutdown using lifecycle manager
-        for task in test_server._lifecycle_manager._shutdown_hooks:
+        for task in test_server.lifecycle_manager._shutdown_hooks:
             if asyncio.iscoroutinefunction(task):
                 await task()
             else:
@@ -641,11 +654,11 @@ class TestLifecycleHooks:
             return response
 
         # Register middleware directly with the manager
-        await test_server._middleware_manager.add_middleware("http", custom_middleware)
+        await test_server.middleware_manager.add_middleware("http", custom_middleware)
 
         # Verify middleware is registered using middleware manager
-        assert len(test_server._middleware_manager._custom_middleware) == 1
-        middleware_entry = test_server._middleware_manager._custom_middleware[0]
+        assert len(test_server.middleware_manager._custom_middleware) == 1
+        middleware_entry = test_server.middleware_manager._custom_middleware[0]
         assert middleware_entry["func"] == custom_middleware
         assert middleware_entry["middleware_type"] == "http"
 
@@ -754,11 +767,11 @@ class TestServerConfiguration:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-        config = ServerConfig(db_type="json", db_path="jvdb/tests")
+        config = ServerConfig(db_type="json", db_path="./jvdb/tests")
         server = Server(config=config)
 
         assert server.config.db_type == "json"
-        assert server.config.db_path == "jvdb/tests"
+        assert server.config.db_path == "./jvdb/tests"
 
     async def test_api_documentation_configuration(self):
         """Test API documentation configuration."""
@@ -787,7 +800,7 @@ class TestDynamicEndpointManagement:
         class DynamicWalker(Walker):
             param: str = EndpointField(description="Dynamic parameter")
 
-        assert test_server._endpoint_registry.has_walker(DynamicWalker)
+        assert test_server.endpoint_manager.get_registry().has_walker(DynamicWalker)
 
         # Create app and test endpoint
         app = test_server._create_app()
@@ -805,12 +818,14 @@ class TestDynamicEndpointManagement:
         class RemovableWalker(Walker):
             param: str = EndpointField(description="Removable walker")
 
-        # Initially registered using endpoint registry
-        assert test_server._endpoint_registry.has_walker(RemovableWalker)
+        # Initially registered using endpoint manager
+        assert test_server.endpoint_manager.get_registry().has_walker(RemovableWalker)
 
         # For now, just verify registration tracking works
         # TODO: Implement removal functionality
-        endpoint_info = test_server._endpoint_registry.get_walker_info(RemovableWalker)
+        endpoint_info = test_server.endpoint_manager.get_registry().get_walker_info(
+            RemovableWalker
+        )
         assert endpoint_info.path == "/removable-walker"
 
     async def test_multiple_endpoint_registration_removal(self, test_server):
@@ -824,13 +839,17 @@ class TestDynamicEndpointManagement:
         class WalkerB(Walker):
             param_b: str = EndpointField(description="Parameter B")
 
-        walkers = test_server._endpoint_registry.list_walkers()
+        walkers = test_server.endpoint_manager.get_registry().list_walkers()
         assert len(walkers) == 2
-        assert test_server._endpoint_registry.has_walker(WalkerA)
-        assert test_server._endpoint_registry.has_walker(WalkerB)
+        assert test_server.endpoint_manager.get_registry().has_walker(WalkerA)
+        assert test_server.endpoint_manager.get_registry().has_walker(WalkerB)
 
         # Verify both are properly mapped
-        endpoint_info_a = test_server._endpoint_registry.get_walker_info(WalkerA)
-        endpoint_info_b = test_server._endpoint_registry.get_walker_info(WalkerB)
+        endpoint_info_a = test_server.endpoint_manager.get_registry().get_walker_info(
+            WalkerA
+        )
+        endpoint_info_b = test_server.endpoint_manager.get_registry().get_walker_info(
+            WalkerB
+        )
         assert endpoint_info_a.path == "/walker-a"
         assert endpoint_info_b.path == "/walker-b"

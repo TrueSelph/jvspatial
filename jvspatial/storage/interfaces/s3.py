@@ -661,3 +661,104 @@ class S3FileInterface(FileStorageInterface):
             "supports_metadata": True,
             "url_expiration_default": self.url_expiration,
         }
+
+    # File versioning methods (placeholder implementations)
+    async def create_version(
+        self, file_path: str, content: bytes, metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Create a new version of a file.
+
+        Args:
+            file_path: Path to the file
+            content: File content
+            metadata: Optional metadata for the version
+
+        Returns:
+            Version ID
+        """
+        # Placeholder implementation - S3 versioning would be implemented here
+        import uuid
+
+        version_id = str(uuid.uuid4())
+
+        # Save the versioned file
+        version_path = f"{file_path}/versions/{version_id}"
+        await self.save_file(version_path, content, metadata)
+
+        return version_id
+
+    async def get_version(self, file_path: str, version: str) -> bytes:
+        """Retrieve a specific version of a file.
+
+        Args:
+            file_path: Path to the file
+            version: Version identifier
+
+        Returns:
+            File content for the specified version
+        """
+        # Placeholder implementation
+        version_path = f"{file_path}/versions/{version}"
+        content = await self.get_file(version_path)
+        if content is None:
+            raise FileNotFoundError(f"Version {version} not found for file {file_path}")
+        return content
+
+    async def list_versions(self, file_path: str) -> List[Dict[str, Any]]:
+        """List all versions of a file.
+
+        Args:
+            file_path: Path to the file
+
+        Returns:
+            List of version information dictionaries
+        """
+        # Placeholder implementation
+        versions_prefix = f"{file_path}/versions/"
+        files = await self.list_files(prefix=versions_prefix)
+
+        versions = []
+        for file_info in files:
+            version_id = file_info["path"].split("/")[-1]
+            versions.append(
+                {
+                    "version_id": version_id,
+                    "created_at": file_info["modified_at"],
+                    "size": file_info["size"],
+                    "checksum": file_info["checksum"],
+                }
+            )
+
+        return versions
+
+    async def delete_version(self, file_path: str, version: str) -> bool:
+        """Delete a specific version of a file.
+
+        Args:
+            file_path: Path to the file
+            version: Version identifier
+
+        Returns:
+            True if version was deleted, False otherwise
+        """
+        # Placeholder implementation
+        version_path = f"{file_path}/versions/{version}"
+        return await self.delete_file(version_path)
+
+    async def get_latest_version(self, file_path: str) -> bytes:
+        """Retrieve the latest version of a file.
+
+        Args:
+            file_path: Path to the file
+
+        Returns:
+            File content for the latest version
+        """
+        # Placeholder implementation
+        versions = await self.list_versions(file_path)
+        if not versions:
+            raise FileNotFoundError(f"No versions found for file {file_path}")
+
+        # Get the latest version (assuming they're sorted by creation time)
+        latest_version = versions[-1]["version_id"]
+        return await self.get_version(file_path, latest_version)

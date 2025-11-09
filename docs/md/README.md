@@ -22,6 +22,7 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 | Document | Description | Audience |
 |----------|-------------|----------|
 | [Graph Traversal](graph-traversal.md) | Walker pattern and graph operations | Intermediate |
+| [Graph Visualization](graph-visualization.md) | Export graphs in DOT/Mermaid formats | All levels |
 | [Entity Reference](entity-reference.md) | Node, Edge, Walker classes | All levels |
 | [Context Management](context-management-guide.md) | GraphContext, ServerContext usage | Intermediate |
 | [Node Operations](node-operations.md) | Working with nodes | All levels |
@@ -33,6 +34,7 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 | [REST API](rest-api.md) | API design and endpoints | All levels |
 | [API Architecture](api-architecture.md) | Server architecture | Advanced |
 | [Server API](server-api.md) | Server configuration | Intermediate |
+| [Examples](examples.md) | **Standard implementation examples** | ⭐ **Start Here** |
 | [Decorator Reference](decorator-reference.md) | All decorators explained | All levels |
 
 ### **Authentication & Security**
@@ -56,7 +58,9 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 
 | Document | Description | Audience |
 |----------|-------------|----------|
+| [Graph Context](graph-context.md) | Database management and multi-database support | Intermediate |
 | [MongoDB Query Interface](mongodb-query-interface.md) | Database queries | Intermediate |
+| [Custom Database Guide](custom-database-guide.md) | Implementing custom database backends | Advanced |
 | [Caching](caching.md) | Cache strategies | Intermediate |
 
 ### **Advanced Topics**
@@ -75,6 +79,7 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 | Document | Description | Audience |
 |----------|-------------|----------|
 | [Contributing](contributing.md) | Contribution guide | Developers |
+| [Custom Database Guide](custom-database-guide.md) | Extending with custom databases | Advanced |
 | [Troubleshooting](troubleshooting.md) | Common issues | All levels |
 | [Migration Guide](../../MIGRATION_GUIDE_COMMON_TO_UTILS.md) | Upgrading from 0.1.x | Users |
 
@@ -82,7 +87,7 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 
 | Document | Description | Audience |
 |----------|-------------|----------|
-| [Attribute Annotations](attribute-annotations.md) | @protected, @private | All levels |
+| [Attribute Annotations](attribute-annotations.md) | @attribute | All levels |
 | [Walker Events](walker-reporting-events.md) | Walker event system | Intermediate |
 | [Walker Queue](walker-queue-operations.md) | Queue management | Advanced |
 | [Walker Trail](walker-trail-tracking.md) | Trail tracking | Advanced |
@@ -132,6 +137,7 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 | Create a node | [Quick Start](quick-start-guide.md) | Pattern 1 |
 | Define an endpoint | [Quick Start](quick-start-guide.md) | Step 3 |
 | Build a walker | [Graph Traversal](graph-traversal.md) | Basic Walker |
+| Visualize graph | [Graph Visualization](graph-visualization.md) | Quick Start |
 | Query database | [MongoDB Query](mongodb-query-interface.md) | Query Builder |
 | Add authentication | [Auth Quickstart](auth-quickstart.md) | Setup |
 | Setup caching | [Caching](caching.md) | Configuration |
@@ -190,6 +196,7 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 
 **Core Graph**:
 - Graph Traversal
+- Graph Visualization
 - Entity Reference
 - Node Operations
 - Walker Events
@@ -256,11 +263,14 @@ from jvspatial import Object, Node, Edge, Walker, Root
 # Graph operations
 from jvspatial.core import GraphContext, on_visit, on_exit
 
+# Graph visualization
+from jvspatial.core.graph import generate_graph_dot, generate_graph_mermaid, export_graph
+
 # API
 from jvspatial.api import Server, ServerConfig, endpoint
 
 # Database
-from jvspatial.db import get_database, query
+from jvspatial.db import create_database, Database
 
 # Cache
 from jvspatial.cache import get_cache_backend

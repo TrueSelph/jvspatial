@@ -19,7 +19,7 @@ from jvspatial.core import (
     on_exit,
     on_visit,
 )
-from jvspatial.db import get_database
+from jvspatial.db import create_database
 
 
 # Entity definitions
@@ -57,7 +57,7 @@ class Tourist(Walker):
     async def trip_summary(self):
         """Provide a trip summary."""
         print(f"🎒 Trip complete! Visited {len(self.cities_visited)} cities")
-        self.report(
+        await self.report(
             {
                 "trip_summary": {
                     "total_cities": len(self.cities_visited),
@@ -96,7 +96,7 @@ async def demonstrate_original_api():
 
     # Original walker usage - unchanged
     tourist = Tourist()
-    await tourist.spawn(start=chicago)
+    await tourist.spawn(chicago)
 
     return [chicago, milwaukee, highway]
 
@@ -114,7 +114,7 @@ async def demonstrate_explicit_context():
 
     # Create a specific database instance
     temp_db_path = tempfile.mkdtemp()
-    custom_db = get_database(db_type="json", base_path=temp_db_path)
+    custom_db = create_database(db_type="json", base_path=temp_db_path)
 
     # Create GraphContext with custom database
     ctx = GraphContext(database=custom_db)
@@ -139,7 +139,7 @@ async def demonstrate_explicit_context():
 
     # Walkers can use entities from any context
     tourist = Tourist()
-    await tourist.spawn(start=seattle)
+    await tourist.spawn(seattle)
 
     return ctx, [seattle, portland, highway]
 
@@ -156,11 +156,11 @@ async def demonstrate_multiple_contexts():
     print("=" * 50)
 
     # Main database for application data
-    main_db = get_database(db_type="json", base_path=tempfile.mkdtemp())
+    main_db = create_database(db_type="json", base_path=tempfile.mkdtemp())
     main_ctx = GraphContext(database=main_db)
 
     # Analytics database for logging/metrics
-    analytics_db = get_database(db_type="json", base_path=tempfile.mkdtemp())
+    analytics_db = create_database(db_type="json", base_path=tempfile.mkdtemp())
     analytics_ctx = GraphContext(database=analytics_db)
 
     print("📊 Created separate contexts for main data and analytics")
@@ -209,7 +209,7 @@ async def demonstrate_testing_pattern():
 
     # Create isolated test database
     test_db_path = tempfile.mkdtemp()
-    test_db = get_database(db_type="json", base_path=test_db_path)
+    test_db = create_database(db_type="json", base_path=test_db_path)
     test_ctx = GraphContext(database=test_db)
 
     print(f"🧪 Created isolated test database at: {test_db_path}")
@@ -269,7 +269,7 @@ async def demonstrate_backwards_compatibility():
             print(f"  Processing {here.name} with {here.population:,} people")
 
     walker = LegacyWalker()
-    await walker.spawn(start=node1)
+    await walker.spawn(node1)
 
     print("✅ All legacy patterns work perfectly!")
     print("✅ No breaking changes to existing code")

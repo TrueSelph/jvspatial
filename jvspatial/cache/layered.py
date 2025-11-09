@@ -231,3 +231,51 @@ class LayeredCache(CacheBackend):
             deleted = await self.l2.invalidate_pattern(pattern)
 
         return deleted
+
+    async def invalidate_by_pattern(self, pattern: str) -> int:
+        """Invalidate keys matching pattern in both cache layers.
+
+        Args:
+            pattern: Pattern to match (e.g., "user:*", "node:123:*")
+
+        Returns:
+            Number of keys deleted from L2 (L1 doesn't support patterns)
+        """
+        return await self.invalidate_pattern(pattern)
+
+    async def invalidate_by_tags(self, tags: list) -> int:
+        """Invalidate keys associated with specific tags.
+
+        Args:
+            tags: List of tags to invalidate
+
+        Returns:
+            Number of keys deleted
+        """
+        # Clear entire L1 cache (doesn't support tags)
+        await self.l1.clear()
+
+        # Invalidate tags in L2
+        deleted = 0
+        if self.l2_available and self.l2:
+            deleted = await self.l2.invalidate_by_tags(tags)
+
+        return deleted
+
+    async def set_with_tags(
+        self, key: str, value: Any, tags: list = None, ttl: Optional[int] = None
+    ) -> None:
+        """Store value in cache with associated tags.
+
+        Args:
+            key: Cache key
+            value: Value to store
+            tags: List of tags to associate with the key
+            ttl: Time to live in seconds
+        """
+        # Store in L1
+        await self.l1.set(key, value, ttl)
+
+        # Store in L2 with tags
+        if self.l2_available and self.l2:
+            await self.l2.set_with_tags(key, value, tags, ttl)

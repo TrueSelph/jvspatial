@@ -1,549 +1,449 @@
-"""Comprehensive test suite for database factory.
+"""Test suite for database factory.
 
-Tests database factory and registry functionality including:
-- Database registration and unregistration
-- Database type management
-- Default database configuration
-- Database discovery
-- Error handling
+Tests the simplified database creation functionality and custom database registration.
 """
 
 import os
-from unittest.mock import MagicMock, patch
+import tempfile
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from unittest.mock import patch
 
 import pytest
 
 from jvspatial.db.database import Database
 from jvspatial.db.factory import (
-    get_database,
-    get_default_database_type,
-    list_available_databases,
-    register_database,
-    set_default_database,
-    unregister_database,
+    create_database,
+    create_default_database,
+    list_database_types,
+    register_database_type,
+    unregister_database_type,
 )
 from jvspatial.db.jsondb import JsonDB
 from jvspatial.db.mongodb import MongoDB
-from jvspatial.exceptions import InvalidConfigurationError, ValidationError
 
 
 class TestDatabaseFactory:
-    """Test database factory functionality."""
-
-    def setup_method(self):
-        """Set up test environment."""
-        # Clean up any "mock" registrations from previous tests
-        unregister_database("mock")
-        unregister_database("custom")
-        unregister_database("lifecycle")
-
-    def _create_mock_database_class(self, name="MockDatabase"):
-        """Create a real database class for testing."""
-
-        class MockDatabase(Database):
-            def __init__(self, **kwargs):
-                pass
-
-            async def clean(self) -> None:
-                """Clean up orphaned edges."""
-                pass
-
-            async def save(self, collection: str, record: dict) -> dict:
-                return record
-
-            async def get(self, collection: str, id: str):
-                return None
-
-            async def find(self, collection: str, query: dict) -> list:
-                return []
-
-            async def delete(self, collection: str, record_id: str) -> None:
-                pass
-
-        MockDatabase.__name__ = name
-        return MockDatabase
-
-    async def test_database_registration(self):
-        """Test database registration."""
-        # Create a real database class for testing
-        MockDatabase = self._create_mock_database_class("MockDatabase")
-
-        # Register the database
-        register_database("mock", MockDatabase)
-
-        # Verify registration
-        from jvspatial.db.factory import _DATABASE_REGISTRY
-
-        assert "mock" in _DATABASE_REGISTRY
-        assert _DATABASE_REGISTRY["mock"] == MockDatabase
-
-    async def test_database_unregistration(self):
-        """Test database unregistration."""
-        # Create a real database class for testing
-        MockDatabase = self._create_mock_database_class("MockDatabase")
-
-        # Register the database
-        register_database("mock", MockDatabase)
-
-        # Unregister it
-        unregister_database("mock")
-
-        # Verify unregistration
-        from jvspatial.db.factory import _DATABASE_REGISTRY
-
-        assert "mock" not in _DATABASE_REGISTRY
-
-    async def test_database_registration_duplicate(self):
-        """Test duplicate database registration."""
-        MockDatabase = self._create_mock_database_class("MockDatabase")
-
-        # Register first time
-        register_database("mock", MockDatabase)
-
-        # Register again - should raise error
-        with pytest.raises(InvalidConfigurationError):
-            register_database("mock", MockDatabase)
-
-    async def test_database_registration_invalid_class(self):
-        """Test registration of invalid database class."""
-        # Try to register non-Database class
-        with pytest.raises(ValidationError):
-            register_database("invalid", str)
-
-    async def test_database_registration_invalid_name(self):
-        """Test registration with invalid name."""
-        # Empty name should work but is discouraged
-        # Just test with valid database class
-        MockDatabase = self._create_mock_database_class()
-        register_database("test_empty", MockDatabase)
-        unregister_database("test_empty")
-
-    async def test_database_unregistration_nonexistent(self):
-        """Test unregistration of non-existent database."""
-        # Unregistering non-existent database should succeed (no-op)
-        unregister_database("nonexistent")
-        # Verify it's still not registered
-        available = list_available_databases()
-        assert "nonexistent" not in available
-
-    async def test_list_available_databases(self):
-        """Test listing available databases."""
-        # Register some databases
-        mock_db1 = self._create_mock_database_class("MockDatabase1")
-        mock_db2 = self._create_mock_database_class("MockDatabase2")
-
-        register_database("mock1", mock_db1)
-        register_database("mock2", mock_db2)
-
-        # List available databases (returns dict, not list)
-        available = list_available_databases()
-        assert "mock1" in available
-        assert "mock2" in available
-
-    async def test_list_available_databases_empty(self):
-        """Test listing available databases."""
-        # Built-in databases are always registered (json, mongodb if available)
-        available = list_available_databases()
-        assert isinstance(available, dict)
-        assert len(available) >= 1  # At least json is registered
-        assert "json" in available
-
-    async def test_set_default_database(self):
-        """Test setting default database."""
-        mock_db_class = self._create_mock_database_class()
-        register_database("mock", mock_db_class)
-
-        # Set as default
-        set_default_database("mock")
-
-        # Verify default is set
-        default_type = get_default_database_type()
-        assert default_type == "mock"
-
-    async def test_set_default_database_nonexistent(self):
-        """Test setting non-existent database as default."""
-        with pytest.raises(InvalidConfigurationError):
-            set_default_database("nonexistent")
-
-    async def test_get_default_database_type(self):
-        """Test getting default database type."""
-        mock_db_class = self._create_mock_database_class()
-        register_database("mock", mock_db_class)
-        set_default_database("mock")
-
-        default_type = get_default_database_type()
-        assert default_type == "mock"
-
-    async def test_get_default_database_type_none(self):
-        """Test getting default database type when none is set."""
-        # The default is always set, just verify it returns a string
-        default_type = get_default_database_type()
-        assert isinstance(default_type, str)
-
-
-class TestDatabaseCreation:
-    """Test database creation functionality."""
-
-    def setup_method(self):
-        """Set up test environment."""
-        # Clean up any "mock" registrations from previous tests
-        unregister_database("mock")
-
-    async def test_get_database_with_type(self):
-        """Test getting database with specific type."""
-        # Register mock database
-        mock_db_class = MagicMock(spec=Database)
-        mock_db_instance = MagicMock(spec=Database)
-        mock_db_class.return_value = mock_db_instance
-
-        register_database("mock", mock_db_class)
-
-        # Get database
-        db = get_database("mock", config={"test": "value"})
-
-        # Verify database creation
-        assert db == mock_db_instance
-        mock_db_class.assert_called_once_with(config={"test": "value"})
-
-    async def test_get_database_with_default(self):
-        """Test getting database with default type."""
-        # Register mock database and set as default
-        mock_db_class = MagicMock(spec=Database)
-        mock_db_instance = MagicMock(spec=Database)
-        mock_db_class.return_value = mock_db_instance
-
-        register_database("mock", mock_db_class)
-        set_default_database("mock")
-
-        # Get database without specifying type
-        db = get_database(config={"test": "value"})
-
-        # Verify database creation
-        assert db == mock_db_instance
-        mock_db_class.assert_called_once_with(config={"test": "value"})
-
-    async def test_get_database_nonexistent_type(self):
-        """Test getting database with non-existent type."""
-        with pytest.raises(ValueError):
-            get_database("nonexistent")
-
-    async def test_get_database_no_default(self):
-        """Test getting database with default."""
-        # There's always a default (json), so this should succeed
-        db = get_database()
-        assert db is not None
-        from jvspatial.db.jsondb import JsonDB
-
-        assert isinstance(db, JsonDB)
-
-    async def test_get_database_with_environment(self):
-        """Test getting database with environment configuration."""
-        # Mock environment variable
-        with patch.dict(os.environ, {"JVSPATIAL_DB_TYPE": "mock"}):
-            # Register mock database
-            mock_db_class = MagicMock(spec=Database)
-            mock_db_instance = MagicMock(spec=Database)
-            mock_db_class.return_value = mock_db_instance
-
-            register_database("mock", mock_db_class)
-
-            # Get database
-            db = get_database()
-
-            # Verify database creation
-            assert db == mock_db_instance
-
-    async def test_get_database_with_config_override(self):
-        """Test getting database with configuration override."""
-        # Register mock database
-        mock_db_class = MagicMock(spec=Database)
-        mock_db_instance = MagicMock(spec=Database)
-        mock_db_class.return_value = mock_db_instance
-
-        register_database("mock", mock_db_class)
-
-        # Get database with config override
-        db = get_database("mock", config={"override": "value"})
-
-        # Verify database creation with config
-        assert db == mock_db_instance
-        mock_db_class.assert_called_once_with(config={"override": "value"})
-
-
-class TestBuiltinDatabases:
-    """Test built-in database types."""
-
-    def setup_method(self):
-        """Set up test environment."""
-        # Don't clear the registry - keep built-in databases available
-        pass
-
-    async def test_json_database_registration(self):
-        """Test JSON database registration."""
-        # JSON database should be available
-        available = list_available_databases()
-        assert "json" in available
-
-    async def test_mongodb_database_registration(self):
-        """Test MongoDB database registration."""
-        # MongoDB database should be available if pymongo is installed
-        available = list_available_databases()
-        # MongoDB might not be available if pymongo is not installed
-        # This test should pass regardless
-
-    async def test_get_json_database(self):
-        """Test getting JSON database."""
-        # Get JSON database
-        db = get_database("json", config={"root_path": "/tmp/test"})
-
-        # Verify it's a JsonDB instance
-        assert isinstance(db, JsonDB)
-
-    async def test_get_mongodb_database(self):
-        """Test getting MongoDB database."""
-        # Get MongoDB database
-        db = get_database(
-            "mongodb", config={"uri": "mongodb://localhost:27017", "db_name": "test"}
-        )
-
-        # Verify it's a MongoDB instance
-        assert isinstance(db, MongoDB)
-
-    async def test_database_configuration_validation(self):
-        """Test database configuration validation."""
-        # JsonDB doesn't validate config, it just ignores unknown params
-        # This is intentional - it accepts base_path and cache_size
-        db = get_database("json", base_path="/tmp/test")
-        assert db is not None
-
-
-class TestDatabaseFactoryIntegration:
-    """Test database factory integration."""
-
-    def setup_method(self):
-        """Set up test environment."""
-        # Clean up any test database registrations from previous tests
-        unregister_database("custom")
-        unregister_database("lifecycle")
-        unregister_database("db1")
-        unregister_database("db2")
-
-    async def test_factory_with_custom_database(self):
-        """Test factory with custom database."""
-
-        # Create custom database class
-        class CustomDatabase(Database):
-            def __init__(self, config=None):
-                self.custom_initialized = True
-
-            async def clean(self) -> None:
-                pass
-
-            async def save(self, collection: str, data: dict) -> dict:
-                return data
-
-            async def get(self, collection: str, id: str):
-                return None
-
-            async def find(self, collection: str, query: dict) -> list:
-                return []
-
-            async def delete(self, collection: str, id: str) -> None:
-                pass
-
-        # Register custom database
-        register_database("custom", CustomDatabase)
-
-        # Get custom database
-        db = get_database("custom", config={"test": "value"})
-
-        # Verify it's the custom database
-        assert isinstance(db, CustomDatabase)
-        assert db.custom_initialized is True
-
-    async def test_factory_with_multiple_databases(self):
-        """Test factory with multiple databases."""
-        # Register multiple databases
-        mock_db1 = MagicMock(spec=Database)
-        mock_db2 = MagicMock(spec=Database)
-
-        register_database("db1", mock_db1)
-        register_database("db2", mock_db2)
-
-        # List available databases
-        available = list_available_databases()
-        assert "db1" in available
-        assert "db2" in available
-
-        # Get each database
-        db1 = get_database("db1")
-        db2 = get_database("db2")
-
-        assert db1 is not None
-        assert db2 is not None
+    """Test database factory functions."""
+
+    def test_create_database_json(self):
+        """Test creating JSON database."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db = create_database("json", base_path=temp_dir)
+            assert isinstance(db, JsonDB)
+            assert db.base_path.resolve() == Path(temp_dir).resolve()
+
+    def test_create_database_mongodb(self):
+        """Test creating MongoDB database."""
+        with patch("jvspatial.db.mongodb.AsyncIOMotorClient"):
+            db = create_database("mongodb", uri="mongodb://localhost:27017/test")
+            assert isinstance(db, MongoDB)
+
+    def test_create_database_invalid_type(self):
+        """Test error handling for invalid database type."""
+        with pytest.raises(ValueError) as exc_info:
+            create_database("invalid_type")
+
+        assert "Unsupported database type" in str(exc_info.value)
+        assert "invalid_type" in str(exc_info.value)
+
+    def test_create_database_default_json(self):
+        """Test default database creation defaults to JSON."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(os.environ, {"JVSPATIAL_DB_TYPE": "json"}):
+                db = create_default_database()
+                assert isinstance(db, JsonDB)
+
+    def test_create_database_default_mongodb(self):
+        """Test default database creation with MongoDB."""
+        from jvspatial.db.manager import DatabaseManager
+
+        # Save current instance
+        original_instance = DatabaseManager._instance
+
+        try:
+            # Reset singleton to force re-initialization
+            DatabaseManager._instance = None
+
+            with patch("jvspatial.db.mongodb.AsyncIOMotorClient"):
+                with patch.dict(os.environ, {"JVSPATIAL_DB_TYPE": "mongodb"}):
+                    db = create_default_database()
+                    assert isinstance(db, MongoDB)
+        finally:
+            # Restore original instance
+            DatabaseManager._instance = original_instance
+
+    def test_create_database_json_with_config(self):
+        """Test creating JSON database with configuration."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = {"base_path": temp_dir, "create_dirs": True, "pretty_print": True}
+            db = create_database("json", **config)
+            assert isinstance(db, JsonDB)
+            assert db.base_path.resolve() == Path(temp_dir).resolve()
+
+    def test_create_database_mongodb_with_config(self):
+        """Test creating MongoDB database with configuration."""
+        with patch("jvspatial.db.mongodb.AsyncIOMotorClient"):
+            config = {"uri": "mongodb://localhost:27017/test", "db_name": "test_db"}
+            db = create_database("mongodb", **config)
+            assert isinstance(db, MongoDB)
 
     @pytest.mark.asyncio
-    async def test_factory_database_lifecycle(self):
-        """Test database lifecycle management."""
+    async def test_database_integration(self):
+        """Test database integration."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db = create_database("json", base_path=temp_dir)
 
-        # Register database with lifecycle methods
-        class LifecycleDatabase(Database):
-            def __init__(self, config=None):
-                self.initialized = False
-                self.closed = False
+            # Test basic operations
+            data = {"id": "test-id", "name": "test", "value": 123}
+            await db.save("test_collection", data)
+            result = await db.get("test_collection", "test-id")
+            assert result["name"] == "test"
+            assert result["value"] == 123
 
-            async def clean(self) -> None:
-                pass
+            # Test find
+            results = await db.find("test_collection", {"name": "test"})
+            assert len(results) == 1
+            assert results[0]["name"] == "test"
 
-            async def save(self, collection: str, data: dict) -> dict:
-                return data
+            # Test delete
+            await db.delete("test_collection", "test-id")
+            result = await db.get("test_collection", "test-id")
+            assert result is None
 
-            async def get(self, collection: str, id: str):
+
+class TestCustomDatabaseRegistration:
+    """Test custom database registration functionality."""
+
+    class CustomTestDatabase(Database):
+        """Test custom database implementation."""
+
+        __test__ = False  # Prevent pytest from collecting as test class
+
+        def __init__(self, test_param: str = "default", **kwargs: Any):
+            """Initialize test database."""
+            self.test_param = test_param
+            self._data: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+        async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
+            """Save a record."""
+            if "id" not in data:
+                raise ValueError("Record must have an 'id' field")
+            if collection not in self._data:
+                self._data[collection] = {}
+            self._data[collection][data["id"]] = data.copy()
+            return data
+
+        async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
+            """Get a record."""
+            if collection not in self._data:
                 return None
+            return self._data[collection].get(id)
 
-            async def find(self, collection: str, query: dict) -> list:
+        async def delete(self, collection: str, id: str) -> None:
+            """Delete a record."""
+            if collection in self._data:
+                self._data[collection].pop(id, None)
+
+        async def find(
+            self, collection: str, query: Dict[str, Any]
+        ) -> List[Dict[str, Any]]:
+            """Find records."""
+            if collection not in self._data:
                 return []
+            if not query:
+                return list(self._data[collection].values())
+            results = []
+            for record in self._data[collection].values():
+                if all(record.get(k) == v for k, v in query.items()):
+                    results.append(record)
+            return results
 
-            async def delete(self, collection: str, id: str) -> None:
-                pass
+    def test_register_database_type(self):
+        """Test registering a custom database type."""
 
-            async def initialize(self):
-                self.initialized = True
+        def create_test_db(
+            **kwargs: Any,
+        ) -> TestCustomDatabaseRegistration.CustomTestDatabase:
+            return TestCustomDatabaseRegistration.CustomTestDatabase(**kwargs)
 
-            async def close(self):
-                self.closed = True
+        # Cleanup in case of previous test failure
+        try:
+            unregister_database_type("test_custom")
+        except ValueError:
+            pass
 
-        register_database("lifecycle", LifecycleDatabase)
+        # Register custom database
+        register_database_type("test_custom", create_test_db)
 
-        # Get database
-        db = get_database("lifecycle")
+        # Verify it's registered
+        types = list_database_types()
+        assert "test_custom" in types
+        assert "Custom database" in types["test_custom"]
 
-        # Test lifecycle
-        assert not db.initialized
-        assert not db.closed
+        # Cleanup
+        unregister_database_type("test_custom")
 
-        # Initialize
-        await db.initialize()
-        assert db.initialized
+    def test_create_custom_database(self):
+        """Test creating a custom database via factory."""
 
-        # Close
-        await db.close()
-        assert db.closed
+        def create_test_db(
+            **kwargs: Any,
+        ) -> TestCustomDatabaseRegistration.CustomTestDatabase:
+            return TestCustomDatabaseRegistration.CustomTestDatabase(**kwargs)
 
-    async def test_factory_error_handling(self):
-        """Test factory error handling."""
-        # Test with invalid database type
-        with pytest.raises(ValueError):
-            get_database("invalid_type")
+        # Cleanup in case of previous test failure
+        try:
+            unregister_database_type("test_custom")
+        except ValueError:
+            pass
 
-        # JsonDB doesn't validate config, it ignores unknown params
-        # So this test isn't applicable for JsonDB
+        # Register and create
+        register_database_type("test_custom", create_test_db)
+        db = create_database("test_custom", test_param="custom_value")
 
-        # Test with database creation error
-        class FailingDatabase(Database):
-            def __init__(self, config=None):
-                raise RuntimeError("Database creation failed")
+        assert isinstance(db, TestCustomDatabaseRegistration.CustomTestDatabase)
+        assert db.test_param == "custom_value"
 
-            async def clean(self) -> None:
-                pass
+        # Cleanup
+        unregister_database_type("test_custom")
 
-            async def save(self, collection: str, data: dict) -> dict:
-                return data
+    def test_create_custom_database_with_kwargs(self):
+        """Test creating custom database with additional kwargs."""
 
-            async def get(self, collection: str, id: str):
-                return None
+        def create_test_db(
+            **kwargs: Any,
+        ) -> TestCustomDatabaseRegistration.CustomTestDatabase:
+            return TestCustomDatabaseRegistration.CustomTestDatabase(**kwargs)
 
-            async def find(self, collection: str, query: dict) -> list:
-                return []
+        # Cleanup in case of previous test failure
+        try:
+            unregister_database_type("test_custom")
+        except ValueError:
+            pass
 
-            async def delete(self, collection: str, id: str) -> None:
-                pass
+        register_database_type("test_custom", create_test_db)
+        db = create_database(
+            "test_custom", test_param="test_value", extra_param="ignored"
+        )
 
-        register_database("failing", FailingDatabase)
+        assert isinstance(db, TestCustomDatabaseRegistration.CustomTestDatabase)
+        assert db.test_param == "test_value"
 
-        # The error gets wrapped in InvalidConfigurationError
-        with pytest.raises(InvalidConfigurationError):
-            get_database("failing")
+        # Cleanup
+        unregister_database_type("test_custom")
 
-    async def test_factory_configuration_merging(self):
-        """Test configuration merging."""
-        # Test with environment variables
-        with patch.dict(
-            os.environ,
-            {"JVSPATIAL_DB_TYPE": "json", "JVSPATIAL_JSONDB_PATH": "/tmp/env_path"},
-        ):
-            db = get_database()
-            assert isinstance(db, JsonDB)
-            # On macOS, /tmp may be a symlink to /private/tmp
-            assert str(db.base_path) == os.path.realpath("/tmp/env_path")
+    def test_register_duplicate_type(self):
+        """Test error when registering duplicate database type."""
 
-        # Test with configuration override
-        db = get_database("json", base_path="/tmp/override")
-        assert str(db.base_path) == os.path.realpath("/tmp/override")
+        def create_test_db(
+            **kwargs: Any,
+        ) -> TestCustomDatabaseRegistration.CustomTestDatabase:
+            return TestCustomDatabaseRegistration.CustomTestDatabase(**kwargs)
 
-    async def test_factory_database_validation(self):
-        """Test database validation."""
-        # Test with valid database
-        db = get_database("json", base_path="/tmp/test")
-        assert db is not None
+        # Cleanup in case of previous test failure
+        try:
+            unregister_database_type("test_duplicate")
+        except ValueError:
+            pass
 
-        # JsonDB doesn't validate configuration, it just uses defaults
-        # So this test isn't applicable
+        register_database_type("test_duplicate", create_test_db)
 
-        # MongoDB would need proper configuration
-        # MongoDB tests should check for proper URI and db_name
+        # Try to register again
+        with pytest.raises(ValueError) as exc_info:
+            register_database_type("test_duplicate", create_test_db)
 
+        assert "already registered" in str(exc_info.value).lower()
 
-class TestDatabaseFactoryPerformance:
-    """Test database factory performance."""
+        # Cleanup
+        unregister_database_type("test_duplicate")
 
-    def setup_method(self):
-        """Set up test environment."""
-        # Clean up any test databases from previous runs
-        for i in range(1000):
-            unregister_database(f"db_{i}")
-        unregister_database("perf")
-        unregister_database("large_config")
+    def test_register_builtin_type_fails(self):
+        """Test that registering built-in types fails."""
 
-    async def test_factory_registration_performance(self):
-        """Test factory registration performance."""
-        # Get initial count (built-in databases)
-        initial_count = len(list_available_databases())
+        def create_test_db(
+            **kwargs: Any,
+        ) -> TestCustomDatabaseRegistration.CustomTestDatabase:
+            return TestCustomDatabaseRegistration.CustomTestDatabase(**kwargs)
 
-        # Register many databases
-        for i in range(1000):
-            mock_db = MagicMock(spec=Database)
-            register_database(f"db_{i}", mock_db)
+        # Try to register "json" (built-in)
+        with pytest.raises(ValueError) as exc_info:
+            register_database_type("json", create_test_db)
 
-        # List available databases
-        available = list_available_databases()
-        assert len(available) == initial_count + 1000
+        assert "built-in" in str(exc_info.value).lower()
 
-    async def test_factory_database_creation_performance(self):
-        """Test database creation performance."""
-        # Register database
-        mock_db_class = MagicMock(spec=Database)
-        mock_db_instance = MagicMock(spec=Database)
-        mock_db_class.return_value = mock_db_instance
+        # Try to register "mongodb" (built-in)
+        with pytest.raises(ValueError) as exc_info:
+            register_database_type("mongodb", create_test_db)
 
-        register_database("perf", mock_db_class)
+        assert "built-in" in str(exc_info.value).lower()
 
-        # Create many databases
-        for _ in range(100):
-            db = get_database("perf")
-            assert db is not None
+    def test_unregister_database_type(self):
+        """Test unregistering a custom database type."""
 
-    async def test_factory_configuration_performance(self):
-        """Test configuration performance."""
-        # Test with large configuration
-        large_config = {f"key_{i}": f"value_{i}" for i in range(1000)}
+        def create_test_db(
+            **kwargs: Any,
+        ) -> TestCustomDatabaseRegistration.CustomTestDatabase:
+            return TestCustomDatabaseRegistration.CustomTestDatabase(**kwargs)
 
-        mock_db_class = MagicMock(spec=Database)
-        mock_db_instance = MagicMock(spec=Database)
-        mock_db_class.return_value = mock_db_instance
+        # Register then unregister
+        register_database_type("test_unregister", create_test_db)
+        assert "test_unregister" in list_database_types()
 
-        register_database("large_config", mock_db_class)
+        unregister_database_type("test_unregister")
+        assert "test_unregister" not in list_database_types()
 
-        # Get database with large config
-        db = get_database("large_config", config=large_config)
-        assert db is not None
+    def test_unregister_nonexistent_type(self):
+        """Test error when unregistering non-existent type."""
+        with pytest.raises(ValueError) as exc_info:
+            unregister_database_type("nonexistent_type")
+
+        assert "not registered" in str(exc_info.value).lower()
+
+    def test_unregister_builtin_type_fails(self):
+        """Test that unregistering built-in types fails."""
+        with pytest.raises(ValueError) as exc_info:
+            unregister_database_type("json")
+
+        assert "built-in" in str(exc_info.value).lower()
+
+        with pytest.raises(ValueError) as exc_info:
+            unregister_database_type("mongodb")
+
+        assert "built-in" in str(exc_info.value).lower()
+
+    def test_list_database_types(self):
+        """Test listing all database types."""
+        types = list_database_types()
+
+        # Should include built-in types
+        assert "json" in types
+        assert "mongodb" in types
+        assert "json" in str(types["json"]).lower()
+        assert "mongodb" in str(types["mongodb"]).lower()
+
+        # Register custom type and verify it appears
+        def create_test_db(
+            **kwargs: Any,
+        ) -> TestCustomDatabaseRegistration.CustomTestDatabase:
+            return TestCustomDatabaseRegistration.CustomTestDatabase(**kwargs)
+
+        register_database_type("test_list", create_test_db)
+        types = list_database_types()
+        assert "test_list" in types
+
+        # Cleanup
+        unregister_database_type("test_list")
+
+    def test_create_unregistered_type_fails(self):
+        """Test that creating unregistered custom type fails."""
+        with pytest.raises(ValueError) as exc_info:
+            create_database("unregistered_custom")
+
+        assert "Unsupported database type" in str(exc_info.value)
+        assert "unregistered_custom" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_custom_database_integration(self):
+        """Test custom database with full CRUD operations."""
+
+        def create_test_db(
+            **kwargs: Any,
+        ) -> TestCustomDatabaseRegistration.CustomTestDatabase:
+            return TestCustomDatabaseRegistration.CustomTestDatabase(**kwargs)
+
+        register_database_type("test_integration", create_test_db)
+
+        try:
+            db = create_database("test_integration")
+
+            # Test save
+            data = {"id": "test-1", "name": "test", "value": 42}
+            saved = await db.save("test_collection", data)
+            assert saved["id"] == "test-1"
+
+            # Test get
+            retrieved = await db.get("test_collection", "test-1")
+            assert retrieved is not None
+            assert retrieved["name"] == "test"
+            assert retrieved["value"] == 42
+
+            # Test find
+            results = await db.find("test_collection", {"name": "test"})
+            assert len(results) == 1
+            assert results[0]["id"] == "test-1"
+
+            # Test find with empty query
+            all_results = await db.find("test_collection", {})
+            assert len(all_results) == 1
+
+            # Test delete
+            await db.delete("test_collection", "test-1")
+            retrieved = await db.get("test_collection", "test-1")
+            assert retrieved is None
+
+        finally:
+            unregister_database_type("test_integration")
+
+    def test_custom_database_with_multi_database_management(self):
+        """Test custom database with multi-database management."""
+
+        def create_test_db(
+            **kwargs: Any,
+        ) -> TestCustomDatabaseRegistration.CustomTestDatabase:
+            return TestCustomDatabaseRegistration.CustomTestDatabase(**kwargs)
+
+        register_database_type("test_multi", create_test_db)
+
+        try:
+            from jvspatial.db import get_database_manager
+
+            # Create and register with manager
+            db = create_database("test_multi", register=True, name="test_multi_db")
+            manager = get_database_manager()
+
+            # Verify it's registered
+            databases = manager.list_databases()
+            assert "test_multi_db" in databases
+
+            # Switch to it
+            manager.set_current_database("test_multi_db")
+            current = manager.get_current_database()
+            assert isinstance(
+                current, TestCustomDatabaseRegistration.CustomTestDatabase
+            )
+
+        finally:
+            unregister_database_type("test_multi")
+            # Cleanup manager registration
+            try:
+                from jvspatial.db import unregister_database
+
+                unregister_database("test_multi_db")
+            except ValueError:
+                pass  # Already unregistered
+
+    def test_custom_database_with_graph_context(self):
+        """Test custom database with GraphContext."""
+
+        def create_test_db(
+            **kwargs: Any,
+        ) -> TestCustomDatabaseRegistration.CustomTestDatabase:
+            return TestCustomDatabaseRegistration.CustomTestDatabase(**kwargs)
+
+        register_database_type("test_context", create_test_db)
+
+        try:
+            from jvspatial.core.context import GraphContext
+
+            db = create_database("test_context")
+            ctx = GraphContext(database=db)
+
+            # Verify context uses custom database
+            assert ctx.database is db
+            assert isinstance(
+                ctx.database, TestCustomDatabaseRegistration.CustomTestDatabase
+            )
+
+        finally:
+            unregister_database_type("test_context")

@@ -19,6 +19,8 @@ from jvspatial.core import (
     on_exit,
     on_visit,
 )
+from jvspatial.core.context import set_default_context
+from jvspatial.db import create_database
 
 
 class AlertNode(Node):
@@ -36,9 +38,21 @@ class MonitoringWalker(Walker):
         super().__init__(**kwargs)
         self.alerts_sent = 0
 
+    @on_visit(Root)
+    async def visit_root(self, here: Root) -> None:
+        """Continue traversal from root to connected AlertNodes."""
+        connected_nodes = await here.nodes()
+        alert_nodes = [n for n in connected_nodes if isinstance(n, AlertNode)]
+        if alert_nodes:
+            await self.visit(alert_nodes)
+
     @on_visit(AlertNode)
     async def check_for_alerts(self, here: AlertNode) -> None:
         """Check if this node should trigger an alert."""
+        # Skip if already visited (check trail)
+        if self.is_visited(here):
+            return
+
         if here.severity in ["warning", "critical"]:
             await self.emit(
                 "alert_detected",
@@ -62,6 +76,16 @@ class MonitoringWalker(Walker):
             )
             print(f"🚨 {self.id}: Alert sent for {here.name} ({here.severity})")
 
+        # Continue traversal to connected nodes (only unvisited ones, check trail)
+        connected_nodes = await here.nodes()
+        alert_neighbors = [
+            n
+            for n in connected_nodes
+            if isinstance(n, AlertNode) and not self.is_visited(n)
+        ]
+        if alert_neighbors:
+            await self.visit(alert_neighbors)
+
 
 class LoggingWalker(Walker):
     """A walker that receives and logs events from other walkers."""
@@ -70,8 +94,18 @@ class LoggingWalker(Walker):
         super().__init__(**kwargs)
         self.events_received = 0
 
+    @on_visit(Root)
+    async def visit_root(self, here: Root) -> None:
+        """Continue traversal from root to connected AlertNodes."""
+        connected_nodes = await here.nodes()
+        alert_nodes = [n for n in connected_nodes if isinstance(n, AlertNode)]
+        if alert_nodes:
+            await self.visit(alert_nodes)
+
     @on_emit("alert_detected")
-    async def handle_alert(self, event_data: Dict[str, Any]) -> None:
+    async def handle_alert(
+        self, event_type: str, event_data: Dict[str, Any], source_id: str
+    ) -> None:
         """Handle alert events from monitoring walkers."""
         self.events_received += 1
 
@@ -91,6 +125,10 @@ class LoggingWalker(Walker):
     @on_visit(AlertNode)
     async def log_node_visit(self, here: AlertNode) -> None:
         """Log visits to alert nodes."""
+        # Skip if already visited (check trail)
+        if self.is_visited(here):
+            return
+
         await self.report(
             {
                 "node_visit": {
@@ -100,6 +138,15 @@ class LoggingWalker(Walker):
                 }
             }
         )
+        # Continue traversal to connected nodes (only unvisited ones, check trail)
+        connected_nodes = await here.nodes()
+        alert_neighbors = [
+            n
+            for n in connected_nodes
+            if isinstance(n, AlertNode) and not self.is_visited(n)
+        ]
+        if alert_neighbors:
+            await self.visit(alert_neighbors)
 
 
 class AnalyticsWalker(Walker):
@@ -109,8 +156,35 @@ class AnalyticsWalker(Walker):
         super().__init__(**kwargs)
         self.alert_counts = {"info": 0, "warning": 0, "critical": 0}
 
+    @on_visit(Root)
+    async def visit_root(self, here: Root) -> None:
+        """Continue traversal from root to connected AlertNodes."""
+        connected_nodes = await here.nodes()
+        alert_nodes = [n for n in connected_nodes if isinstance(n, AlertNode)]
+        if alert_nodes:
+            await self.visit(alert_nodes)
+
+    @on_visit(AlertNode)
+    async def visit_alert_node(self, here: AlertNode) -> None:
+        """Visit alert nodes to stay synchronized with other walkers."""
+        # Skip if already visited (check trail)
+        if self.is_visited(here):
+            return
+
+        # Continue traversal to connected nodes (only unvisited ones, check trail)
+        connected_nodes = await here.nodes()
+        alert_neighbors = [
+            n
+            for n in connected_nodes
+            if isinstance(n, AlertNode) and not self.is_visited(n)
+        ]
+        if alert_neighbors:
+            await self.visit(alert_neighbors)
+
     @on_emit("alert_detected")
-    async def analyze_alert(self, event_data: Dict[str, Any]) -> None:
+    async def analyze_alert(
+        self, event_type: str, event_data: Dict[str, Any], source_id: str
+    ) -> None:
         """Analyze incoming alerts for patterns."""
         severity = event_data.get("severity", "info")
         self.alert_counts[severity] += 1
@@ -153,8 +227,35 @@ class ReportWalker(Walker):
         super().__init__(**kwargs)
         self.analytics_received = []
 
+    @on_visit(Root)
+    async def visit_root(self, here: Root) -> None:
+        """Continue traversal from root to connected AlertNodes."""
+        connected_nodes = await here.nodes()
+        alert_nodes = [n for n in connected_nodes if isinstance(n, AlertNode)]
+        if alert_nodes:
+            await self.visit(alert_nodes)
+
+    @on_visit(AlertNode)
+    async def visit_alert_node(self, here: AlertNode) -> None:
+        """Visit alert nodes to stay synchronized with other walkers."""
+        # Skip if already visited (check trail)
+        if self.is_visited(here):
+            return
+
+        # Continue traversal to connected nodes (only unvisited ones, check trail)
+        connected_nodes = await here.nodes()
+        alert_neighbors = [
+            n
+            for n in connected_nodes
+            if isinstance(n, AlertNode) and not self.is_visited(n)
+        ]
+        if alert_neighbors:
+            await self.visit(alert_neighbors)
+
     @on_emit("analytics_complete")
-    async def handle_analytics_complete(self, event_data: Dict[str, Any]) -> None:
+    async def handle_analytics_complete(
+        self, event_type: str, event_data: Dict[str, Any], source_id: str
+    ) -> None:
         """Handle completion of analytics from other walkers."""
         self.analytics_received.append(event_data)
 
@@ -192,21 +293,13 @@ async def create_alert_graph() -> None:
     for node in nodes:
         await node.save()
 
-    # Connect nodes to root
+    # Connect nodes to root using entity-centric connect()
     for i, node in enumerate(nodes):
-        edge = Edge(
-            source_id=root.id,
-            target_id=node.id,
-            name=f"monitors_{node.name.lower()}",
-        )
-        await edge.save()
+        await root.connect(node, name=f"monitors_{node.name.lower()}")
 
         # Create some inter-node dependencies
         if i < len(nodes) - 1:
-            dep_edge = Edge(
-                source_id=node.id, target_id=nodes[i + 1].id, name="depends_on"
-            )
-            await dep_edge.save()
+            await node.connect(nodes[i + 1], name="depends_on")
 
 
 async def demonstrate_event_communication():
@@ -222,7 +315,17 @@ async def demonstrate_event_communication():
     analytics = AnalyticsWalker()
     reporter = ReportWalker()
 
-    # Start all walkers concurrently
+    # Register all walkers with event bus before starting (spawn() does this, but ensure they're all ready)
+    from jvspatial.core.events import event_bus
+
+    await asyncio.gather(
+        event_bus.register_entity(monitor),
+        event_bus.register_entity(logger),
+        event_bus.register_entity(analytics),
+        event_bus.register_entity(reporter),
+    )
+
+    # Start all walkers concurrently (spawn() also registers, but this ensures early registration)
     tasks = [monitor.spawn(), logger.spawn(), analytics.spawn(), reporter.spawn()]
 
     # Wait for all walkers to complete
@@ -232,7 +335,7 @@ async def demonstrate_event_communication():
     print("=" * 50)
 
     # Monitor Walker Report
-    monitor_report = monitor.get_report()
+    monitor_report = await monitor.get_report()
     print(f"\n🚨 Monitor Walker ({monitor.id}):")
     print(f"   Alerts sent: {monitor.alerts_sent}")
     alert_count = sum(
@@ -241,7 +344,7 @@ async def demonstrate_event_communication():
     print(f"   Report entries: {len(monitor_report)} (alerts: {alert_count})")
 
     # Logger Walker Report
-    logger_report = logger.get_report()
+    logger_report = await logger.get_report()
     print(f"\n📝 Logger Walker ({logger.id}):")
     print(f"   Events received: {logger.events_received}")
     received_count = sum(
@@ -252,7 +355,7 @@ async def demonstrate_event_communication():
     print(f"   Report entries: {len(logger_report)} (alerts logged: {received_count})")
 
     # Analytics Walker Report
-    analytics_report = analytics.get_report()
+    analytics_report = await analytics.get_report()
     print(f"\n📊 Analytics Walker ({analytics.id}):")
     print(f"   Alert breakdown: {analytics.alert_counts}")
     analysis_count = sum(
@@ -263,7 +366,7 @@ async def demonstrate_event_communication():
     print(f"   Report entries: {len(analytics_report)} (analyses: {analysis_count})")
 
     # Report Walker Report
-    reporter_report = reporter.get_report()
+    reporter_report = await reporter.get_report()
     print(f"\n📄 Report Walker ({reporter.id}):")
     print(f"   Analytics summaries received: {len(reporter.analytics_received)}")
     print(f"   Report entries: {len(reporter_report)}")
@@ -288,8 +391,18 @@ async def demonstrate_event_filtering():
             super().__init__(**kwargs)
             self.critical_alerts = 0
 
+        @on_visit(Root)
+        async def visit_root(self, here: Root) -> None:
+            """Continue traversal from root to connected AlertNodes."""
+            connected_nodes = await here.nodes()
+            alert_nodes = [n for n in connected_nodes if isinstance(n, AlertNode)]
+            if alert_nodes:
+                await self.visit(alert_nodes)
+
         @on_emit("alert_detected")
-        async def handle_critical_only(self, event_data: Dict[str, Any]) -> None:
+        async def handle_critical_only(
+            self, event_type: str, event_data: Dict[str, Any], source_id: str
+        ) -> None:
             """Only process critical alerts."""
             if event_data.get("severity") == "critical":
                 self.critical_alerts += 1
@@ -310,11 +423,19 @@ async def demonstrate_event_filtering():
     monitor = MonitoringWalker()
     critical_handler = CriticalOnlyWalker()
 
+    # Register walkers with event bus before starting (ensure they receive events)
+    from jvspatial.core.events import event_bus
+
+    await asyncio.gather(
+        event_bus.register_entity(monitor),
+        event_bus.register_entity(critical_handler),
+    )
+
     # Run them concurrently
     await asyncio.gather(monitor.spawn(), critical_handler.spawn())
 
     print(f"🔥 Critical alerts handled: {critical_handler.critical_alerts}")
-    critical_report = critical_handler.get_report()
+    critical_report = await critical_handler.get_report()
     critical_count = sum(
         1
         for item in critical_report
@@ -328,7 +449,10 @@ if __name__ == "__main__":
     print("=" * 50)
 
     async def run_demo():
-        # No architecture setup needed - use default
+        # Initialize default context for standalone execution
+        db = create_database(db_type="json", base_path="./jvdb")
+        ctx = GraphContext(database=db)
+        set_default_context(ctx)
 
         reports = await demonstrate_event_communication()
         await demonstrate_event_filtering()

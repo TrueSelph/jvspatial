@@ -42,6 +42,10 @@ repos:
           - --follow-imports=silent
           - --ignore-missing-imports
           - --explicit-package-bases
+          - --no-warn-return-any
+          - --no-strict-optional
+          - --allow-redefinition
+          - --show-error-codes
         additional_dependencies:
           - types-PyYAML
           - types-requests

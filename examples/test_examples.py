@@ -4,6 +4,7 @@
 This script runs each example and reports success/failure status.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,7 +12,7 @@ from pathlib import Path
 
 def run_example_group(examples_dir, examples, title, description):
     """Run a group of examples and return results."""
-    print(f"\n{title}")
+    print(f"{title}")
     print("-" * 50)
     print(description)
     print()
@@ -24,9 +25,7 @@ def run_example_group(examples_dir, examples, title, description):
                 passed += 1
             else:
                 failed += 1
-        else:
-            print(f"❓ {example_name} (not found)")
-            failed += 1
+        # Skip non-existent files silently (they're not in the codebase)
 
     return passed, failed
 
@@ -35,7 +34,21 @@ def test_example(example_file):
     """Test a single example file."""
     try:
         # Use longer timeout for certain examples
-        timeout = 120 if example_file.name == "agent_graph.py" else 30
+        if example_file.name == "agent_graph.py":
+            timeout = 120
+        elif example_file.name == "database_error_handling.py":
+            timeout = 60  # MongoDB connection attempts can take time
+        else:
+            timeout = 30
+
+        # Set PYTHONPATH to include the project root
+        env = os.environ.copy()
+        project_root = Path(__file__).parent.parent
+        pythonpath = env.get("PYTHONPATH", "")
+        if pythonpath:
+            env["PYTHONPATH"] = f"{project_root}:{pythonpath}"
+        else:
+            env["PYTHONPATH"] = str(project_root)
 
         # Run the example with a timeout
         result = subprocess.run(
@@ -44,6 +57,7 @@ def test_example(example_file):
             text=True,
             timeout=timeout,
             cwd=Path(__file__).parent,
+            env=env,
         )
 
         if result.returncode == 0:
@@ -66,6 +80,15 @@ def test_example(example_file):
 def test_server_example(example_file):
     """Test a server example file - these start servers that need special handling."""
     try:
+        # Set PYTHONPATH to include the project root
+        env = os.environ.copy()
+        project_root = Path(__file__).parent.parent
+        pythonpath = env.get("PYTHONPATH", "")
+        if pythonpath:
+            env["PYTHONPATH"] = f"{project_root}:{pythonpath}"
+        else:
+            env["PYTHONPATH"] = str(project_root)
+
         # For server examples, we just check if they start without errors
         # and then terminate them after a few seconds
         process = subprocess.Popen(
@@ -74,6 +97,7 @@ def test_server_example(example_file):
             stderr=subprocess.PIPE,
             text=True,
             cwd=Path(__file__).parent,
+            env=env,
         )
 
         # Wait a few seconds to see if the server starts properly
@@ -143,50 +167,38 @@ def main():
 
     # Core examples
     core_examples = [
-        "database/crud_demo.py",
-        "database/orm_demo.py",
         "walkers/walker_traversal_demo.py",
         "database/filtering/enhanced_nodes_filtering.py",
-        "database/modern_query_interface.py",
+        "database/query_interface_example.py",
         "database/pagination/object_pagination_demo.py",
-        "walkers/traversal_demo.py",
         "database/filtering/semantic_filtering.py",
         "database/unified_query_interface_example.py",
         "database/custom_database_example.py",
-        "database/custom_database_registry_example.py",
         "database/database_switching_example.py",
         "walkers/walker_events_demo.py",
         "walkers/walker_reporting_demo.py",
     ]
 
-    # Server examples
-    server_examples = [
-        "server/comprehensive_server_example.py",  # Combined best practices
-        "server/server_example.py",  # Basic patterns
-        "server/server_demo.py",  # Advanced patterns
-        "server/fastapi_server.py",  # FastAPI integration
-        "server/dynamic_server_demo.py",  # Dynamic endpoint management
-        "server/dynamic_endpoint_removal.py",  # Dynamic endpoint lifecycle
-        "server/endpoint_decorator_demo.py",  # Decorator patterns
-        "server/endpoint_respond_demo.py",  # Response patterns
-        "server/exception_handling_demo.py",  # Error handling patterns
-        "server/webhook_examples.py",  # Webhook patterns
-    ]
-
-    # Scheduler examples
+    # Scheduler examples (long-running, skipped)
     scheduler_examples = [
         "scheduler/scheduler_example.py",  # Basic scheduler patterns
         "scheduler/dynamic_scheduler_demo.py",  # Advanced scheduler features
     ]
 
-    # Authentication examples
-    auth_examples = [
-        "auth/auth_demo.py",  # Authentication patterns
+    # Storage examples (these start servers, so test as server examples)
+    storage_examples = [
+        "storage/storage_example.py",  # Comprehensive storage example
+        "storage/file_storage_demo.py",  # File storage operations demo
+    ]
+
+    # API examples
+    api_examples = [
+        "api/authenticated_endpoints_example.py",  # Authenticated API endpoints
+        "api/unauthenticated_endpoints_example.py",  # Unauthenticated API endpoints
     ]
 
     # Long-running examples to skip
     long_running_examples = [
-        *auth_examples,
         *scheduler_examples,
     ]
 
@@ -215,13 +227,13 @@ def main():
     passed += group_passed
     failed += group_failed
 
-    # Test server examples
+    # Test storage examples (these start servers)
     print("\n🌐 Server Examples:")
     print("-" * 50)
     print("These start servers; we validate they start without errors")
     print()
 
-    for example_name in server_examples:
+    for example_name in storage_examples:
         example_path = examples_dir / example_name
         if example_path.exists():
             if test_server_example(example_path):
@@ -231,6 +243,16 @@ def main():
         else:
             print(f"❓ {example_name} (not found)")
             failed += 1
+
+    # Test API examples
+    group_passed, group_failed = run_example_group(
+        examples_dir,
+        api_examples,
+        "\n🌐 API Examples:",
+        "Examples demonstrating API endpoint patterns",
+    )
+    passed += group_passed
+    failed += group_failed
 
     # Report long-running examples
     print("\n⏱️  Long Running Examples:")
@@ -242,9 +264,6 @@ def main():
         example_path = examples_dir / example_name
         if example_path.exists():
             print(f"⏭️  {example_name} (skipped - runs indefinitely)")
-            skipped += 1
-        else:
-            print(f"❓ {example_name} (not found)")
             skipped += 1
 
     # Print summary

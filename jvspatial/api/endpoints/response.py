@@ -5,9 +5,10 @@ This module provides all response-related functionality including:
 - Response formatting utilities
 - Response helper class with convenience methods
 - Low-level response wrapper class
+- Response schema definition system for @endpoint decorator
 """
 
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Type, Union
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
@@ -53,518 +54,768 @@ class ErrorResponse(APIResponse):
 
 def format_response(
     data: Optional[Dict[str, Any]] = None,
-    *,
-    success: bool = True,
     message: Optional[str] = None,
-    error: Optional[str] = None,
-    detail: Optional[str] = None,
-    code: Optional[str] = None,
-    status: Optional[int] = None,
-) -> Union[SuccessResponse, ErrorResponse]:
-    """Format an API response using standard types.
+    success: bool = True,
+) -> Dict[str, Any]:
+    """Format a response dictionary.
 
     Args:
-        data: Response data for successful responses
-        success: Whether the request was successful
-        message: Optional message for successful responses
-        error: Error message for failed responses
-        detail: Additional error details
-        code: Error code
-        status: HTTP status code for error responses
+        data: Response data
+        message: Optional message
+        success: Whether the response represents success
 
     Returns:
-        Formatted API response (SuccessResponse or ErrorResponse)
-
-    Example:
-        >>> await format_response(data={"user": "john"}, success=True)
-        SuccessResponse(success=True, data={"user": "john"})
-
-        >>> await format_response(error="Not found", status=404, success=False)
-        ErrorResponse(success=False, error="Not found", status=404)
+        Formatted response dictionary
     """
-    if success:
-        return SuccessResponse(
-            success=True,
-            message=message,
-            data=data or {},
-        )
-    else:
-        return ErrorResponse(
-            success=False,
-            error=error or "Unknown error",
-            detail=detail,
-            code=code,
-            status=status or 500,
-        )
-
-
-# ============================================================================
-# Low-Level Response Wrapper
-# ============================================================================
+    response = {"success": success}
+    if message is not None:
+        response["message"] = message
+    if data is not None:
+        response["data"] = data
+    return response
 
 
 class EndpointResponse:
-    """Low-level response wrapper for jvspatial endpoints.
-
-    This class provides a flexible interface for creating HTTP responses
-    with configurable status codes, content, headers, and media types.
-    Used internally by ResponseHelper and endpoint routers.
-
-    Example:
-        >>> resp = EndpointResponse(content={"data": "test"}, status_code=200)
-        >>> resp.to_json_response()
-        JSONResponse(content={"data": "test"}, status_code=200)
-    """
+    """Response wrapper for endpoint handlers."""
 
     def __init__(
         self,
-        content: Any = None,
+        content: Optional[Any] = None,
         status_code: int = 200,
         headers: Optional[Dict[str, str]] = None,
         media_type: str = "application/json",
-    ) -> None:
-        """Initialize EndpointResponse.
+    ):
+        """Initialize endpoint response.
 
         Args:
-            content: Response content/payload
+            content: Response content (dict, string, or any serializable object)
             status_code: HTTP status code
-            headers: Optional HTTP headers
-            media_type: Response media type
+            headers: Optional response headers
+            media_type: Content type
         """
         self.content = content
         self.status_code = status_code
         self.headers = headers or {}
         self.media_type = media_type
 
+    async def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary.
+
+        Returns:
+            Response dictionary with status, message, data, headers fields
+        """
+        result = {"status": self.status_code}
+
+        # Handle content based on type
+        if self.content is None:
+            # None content - just return status
+            pass
+        elif isinstance(self.content, dict):
+            # If content is a dict, merge all its fields into result
+            if self.content:  # Non-empty dict
+                result.update(self.content)
+            # Empty dict - just return status (already set)
+        else:
+            # Non-dict content goes into "data" field
+            result["data"] = self.content
+
+        # Add headers if present
+        if self.headers:
+            result["headers"] = self.headers
+
+        return result
+
     async def to_json_response(self) -> JSONResponse:
         """Convert to FastAPI JSONResponse.
 
         Returns:
-            JSONResponse object ready for FastAPI
+            JSONResponse instance
         """
+        content_dict = await self.to_dict()
+        # Extract the actual content (status should not be in JSONResponse content)
+        json_content = {k: v for k, v in content_dict.items() if k != "status"}
         return JSONResponse(
-            content=self.content,
+            content=json_content,
             status_code=self.status_code,
             headers=self.headers,
             media_type=self.media_type,
         )
 
-    async def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary format for walker response property.
-
-        Returns:
-            Dictionary representation including status code
-        """
-        response_dict: Dict[str, Any] = {"status": self.status_code}
-        if self.content is not None:
-            if isinstance(self.content, dict):
-                response_dict.update(self.content)
-            else:
-                response_dict["data"] = self.content
-        if self.headers:
-            response_dict["headers"] = self.headers
-        return response_dict
-
-
-# ============================================================================
-# High-Level Response Helper
-# ============================================================================
-
 
 class ResponseHelper:
-    """High-level helper class for generating API responses.
+    """Helper class for Walker responses."""
 
-    This class provides convenient methods for creating common HTTP responses
-    with appropriate status codes and formatting. Automatically handles both
-    walker endpoints (returns dict) and function endpoints (returns JSONResponse).
-
-    Example:
-        >>> helper = ResponseHelper()
-        >>> helper.success(data={"user": "john"})
-        JSONResponse(content={"data": {"user": "john"}}, status_code=200)
-
-        >>> helper.not_found(message="User not found")
-        JSONResponse(content={"error": "User not found"}, status_code=404)
-    """
-
-    def __init__(self, *, walker_instance: Optional[Walker] = None) -> None:
-        """Initialize the response helper.
+    def __init__(self, walker_instance: Optional[Walker] = None):
+        """Initialize response helper.
 
         Args:
-            walker_instance: Optional walker instance to update response property
+            walker_instance: Optional Walker instance
         """
         self.walker_instance = walker_instance
 
     async def response(
         self,
-        content: Any = None,
+        content: Optional[Dict[str, Any]] = None,
         status_code: int = 200,
         headers: Optional[Dict[str, str]] = None,
-        media_type: str = "application/json",
-    ) -> Union[JSONResponse, Dict[str, Any]]:
-        """Create a flexible response.
+    ) -> Union[Dict[str, Any], JSONResponse]:
+        """Create a custom response.
 
         Args:
-            content: Response content/payload
+            content: Response content
             status_code: HTTP status code
-            headers: Optional HTTP headers
-            media_type: Response media type
+            headers: Optional headers
 
         Returns:
-            JSONResponse for function endpoints, dict for walker endpoints
+            Dict for walkers, JSONResponse for function endpoints
         """
-        response_dict: Dict[str, Any] = {"status": status_code}
-        if content is not None:
-            if isinstance(content, dict):
-                # Preserve status when updating with content
-                content_copy = content.copy()
-                response_dict.update(content_copy)
-                response_dict["status"] = status_code
-            else:
-                response_dict["data"] = content
+        response_data = {"status": status_code}
+        if content:
+            response_data.update(content)
         if headers:
-            response_dict["headers"] = headers
+            response_data["headers"] = headers or {}
 
-        if self.walker_instance is not None:
-            # Set response property and add to report if available
-            self.walker_instance.response = response_dict
+        if self.walker_instance:
+            # Store response on walker instance and add to report
+            if not hasattr(self.walker_instance, "response"):
+                self.walker_instance.response = None
+            self.walker_instance.response = response_data
+            # Add to walker's report so it can be retrieved via get_report()
             if hasattr(self.walker_instance, "report"):
-                await self.walker_instance.report(response_dict)
-            return response_dict
+                await self.walker_instance.report(response_data)
+            return response_data
         else:
-            # For function endpoints, return JSONResponse
+            # Return JSONResponse for function endpoints
             return JSONResponse(
-                content=content,
+                content=content or {},
                 status_code=status_code,
                 headers=headers,
-                media_type=media_type,
             )
 
     async def success(
         self,
         data: Optional[Dict[str, Any]] = None,
         message: Optional[str] = None,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> Union[JSONResponse, Dict[str, Any]]:
-        """Generate a successful response (200 OK).
+    ) -> Union[Dict[str, Any], JSONResponse]:
+        """Create success response.
 
         Args:
             data: Response data
-            message: Optional success message
-            headers: Optional HTTP headers
+            message: Optional message
 
         Returns:
-            Success response
+            Dict for walkers, JSONResponse for function endpoints
         """
-        content: Dict[str, Any] = {}
-        if data is not None:
-            content["data"] = data
-        if message is not None:
-            content["message"] = message
+        response_data = {"status": 200}
+        if message:
+            response_data["message"] = message
+        if data:
+            response_data["data"] = data
 
-        final_content = (
-            content if content else {"data": data} if data is not None else content
-        )
-        return await self.response(
-            content=final_content,
-            status_code=200,
-            headers=headers,
-        )
+        if self.walker_instance:
+            if not hasattr(self.walker_instance, "response"):
+                self.walker_instance.response = None
+            self.walker_instance.response = response_data
+            # Add to walker's report so it can be retrieved via get_report()
+            if hasattr(self.walker_instance, "report"):
+                await self.walker_instance.report(response_data)
+            return response_data
+        else:
+            content = {}
+            if message:
+                content["message"] = message
+            if data:
+                content["data"] = data
+            return JSONResponse(content=content, status_code=200)
 
     async def created(
         self,
-        data: Any = None,
+        data: Optional[Dict[str, Any]] = None,
         message: Optional[str] = None,
         headers: Optional[Dict[str, str]] = None,
-    ) -> Union[JSONResponse, Dict[str, Any]]:
-        """Create a resource created response (201 Created).
+    ) -> Union[Dict[str, Any], JSONResponse]:
+        """Create 201 Created response.
 
         Args:
-            data: Created resource data
-            message: Optional creation message
-            headers: Optional HTTP headers
+            data: Response data
+            message: Optional message
+            headers: Optional headers
 
         Returns:
-            Created response
+            Dict for walkers, JSONResponse for function endpoints
         """
-        content: Dict[str, Any] = {}
-        if data is not None:
-            content["data"] = data
-        if message is not None:
-            content["message"] = message
+        response_data = {"status": 201}
+        if message:
+            response_data["message"] = message
+        if data:
+            response_data["data"] = data
+        if headers:
+            response_data["headers"] = headers
 
-        final_content = (
-            content if content else {"data": data} if data is not None else content
-        )
-        return await self.response(
-            content=final_content,
-            status_code=201,
-            headers=headers,
-        )
+        if self.walker_instance:
+            if not hasattr(self.walker_instance, "response"):
+                self.walker_instance.response = None
+            self.walker_instance.response = response_data
+            # Add to walker's report so it can be retrieved via get_report()
+            if hasattr(self.walker_instance, "report"):
+                await self.walker_instance.report(response_data)
+            return response_data
+        else:
+            content = {}
+            if message:
+                content["message"] = message
+            if data:
+                content["data"] = data
+            return JSONResponse(content=content, status_code=201, headers=headers)
 
     async def no_content(
-        self, headers: Optional[Dict[str, str]] = None
-    ) -> Union[JSONResponse, Dict[str, Any]]:
-        """Create a no content response (204 No Content).
+        self,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Union[Dict[str, Any], JSONResponse]:
+        """Create 204 No Content response.
 
         Args:
-            headers: Optional HTTP headers
+            headers: Optional headers
 
         Returns:
-            No content response
+            Dict for walkers, JSONResponse for function endpoints
         """
-        return await self.response(
-            content=None,
-            status_code=204,
-            headers=headers,
-        )
+        response_data = {"status": 204}
+        if headers:
+            response_data["headers"] = headers
+
+        if self.walker_instance:
+            if not hasattr(self.walker_instance, "response"):
+                self.walker_instance.response = None
+            self.walker_instance.response = response_data
+            # Add to walker's report so it can be retrieved via get_report()
+            if hasattr(self.walker_instance, "report"):
+                await self.walker_instance.report(response_data)
+            return response_data
+        else:
+            return JSONResponse(content=None, status_code=204, headers=headers)
+
+    async def bad_request(
+        self,
+        message: str = "Bad Request",
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Union[Dict[str, Any], JSONResponse]:
+        """Create 400 Bad Request response.
+
+        Args:
+            message: Error message
+            details: Optional error details
+
+        Returns:
+            Dict for walkers, JSONResponse for function endpoints
+        """
+        response_data = {"status": 400, "error": message}
+        if details:
+            response_data["details"] = details
+
+        if self.walker_instance:
+            if not hasattr(self.walker_instance, "response"):
+                self.walker_instance.response = None
+            self.walker_instance.response = response_data
+            # Add to walker's report so it can be retrieved via get_report()
+            if hasattr(self.walker_instance, "report"):
+                await self.walker_instance.report(response_data)
+            return response_data
+        else:
+            content = {"error": message}
+            if details:
+                content["details"] = details
+            return JSONResponse(content=content, status_code=400)
+
+    async def unauthorized(
+        self,
+        message: str = "Unauthorized",
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Union[Dict[str, Any], JSONResponse]:
+        """Create 401 Unauthorized response.
+
+        Args:
+            message: Error message
+            details: Optional error details
+
+        Returns:
+            Dict for walkers, JSONResponse for function endpoints
+        """
+        response_data = {"status": 401, "error": message}
+        if details:
+            response_data["details"] = details
+
+        if self.walker_instance:
+            if not hasattr(self.walker_instance, "response"):
+                self.walker_instance.response = None
+            self.walker_instance.response = response_data
+            # Add to walker's report so it can be retrieved via get_report()
+            if hasattr(self.walker_instance, "report"):
+                await self.walker_instance.report(response_data)
+            return response_data
+        else:
+            content = {"error": message}
+            if details:
+                content["details"] = details
+            return JSONResponse(content=content, status_code=401)
+
+    async def forbidden(
+        self,
+        message: str = "Forbidden",
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Union[Dict[str, Any], JSONResponse]:
+        """Create 403 Forbidden response.
+
+        Args:
+            message: Error message
+            details: Optional error details
+
+        Returns:
+            Dict for walkers, JSONResponse for function endpoints
+        """
+        response_data = {"status": 403, "error": message}
+        if details:
+            response_data["details"] = details
+
+        if self.walker_instance:
+            if not hasattr(self.walker_instance, "response"):
+                self.walker_instance.response = None
+            self.walker_instance.response = response_data
+            # Add to walker's report so it can be retrieved via get_report()
+            if hasattr(self.walker_instance, "report"):
+                await self.walker_instance.report(response_data)
+            return response_data
+        else:
+            content = {"error": message}
+            if details:
+                content["details"] = details
+            return JSONResponse(content=content, status_code=403)
+
+    async def not_found(
+        self,
+        message: str = "Not Found",
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Union[Dict[str, Any], JSONResponse]:
+        """Create 404 Not Found response.
+
+        Args:
+            message: Error message
+            details: Optional error details
+
+        Returns:
+            Dict for walkers, JSONResponse for function endpoints
+        """
+        response_data = {"status": 404, "error": message}
+        if details:
+            response_data["details"] = details
+
+        if self.walker_instance:
+            if not hasattr(self.walker_instance, "response"):
+                self.walker_instance.response = None
+            self.walker_instance.response = response_data
+            # Add to walker's report so it can be retrieved via get_report()
+            if hasattr(self.walker_instance, "report"):
+                await self.walker_instance.report(response_data)
+            return response_data
+        else:
+            content = {"error": message}
+            if details:
+                content["details"] = details
+            return JSONResponse(content=content, status_code=404)
+
+    async def conflict(
+        self,
+        message: str = "Conflict",
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Union[Dict[str, Any], JSONResponse]:
+        """Create 409 Conflict response.
+
+        Args:
+            message: Error message
+            details: Optional error details
+
+        Returns:
+            Dict for walkers, JSONResponse for function endpoints
+        """
+        response_data = {"status": 409, "error": message}
+        if details:
+            response_data["details"] = details
+
+        if self.walker_instance:
+            if not hasattr(self.walker_instance, "response"):
+                self.walker_instance.response = None
+            self.walker_instance.response = response_data
+            # Add to walker's report so it can be retrieved via get_report()
+            if hasattr(self.walker_instance, "report"):
+                await self.walker_instance.report(response_data)
+            return response_data
+        else:
+            content = {"error": message}
+            if details:
+                content["details"] = details
+            return JSONResponse(content=content, status_code=409)
+
+    async def unprocessable_entity(
+        self,
+        message: str = "Unprocessable Entity",
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Union[Dict[str, Any], JSONResponse]:
+        """Create 422 Unprocessable Entity response.
+
+        Args:
+            message: Error message
+            details: Optional error details
+
+        Returns:
+            Dict for walkers, JSONResponse for function endpoints
+        """
+        response_data = {"status": 422, "error": message}
+        if details:
+            response_data["details"] = details
+
+        if self.walker_instance:
+            if not hasattr(self.walker_instance, "response"):
+                self.walker_instance.response = None
+            self.walker_instance.response = response_data
+            # Add to walker's report so it can be retrieved via get_report()
+            if hasattr(self.walker_instance, "report"):
+                await self.walker_instance.report(response_data)
+            return response_data
+        else:
+            content = {"error": message}
+            if details:
+                content["details"] = details
+            return JSONResponse(content=content, status_code=422)
+
+    async def internal_server_error(
+        self,
+        message: str = "Internal Server Error",
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Union[Dict[str, Any], JSONResponse]:
+        """Create 500 Internal Server Error response.
+
+        Args:
+            message: Error message
+            details: Optional error details
+
+        Returns:
+            Dict for walkers, JSONResponse for function endpoints
+        """
+        response_data = {"status": 500, "error": message}
+        if details:
+            response_data["details"] = details
+
+        if self.walker_instance:
+            if not hasattr(self.walker_instance, "response"):
+                self.walker_instance.response = None
+            self.walker_instance.response = response_data
+            # Add to walker's report so it can be retrieved via get_report()
+            if hasattr(self.walker_instance, "report"):
+                await self.walker_instance.report(response_data)
+            return response_data
+        else:
+            content = {"error": message}
+            if details:
+                content["details"] = details
+            return JSONResponse(content=content, status_code=500)
 
     async def error(
         self,
         message: str,
         status_code: int = 400,
-        details: Any = None,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> Union[JSONResponse, Dict[str, Any]]:
-        """Create an error response.
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Union[Dict[str, Any], JSONResponse]:
+        """Create error response with custom status code.
 
         Args:
             message: Error message
             status_code: HTTP status code
             details: Optional error details
-            headers: Optional HTTP headers
 
         Returns:
-            Error response
+            Dict for walkers, JSONResponse for function endpoints
         """
-        content: Dict[str, Any] = {"error": message}
-        if details is not None:
-            content["details"] = details
+        response_data = {"status": status_code, "error": message}
+        if details:
+            response_data["details"] = details
 
-        return await self.response(
-            content=content,
-            status_code=status_code,
-            headers=headers,
-        )
+        if self.walker_instance:
+            if not hasattr(self.walker_instance, "response"):
+                self.walker_instance.response = None
+            self.walker_instance.response = response_data
+            # Add to walker's report so it can be retrieved via get_report()
+            if hasattr(self.walker_instance, "report"):
+                await self.walker_instance.report(response_data)
+            return response_data
+        else:
+            content = {"error": message}
+            if details:
+                content["details"] = details
+            return JSONResponse(content=content, status_code=status_code)
 
-    async def bad_request(
-        self,
-        message: str = "Bad Request",
-        details: Any = None,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> Union[JSONResponse, Dict[str, Any]]:
-        """Create a bad request response (400 Bad Request).
-
-        Args:
-            message: Error message
-            details: Optional error details
-            headers: Optional HTTP headers
-
-        Returns:
-            Bad request response
-        """
-        return await self.error(
-            message=message,
-            status_code=400,
-            details=details,
-            headers=headers,
-        )
-
-    async def unauthorized(
-        self,
-        message: str = "Unauthorized",
-        details: Any = None,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> Union[JSONResponse, Dict[str, Any]]:
-        """Create an unauthorized response (401 Unauthorized).
-
-        Args:
-            message: Error message
-            details: Optional error details
-            headers: Optional HTTP headers
-
-        Returns:
-            Unauthorized response
-        """
-        return await self.error(
-            message=message,
-            status_code=401,
-            details=details,
-            headers=headers,
-        )
-
-    async def forbidden(
-        self,
-        message: str = "Forbidden",
-        details: Any = None,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> Union[JSONResponse, Dict[str, Any]]:
-        """Create a forbidden response (403 Forbidden).
-
-        Args:
-            message: Error message
-            details: Optional error details
-            headers: Optional HTTP headers
-
-        Returns:
-            Forbidden response
-        """
-        return await self.error(
-            message=message,
-            status_code=403,
-            details=details,
-            headers=headers,
-        )
-
-    async def not_found(
-        self,
-        message: str = "Not Found",
-        details: Any = None,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> Union[JSONResponse, Dict[str, Any]]:
-        """Create a not found response (404 Not Found).
-
-        Args:
-            message: Error message
-            details: Optional error details
-            headers: Optional HTTP headers
-
-        Returns:
-            Not found response
-        """
-        return await self.error(
-            message=message,
-            status_code=404,
-            details=details,
-            headers=headers,
-        )
-
-    async def conflict(
-        self,
-        message: str = "Conflict",
-        details: Any = None,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> Union[JSONResponse, Dict[str, Any]]:
-        """Create a conflict response (409 Conflict).
-
-        Args:
-            message: Error message
-            details: Optional error details
-            headers: Optional HTTP headers
-
-        Returns:
-            Conflict response
-        """
-        return await self.error(
-            message=message,
-            status_code=409,
-            details=details,
-            headers=headers,
-        )
-
-    async def unprocessable_entity(
-        self,
-        message: str = "Unprocessable Entity",
-        details: Any = None,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> Union[JSONResponse, Dict[str, Any]]:
-        """Create an unprocessable entity response (422 Unprocessable Entity).
-
-        Args:
-            message: Error message
-            details: Optional error details
-            headers: Optional HTTP headers
-
-        Returns:
-            Unprocessable entity response
-        """
-        return await self.error(
-            message=message,
-            status_code=422,
-            details=details,
-            headers=headers,
-        )
-
-    async def internal_server_error(
-        self,
-        message: str = "Internal Server Error",
-        details: Any = None,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> Union[JSONResponse, Dict[str, Any]]:
-        """Create an internal server error response (500 Internal Server Error).
-
-        Args:
-            message: Error message
-            details: Optional error details
-            headers: Optional HTTP headers
-
-        Returns:
-            Internal server error response
-        """
-        return await self.error(
-            message=message,
-            status_code=500,
-            details=details,
-            headers=headers,
-        )
-
-    def exception(
+    def raise_error(
         self,
         status_code: int,
-        *,
+        error: str,
         detail: Optional[str] = None,
-        headers: Optional[Dict[str, str]] = None,
+        code: Optional[str] = None,
     ) -> None:
-        """Raise an HTTP exception.
+        """Raise HTTP exception.
 
         Args:
             status_code: HTTP status code
-            detail: Error detail
-            headers: Optional response headers
-
-        Raises:
-            HTTPException: Always
+            error: Error message
+            detail: Optional error detail
+            code: Optional error code
         """
         raise HTTPException(
             status_code=status_code,
-            detail=detail,
-            headers=headers,
+            detail={
+                "error": error,
+                "detail": detail,
+                "code": code,
+            },
         )
 
 
-# ============================================================================
-# Factory Function
-# ============================================================================
-
-
-def create_endpoint_helper(
-    walker_instance: Optional[Any] = None,
-) -> ResponseHelper:
-    """Factory function to create an endpoint response helper.
+def create_endpoint_helper(walker_instance: Optional[Walker] = None) -> ResponseHelper:
+    """Create response helper instance.
 
     Args:
-        walker_instance: Optional walker instance for response property updates
+        walker_instance: Optional Walker instance
 
     Returns:
-        Configured ResponseHelper instance
+        ResponseHelper instance
+    """
+    return ResponseHelper(walker_instance)
+
+
+# ============================================================================
+# Response Schema Definition System
+# ============================================================================
+
+
+class ResponseField:
+    """Field definition for API response schemas.
+
+    Similar to EndpointField but for response definitions.
+    """
+
+    def __init__(
+        self,
+        field_type: Type[Any],
+        description: str = "",
+        example: Any = None,
+        examples: Optional[List[Any]] = None,
+        **kwargs: Any,
+    ):
+        """Initialize response field.
+
+        Args:
+            field_type: The type of the field
+            description: Description of the field
+            example: Single example value
+            examples: List of example values
+            **kwargs: Additional Pydantic field arguments
+        """
+        self.field_type = field_type
+        self.description = description
+        self.example = example
+        self.examples = examples or ([example] if example is not None else [])
+        self.kwargs = kwargs
+
+
+class ResponseSchema:
+    """Response schema definition for endpoints.
+
+    This class allows developers to define the expected response structure
+    for their endpoints in a programmatic way.
+    """
+
+    def __init__(
+        self,
+        success: bool = True,
+        message: Optional[str] = None,
+        data: Optional[Dict[str, ResponseField]] = None,
+        error: Optional[Dict[str, ResponseField]] = None,
+        **kwargs: Any,
+    ):
+        """Initialize response schema.
+
+        Args:
+            success: Whether the response represents success
+            message: Optional message field
+            data: Data fields for successful responses
+            error: Error fields for error responses
+            **kwargs: Additional fields
+        """
+        self.success = success
+        self.message = message
+        self.data = data or {}
+        self.error = error or {}
+        self.kwargs = kwargs
+
+    def to_pydantic_model(self, model_name: str) -> Type[BaseModel]:
+        """Convert response schema to Pydantic model.
+
+        Args:
+            model_name: Name for the generated model
+
+        Returns:
+            Pydantic model class
+        """
+        # Create a proper namespace with annotations
+        namespace = {
+            "__annotations__": {},
+            "model_config": ConfigDict(extra="forbid"),
+        }
+        example: Dict[str, Any] = {}
+
+        # Add success field
+        namespace["__annotations__"]["success"] = bool
+        namespace["success"] = Field(
+            default=self.success, description="Whether the request was successful"
+        )
+        example["success"] = self.success
+
+        # Add message field if specified
+        if self.message is not None:
+            namespace["__annotations__"]["message"] = Optional[str]
+            namespace["message"] = Field(default=None, description="Response message")
+            # don't set example for message unless provided via kwargs
+
+        # Add data fields for successful responses
+        if self.success and self.data:
+            for field_name, field_def in self.data.items():
+                namespace["__annotations__"][field_name] = field_def.field_type
+                field_config = {
+                    "description": field_def.description,
+                    "examples": field_def.examples,
+                }
+                field_config.update(field_def.kwargs)
+                namespace[field_name] = Field(**field_config)
+                # compose example if available
+                if field_def.examples:
+                    example[field_name] = field_def.examples[0]
+
+        # Add error fields for error responses
+        if not self.success and self.error:
+            for field_name, field_def in self.error.items():
+                namespace["__annotations__"][field_name] = field_def.field_type
+                field_config = {
+                    "description": field_def.description,
+                    "examples": field_def.examples,
+                }
+                field_config.update(field_def.kwargs)
+                namespace[field_name] = Field(**field_config)
+                if field_def.examples:
+                    example[field_name] = field_def.examples[0]
+
+        # Add any additional fields
+        for field_name, field_value in self.kwargs.items():
+            if isinstance(field_value, ResponseField):
+                namespace["__annotations__"][field_name] = field_value.field_type
+                field_config = {
+                    "description": field_value.description,
+                    "examples": field_value.examples,
+                }
+                field_config.update(field_value.kwargs)
+                namespace[field_name] = Field(**field_config)
+                if field_value.examples:
+                    example[field_name] = field_value.examples[0]
+            else:
+                field_type = type(field_value)
+                namespace["__annotations__"][field_name] = field_type
+                namespace[field_name] = Field(default=field_value)
+                example[field_name] = field_value
+
+        # Attach model-level example via model_config
+        if example:
+            # Merge into existing model_config
+            current_cfg: ConfigDict = namespace.get("model_config", ConfigDict())
+            merged_cfg = ConfigDict(
+                **{**current_cfg, "json_schema_extra": {"example": example}}
+            )
+            namespace["model_config"] = merged_cfg
+
+        # Create the model
+        return type(model_name, (BaseModel,), namespace)
+
+
+def response_schema(
+    success: bool = True,
+    message: Optional[str] = None,
+    data: Optional[Dict[str, ResponseField]] = None,
+    error: Optional[Dict[str, ResponseField]] = None,
+    **kwargs: Any,
+) -> ResponseSchema:
+    """Create a response schema definition.
+
+    Args:
+        success: Whether the response represents success
+        message: Optional message field
+        data: Data fields for successful responses
+        error: Error fields for error responses
+        **kwargs: Additional fields
+
+    Returns:
+        ResponseSchema instance
 
     Example:
-        >>> helper = create_endpoint_helper()
-        >>> helper.success(data={"user": "john"})
+        @endpoint("/users", response=response_schema(
+            data={
+                "users": ResponseField(
+                    field_type=List[Dict[str, Any]],
+                    description="List of users",
+                    example=[{"id": 1, "name": "John"}]
+                ),
+                "count": ResponseField(
+                    field_type=int,
+                    description="Total number of users",
+                    example=1
+                )
+            }
+        ))
+        def get_users():
+            return {"users": [], "count": 0}
     """
-    return ResponseHelper(walker_instance=walker_instance)
+    return ResponseSchema(
+        success=success, message=message, data=data, error=error, **kwargs
+    )
 
 
-__all__ = [
-    # Type definitions
-    "APIResponse",
-    "SuccessResponse",
-    "ErrorResponse",
-    # Formatting utilities
-    "format_response",
-    # Response classes
-    "EndpointResponse",
-    "ResponseHelper",
-    # Factory function
-    "create_endpoint_helper",
-]
+# Convenience functions for common response patterns
+def success_response(
+    data: Optional[Dict[str, ResponseField]] = None,
+    message: Optional[str] = None,
+    **kwargs: Any,
+) -> ResponseSchema:
+    """Create a success response schema.
+
+    Args:
+        data: Data fields
+        message: Optional message
+        **kwargs: Additional fields
+
+    Returns:
+        ResponseSchema for success responses
+    """
+    return ResponseSchema(success=True, message=message, data=data, **kwargs)
+
+
+def error_response(
+    error: Optional[Dict[str, ResponseField]] = None,
+    message: Optional[str] = None,
+    **kwargs: Any,
+) -> ResponseSchema:
+    """Create an error response schema.
+
+    Args:
+        error: Error fields
+        message: Optional message
+        **kwargs: Additional fields
+
+    Returns:
+        ResponseSchema for error responses
+    """
+    return ResponseSchema(success=False, message=message, error=error, **kwargs)

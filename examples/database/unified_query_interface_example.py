@@ -15,7 +15,7 @@ from typing import Any, Dict, List
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from jvspatial.core import GraphContext, Node
-from jvspatial.db import Database, get_database, register_database
+from jvspatial.db import Database, create_database
 from jvspatial.db.query import QueryBuilder, QueryEngine, query
 
 
@@ -76,18 +76,15 @@ async def demonstrate_unified_queries():
     print("🔍 Unified MongoDB-style Query Interface Demo")
     print("=" * 60)
 
-    # Register custom database
-    register_database("memory", InMemoryDatabase, memory_configurator)
-
     # Create different database instances
     databases = {
-        "JSON": get_database("json", base_path="temp_query_demo"),
-        "Memory": get_database("memory", name="QueryDemo"),
+        "JSON": create_database("json", base_path="temp_query_demo"),
+        "Memory": InMemoryDatabase(name="QueryDemo"),
     }
 
     # Add MongoDB if available
     try:
-        mongo_db = get_database("mongodb", db_name="query_demo_test")
+        mongo_db = create_database("mongodb", db_name="query_demo_test")
         # Test the connection by attempting a simple operation
         await mongo_db.count("test")
         databases["MongoDB"] = mongo_db
@@ -271,25 +268,26 @@ async def demonstrate_unified_queries():
 
     print(f"\n  🎯 Distinct Values:")
     for db_name, db in databases.items():
-        categories = await db.distinct("node", "context.category")
-        print(f"    {db_name}: {len(categories)} categories: {categories}")
+        # Get all records and extract unique category values
+        all_records = await db.find("node", {})
+        categories = set()
+        for record in all_records:
+            context = record.get("context", {})
+            category = context.get("category")
+            if category:
+                categories.add(category)
+        print(f"    {db_name}: {len(categories)} categories: {sorted(categories)}")
 
     # Test Query Builder
     print(f"\n9️⃣  Query Builder Usage")
 
     # Build complex query programmatically
-    builder_query = (
-        query()
-        .field("context.category")
-        .eq("electronics")
-        .field("context.price")
-        .gte(50)
-        .field("context.price")
-        .lte(150)
-        .field("context.in_stock")
-        .eq(True)
-        .build()
-    )
+    builder = query()
+    builder.field("context.category").eq("electronics")
+    builder.field("context.price").gte(50)
+    builder.field("context.price").lte(150)
+    builder.field("context.in_stock").eq(True)
+    builder_query = builder.build()
 
     print(f"Built query: {builder_query}")
 
@@ -309,8 +307,21 @@ async def demonstrate_unified_queries():
     update_ops = {"$inc": {"context.price": 10}}  # Increase price by $10
 
     for db_name, db in databases.items():
-        result = await db.update_many("node", update_query, update_ops)
-        print(f"  {db_name}: Modified {result.get('modified_count', 0)} electronics")
+        # update_many is not available in the Database interface
+        # Instead, find records and update them individually
+        records_to_update = await db.find("node", update_query)
+        modified_count = 0
+        for record in records_to_update:
+            # Update the record with $inc operation
+            context = record.get("context", {})
+            if "price" in context:
+                context["price"] = context.get("price", 0) + update_ops.get(
+                    "$inc", {}
+                ).get("context.price", 10)
+                record["context"] = context
+                await db.save("node", record)
+                modified_count += 1
+        print(f"  {db_name}: Modified {modified_count} electronics")
 
     # Verify updates worked
     print(f"\n  📋 Verification (electronics after price increase):")
@@ -329,10 +340,16 @@ async def demonstrate_unified_queries():
     delete_query = {"context.in_stock": False}
 
     for db_name, db in databases.items():
-        result = await db.delete_many("node", delete_query)
-        print(
-            f"  {db_name}: Deleted {result.get('deleted_count', 0)} out-of-stock items"
-        )
+        # delete_many is not available in the Database interface
+        # Instead, find records and delete them individually
+        records_to_delete = await db.find("node", delete_query)
+        deleted_count = 0
+        for record in records_to_delete:
+            record_id = record.get("_id") or record.get("id")
+            if record_id:
+                await db.delete("node", record_id)
+                deleted_count += 1
+        print(f"  {db_name}: Deleted {deleted_count} out-of-stock items")
 
     # Final count
     print(f"\n📊 Final Counts:")

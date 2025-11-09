@@ -108,3 +108,52 @@ class ServerConfig(BaseModel):
     proxy_max_expiration: int = Field(
         default=86400, validation_alias="JVSPATIAL_PROXY_MAX_EXPIRATION"
     )  # 24 hours
+
+    # Authentication Configuration
+    auth_enabled: bool = Field(
+        default=False, description="Enable authentication middleware"
+    )
+    jwt_auth_enabled: bool = Field(
+        default=False, description="Enable JWT authentication"
+    )
+    api_key_auth_enabled: bool = Field(
+        default=False, description="Enable API key authentication"
+    )
+    session_auth_enabled: bool = Field(
+        default=False, description="Enable session authentication"
+    )
+
+    # JWT Configuration
+    jwt_secret: str = Field(default="your-secret-key", description="JWT secret key")
+    jwt_algorithm: str = Field(default="HS256", description="JWT algorithm")
+    jwt_expire_minutes: int = Field(
+        default=30, description="JWT expiration time in minutes"
+    )
+
+    # API Key Configuration
+    api_key_header: str = Field(
+        default="x-api-key", description="Header name for API key"
+    )
+    api_keys: List[str] = Field(default_factory=list, description="Valid API keys")
+
+    # Session Configuration
+    session_cookie_name: str = Field(
+        default="session", description="Session cookie name"
+    )
+    session_expire_minutes: int = Field(
+        default=60, description="Session expiration time in minutes"
+    )
+
+    # Authentication Exempt Paths
+    auth_exempt_paths: List[str] = Field(
+        default_factory=lambda: [
+            "/health",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
+            "/favicon.ico",
+            "/auth/login",
+            "/auth/logout",
+            "/auth/register",
+        ]
+    )

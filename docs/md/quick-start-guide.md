@@ -91,23 +91,32 @@ class UserWalker(Walker):
 
 ### **Step 3: Create API Endpoints**
 
-```python
-from jvspatial.api import Server, ServerConfig, endpoint
-from jvspatial.core import GraphContext
+> **💡 Standard Examples**: For production-ready implementations with authentication, CRUD operations, and pagination, see:
+> - **Authenticated API**: [`examples/api/authenticated_endpoints_example.py`](../../examples/api/authenticated_endpoints_example.py)
+> - **Unauthenticated API**: [`examples/api/unauthenticated_endpoints_example.py`](../../examples/api/unauthenticated_endpoints_example.py)
 
-@endpoint("/users/{user_id}")
+```python
+from jvspatial.api import Server, endpoint
+from jvspatial.core import Node
+
+# Create server (entity-centric operations are automatically available)
+server = Server(
+    title="My API",
+    description="API description",
+    version="1.0.0",
+    db_type="json",
+    db_path="./jvdb",
+    auth_enabled=False  # Set to True to enable authentication
+)
+
+@endpoint("/users/{user_id}", methods=["GET"])
 async def get_user(user_id: str):
     """Get a user by ID."""
-    async with GraphContext() as ctx:
-        user = await User.get(user_id, ctx=ctx)
-        return {"user": user.to_dict()}
-
-@endpoint("/users/{user_id}/posts")
-async def get_user_posts(user_id: str):
-    """Get all posts by a user."""
-    walker = UserWalker(start_node=user_id)
-    result = await walker.execute()
-    return result
+    user = await User.get(user_id)  # Entity-centric operation
+    if not user:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"user": user.export()}
 ```
 
 ### **Step 4: Start the Server**
@@ -165,19 +174,16 @@ async with GraphContext() as ctx:
 ### **Pattern 2: Querying Nodes**
 
 ```python
-from jvspatial.db import query
+# Get by ID (returns None if not found)
+user = await User.get("user_id_here")
+if user is None:
+    raise EntityNotFoundError(message="User not found", entity_type="User", entity_id="user_id_here")
 
-async with GraphContext() as ctx:
-    # Get by ID
-    user = await User.get("user_id_here", ctx=ctx)
-
-    # Query with filters
-    db = ctx.database
-    users = await db.find(
-        query("User")
-        .where("age").greater_than(18)
-        .where("name").matches("A.*")
-    )
+# Query with MongoDB-style filters
+users = await User.find({
+    "context.age": {"$gt": 18},
+    "context.name": {"$regex": "^A", "$options": "i"}
+})
 ```
 
 ### **Pattern 3: Creating Relationships**
@@ -198,14 +204,13 @@ async with GraphContext() as ctx:
 ### **Pattern 4: Authenticated Endpoints**
 
 ```python
-from jvspatial.api.decorators import auth_endpoint
+from jvspatial.api import endpoint
 
-@auth_endpoint("/admin/users")
+@endpoint("/admin/users", methods=["GET"], auth=True, roles=["admin"])
 async def list_all_users():
     """Admin-only endpoint."""
-    async with GraphContext() as ctx:
-        users = await User.all(ctx=ctx)
-        return {"users": [u.to_dict() for u in users]}
+    users = await User.find({})
+    return {"users": [u.export() for u in users]}
 ```
 
 ### **Pattern 5: Caching**
@@ -343,7 +348,7 @@ ls -la
 # Run examples
 python core/cities.py
 python server/server_demo.py
-python walkers/traversal_demo.py
+python walkers/walker_traversal_demo.py
 ```
 
 ### **Join the Community**

@@ -1,8 +1,6 @@
-<div align="center">
-
 # jvspatial
 
-An async-first Python library for building graph-based spatial applications with FastAPI integration.
+An async-first Python library for building graph-based spatial applications with FastAPI integration. Provides entity-centric database operations with automatic context management.
 
 [![GitHub release (latest by date)](https://img.shields.io/github/v/release/TrueSelph/jvspatial)](https://github.com/TrueSelph/jvspatial/releases)
 [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/TrueSelph/jvspatial/test-jvspatial.yaml)](https://github.com/TrueSelph/jvspatial/actions)
@@ -10,552 +8,251 @@ An async-first Python library for building graph-based spatial applications with
 [![GitHub pull requests](https://img.shields.io/github/issues-pr/TrueSelph/jvspatial)](https://github.com/TrueSelph/jvspatial/pulls)
 [![GitHub](https://img.shields.io/github/license/TrueSelph/jvspatial)](LICENSE)
 
-</div>
-
 ## Table of Contents
 
 - [Overview](#overview)
-  - [Design Principles](#design-principles)
-  - [Use Cases](#use-cases)
-- [Features](#features)
-  - [Core Features](#core-features)
+- [Key Features](#key-features)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
-- [Key Concepts](#key-concepts)
-  - [Entity-Centric Design](#entity-centric-design)
-  - [Graph Traversal](#graph-traversal)
-  - [Entity Operations](#entity-operations)
-- [Examples](#examples)
-  - [Core Functionality](#core-functionality)
-  - [API & Integration](#api--integration)
+- [Core Concepts](#core-concepts)
 - [Configuration](#configuration)
-  - [Core Settings](#core-settings)
-  - [Auth Settings](#auth-settings)
-  - [Storage Settings](#storage-settings)
-  - [Walker Settings](#walker-settings)
 - [Documentation](#documentation)
-  - [Official Docs](#official-docs)
-  - [User Resources](#user-resources)
-  - [Developer Guides](#developer-guides)
-- [Project Structure](#project-structure)
 - [Contributing](#contributing)
-  - [Development Setup](#development-setup)
-  - [Development Workflow](#development-workflow)
-- [Contributors](#contributors)
 - [License](#license)
-- [Acknowledgments](#acknowledgments)
 
 ## Overview
 
-jvspatial combines graph databases with spatial processing for building complex applications. Inspired by Jaseci Labs' object-spatial paradigm, it provides an async-first API with enterprise-grade features for building spatial applications, middleware, and services.
+jvspatial is an async-first Python library for building graph-based spatial applications with FastAPI integration. It provides entity-centric database operations with automatic context management.
 
-### Design Principles
+**Key Design Principles:**
+- **Hierarchy**: Object → Node → Edge/Walker inheritance
+- **Entity-Centric**: Direct database operations via entity methods
+- **Unified Decorators**: `@attribute` for entity attributes, `@endpoint` for API endpoints
+- **Automatic Context**: Server automatically provides database context to entities
+- **Essential CRUD**: Core database operations with pagination support
+- **Unified Configuration**: Single `Config` class for all settings
+- **Async-First**: Built for modern Python async/await patterns
 
-- **Simple APIs**: Clean, predictable interfaces for graph operations
-- **Type Safety**: Comprehensive validation with Pydantic
-- **Async First**: Native async/await for high performance
-- **Enterprise Ready**: Built-in security, storage, and caching
-- **Extensible**: Pluggable backends and custom behaviors
+## Key Features
 
+### 🎯 Inheritance Hierarchy
+- **Object**: Base class for all entities
+- **Node**: Graph nodes with spatial data (inherits from Object)
+- **Edge**: Relationships between nodes (inherits from Object)
+- **Walker**: Graph traversal and pathfinding (inherits from Object)
+- **Root**: Singleton root node (inherits from Node)
 
-## Comparison
+### 🎨 Unified Decorator System
+- `@attribute` - Define entity attributes with protection, transient flags, and validation
+- `@endpoint` - Unified endpoint decorator for both functions and Walker classes
+- Automatic parameter and response schema generation
 
-How jvspatial compares to adjacent tools:
+### 🗄️ Entity-Centric Database Operations
+- Entity methods: `Entity.get()`, `Entity.find()`, `Entity.create()`, `entity.save()`, `entity.delete()`
+- Automatic context management
+- Support for JSON and MongoDB backends
+- Multi-database support with prime database for core persistence
+- Custom database registration for extensibility
+- Pagination with `ObjectPager`
 
-- **NetworkX**: Great for in-memory graph algorithms; jvspatial focuses on async application development, persistence, and REST integration.
-- **Neo4j drivers**: Low-level graph database access; jvspatial provides a higher-level object-spatial model with walkers, endpoints, and auth.
-- **Plain FastAPI + ORM**: Excellent for CRUD; jvspatial adds graph traversal, node/edge relationships, and spatial patterns.
+### ⚙️ Unified Configuration
+- Single `Config` class for all settings
+- Environment variable support
+- Type-safe configuration
 
-## Who is this for?
-
-- Backend engineers building spatially-aware services
-- Data engineers modeling complex relationships as graphs
-- Teams needing graph traversal with REST integration and auth
-- Developers who prefer Python async patterns with clear APIs
-
-## When to use
-
-- You have entities with relationships (roads between cities, users following users)
-- You need to traverse or analyze connected data efficiently
-- You want REST endpoints backed by safe, async graph operations
-- You need enterprise features: authentication, storage, caching
-
-### Use Cases
-
-- **Spatial Services**: Location-based APIs and analysis
-- **Graph Processing**: Complex relationship traversal
-- **Data APIs**: REST endpoints with built-in auth and storage
-- **ETL Pipelines**: Async data processing and transformation
-- **Middleware**: Secure integrations and event processing
-
-## Key Concepts
-
-jvspatial is built around three core concepts: Nodes, Edges, and Walkers. These provide the foundation for building complex spatial applications.
-
-### Entity-Centric Design
-
-```python
-from jvspatial.core import Node
-
-class User(Node):
-    name: str
-    email: str
-    department: str
-
-# Create and query entities
-user = await User.create(name="Alice", email="alice@company.com")
-active_users = await User.find({"context.active": True})
-
-# Complex queries work across all backends
-senior_engineers = await User.find({
-    "$and": [
-        {"context.department": "engineering"},
-        {"context.years": {"$gte": 5}}
-    ]
-})
-```
-
-### Graph Traversal
-
-```python
-from jvspatial.core import Walker, on_visit
-
-class TeamAnalyzer(Walker):
-    @on_visit(User)
-    async def analyze_team(self, here: User):
-        # Find team members
-        team = await here.nodes(
-            node="User",
-            department=here.department,
-            active=True
-        )
-        await self.visit(team)
-```
-
-### Entity Operations
-
-```python
-# CRUD operations
-user = await User.get(user_id)
-user.name = "Alice Johnson"
-await user.save()
-
-# Filtering and aggregation
-count = await User.count({"context.role": "engineer"})
-depts = await User.distinct("department")
-```
+### 🚀 FastAPI Integration
+- Built-in FastAPI server with automatic OpenAPI documentation
+- Automatic endpoint registration from decorators
+- Authentication and authorization with automatic endpoint registration when enabled
+- Response schema definitions with examples
+- Entity-centric CRUD operations
 
 ## Installation
 
 ```bash
-pip install jvspatial            # Basic installation
-pip install jvspatial[all]       # All features
-pip install jvspatial[api]       # FastAPI integration
-pip install jvspatial[storage]   # S3 storage support
-pip install jvspatial[auth]      # Authentication features
-pip install jvspatial[cache]     # Redis caching support
-```
-
-Requirements:
-- Python 3.9+
-- FastAPI 0.88+ (for REST API)
-- MongoDB 5.0+ (optional)
-- Redis (optional)
-
-## Quick Start
-
-1. Create a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: .\venv\Scripts\activate
 pip install jvspatial
 ```
 
-2. Create a `.env` file:
-```bash
-JVSPATIAL_DB_TYPE=json
-JVSPATIAL_JSONDB_PATH=./jvdb/dev
+## Quick Start
 
-# Auth settings
-JVSPATIAL_JWT_SECRET=your-secret-key
-JVSPATIAL_JWT_ALGORITHM=HS256
-```
+> **💡 Standard Examples**: For production-ready API implementations, see:
+> - **Authenticated API**: [`examples/api/authenticated_endpoints_example.py`](examples/api/authenticated_endpoints_example.py) - Complete CRUD with authentication
+> - **Unauthenticated API**: [`examples/api/unauthenticated_endpoints_example.py`](examples/api/unauthenticated_endpoints_example.py) - Public read-only API
 
-3. Create a server:
+### Basic Example
+
 ```python
-from jvspatial.api import Server
-from jvspatial.api.auth.decorators import auth_endpoint
+from jvspatial.api import Server, endpoint
+from jvspatial.core import Node
 
-# Create server
+# Create server (entity-centric operations available automatically)
 server = Server(
     title="My API",
-    description="First jvspatial API",
-    auth_enabled=True
+    db_type="json",
+    db_path="./jvdb",
+    auth_enabled=False  # Set to True to enable authentication
 )
 
-# Add endpoint
-@auth_endpoint("/api/hello")
-async def hello(name: str = "World", endpoint=None):
-    return endpoint.success({
-        "message": f"Hello, {name}!"
-    })
+# Define entity
+class User(Node):
+    name: str = ""
+    email: str = ""
+
+# Create endpoint
+@endpoint("/users/{user_id}", methods=["GET"])
+async def get_user(user_id: str):
+    user = await User.get(user_id)
+    if not user:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"user": user.export()}
 
 if __name__ == "__main__":
     server.run()
 ```
 
-## Features
+## Core Concepts
 
-### Core Features
+### Entity Definition and Attributes
 
-#### Entity System
-- **Entity-Centric Design** - [docs/md/entity-reference.md](docs/md/entity-reference.md)
-  - MongoDB-style query interface across all backends
-  - Unified API for JSON and MongoDB storage
-  - Extensible database interface
-  - Consistent CRUD operations
+```python
+from jvspatial.core import Node
+from jvspatial.core.annotations import attribute
 
-- **Type Safety** - [docs/md/attribute-annotations.md](docs/md/attribute-annotations.md)
-  - Full Pydantic integration
-  - Runtime type validation
-  - Rich type hints and IDE support
-  - Custom type converters
+class User(Node):
+    name: str = ""
+    email: str = ""
+    cache: dict = attribute(transient=True, default_factory=dict)
+```
 
-- **Attribute Control** - [docs/md/attribute-annotations.md](docs/md/attribute-annotations.md)
-  - `@protected` decorator for immutable fields
-  - `@private` decorator for private properties
-  - `@transient` decorator for runtime-only data
-  - Computed properties
-  - Validation hooks
-  - Validation hooks
+### Unified Endpoint Decorator
 
-#### Graph Processing
-- **Graph Traversal** - [docs/md/node-operations.md](docs/md/node-operations.md)
-  - Walker-based graph processing
-  - Semantic path filtering
-  - Bidirectional traversal
-  - Custom traversal strategies
+The `@endpoint` decorator works with both functions and Walker classes:
 
-- **Walker Features** - [docs/md/walker-reporting-events.md](docs/md/walker-reporting-events.md)
-  - Event-driven walker coordination
-  - Built-in reporting system
-  - Data collection and aggregation
-  - Inter-walker communication
+```python
+from jvspatial.api import Server, endpoint
+from jvspatial.core import Node
 
-- **Safety Features** - [docs/md/infinite-walk-protection.md](docs/md/infinite-walk-protection.md)
-  - Infinite walk protection
-  - Configurable step limits
-  - Visit frequency control
-  - Execution time limits
+server = Server(title="My API", db_type="json", db_path="./jvdb")
 
-#### Data Management
-- **Database Operations** - [docs/md/mongodb-query-interface.md](docs/md/mongodb-query-interface.md)
-  - Multi-backend support (JSON, MongoDB)
-  - Atomic transactions
-  - Bulk operations
-  - Query optimization
+# Function endpoint
+@endpoint("/api/users", methods=["GET"])
+async def list_users(page: int = 1, per_page: int = 10):
+    from jvspatial.core.pager import ObjectPager
+    pager = ObjectPager(User, page_size=per_page)
+    users = await pager.get_page(page=page)
+    return {"users": [user.export() for user in users]}
 
-- **Caching System** - [docs/md/caching.md](docs/md/caching.md)
-  - Multi-level cache architecture
-  - In-memory caching
-  - Redis integration
-  - Cache invalidation strategies
+# Authenticated endpoint
+@endpoint("/api/admin", methods=["GET"], auth=True, roles=["admin"])
+async def admin_panel():
+    return {"admin": "dashboard"}
 
-- **Pagination** - [docs/md/pagination.md](docs/md/pagination.md)
-  - Database-level pagination
-  - Efficient `ObjectPager`
-  - Cursor-based navigation
-  - Automatic count handling
+# Endpoint with response schema
+from jvspatial.api.endpoints.response import ResponseField, success_response
 
-#### API & Integration
-- **FastAPI Integration** - [docs/md/rest-api.md](docs/md/rest-api.md)
-  - Built-in REST endpoints
-  - Automatic OpenAPI docs
-  - Request validation
-  - Response formatting
+@endpoint(
+    "/api/users",
+    methods=["GET"],
+    response=success_response(
+        data={
+            "users": ResponseField(List[Dict], "List of users"),
+            "total": ResponseField(int, "Total count")
+        }
+    )
+)
+async def get_users():
+    return {"users": [], "total": 0}
+```
 
-- **Webhook System** - [docs/md/webhook-architecture.md](docs/md/webhook-architecture.md)
-  - HMAC signature verification
-  - Idempotency handling
-  - Path-based authentication
-  - Async webhook processing
-  - Automatic payload injection
+### Entity-Centric Database Operations
 
-- **Background Tasks**
-  - Async task scheduling
-  - Task prioritization
-  - Error handling
-  - Task monitoring
+```python
+from jvspatial.core import Node
 
-#### Security
-- **Authentication** - [docs/md/authentication.md](docs/md/authentication.md)
-  - JWT token support
-  - API key management
-  - Multi-scheme auth
-  - Token refresh handling
+class User(Node):
+    name: str = ""
+    email: str = ""
 
-- **Authorization**
-  - Role-based access control (RBAC)
-  - Spatial permissions system
-  - Granular access policies
-  - Permission inheritance
+# Entity-centric operations (no context needed - server provides it automatically)
+user = await User.create(name="John", email="john@example.com")
+users = await User.find({"context.name": "John"})  # Use context. prefix for fields
+user = await User.get(user_id)  # Returns None if not found
+if user:
+    await user.save()
+    await user.delete()
 
-- **Security Features**
-  - Rate limiting
-  - Request validation
-  - CORS support
-  - SSL/TLS configuration
-
-#### Storage & Files
-- **File Storage** - [docs/md/file-storage-architecture.md](docs/md/file-storage-architecture.md)
-  - Local file system support
-  - S3 compatible storage
-  - File streaming
-  - Metadata management
-
-- **Storage Features**
-  - Automatic cleanup
-  - Version control
-  - Content validation
-  - Access control
-
-#### Development Tools
-- **Testing Support**
-  - Comprehensive test utilities
-  - Mock data generators
-  - Test fixtures
-  - Performance testing tools
-
-- **Debugging**
-  - Detailed logging
-  - Performance profiling
-  - Query analysis
-  - Error tracking
-
-- **Documentation**
-  - Extensive API docs
-  - Code examples
-  - Best practices
-  - Migration guides
-
-## Examples
-
-Browse example categories in the `/examples` directory:
-
-### Core Functionality
-- [Core Examples](examples/core/) - Entity modeling and basic operations
-- [Database Examples](examples/database/) - Query and ORM features
-- [Walker Examples](examples/walkers/) - Graph traversal patterns
-
-### API & Integration
-- [API Examples](examples/api/) - Server and endpoint setup
-- [Auth Examples](examples/auth/) - Authentication and permissions
-- [Storage Examples](examples/storage/) - File storage features
-- [Integration Examples](examples/integrations/) - External system integrations
+# Counting: use len() with find() - Object.count() doesn't exist
+count = len(await User.find({"context.active": True}))
+```
 
 ## Configuration
 
-See [.env.example](.env.example) for all configuration options.
+### Server Configuration
 
-### Core Settings
+```python
+from jvspatial.api import Server
 
-- `JVSPATIAL_DB_TYPE`: Database backend (`json` or `mongodb`)
-- `JVSPATIAL_JSONDB_PATH`: Path for JSON database files
-- `JVSPATIAL_MONGODB_URI`: MongoDB connection URI
+# Basic server
+server = Server(
+    title="My API",
+    description="API description",
+    version="1.0.0",
+    db_type="json",
+    db_path="./jvdb"
+)
 
-### Authentication
+# Server with authentication
+server = Server(
+    title="Secure API",
+    auth_enabled=True,  # Automatically registers /auth/register, /auth/login, /auth/logout
+    jwt_auth_enabled=True,
+    jwt_secret="your-secret-key",
+    jwt_expire_minutes=60,
+    db_type="json",
+    db_path="./jvdb"
+)
 
-- `JVSPATIAL_JWT_SECRET`: JWT signing key
-- `JVSPATIAL_JWT_ALGORITHM`: JWT algorithm (default: HS256)
-- `JVSPATIAL_JWT_EXPIRATION_HOURS`: JWT token expiration
-- `JVSPATIAL_API_KEY_HEADER`: API key header name
-- `JVSPATIAL_API_KEY_PREFIX`: API key prefix
+# Server without authentication (public API)
+server = Server(
+    title="Public API",
+    auth_enabled=False,  # NO authentication endpoints registered
+    db_type="json",
+    db_path="./jvdb_public"
+)
+```
 
-### Storage
+### Authentication Behavior
 
-- `JVSPATIAL_FILE_STORAGE_ENABLED`: Enable file storage
-- `JVSPATIAL_FILE_STORAGE_PROVIDER`: Storage provider (`local` or `s3`)
-- `JVSPATIAL_FILE_STORAGE_ROOT`: Local storage directory
-- `JVSPATIAL_S3_*`: AWS S3 configuration
-
-### Walker Settings
-
-- `JVSPATIAL_WALKER_PROTECTION_ENABLED`: Enable infinite walk protection
-- `JVSPATIAL_WALKER_MAX_STEPS`: Maximum steps before halting (default: 10000)
-- `JVSPATIAL_WALKER_MAX_VISITS_PER_NODE`: Maximum node revisits (default: 100)
-- `JVSPATIAL_WALKER_MAX_EXECUTION_TIME`: Maximum execution time in seconds
+- **`auth_enabled=True`**: Server automatically registers authentication endpoints (`/auth/register`, `/auth/login`, `/auth/logout`)
+- **`auth_enabled=False`**: Authentication endpoints are **NOT** registered (public API)
 
 ## Documentation
 
-### Core Documentation
-- [API Architecture](docs/md/api-architecture.md) - API system design and components
-- [Authentication](docs/md/authentication.md) - Authentication and authorization
-- [Graph Context](docs/md/graph-context.md) - Understanding graph operations
-- [Node Operations](docs/md/node-operations.md) - Working with nodes
-- [Entity Reference](docs/md/entity-reference.md) - Entity types and usage
+### Getting Started
+- [Quick Start Guide](docs/md/quick-start-guide.md) - Get started in 5 minutes
+- [Examples](docs/md/examples.md) - **Standard implementation examples** ⭐
+  - [Authenticated API Example](examples/api/authenticated_endpoints_example.py) - Complete CRUD with authentication
+  - [Unauthenticated API Example](examples/api/unauthenticated_endpoints_example.py) - Public read-only API
+- [API Implementation Standards](docs/md/API_IMPLEMENTATION_STANDARDS.md) - Standard patterns and best practices
+
+### API Development
+- [REST API Guide](docs/md/rest-api.md) - API design patterns
+- [Server API Guide](docs/md/server-api.md) - Server configuration
+- [Authentication Guide](docs/md/authentication.md) - Authentication patterns
+- [Entity Reference](docs/md/entity-reference.md) - Node, Edge, Walker classes
 
 ### Advanced Topics
-- [MongoDB Query Interface](docs/md/mongodb-query-interface.md) - Query patterns
-- [Infinite Walk Protection](docs/md/infinite-walk-protection.md) - Safety features
-- [Caching System](docs/md/caching.md) - Performance optimization
-- [File Storage](docs/md/file-storage-architecture.md) - Storage architecture
-
-### Development Guides
-- [Error Handling](docs/md/error-handling.md) - Error management
-- [Optimization](docs/md/optimization.md) - Performance tuning
-- [Troubleshooting](docs/md/troubleshooting.md) - Common issues
-- [Webhooks](docs/md/webhook-architecture.md) - Event processing
-
-### User Resources
-- [GitHub Issues](https://github.com/TrueSelph/jvspatial/issues) - Bug reports and feature requests
-- [GitHub Discussions](https://github.com/TrueSelph/jvspatial/discussions) - Community discussions
-- [Stack Overflow](https://stackoverflow.com/questions/tagged/jvspatial) - Q&A
-
-### Developer Guides
-- [Contributing Guide](CONTRIBUTING.md) - Development setup
-- [Architecture Guide](docs/architecture.md) - System design
-- [Testing Guide](docs/testing.md) - Test patterns
-
-## Project Structure
-
-```
-jvspatial/
-├── jvspatial/              # Core package
-│   ├── api/                # API components
-│   │   ├── auth/           # Authentication
-│   │   ├── endpoint/       # Endpoint routing
-│   │   └── storage/        # Storage backends
-│   ├── core/               # Core features
-│   │   ├── entities/       # Node, Edge, Walker
-│   │   ├── events/         # Event system
-│   │   └── query/          # Query engine
-│   └── db/                 # Database backends
-│       ├── json/           # JSON storage
-│       └── mongo/          # MongoDB integration
-│
-├── docs/                   # Documentation
-│   ├── guides/             # User guides
-│   ├── api/                # API reference
-│   └── examples/           # Example code
-│
-├── examples/               # Example projects
-│   ├── core/               # Core features
-│   ├── api/                # API servers
-│   ├── auth/               # Authentication
-│   ├── database/           # Database usage
-│   ├── storage/            # Storage examples
-│   └── walkers/            # Walker patterns
-│
-├── tests/                  # Test suite
-│   ├── unit/               # Unit tests
-│   ├── integration/        # Integration tests
-│   └── e2e/                # End-to-end tests
-│
-├── .env.example           # Environment template
-├── CHANGELOG.md           # Version history
-├── CONTRIBUTING.md        # Contribution guide
-├── LICENSE                # MIT license
-├── MANIFEST.in            # Package manifest
-├── README.md             # This file
-├── pyproject.toml        # Project metadata
-└── setup.py              # Package setup
-```
+- [API Architecture](docs/md/api-architecture.md) - System architecture
+- [Graph Context Guide](docs/md/graph-context.md) - Context management and multi-database support
+- [Custom Database Guide](docs/md/custom-database-guide.md) - Implementing custom database backends
+- [Graph Visualization](docs/md/graph-visualization.md) - Export graphs in DOT/Mermaid formats
+- [Pagination](docs/md/pagination.md) - ObjectPager usage
 
 ## Contributing
 
-### Development Setup
-
-1. Clone repository:
-```bash
-git clone https://github.com/user/jvspatial.git
-cd jvspatial
-```
-
-2. Set up environment:
-```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: .\venv\Scripts\activate
-
-# Install dependencies
-pip install -e ".[dev]"      # Development install
-pip install -e ".[test]"     # Test dependencies
-pip install -e ".[docs]"     # Documentation tools
-```
-
-3. Configure environment:
-```bash
-# Copy example config
-cp .env.example .env
-
-# Edit configuration
-vim .env  # Or your preferred editor
-```
-
-4. Verify setup:
-```bash
-# Run tests
-pytest tests/
-
-# Run linting
-flake8
-mypy .
-
-# Build docs
-mkdocs build
-```
-
-### Development Workflow
-
-1. Create a feature branch:
-```bash
-git checkout -b feature/your-feature
-```
-
-2. Make changes and run tests:
-```bash
-# Run specific test file
-pytest tests/test_your_feature.py -v
-
-# Run with coverage
-pytest --cov=jvspatial
-```
-
-3. Update documentation:
-```bash
-# Live preview
-mkdocs serve
-```
-
-4. Submit changes:
-```bash
-# Format code
-black .
-isort .
-
-# Run all checks
-pre-commit run --all-files
-
-# Commit and push
-git add .
-git commit -m "feat: your feature description"
-git push origin feature/your-feature
-```
-
-## Contributors
-
-<p align="center">
-    <a href="https://github.com/TrueSelph/jvspatial/graphs/contributors">
-        <img src="https://contrib.rocks/image?repo=TrueSelph/jvspatial" />
-    </a>
-</p>
+We welcome contributions! Please see our [Contributing Guide](docs/md/contributing.md) for details.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
-
-## Acknowledgments
-
-- Inspired by [Jaseci](https://github.com/Jaseci-Labs/jaseci) and its Object-Spatial paradigm
-- Built with [Pydantic](https://pydantic-docs.helpmanual.io/) for data validation
-- REST API powered by [FastAPI](https://fastapi.tiangolo.com/)
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

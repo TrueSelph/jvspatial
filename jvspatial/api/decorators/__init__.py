@@ -3,10 +3,7 @@
 This module provides decorators for both route-level and field-level configuration:
 
 Route Decorators (function/class level):
-    - @endpoint: Basic endpoint decorator
-    - @auth_endpoint: Authenticated endpoint decorator
-    - @webhook_endpoint: Webhook endpoint decorator
-    - @admin_endpoint: Admin-only endpoint decorator
+    - @endpoint: Unified endpoint decorator
 
 Field Decorators (Pydantic field level):
     - endpoint_field(): Configure field behavior in API endpoints
@@ -17,7 +14,7 @@ Examples:
         async def get_users():
             return {"users": [...]}
 
-        @auth_endpoint("/api/admin", roles=["admin"])
+        @endpoint("/api/admin", auth=True, roles=["admin"])
         async def admin_panel():
             return {"admin": "dashboard"}
 
@@ -40,12 +37,7 @@ from .field import (
 )
 
 # Route decorators
-from .route import (
-    admin_endpoint,
-    auth_endpoint,
-    endpoint,
-    webhook_endpoint,
-)
+from .route import endpoint
 
 # Route configuration (for advanced users)
 from .route_config import (
@@ -57,9 +49,6 @@ from .route_config import (
 __all__ = [
     # Route decorators (function/class level)
     "endpoint",
-    "auth_endpoint",
-    "webhook_endpoint",
-    "admin_endpoint",
     # Field decorators (field level)
     "endpoint_field",
     "EndpointField",

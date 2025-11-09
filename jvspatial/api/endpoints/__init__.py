@@ -8,12 +8,7 @@ This module provides all endpoint-related functionality including:
 """
 
 # Route decorators (for convenience, also available from api.decorators)
-from ..decorators.route import (
-    admin_endpoint,
-    auth_endpoint,
-    endpoint,
-    webhook_endpoint,
-)
+from ..decorators.route import endpoint
 
 # Parameter models
 from .factory import EndpointParameterModel, ParameterModelFactory
@@ -38,9 +33,6 @@ from .router import AuthEndpoint, BaseRouter, EndpointRouter
 __all__ = [
     # Route decorators
     "endpoint",
-    "auth_endpoint",
-    "webhook_endpoint",
-    "admin_endpoint",
     # Response types
     "APIResponse",
     "SuccessResponse",

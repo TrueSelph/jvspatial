@@ -10,6 +10,8 @@ import asyncio
 from typing import Any, Dict, List
 
 from jvspatial.core import Edge, GraphContext, Node, Root, Walker, on_exit, on_visit
+from jvspatial.core.context import set_default_context
+from jvspatial.db import create_database
 
 
 class DataNode(Node):
@@ -28,9 +30,21 @@ class CollectorWalker(Walker):
         self.total_collected = 0
         self.categories_seen = set()
 
+    @on_visit(Root)
+    async def visit_root(self, here: Root) -> None:
+        """Continue traversal from root to connected DataNodes."""
+        connected_nodes = await here.nodes()
+        data_nodes = [n for n in connected_nodes if isinstance(n, DataNode)]
+        if data_nodes:
+            await self.visit(data_nodes)
+
     @on_visit(DataNode)
     async def collect_data(self, here: DataNode) -> None:
         """Collect data from DataNode instances."""
+        # Skip if already visited (check trail)
+        if self.is_visited(here):
+            return
+
         # Report individual node data
         report_data = await self.get_report()
         await self.report(
@@ -51,21 +65,41 @@ class CollectorWalker(Walker):
             f"Collected: {here.name} (value: {here.value}, category: {here.category})"
         )
 
+        # Continue traversal to connected nodes (only unvisited ones, check trail)
+        connected_nodes = await here.nodes()
+        data_neighbors = [
+            n
+            for n in connected_nodes
+            if isinstance(n, DataNode) and not self.is_visited(n)
+        ]
+        if data_neighbors:
+            await self.visit(data_neighbors)
+
     @on_exit
     async def generate_summary(self) -> None:
-        """Generate a summary report when traversal is complete."""
+        """Generate a summary report using the traversal trail."""
+        # Calculate unique nodes and values from report items
         report_data = await self.get_report()
+        unique_values = {}
+        for item in report_data:
+            if isinstance(item, dict) and "node_id" in item and "value" in item:
+                node_id = item.get("node_id")
+                if node_id and node_id not in unique_values:
+                    unique_values[node_id] = item.get("value", 0)
 
-        # Calculate summary statistics
-        total_nodes = len(report_data)
-        avg_value = self.total_collected / total_nodes if total_nodes > 0 else 0
+        unique_count = len(unique_values)
+        unique_total_value = sum(unique_values.values())
+        avg_value = unique_total_value / unique_count if unique_count > 0 else 0
 
         # Report summary
         await self.report(
             {
                 "summary": {
-                    "total_nodes_visited": total_nodes,
-                    "total_value_collected": self.total_collected,
+                    "total_nodes_visited": self.get_trail_length(),
+                    "unique_nodes_processed": unique_count,
+                    "trail_length": self.get_trail_length(),
+                    "trail": self.get_trail(),
+                    "total_value_collected": unique_total_value,
                     "average_value": round(avg_value, 2),
                     "categories_found": list(self.categories_seen),
                     "category_count": len(self.categories_seen),
@@ -81,9 +115,21 @@ class AnalyticsWalker(Walker):
         super().__init__(**kwargs)
         self.value_ranges = {"low": [], "medium": [], "high": []}
 
+    @on_visit(Root)
+    async def visit_root(self, here: Root) -> None:
+        """Continue traversal from root to connected DataNodes."""
+        connected_nodes = await here.nodes()
+        data_nodes = [n for n in connected_nodes if isinstance(n, DataNode)]
+        if data_nodes:
+            await self.visit(data_nodes)
+
     @on_visit(DataNode)
     async def analyze_data(self, here: DataNode) -> None:
         """Analyze data and categorize by value ranges."""
+        # Skip if already visited (check trail)
+        if self.is_visited(here):
+            return
+
         if here.value < 10:
             range_category = "low"
         elif here.value < 50:
@@ -107,6 +153,16 @@ class AnalyticsWalker(Walker):
                 }
             }
         )
+
+        # Continue traversal to connected nodes (only unvisited ones, check trail)
+        connected_nodes = await here.nodes()
+        data_neighbors = [
+            n
+            for n in connected_nodes
+            if isinstance(n, DataNode) and not self.is_visited(n)
+        ]
+        if data_neighbors:
+            await self.visit(data_neighbors)
 
     def _calculate_percentile(self, value: int) -> str:
         """Simple percentile calculation."""
@@ -175,23 +231,13 @@ async def create_sample_graph() -> None:
     for node in nodes:
         await node.save()
 
-    # Connect nodes to root and create a traversal path
+    # Connect nodes to root and create a traversal path using entity-centric API
     for i, node in enumerate(nodes):
-        edge = Edge(
-            source_id=root.id,
-            target_id=node.id,
-            name=f"connects_to_{node.name.lower()}",
-        )
-        await edge.save()
+        await root.connect(node, name=f"connects_to_{node.name.lower()}")
 
         # Create some inter-node connections
         if i < len(nodes) - 1:
-            inter_edge = Edge(
-                source_id=node.id,
-                target_id=nodes[i + 1].id,
-                name=f"next_in_sequence",
-            )
-            await inter_edge.save()
+            await node.connect(nodes[i + 1], name="next_in_sequence")
 
 
 async def demonstrate_reporting():
@@ -204,30 +250,81 @@ async def demonstrate_reporting():
     await collector.spawn()
 
     # Get the complete report
-    collector_report = collector.get_report()
+    collector_report = await collector.get_report()
     print(f"\n📋 Collector Report:")
     print(f"   Total items in report: {len(collector_report)}")
 
-    # Show individual data points
+    # Show trail insights
+    collector_trail_ids = collector.get_trail_path()
+    print(f"   Trail length: {collector.get_trail_length()}")
+    print(f"   Trail (node ids): {collector_trail_ids}")
+
+    # Show individual data points (unique nodes only)
+    seen_node_ids = set()
+    unique_items = []
     for item in collector_report:
-        if isinstance(item, dict) and "name" in item:  # Individual node data
-            print(f"   • {item['name']}: {item['value']} ({item['category']})")
-        elif isinstance(item, dict) and "summary" in item:  # Summary data
-            summary = item["summary"]
-            print(f"\n📈 Summary:")
-            print(f"   • Nodes visited: {summary['total_nodes_visited']}")
-            print(f"   • Total value: {summary['total_value_collected']}")
-            print(f"   • Average value: {summary['average_value']}")
-            print(f"   • Categories: {', '.join(summary['categories_found'])}")
+        if isinstance(item, dict) and "node_id" in item:
+            node_id = item.get("node_id")
+            if node_id and node_id not in seen_node_ids:
+                seen_node_ids.add(node_id)
+                unique_items.append(item)
+                print(
+                    f"   • {item.get('name', 'Unknown')}: {item.get('value', 0)} ({item.get('category', 'unknown')})"
+                )
+
+    # Calculate summary from unique nodes
+    total_unique_value = sum(item.get("value", 0) for item in unique_items)
+    unique_count = len(unique_items)
+    categories = set(
+        item.get("category", "") for item in unique_items if item.get("category")
+    )
+
+    # Check for summary in report (from @on_exit hook)
+    summary_data = None
+    for item in collector_report:
+        if isinstance(item, dict) and "summary" in item:
+            summary_data = item["summary"]
+            break
+
+    if summary_data:
+        print(f"\n📈 Summary:")
+        print(
+            f"   • Total trail steps: {summary_data.get('total_nodes_visited', collector.get_trail_length())}"
+        )
+        print(
+            f"   • Unique nodes processed: {summary_data.get('unique_nodes_processed', unique_count)}"
+        )
+        print(
+            f"   • Total value: {summary_data.get('total_value_collected', total_unique_value)}"
+        )
+        print(
+            f"   • Average value: {summary_data.get('average_value', total_unique_value / unique_count if unique_count > 0 else 0.0):.2f}"
+        )
+        print(
+            f"   • Categories: {', '.join(sorted(summary_data.get('categories_found', categories)))}"
+        )
+    else:
+        print(f"\n📈 Summary:")
+        print(f"   • Total trail steps: {collector.get_trail_length()}")
+        print(f"   • Unique nodes processed: {unique_count}")
+        print(f"   • Total value: {total_unique_value}")
+        print(
+            f"   • Average value: {total_unique_value / unique_count if unique_count > 0 else 0.0:.2f}"
+        )
+        print(f"   • Categories: {', '.join(sorted(categories))}")
 
     print("\n🔍 Running analytics walker...")
     analytics = AnalyticsWalker()
     await analytics.spawn()
 
     # Get the analytics report
-    analytics_report = analytics.get_report()
+    analytics_report = await analytics.get_report()
     print(f"\n📊 Analytics Report:")
     print(f"   Total analyses: {len(analytics_report)}")
+
+    # Show trail insights
+    print(f"   Trail length: {analytics.get_trail_length()}")
+    print(f"   Trail (node ids): {analytics.get_trail()}")
 
     # Show analytics summary
     for item in analytics_report:
@@ -251,11 +348,11 @@ async def demonstrate_report_access():
     result_walker = await walker.spawn()  # spawn returns the walker instance
 
     # Access report through the returned walker
-    report = result_walker.get_report()
+    report = await result_walker.get_report()
     print(f"Report accessed from returned walker: {len(report)} items")
 
     # Access report through the original walker reference (same object)
-    same_report = walker.get_report()
+    same_report = await walker.get_report()
     print(f"Report accessed from original walker: {len(same_report)} items")
 
     # Demonstrate that they're the same
@@ -267,7 +364,10 @@ if __name__ == "__main__":
     print("=" * 50)
 
     async def run_demo():
-        # No architecture setup needed - use default
+        # Initialize default context for standalone execution
+        db = create_database(db_type="json", base_path="./jvdb")
+        ctx = GraphContext(database=db)
+        set_default_context(ctx)
 
         await demonstrate_reporting()
         await demonstrate_report_access()

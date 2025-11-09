@@ -11,7 +11,6 @@ All jvspatial exceptions inherit from `JVSpatialError`:
 ```python
 from jvspatial.exceptions import (
     JVSpatialError,         # Base exception
-    ValidationError,        # Data validation errors
     EntityNotFoundError,    # Entity lookup failures
     NodeNotFoundError,      # Node-specific not found
     EdgeNotFoundError,      # Edge-specific not found
@@ -21,6 +20,7 @@ from jvspatial.exceptions import (
     WalkerExecutionError,   # Walker runtime errors
     ConfigurationError,     # Configuration problems
 )
+from pydantic import ValidationError  # Pydantic validation errors
 ```
 
 ## Basic Exception Handling
@@ -40,15 +40,24 @@ async def handle_user_operations():
         user = await User.create(name="Alice", email="alice@example.com")
         retrieved = await User.get("invalid_id")
 
+        # Object.get() returns None if not found
+        if retrieved is None:
+            raise EntityNotFoundError(
+                message="User not found",
+                entity_type="User",
+                entity_id="invalid_id"
+            )
+
     except EntityNotFoundError as e:
         print(f"Entity not found: {e.message}")
         print(f"Entity type: {e.entity_type}, ID: {e.entity_id}")
 
     except ValidationError as e:
-        print(f"Validation failed: {e.message}")
-        if e.field_errors:
-            for field, error in e.field_errors.items():
-                print(f"  {field}: {error}")
+        # Pydantic ValidationError - handle field errors
+        print(f"Validation failed: {e}")
+        if hasattr(e, 'errors'):
+            for error in e.errors():
+                print(f"  {error.get('loc', [])}: {error.get('msg', '')}")
 
     except JVSpatialError as e:
         # Catch-all for any jvspatial error
@@ -112,7 +121,7 @@ async def safe_traversal():
     except WalkerTimeoutError as e:
         print(f"Walker timed out after {e.timeout_seconds} seconds")
         # Access partial results
-        partial_report = walker.get_report()
+        partial_report = await walker.get_report()
 
     except WalkerExecutionError as e:
         print(f"Walker execution failed: {e.message}")
@@ -123,20 +132,19 @@ async def safe_traversal():
 
 ```python
 from jvspatial.exceptions import ConfigurationError, InvalidConfigurationError
-from jvspatial.db.factory import get_database
+from jvspatial.db import create_database
 
 def setup_database_with_fallback():
     try:
         # Try preferred database
-        db = get_database("mongodb")
+        db = create_database("mongodb", db_name="mydb")
 
-    except InvalidConfigurationError as e:
-        print(f"MongoDB configuration invalid: {e.message}")
-        print(f"Config key: {e.config_key}, Value: {e.config_value}")
+    except (InvalidConfigurationError, ValueError) as e:
+        print(f"MongoDB configuration invalid: {e}")
 
         # Fall back to JSON database
         try:
-            db = get_database("json")
+            db = create_database("json", base_path="./data")
             print("Falling back to JSON database")
         except ConfigurationError:
             raise ConfigurationError("No database backend available")

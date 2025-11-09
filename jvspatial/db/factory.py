@@ -1,215 +1,258 @@
-"""Database factory with flexible registry-based configuration."""
+"""Simplified database creation utilities.
+
+This module provides simple utilities for creating database instances,
+replacing the complex factory pattern with direct instantiation.
+Includes integration with DatabaseManager for multi-database support.
+Supports custom database registration for seamless extension.
+"""
 
 import os
-from typing import Any, Callable, Dict, Optional, Type
-
-from jvspatial.exceptions import (
-    InvalidConfigurationError,
-    ValidationError,
-)
+from typing import Any, Callable, Dict, Optional
 
 from .database import Database
+from .jsondb import JsonDB
+from .manager import get_database_manager
 
-# Registry for database implementations
-_DATABASE_REGISTRY: Dict[str, Type[Database]] = {}
-# Registry for database configuration functions
-_DATABASE_CONFIGURATORS: Dict[str, Callable[[Dict[str, Any]], Database]] = {}
-# Default database name
-_DEFAULT_DATABASE: str = "json"
+# Registry for custom database implementations
+_DATABASE_REGISTRY: Dict[str, Callable[..., Database]] = {}
 
 
-def register_database(
-    name: str,
-    database_class: Type[Database],
-    configurator: Optional[Callable[[Dict[str, Any]], Database]] = None,
-    set_as_default: bool = False,
-) -> None:
-    """Register a database implementation.
+def register_database_type(db_type: str, factory: Callable[..., Database]) -> None:
+    """Register a custom database type for use with create_database().
+
+    This allows you to seamlessly integrate custom database implementations
+    into the jvspatial factory system. Once registered, your custom database
+    can be created using create_database() just like built-in types.
 
     Args:
-        name: Database type name to register
-        database_class: Database class that implements the Database interface
-        configurator: Optional function to configure the database with kwargs
-        set_as_default: Whether to set this as the default database
+        db_type: Unique identifier for the database type (e.g., 'redis', 'postgresql')
+        factory: Factory function that creates a Database instance.
+                 Should accept **kwargs and return a Database instance.
+
+    Example:
+        ```python
+        from jvspatial.db import Database, register_database_type, create_database
+
+        class MyCustomDB(Database):
+            def __init__(self, connection_string: str):
+                self.connection_string = connection_string
+            # ... implement abstract methods ...
+
+        def create_my_custom_db(**kwargs):
+            return MyCustomDB(kwargs.get("connection_string", "default://"))
+
+        # Register the custom database
+        register_database_type("my_custom", create_my_custom_db)
+
+        # Now use it like built-in types
+        db = create_database("my_custom", connection_string="custom://example")
+        ```
 
     Raises:
-        TypeError: If database_class doesn't inherit from Database
-        ValueError: If name is already registered
+        ValueError: If db_type is already registered or conflicts with built-in types
     """
-    # Check if it's a subclass of Database, but allow mock objects for testing
-    try:
-        is_subclass = issubclass(database_class, Database)
-    except TypeError:
-        # Handle mock objects that can't be used with issubclass
-        is_subclass = False
-
-    is_mock = (
-        hasattr(database_class, "_mock_name")  # MagicMock objects
-        or str(type(database_class)).startswith(
-            "<class 'unittest.mock."
-        )  # Mock objects
-        or hasattr(database_class, "_spec_class")  # Mock with spec
-        or "Mock" in str(type(database_class))  # Any Mock object
-    )
-
-    if not (is_subclass or is_mock):
-        raise ValidationError(
-            f"Database class {database_class.__name__} must inherit from Database",
-            details={"database_class": database_class.__name__},
+    if db_type in ("json", "mongodb"):
+        raise ValueError(f"Cannot register '{db_type}' - it's a built-in database type")
+    if db_type in _DATABASE_REGISTRY:
+        raise ValueError(
+            f"Database type '{db_type}' is already registered. "
+            "Use unregister_database_type() first to replace it."
         )
-
-    if name in _DATABASE_REGISTRY:
-        raise InvalidConfigurationError(
-            "database_type",
-            name,
-            "Database type is already registered",
-            details={"name": name},
-        )
-
-    _DATABASE_REGISTRY[name] = database_class
-
-    # Register configurator or use default
-    if configurator:
-        _DATABASE_CONFIGURATORS[name] = configurator
-    else:
-        _DATABASE_CONFIGURATORS[name] = lambda kwargs: database_class(**kwargs)
-
-    # Update default if requested
-    if set_as_default:
-        global _DEFAULT_DATABASE
-        _DEFAULT_DATABASE = name
+    _DATABASE_REGISTRY[db_type] = factory
 
 
-def unregister_database(name: str) -> None:
-    """Unregister a database implementation.
+def unregister_database_type(db_type: str) -> None:
+    """Unregister a custom database type.
 
     Args:
-        name: Database type name to unregister
-    """
-    _DATABASE_REGISTRY.pop(name, None)
-    _DATABASE_CONFIGURATORS.pop(name, None)
-
-    # Reset default to json if we just unregistered the default
-    global _DEFAULT_DATABASE
-    if _DEFAULT_DATABASE == name:
-        _DEFAULT_DATABASE = "json"
-
-
-def set_default_database(name: str) -> None:
-    """Set the default database type.
-
-    Args:
-        name: Database type name to use as default
+        db_type: Database type identifier to unregister
 
     Raises:
-        ValueError: If database type is not registered
+        ValueError: If db_type is not registered or is a built-in type
     """
-    if name not in _DATABASE_REGISTRY:
-        available_types = ", ".join(sorted(_DATABASE_REGISTRY.keys()))
-        raise InvalidConfigurationError(
-            "database_type",
-            name,
-            f"Database type is not registered. Available types: {available_types}",
-            details={"available_types": available_types},
+    if db_type in ("json", "mongodb"):
+        raise ValueError(
+            f"Cannot unregister '{db_type}' - it's a built-in database type"
         )
-
-    global _DEFAULT_DATABASE
-    _DEFAULT_DATABASE = name
-
-
-def get_default_database_type() -> str:
-    """Get the current default database type.
-
-    Returns:
-        Default database type name
-    """
-    return _DEFAULT_DATABASE
+    if db_type not in _DATABASE_REGISTRY:
+        raise ValueError(f"Database type '{db_type}' is not registered")
+    del _DATABASE_REGISTRY[db_type]
 
 
-def list_available_databases() -> Dict[str, Type[Database]]:
-    """Get all available database types.
+def list_database_types() -> Dict[str, str]:
+    """List all available database types (built-in and registered).
 
     Returns:
-        Dictionary mapping database type names to their classes
+        Dictionary mapping database type names to their descriptions
     """
-    return _DATABASE_REGISTRY.copy()
+    types = {
+        "json": "JSON file-based database (built-in)",
+        "mongodb": "MongoDB database (built-in)",
+    }
+    for db_type, factory in _DATABASE_REGISTRY.items():
+        types[db_type] = f"Custom database: {factory.__name__}"
+    return types
 
 
-def get_database(db_type: Optional[str] = None, **kwargs: Any) -> Database:
-    """Get a database instance.
+def create_database(
+    db_type: str = "json",
+    register: bool = False,
+    name: Optional[str] = None,
+    **kwargs: Any,
+) -> Database:
+    """Create a database instance with direct instantiation.
+
+    Supports both built-in database types ('json', 'mongodb') and custom
+    database types registered via register_database_type().
 
     Args:
-        db_type: Database type (registered name).
-                Defaults to env var JVSPATIAL_DB_TYPE or current default
-        **kwargs: Database-specific configuration
+        db_type: Database type ('json', 'mongodb', or a registered custom type)
+        register: If True, register the database with DatabaseManager
+        name: Database name for registration (required if register=True)
+        **kwargs: Database-specific configuration passed to the database constructor
 
     Returns:
         Database instance
 
+    Examples:
+        # JSON database (not registered)
+        db = create_database("json", base_path="./data")
+
+        # MongoDB database (registered with manager)
+        db = create_database("mongodb", uri="mongodb://localhost:27017",
+                            register=True, name="app_db")
+
+        # Custom database (after registration)
+        db = create_database("my_custom", connection_string="custom://",
+                            register=True, name="custom_db")
+
+        # Create and auto-register as current database
+        db = create_database("json", base_path="./app_data",
+                            register=True, name="app")
+        manager = get_database_manager()
+        manager.set_current_database("app")
+
     Raises:
-        ValueError: If db_type is not supported
-        ImportError: If required dependencies are missing
-        TypeError: If configuration is invalid
+        ValueError: If db_type is not supported or registration fails
     """
-    if db_type is None:
-        db_type = os.getenv("JVSPATIAL_DB_TYPE", _DEFAULT_DATABASE)
-
-    if db_type not in _DATABASE_REGISTRY:
-        raise ValueError(f"Unsupported database type: '{db_type}'")
-
-    # Use the registered configurator to create the database instance
-    configurator = _DATABASE_CONFIGURATORS[db_type]
-
-    try:
-        return configurator(kwargs)
-    except Exception as e:
-        raise InvalidConfigurationError(
-            "database_configuration",
-            db_type,
-            f"Failed to configure database: {e}",
-            details={"kwargs": kwargs},
-        ) from e
-
-
-# Register built-in database implementations
-def _register_builtin_databases() -> None:
-    """Register built-in database implementations."""
-    # Import and register JsonDB
-    from .jsondb import JsonDB
-
-    def json_configurator(kwargs: Dict[str, Any]) -> JsonDB:
-        """Configure JsonDB with proper parameter handling."""
+    # Check built-in types first
+    db: Database
+    if db_type == "json":
         base_path = kwargs.get("base_path") or os.getenv(
             "JVSPATIAL_JSONDB_PATH", "jvdb"
         )
-        # Extract cache_size if provided
-        cache_size = kwargs.get("cache_size")
-        return JsonDB(str(base_path), cache_size=cache_size)
+        db = JsonDB(str(base_path))
 
-    register_database("json", JsonDB, json_configurator, set_as_default=True)
-
-    # Import and register MongoDB if available
-    try:
+    elif db_type == "mongodb":
         from .mongodb import MongoDB
 
-        def mongodb_configurator(kwargs: Dict[str, Any]) -> MongoDB:
-            """Configure MongoDB with environment variable support."""
-            # Provide defaults from environment
-            if "uri" not in kwargs:
-                kwargs["uri"] = os.getenv(
-                    "JVSPATIAL_MONGODB_URI", "mongodb://localhost:27017"
-                )
-            if "db_name" not in kwargs:
-                kwargs["db_name"] = os.getenv("JVSPATIAL_MONGODB_DB_NAME", "jvdb")
+        # Provide defaults from environment
+        if "uri" not in kwargs:
+            kwargs["uri"] = os.getenv(
+                "JVSPATIAL_MONGODB_URI", "mongodb://localhost:27017"
+            )
+        if "db_name" not in kwargs:
+            kwargs["db_name"] = os.getenv("JVSPATIAL_MONGODB_DB_NAME", "jvdb")
 
-            return MongoDB(**kwargs)
+        db = MongoDB(**kwargs)
 
-        register_database("mongodb", MongoDB, mongodb_configurator)
+    # Check registered custom types
+    elif db_type in _DATABASE_REGISTRY:
+        factory = _DATABASE_REGISTRY[db_type]
+        db = factory(**kwargs)
 
-    except ImportError:
-        # MongoDB dependencies not available, skip registration
-        pass
+    else:
+        available = ", ".join(list_database_types().keys())
+        raise ValueError(
+            f"Unsupported database type: '{db_type}'. " f"Available types: {available}"
+        )
+
+    # Register with manager if requested
+    if register:
+        if name is None:
+            raise ValueError("Database name is required when register=True")
+        manager = get_database_manager()
+        manager.register_database(name, db)
+
+    return db
 
 
-# Initialize built-in databases
-_register_builtin_databases()
+def create_default_database() -> Database:
+    """Create the default database based on environment.
+
+    This creates the prime database used for core persistence operations
+    such as authentication and session management.
+
+    Returns:
+        Configured database instance (prime database)
+    """
+    manager = get_database_manager()
+    return manager.get_prime_database()
+
+
+def get_prime_database() -> Database:
+    """Get the prime database instance.
+
+    The prime database is always used for core persistence operations
+    such as authentication, session management, and system-level data.
+
+    Returns:
+        Prime database instance
+    """
+    manager = get_database_manager()
+    return manager.get_prime_database()
+
+
+def get_current_database() -> Database:
+    """Get the current active database instance.
+
+    Returns:
+        Current database instance (defaults to prime if not set)
+    """
+    manager = get_database_manager()
+    return manager.get_current_database()
+
+
+def switch_database(name: str) -> Database:
+    """Switch to a different database by name.
+
+    Args:
+        name: Database name to switch to
+
+    Returns:
+        The database instance that was switched to
+
+    Raises:
+        ValueError: If database is not registered
+    """
+    manager = get_database_manager()
+    manager.set_current_database(name)
+    return manager.get_current_database()
+
+
+def unregister_database(name: str) -> None:
+    """Unregister a non-prime database instance.
+
+    Removes a database from the DatabaseManager. If the database being
+    removed is the current database, automatically switches back to prime.
+
+    Args:
+        name: Database name to unregister
+
+    Raises:
+        ValueError: If name is "prime" (cannot unregister prime database)
+                    or database is not registered
+
+    Example:
+        ```python
+        from jvspatial.db import create_database, unregister_database
+
+        # Register a database
+        db = create_database("json", base_path="./temp_data", register=True, name="temp")
+
+        # Later, unregister it
+        unregister_database("temp")
+        ```
+    """
+    manager = get_database_manager()
+    manager.unregister_database(name)

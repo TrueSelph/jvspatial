@@ -1,23 +1,26 @@
-"""Redis cache backend implementation.
+"""Redis cache backend implementation with built-in connection pooling and invalidation strategies.
 
 This module provides a Redis-backed cache for distributed deployments,
-enabling shared caching across multiple application instances.
+enabling shared caching across multiple application instances with
+integrated connection pooling and cache invalidation strategies.
 """
 
 import os
 import pickle
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .base import CacheBackend, CacheStats
 
 
 class RedisCache(CacheBackend):
-    """Redis-backed cache implementation for distributed caching.
+    """Redis-backed cache implementation with built-in connection pooling and invalidation strategies.
 
     Features:
     - Distributed cache shared across instances
+    - Built-in connection pooling for optimal performance
     - Persistence across restarts
     - Automatic TTL expiration
+    - Built-in cache invalidation strategies
     - Pub/sub support for cache invalidation
 
     Best for:
@@ -83,6 +86,112 @@ class RedisCache(CacheBackend):
             Prefixed key for Redis
         """
         return f"{self.prefix}{key}"
+
+    async def invalidate_by_pattern(self, pattern: str) -> int:
+        """Invalidate keys matching pattern.
+
+        Args:
+            pattern: Pattern to match keys against (supports wildcards)
+
+        Returns:
+            Number of keys deleted
+        """
+        try:
+            client = await self._get_client()
+
+            # Convert pattern to Redis pattern
+            redis_pattern = self._make_key(pattern)
+
+            # Find all keys matching the pattern
+            keys = await client.keys(redis_pattern)
+
+            if keys:
+                # Delete all matching keys
+                deleted_count = await client.delete(*keys)
+                self._stats.invalidations += deleted_count
+                return deleted_count
+
+            return 0
+
+        except Exception as e:
+            self._stats.errors += 1
+            raise RuntimeError(f"Failed to invalidate by pattern {pattern}: {e}")
+
+    async def invalidate_by_tags(self, tags: List[str]) -> int:
+        """Invalidate keys with specific tags.
+
+        Args:
+            tags: List of tags to match against
+
+        Returns:
+            Number of keys deleted
+        """
+        try:
+            client = await self._get_client()
+
+            keys_to_delete = set()
+
+            for tag in tags:
+                # Get all keys for this tag
+                tag_key = self._make_key(f"tag:{tag}")
+                tagged_keys = await client.smembers(tag_key)
+
+                for key in tagged_keys:
+                    keys_to_delete.add(key)
+
+            if keys_to_delete:
+                # Delete all tagged keys
+                deleted_count = await client.delete(*keys_to_delete)
+                self._stats.invalidations += deleted_count
+
+                # Clean up tag sets
+                for tag in tags:
+                    tag_key = self._make_key(f"tag:{tag}")
+                    await client.delete(tag_key)
+
+                return deleted_count
+
+            return 0
+
+        except Exception as e:
+            self._stats.errors += 1
+            raise RuntimeError(f"Failed to invalidate by tags {tags}: {e}")
+
+    async def set_with_tags(
+        self, key: str, value: Any, tags: List[str], ttl: Optional[int] = None
+    ) -> None:
+        """Store a value in the cache with tags for invalidation.
+
+        Args:
+            key: Cache key
+            value: Value to cache
+            tags: List of tags for invalidation
+            ttl: Time-to-live in seconds (None for no expiration)
+        """
+        try:
+            client = await self._get_client()
+            redis_key = self._make_key(key)
+
+            # Serialize value
+            serialized_value = pickle.dumps(value)
+
+            # Set the value
+            if ttl is None:
+                ttl = self.default_ttl
+
+            await client.setex(redis_key, ttl, serialized_value)
+
+            # Add tags
+            for tag in tags:
+                tag_key = self._make_key(f"tag:{tag}")
+                await client.sadd(tag_key, redis_key)
+                await client.expire(tag_key, ttl)  # Tag set expires with the key
+
+            self._stats.sets += 1
+
+        except Exception as e:
+            self._stats.errors += 1
+            raise RuntimeError(f"Failed to set {key} with tags {tags}: {e}")
 
     async def get(self, key: str) -> Optional[Any]:
         """Retrieve value from Redis cache.

@@ -1141,6 +1141,168 @@ class TestStorageInterfaceIntegration:
         assert result["checksum"] == expected_checksum
 
 
+class TestLocalFileVersioning:
+    """Test LocalFileInterface file versioning features."""
+
+    @pytest.fixture
+    def local_storage_with_versioning(self, temp_storage_dir):
+        """Create LocalFileInterface instance with versioning for testing."""
+        validator = FileValidator(
+            max_size_mb=100,
+            allowed_mime_types=None,
+            blocked_extensions=set(),
+        )
+        return LocalFileInterface(
+            root_dir=temp_storage_dir,
+            base_url="http://localhost:8000",
+            validator=validator,
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_version(self, local_storage_with_versioning, sample_files):
+        """Test creating file versions."""
+        # Save initial file
+        await local_storage_with_versioning.save_file("test.txt", sample_files["text"])
+
+        # Create version
+        version = await local_storage_with_versioning.create_version(
+            "test.txt", sample_files["text"]
+        )
+
+        assert version is not None
+        assert "version_id" in version
+        assert "path" in version
+        assert version["path"] == "test.txt"
+
+    @pytest.mark.asyncio
+    async def test_get_version(self, local_storage_with_versioning, sample_files):
+        """Test retrieving file versions."""
+        # Save initial file
+        await local_storage_with_versioning.save_file("test.txt", sample_files["text"])
+
+        # Create version
+        version = await local_storage_with_versioning.create_version(
+            "test.txt", sample_files["text"]
+        )
+        version_id = version["version_id"]
+
+        # Get version
+        retrieved_version = await local_storage_with_versioning.get_version(
+            "test.txt", version_id
+        )
+
+        assert retrieved_version is not None
+        assert retrieved_version["version_id"] == version_id
+        assert retrieved_version["path"] == "test.txt"
+
+    @pytest.mark.asyncio
+    async def test_list_versions(self, local_storage_with_versioning, sample_files):
+        """Test listing file versions."""
+        # Save initial file
+        await local_storage_with_versioning.save_file("test.txt", sample_files["text"])
+
+        # Create multiple versions
+        version1 = await local_storage_with_versioning.create_version(
+            "test.txt", sample_files["text"]
+        )
+        version2 = await local_storage_with_versioning.create_version(
+            "test.txt", sample_files["text"]
+        )
+
+        # List versions
+        versions = await local_storage_with_versioning.list_versions("test.txt")
+
+        assert len(versions) >= 2
+        version_ids = [v["version_id"] for v in versions]
+        assert version1["version_id"] in version_ids
+        assert version2["version_id"] in version_ids
+
+    @pytest.mark.asyncio
+    async def test_get_latest_version(
+        self, local_storage_with_versioning, sample_files
+    ):
+        """Test getting the latest file version."""
+        # Save initial file
+        await local_storage_with_versioning.save_file("test.txt", sample_files["text"])
+
+        # Create versions
+        version1 = await local_storage_with_versioning.create_version(
+            "test.txt", sample_files["text"]
+        )
+        version2 = await local_storage_with_versioning.create_version(
+            "test.txt", sample_files["text"]
+        )
+
+        # Get latest version
+        latest = await local_storage_with_versioning.get_latest_version("test.txt")
+
+        assert latest is not None
+        assert latest["version_id"] == version2["version_id"]
+
+    @pytest.mark.asyncio
+    async def test_delete_version(self, local_storage_with_versioning, sample_files):
+        """Test deleting file versions."""
+        # Save initial file
+        await local_storage_with_versioning.save_file("test.txt", sample_files["text"])
+
+        # Create version
+        version = await local_storage_with_versioning.create_version(
+            "test.txt", sample_files["text"]
+        )
+        version_id = version["version_id"]
+
+        # Delete version
+        deleted = await local_storage_with_versioning.delete_version(
+            "test.txt", version_id
+        )
+
+        assert deleted is True
+
+        # Verify version is gone
+        retrieved_version = await local_storage_with_versioning.get_version(
+            "test.txt", version_id
+        )
+        assert retrieved_version is None
+
+    @pytest.mark.asyncio
+    async def test_version_metadata(self, local_storage_with_versioning, sample_files):
+        """Test version metadata tracking."""
+        # Save initial file
+        await local_storage_with_versioning.save_file("test.txt", sample_files["text"])
+
+        # Create version with metadata
+        version = await local_storage_with_versioning.create_version(
+            "test.txt", sample_files["text"]
+        )
+
+        assert "created_at" in version
+        assert "size" in version
+        assert version["size"] == len(sample_files["text"])
+
+    @pytest.mark.asyncio
+    async def test_version_nonexistent_file(
+        self, local_storage_with_versioning, sample_files
+    ):
+        """Test versioning operations on non-existent files."""
+        # Try to create version for non-existent file
+        version = await local_storage_with_versioning.create_version(
+            "missing.txt", sample_files["text"]
+        )
+
+        # Should still work (creates the file)
+        assert version is not None
+
+        # Try to get version for non-existent file
+        retrieved = await local_storage_with_versioning.get_version(
+            "missing.txt", "fake_id"
+        )
+        assert retrieved is None
+
+        # Try to list versions for non-existent file
+        versions = await local_storage_with_versioning.list_versions("missing.txt")
+        assert len(versions) >= 1  # Should have the version we just created
+
+
 # ============================================================================
 # Performance Tests
 # ============================================================================

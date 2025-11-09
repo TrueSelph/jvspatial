@@ -156,3 +156,50 @@ class MemoryCache(CacheBackend):
             del self._cache[key]
 
         return len(expired_keys)
+
+    # Cache invalidation strategies
+    async def invalidate_by_pattern(self, pattern: str) -> int:
+        """Invalidate cache keys matching a pattern.
+
+        Args:
+            pattern: Pattern to match against keys (supports * wildcard)
+
+        Returns:
+            Number of keys invalidated
+        """
+        import fnmatch
+
+        matching_keys = [
+            key for key in self._cache.keys() if fnmatch.fnmatch(key, pattern)
+        ]
+
+        for key in matching_keys:
+            del self._cache[key]
+
+        return len(matching_keys)
+
+    async def invalidate_by_tags(self, tags: list) -> int:
+        """Invalidate cache keys associated with specific tags.
+
+        Args:
+            tags: List of tags to match against
+
+        Returns:
+            Number of keys invalidated
+        """
+        # MemoryCache doesn't support tags, so this is a no-op
+        return 0
+
+    async def set_with_tags(
+        self, key: str, value: Any, tags: list = None, ttl: Optional[int] = None
+    ) -> None:
+        """Store value in cache with associated tags.
+
+        Args:
+            key: Cache key
+            value: Value to cache
+            tags: List of tags to associate with this key
+            ttl: Time-to-live in seconds (None for no expiration)
+        """
+        # MemoryCache doesn't support tags, so we just use the regular set method
+        await self.set(key, value, ttl)

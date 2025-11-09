@@ -20,11 +20,26 @@ from typing import Any, Dict, List, Optional
 from jvspatial.api import Server, endpoint
 
 # Import scheduler components (will handle optional dependency gracefully)
-from jvspatial.api.scheduler import (
-    SCHEDULE_AVAILABLE,
-    on_schedule,
-    register_scheduled_tasks,
-)
+try:
+    from jvspatial.api.integrations.scheduler.decorators import (
+        on_schedule,
+        register_scheduled_tasks,
+    )
+    from jvspatial.api.integrations.scheduler.models import (
+        ScheduledTask,
+        SchedulerConfig,
+    )
+    from jvspatial.api.integrations.scheduler.scheduler import (
+        SCHEDULE_AVAILABLE,
+        SchedulerService,
+    )
+except ImportError:
+    SCHEDULE_AVAILABLE = False
+    on_schedule = None  # type: ignore[assignment,misc]
+    register_scheduled_tasks = None  # type: ignore[assignment,misc]
+    SchedulerConfig = None  # type: ignore[assignment,misc]
+    SchedulerService = None  # type: ignore[assignment,misc]
+    ScheduledTask = None  # type: ignore[assignment,misc]
 from jvspatial.core import Object
 
 # Configure logging to see scheduler activity
@@ -41,6 +56,17 @@ class ScheduledJob(Object):
     status: str = "pending"  # pending, completed, failed
     duration_seconds: Optional[float] = None
     error_message: Optional[str] = None
+
+    @classmethod
+    def _get_top_level_fields(cls) -> set:
+        """Return all fields that are stored at top level in the database."""
+        return {
+            "job_name",
+            "execution_time",
+            "status",
+            "duration_seconds",
+            "error_message",
+        }
 
 
 class SystemMetrics(Object):
@@ -160,9 +186,10 @@ async def collect_system_metrics() -> None:
         disk = psutil.disk_usage("/")
 
         # Count active scheduled jobs (entity-centric query)
-        active_jobs = await ScheduledJob.count(
+        active_jobs_list = await ScheduledJob.find(
             {"context.status": {"$in": ["pending", "running"]}}
         )
+        active_jobs = len(active_jobs_list)
 
         # Create metrics record
         metrics = await SystemMetrics.create(
@@ -237,14 +264,19 @@ def create_scheduler_server() -> Server:
         redoc_url="/redoc",
     )
 
-    # Register all decorated tasks with the scheduler
-    if hasattr(server, "scheduler_service") and server.scheduler_service:
-        register_scheduled_tasks(server.scheduler_service)
-        logger.info("✅ Scheduled tasks registered with server")
-    else:
-        logger.warning(
-            "⚠️  Server scheduler service not available - tasks may not be registered"
-        )
+    # Register all decorated tasks with the scheduler in a startup hook
+    # Note: scheduler_service needs to be manually initialized if not automatically created
+    @server.on_startup
+    async def register_scheduler_tasks():
+        """Register scheduled tasks on server startup."""
+        if hasattr(server, "scheduler_service") and server.scheduler_service:
+            await register_scheduled_tasks(server.scheduler_service)
+            logger.info("✅ Scheduled tasks registered with server")
+        else:
+            logger.warning(
+                "⚠️  Server scheduler service not available - tasks may not be registered automatically"
+            )
+            logger.info("💡 You may need to manually initialize the scheduler service")
 
     # Add monitoring endpoints following jvspatial QUICKSTART patterns
 
@@ -262,15 +294,19 @@ def create_scheduler_server() -> Server:
         status = server.scheduler_service.get_status()
 
         # Get job statistics using entity-centric queries
-        total_jobs = await ScheduledJob.count()
-        completed_jobs = await ScheduledJob.count({"context.status": "completed"})
-        failed_jobs = await ScheduledJob.count({"context.status": "failed"})
+        total_jobs_list = await ScheduledJob.find()
+        total_jobs = len(total_jobs_list)
+        completed_jobs_list = await ScheduledJob.find({"context.status": "completed"})
+        completed_jobs = len(completed_jobs_list)
+        failed_jobs_list = await ScheduledJob.find({"context.status": "failed"})
+        failed_jobs = len(failed_jobs_list)
 
         # Recent jobs (last 24 hours)
         recent_cutoff = datetime.now().timestamp() - (24 * 3600)
-        recent_jobs = await ScheduledJob.count(
+        recent_jobs_list = await ScheduledJob.find(
             {"context.execution_time": {"$gte": recent_cutoff}}
         )
+        recent_jobs = len(recent_jobs_list)
 
         return {
             "scheduler": status,
@@ -449,14 +485,17 @@ def create_scheduler_server() -> Server:
                 scheduler_status["running"] = server.scheduler_service.is_running  # type: ignore[attr-defined]
 
             # Get entity counts for health metrics
-            job_count = await ScheduledJob.count()
-            metrics_count = await SystemMetrics.count()
+            job_list = await ScheduledJob.find()
+            job_count = len(job_list)
+            metrics_list = await SystemMetrics.find()
+            metrics_count = len(metrics_list)
 
             # Recent activity check
             recent_cutoff = datetime.now().timestamp() - 3600  # 1 hour
-            recent_activity = await ScheduledJob.count(
+            recent_activity_list = await ScheduledJob.find(
                 {"context.execution_time": {"$gte": recent_cutoff}}
             )
+            recent_activity = len(recent_activity_list)
 
             return {
                 "status": "healthy",
@@ -548,7 +587,8 @@ async def test_scheduler_without_server() -> None:
 
     try:
         # Import here to avoid issues if not available
-        from jvspatial.api.scheduler import SchedulerConfig, SchedulerService
+        from jvspatial.api.integrations.scheduler.models import SchedulerConfig
+        from jvspatial.api.integrations.scheduler.scheduler import SchedulerService
 
         # Create and configure scheduler following QUICKSTART patterns
         config = SchedulerConfig(
@@ -557,7 +597,7 @@ async def test_scheduler_without_server() -> None:
         scheduler_service = SchedulerService(config=config)
 
         # Register decorated tasks
-        register_scheduled_tasks(scheduler_service)
+        await register_scheduled_tasks(scheduler_service)
 
         # Start scheduler
         scheduler_service.start()
@@ -595,9 +635,10 @@ async def test_scheduler_without_server() -> None:
                 # Show recent job count using entity queries
                 recent_cutoff = datetime.now().timestamp() - 300  # 5 minutes
                 try:
-                    recent_jobs = await ScheduledJob.count(
+                    recent_jobs_list = await ScheduledJob.find(
                         {"context.execution_time": {"$gte": recent_cutoff}}
                     )
+                    recent_jobs = len(recent_jobs_list)
                     logger.info(f"📋 Recent jobs (5min): {recent_jobs}")
                 except Exception as e:
                     logger.debug(f"Could not query job entities: {e}")
@@ -613,8 +654,10 @@ async def test_scheduler_without_server() -> None:
 
         # Show entity counts if available
         try:
-            job_count = await ScheduledJob.count()
-            metrics_count = await SystemMetrics.count()
+            job_list = await ScheduledJob.find()
+            job_count = len(job_list)
+            metrics_list = await SystemMetrics.find()
+            metrics_count = len(metrics_list)
             logger.info(f"   • Job records created: {job_count}")
             logger.info(f"   • Metrics records: {metrics_count}")
         except Exception as e:

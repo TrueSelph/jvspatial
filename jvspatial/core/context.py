@@ -18,19 +18,22 @@ if TYPE_CHECKING:
     from .entities import Object
 
 from jvspatial.db.database import Database
-from jvspatial.db.factory import get_database
+from jvspatial.db.factory import create_database, get_current_database
+from jvspatial.db.manager import get_database_manager
 
 T = TypeVar("T", bound="Object")
 
 
 # Simple performance monitor for tracking operations
 class PerformanceMonitor:
-    """Simple performance monitoring for database operations."""
+    """Enhanced performance monitoring for database operations and general operations."""
 
     def __init__(self):
         self.db_operations: List[Dict[str, Any]] = []
         self.hook_executions: List[Dict[str, Any]] = []
         self.db_errors: List[Dict[str, Any]] = []
+        self.general_operations: List[Dict[str, Any]] = []
+        self.general_errors: List[Dict[str, Any]] = []
 
     async def record_db_operation(
         self,
@@ -81,18 +84,79 @@ class PerformanceMonitor:
             }
         )
 
+    async def record_operation(
+        self, operation_name: str, duration: float, **kwargs: Any
+    ):
+        """Record a general operation.
+
+        Args:
+            operation_name: Name of the operation
+            duration: Duration in seconds
+            **kwargs: Additional operation metadata
+        """
+        self.general_operations.append(
+            {
+                "operation_name": operation_name,
+                "duration": duration,
+                "timestamp": time.time(),
+                **kwargs,
+            }
+        )
+
+    async def record_error(self, operation_name: str, error: str):
+        """Record a general error.
+
+        Args:
+            operation_name: Name of the operation that failed
+            error: Error message
+        """
+        self.general_errors.append(
+            {
+                "operation_name": operation_name,
+                "error": error,
+                "timestamp": time.time(),
+            }
+        )
+
     async def get_stats(self) -> Dict[str, Any]:
-        """Get performance statistics."""
-        total_ops = len(self.db_operations)
+        """Get comprehensive performance statistics."""
+        total_db_ops = len(self.db_operations)
+        total_general_ops = len(self.general_operations)
+        total_ops = total_db_ops + total_general_ops
+
         if total_ops == 0:
             return {"total_operations": 0}
 
-        avg_duration = sum(op["duration"] for op in self.db_operations) / total_ops
+        # Calculate database operation statistics
+        db_stats = {}
+        if total_db_ops > 0:
+            avg_db_duration = (
+                sum(op["duration"] for op in self.db_operations) / total_db_ops
+            )
+            db_stats = {
+                "db_operations": total_db_ops,
+                "avg_db_duration": avg_db_duration,
+                "db_errors": len(self.db_errors),
+            }
+
+        # Calculate general operation statistics
+        general_stats = {}
+        if total_general_ops > 0:
+            avg_general_duration = (
+                sum(op["duration"] for op in self.general_operations)
+                / total_general_ops
+            )
+            general_stats = {
+                "general_operations": total_general_ops,
+                "avg_general_duration": avg_general_duration,
+                "general_errors": len(self.general_errors),
+            }
+
         return {
             "total_operations": total_ops,
-            "average_duration": avg_duration,
-            "total_errors": len(self.db_errors),
             "hook_executions": len(self.hook_executions),
+            **db_stats,
+            **general_stats,
         }
 
 
@@ -118,25 +182,31 @@ async def get_performance_stats() -> Optional[Dict[str, Any]]:
 
 
 class GraphContext:
-    """Context manager for graph operations with dependency injection.
+    """Context manager for graph operations with dependency injection and built-in performance monitoring.
 
     Provides centralized database management and eliminates the need for
-    scattered database selection across classes.
+    scattered database selection across classes. Includes integrated performance
+    monitoring for tracking operations and optimizing performance.
 
     Usage:
-        # Create context with default database
+        # Create context with default database and performance monitoring
         ctx = GraphContext()
 
-        # Create context with specific database
-        ctx = GraphContext(database=my_db)
+        # Create context with specific database and performance monitoring
+        ctx = GraphContext(database=my_db, enable_performance_monitoring=True)
 
         # Use context for operations
         node = ctx.create_node(name="Test")
         retrieved = ctx.get_node(node.id)
     """
 
-    def __init__(self, database: Optional[Database] = None, cache_backend=None):
-        """Initialize GraphContext.
+    def __init__(
+        self,
+        database: Optional[Database] = None,
+        cache_backend=None,
+        enable_performance_monitoring: bool = True,
+    ):
+        """Initialize GraphContext with integrated performance monitoring.
 
         Args:
             database: Database instance to use. If None, uses factory default.
@@ -144,14 +214,19 @@ class GraphContext:
                           one based on environment configuration. Can be:
                           - CacheBackend instance
                           - None (auto-detect from environment)
+            enable_performance_monitoring: Whether to enable built-in performance monitoring
         """
         self._database = database
+        self._perf_monitoring_enabled = enable_performance_monitoring
+        self._perf_monitor = (
+            PerformanceMonitor() if enable_performance_monitoring else None
+        )
 
         # Initialize cache backend
         if cache_backend is None:
-            from jvspatial.cache import get_cache_backend
+            from jvspatial.cache import create_cache
 
-            self._cache = get_cache_backend()
+            self._cache = create_cache()
         else:
             self._cache = cache_backend
 
@@ -159,7 +234,12 @@ class GraphContext:
     def database(self) -> Database:
         """Get the database instance, initializing if needed."""
         if self._database is None:
-            self._database = get_database()
+            # Use current database from manager if available
+            try:
+                self._database = get_current_database()
+            except Exception:
+                # Fallback to creating default database
+                self._database = create_database()
         return self._database
 
     async def set_database(self, database: Database) -> None:
@@ -167,6 +247,30 @@ class GraphContext:
         self._database = database
         # Clear cache when database changes
         await self.clear_cache()
+
+    def switch_database(self, name: str) -> None:
+        """Switch to a different database by name using DatabaseManager.
+
+        Args:
+            name: Database name to switch to
+
+        Raises:
+            ValueError: If database is not registered
+        """
+        manager = get_database_manager()
+        manager.set_current_database(name)
+        # Update internal database reference
+        self._database = manager.get_current_database()
+
+    def use_prime_database(self) -> None:
+        """Switch to the prime database for core persistence operations.
+
+        The prime database is always used for authentication, session management,
+        and system-level data.
+        """
+        manager = get_database_manager()
+        manager.set_current_database("prime")
+        self._database = manager.get_prime_database()
 
     def _get_entity_type_code(self, entity_class: Type[T]) -> str:
         """Get the type_code for an entity class.
@@ -195,6 +299,61 @@ class GraphContext:
     async def clear_cache(self) -> None:
         """Clear the entity cache."""
         await self._cache.clear()
+
+    async def get_performance_stats(self) -> Optional[Dict[str, Any]]:
+        """Get performance statistics for this GraphContext instance.
+
+        Returns:
+            Performance statistics dictionary if monitoring is enabled, None otherwise
+        """
+        if not self._perf_monitoring_enabled or not self._perf_monitor:
+            return None
+
+        return await self._perf_monitor.get_stats()
+
+    def enable_performance_monitoring(self) -> None:
+        """Enable performance monitoring for this GraphContext instance."""
+        if not self._perf_monitoring_enabled:
+            self._perf_monitoring_enabled = True
+            self._perf_monitor = PerformanceMonitor()
+
+    def disable_performance_monitoring(self) -> None:
+        """Disable performance monitoring for this GraphContext instance."""
+        self._perf_monitoring_enabled = False
+        self._perf_monitor = None
+
+    async def _record_operation(
+        self, operation_name: str, duration: float, **kwargs: Any
+    ) -> None:
+        """Record an operation for performance monitoring.
+
+        Args:
+            operation_name: Name of the operation
+            duration: Duration in seconds
+            **kwargs: Additional operation metadata
+        """
+        if not self._perf_monitoring_enabled or not self._perf_monitor:
+            return
+
+        # Record generic operation
+        if hasattr(self._perf_monitor, "record_operation"):
+            await self._perf_monitor.record_operation(
+                operation_name, duration, **kwargs
+            )
+
+    async def _record_error(self, operation_name: str, error: str) -> None:
+        """Record an error for performance monitoring.
+
+        Args:
+            operation_name: Name of the operation that failed
+            error: Error message
+        """
+        if not self._perf_monitoring_enabled or not self._perf_monitor:
+            return
+
+        # Record error
+        if hasattr(self._perf_monitor, "record_error"):
+            await self._perf_monitor.record_error(operation_name, error)
 
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""
@@ -266,7 +425,30 @@ class GraphContext:
         Returns:
             The saved entity instance
         """
-        record = entity.export()
+        # Use for_persistence=True for database storage format (Node, Edge, Walker)
+        # This ensures the nested persistence format is used
+        if hasattr(entity, "type_code"):
+            type_code = getattr(entity, "type_code", "")
+            if type_code in ("n", "e", "w"):  # Node, Edge, or Walker
+                record = entity.export(for_persistence=True)
+            else:
+                # For Objects, export and serialize datetimes for JSON compatibility
+                # Also add "name" field for find() queries to work correctly
+                record = entity.export()
+                from jvspatial.utils.serialization import serialize_datetime
+
+                record = serialize_datetime(record)
+                # Add class name for type filtering in find() queries
+                if "name" not in record:
+                    record["name"] = entity.__class__.__name__
+        else:
+            record = entity.export()
+            from jvspatial.utils.serialization import serialize_datetime
+
+            record = serialize_datetime(record)
+            # Add class name for type filtering in find() queries
+            if "name" not in record:
+                record["name"] = entity.__class__.__name__
         # Use entity's get_collection_name method if available, otherwise use type_code
         if hasattr(entity, "get_collection_name"):
             collection = entity.get_collection_name()
@@ -301,6 +483,53 @@ class GraphContext:
         await db.delete(collection, entity.id)
         # Remove from cache
         await self._cache.delete(entity.id)
+
+    async def export_graph(
+        self,
+        format: str = "dot",
+        output_file: Optional[str] = None,
+        **kwargs: Any,
+    ) -> str:
+        """Export the graph in a renderable format.
+
+        Args:
+            format: Output format - "dot" (Graphviz) or "mermaid"
+            output_file: Optional file path to save the output. If provided, the graph
+                        will be written to this file in addition to being returned.
+            **kwargs: Additional format-specific options
+
+        Returns:
+            Graph representation string in the specified format
+
+        Example:
+            ```python
+            context = GraphContext()
+
+            # Generate DOT format
+            dot_graph = await context.export_graph(format="dot", rankdir="LR")
+
+            # Generate Mermaid format
+            mermaid_graph = await context.export_graph(
+                format="mermaid",
+                direction="LR",
+                include_attributes=True
+            )
+
+            # Save to file optionally
+            dot_graph = await context.export_graph(
+                format="dot",
+                output_file="graph.dot",
+                rankdir="LR"
+            )
+            ```
+
+        See `jvspatial.core.graph` for detailed options.
+        """
+        from .graph import export_graph
+
+        return await export_graph(
+            self, format=format, output_file=output_file, **kwargs
+        )
 
     async def _cascade_delete(self, node_entity) -> None:
         """Delete related objects when cascading."""

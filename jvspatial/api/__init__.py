@@ -10,12 +10,7 @@ This module provides:
 
 from .config import ServerConfig
 from .context import ServerContext, get_current_server, set_current_server
-from .decorators.route import (
-    admin_endpoint,
-    auth_endpoint,
-    endpoint,
-    webhook_endpoint,
-)
+from .decorators.route import endpoint
 
 # Note: EndpointField, EndpointFieldInfo, endpoint_field moved to endpoints module
 # from .endpoints import EndpointField, EndpointFieldInfo, endpoint_field
@@ -36,9 +31,6 @@ __all__ = [
     "set_current_server",
     "ServerContext",
     "endpoint",
-    "auth_endpoint",
-    "webhook_endpoint",
-    "admin_endpoint",
     # Core routers (for advanced usage)
     "BaseRouter",
     "EndpointRouter",

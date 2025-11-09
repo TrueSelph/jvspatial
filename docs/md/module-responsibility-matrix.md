@@ -36,7 +36,7 @@ This document provides a clear matrix of module responsibilities, helping develo
 | `decorators.py` | Graph decorators | `@on_visit`, `@on_exit` |
 | `events.py` | Event system | Event handling |
 | `node_query.py` | Node queries | `NodeQuery` |
-| `annotations.py` | Annotations | `@protected`, `@private` |
+| `annotations.py` | Annotations | `@attribute` |
 | `utils.py` | Core utilities | Serialization, helpers |
 | `pager.py` | Pagination | `Pager` |
 | `entities.py` | Entity re-exports | Central import point |

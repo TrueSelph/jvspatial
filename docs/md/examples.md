@@ -2,65 +2,147 @@
 
 This document showcases key examples that demonstrate the range of capabilities and features of the jvspatial library - a powerful object-spatial ORM for building connected graph applications with spatial awareness.
 
-## Table of Contents
+## 🎯 **Standard Implementation Examples** (Recommended Starting Point)
 
-1. [Core ORM Demo](#core-orm-demo) - Basic object-spatial ORM concepts
-2. [Travel Graph](#travel-graph) - Spatial operations and walker patterns
-3. [Agent Graph](#agent-graph) - Hierarchical systems with API endpoints
-4. [Authentication Demo](#authentication-demo) - JWT tokens, API keys, and RBAC
-5. [Dynamic Server](#dynamic-server) - Runtime endpoint registration
-6. [GraphContext Demo](#graphcontext-demo) - Database dependency injection
-7. [Semantic Filtering](#semantic-filtering) - Advanced query capabilities
+These examples serve as the **standard reference implementation** for building custom jvspatial APIs:
+
+### 1. **Authenticated API Example** (Complete CRUD with Authentication)
+**File**: [`examples/api/authenticated_endpoints_example.py`](../../examples/api/authenticated_endpoints_example.py)
+
+**What it demonstrates**:
+- ✅ Complete CRUD operations (Create, Read, Update, Delete)
+- ✅ JWT-based authentication and authorization
+- ✅ Permission and role-based access control
+- ✅ Entity-centric database operations (`UserNode.get()`, `ProductNode.create()`, etc.)
+- ✅ Pagination with `ObjectPager`
+- ✅ Response schemas with examples
+- ✅ Walker-based analytics endpoints
+- ✅ Automatic authentication endpoint registration (login, register, logout)
+
+**Key Features**:
+```python
+# Server with authentication enabled
+server = Server(
+    title="Authenticated CRUD API Example",
+    auth_enabled=True,
+    jwt_auth_enabled=True,
+    db_type="json",
+    db_path="./jvdb"
+)
+
+# Protected endpoint with permissions
+@endpoint("/users", methods=["GET"], auth=True, permissions=["read_users"])
+async def list_users(page: int = 1, per_page: int = 10):
+    pager = ObjectPager(UserNode, page_size=per_page)
+    users = await pager.get_page(page=page)
+    return {"users": [user.export() for user in users], ...}
+
+# Entity-centric CRUD operations
+user = await UserNode.create(name="John", email="john@example.com")
+await user.save()
+await user.delete()
+```
+
+**Use this example when**: You need a full-featured API with authentication, CRUD operations, and role-based access control.
+
+### 2. **Unauthenticated API Example** (Public Read-Only API)
+**File**: [`examples/api/unauthenticated_endpoints_example.py`](../../examples/api/unauthenticated_endpoints_example.py)
+
+**What it demonstrates**:
+- ✅ Public endpoints (no authentication required)
+- ✅ Read-only operations (GET endpoints)
+- ✅ Listing with pagination and filtering
+- ✅ Entity-centric retrieval operations
+- ✅ Response schemas with examples
+- ✅ **No authentication endpoints** (login/register/logout are NOT registered)
+
+**Key Features**:
+```python
+# Server without authentication
+server = Server(
+    title="Public API Example",
+    auth_enabled=False,  # No auth endpoints will be registered
+    db_type="json",
+    db_path="./jvdb_public"
+)
+
+# Public endpoint with pagination
+@endpoint("/articles", methods=["GET"])
+async def list_articles(page: int = 1, per_page: int = 10, category: Optional[str] = None):
+    pager = ObjectPager(ArticleNode, page_size=per_page)
+    articles = await pager.get_page(page=page, additional_filters={"category": category} if category else {})
+    return {"articles": [article.export() for article in articles], ...}
+```
+
+**Use this example when**: You need a public API for reading data, content delivery, or read-only services.
 
 ---
 
-## Core ORM Demo
+## Table of Contents
 
-**File**: [`examples/orm_demo.py`](examples/orm_demo.py)
+**Standard Examples** (Start Here):
+1. [Authenticated API Example](#1-authenticated-api-example-complete-crud-with-authentication) ⭐
+2. [Unauthenticated API Example](#2-unauthenticated-api-example-public-read-only-api) ⭐
+
+**Additional Examples**:
+3. [Graph Visualization](#graph-visualization) - Export graphs in DOT/Mermaid formats
+4. [Core ORM Demo](#core-orm-demo) - Basic object-spatial ORM concepts
+5. [Travel Graph](#travel-graph) - Spatial operations and walker patterns
+6. [Agent Graph](#agent-graph) - Hierarchical systems with API endpoints
+7. [Authentication Demo](#authentication-demo) - JWT tokens, API keys, and RBAC
+8. [Dynamic Server](#dynamic-server) - Runtime endpoint registration
+9. [GraphContext Demo](#graphcontext-demo) - Database dependency injection
+10. [Semantic Filtering](#semantic-filtering) - Advanced query capabilities
+
+---
+
+## Graph Visualization
+
+**File**: [`examples/core/graph_visualization_example.py`](../../examples/core/graph_visualization_example.py)
 
 **What it demonstrates**:
-- Basic Node and Edge creation
-- Semantic connection syntax
-- Walker-based traversal
-- Database-optimized queries
+- ✅ Creating interconnected graph structures
+- ✅ Exporting graphs in DOT (Graphviz) format
+- ✅ Exporting graphs in Mermaid format
+- ✅ Custom filtering and styling
+- ✅ Multiple layout options
+- ✅ File output and return value patterns
 
-### Key Features Shown
+**Key Features**:
+```python
+from jvspatial.core.graph import generate_graph_dot, generate_graph_mermaid
 
-```python path=examples/orm_demo.py start=15
-class City(Node):
-    """Example city node."""
-    name: str = Field(default="")
-    population: int = Field(default=0)
+# Generate DOT format (returns value, optionally saves to file)
+dot_graph = await generate_graph_dot(
+    context,
+    graph_name="company_graph",
+    rankdir="LR",
+    node_shape="box",
+    include_attributes=True,
+    output_file="graph.dot"  # Optional: saves to file
+)
 
-class Highway(Edge):
-    """Example highway edge."""
-    distance: float = Field(default=0.0)
-    lanes: int = Field(default=2)
+# Generate Mermaid format
+mermaid_graph = await generate_graph_mermaid(
+    context,
+    graph_type="flowchart",
+    direction="LR",
+    include_attributes=True,
+    output_file="graph.mermaid"  # Optional: saves to file
+)
+
+# Using GraphContext convenience method
+graph = await context.export_graph(
+    format="dot",
+    output_file="graph.dot",
+    rankdir="LR"
+)
 ```
 
-**Elegant Connection Interface**:
-```python path=examples/orm_demo.py start=71
-highway1 = await new_york.connect(chicago, Highway, distance=790.0, lanes=4)
-```
+**Use this example when**: You need to visualize your graph structure for documentation, debugging, or analysis.
 
-**Database-Optimized Queries**:
-```python path=examples/orm_demo.py start=119
-# MongoDB-style queries with context prefix
-large_cities = await City.find({"context.population": {"$gt": 5000000}})
-```
+**See also**: [Graph Visualization Guide](../graph-visualization.md) - Complete documentation
 
-**Walker Traversal with Report Pattern**:
-```python path=examples/orm_demo.py start=29
-class TravelWalker(Walker):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.cities_visited = []
-
-    @on_visit(City)
-    async def visit_city(self, here: City):
-print(f"Visiting {here.name} (pop: {here.population:,})")
-        self.cities_visited.append(here.name)
-        self.report({"city_visited": here.name})
 
 # Usage
 walker = TravelWalker()
@@ -529,6 +611,26 @@ main_ctx = GraphContext(database=main_db)
 analytics_ctx = GraphContext(database=analytics_db)
 ```
 
+**Multi-Database Support with Prime Database**:
+For managing multiple databases with a prime database for core persistence, see [`examples/database/multi_database_example.py`](../../examples/database/multi_database_example.py):
+```python
+from jvspatial.db import create_database, get_database_manager, switch_database, unregister_database
+
+# Prime database is automatically created for auth/sessions
+manager = get_database_manager()
+prime_db = manager.get_prime_database()
+
+# Create and register additional databases
+app_db = create_database("json", base_path="./app_data", register=True, name="app")
+
+# Switch between databases
+switch_database("app")  # For application data
+switch_database("prime")  # Back to prime
+
+# Remove a database
+unregister_database("app")
+```
+
 **Testing Pattern**:
 ```python path=examples/graphcontext_demo.py start=194
 # Create isolated test database
@@ -593,16 +695,14 @@ good_free_roads = await new_york.nodes(
 The `examples/` directory contains many more specialized examples:
 
 ### Core Examples (All Passing)
-- **`crud_demo.py`** - Basic CRUD operations
-- **`orm_demo.py`** - ORM patterns and best practices
 - **`walker_traversal_demo.py`** - Walker traversal patterns
 - **`walker_events_demo.py`** - Walker event communication system
 - **`walker_reporting_demo.py`** - Walker reporting system with `report()` pattern
+- **`database/multi_database_example.py`** - **Multi-database support with prime database** - Managing multiple databases, switching, and removing non-prime databases
 - **`database_switching_example.py`** - Multiple database backends
 - **`multi_target_hooks_demo.py`** - Advanced walker hooks with `@on_visit(TypeA, TypeB)`
 - **`object_pagination_demo.py`** - Pagination and performance
 - **`testing_with_graphcontext.py`** - Testing strategies with database isolation
-- **`traversal_demo.py`** - Graph traversal patterns
 - **`semantic_filtering.py`** - Advanced MongoDB-style queries
 - **`enhanced_nodes_filtering.py`** - Enhanced filtering capabilities
 - **`unified_query_interface_example.py`** - Advanced query interfaces
@@ -623,7 +723,7 @@ Each example can be run independently:
 
 ```bash
 cd examples/
-python orm_demo.py
+python walker_traversal_demo.py
 python travel_graph.py
 python agent_graph.py
 # ... etc

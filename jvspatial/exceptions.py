@@ -13,6 +13,26 @@ The hybrid approach provides:
 import contextlib
 from typing import Any, Dict, Optional
 
+# Import API exceptions for re-export
+# Note: Some exceptions are defined locally below, so we import only those
+# that are not locally defined
+try:
+    from jvspatial.api.exceptions import (
+        AuthenticationError,
+        AuthorizationError,
+        InvalidCredentialsError,
+        JVSpatialAPIException,
+        RateLimitError,
+    )
+except ImportError:
+    # Fallback if API module is not available - use type: ignore for mypy
+    # These will be None if API module is unavailable, but that's acceptable
+    AuthenticationError = None  # type: ignore[assignment,misc]
+    AuthorizationError = None  # type: ignore[assignment,misc]
+    InvalidCredentialsError = None  # type: ignore[assignment,misc]
+    JVSpatialAPIException = None  # type: ignore[assignment,misc]
+    RateLimitError = None  # type: ignore[assignment,misc]
+
 # =============================================================================
 # BASE EXCEPTIONS - Defined here to avoid circular imports
 # =============================================================================
@@ -147,17 +167,9 @@ with contextlib.suppress(ImportError):
     from .db.database import VersionConflictError  # type: ignore[attr-defined]
 
 
-# Import API authentication exceptions
+# Import API exceptions from api module
 with contextlib.suppress(ImportError):
-    from .api.auth.entities import (  # type: ignore[attr-defined]
-        APIKeyInvalidError,
-        AuthenticationError,
-        AuthorizationError,
-        InvalidCredentialsError,
-        RateLimitError,
-        SessionExpiredError,
-        UserNotFoundError,
-    )
+    from .api.exceptions import JVSpatialAPIException  # type: ignore[attr-defined]
 
 
 # =============================================================================
@@ -440,17 +452,17 @@ __all__ = [
     "WalkerExecutionError",
     "WalkerTimeoutError",
     "InfiniteLoopError",
-    # API exceptions
+    # API exceptions (imported from jvspatial.api.exceptions)
     "APIError",
+    "JVSpatialAPIException",
     "EndpointError",
     "ParameterError",
     "AuthenticationError",
     "AuthorizationError",
     "RateLimitError",
     "InvalidCredentialsError",
-    "UserNotFoundError",
-    "SessionExpiredError",
-    "APIKeyInvalidError",
+    # Note: UserNotFoundError, SessionExpiredError, APIKeyInvalidError
+    # are not currently defined - removed from exports
     # Security exceptions
     "SecurityError",
     "PermissionDeniedError",

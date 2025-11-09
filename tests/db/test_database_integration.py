@@ -24,14 +24,7 @@ from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Edge, Node, Walker
 from jvspatial.core.pager import ObjectPager
 from jvspatial.db.database import Database, VersionConflictError
-from jvspatial.db.factory import (
-    get_database,
-    get_default_database_type,
-    list_available_databases,
-    register_database,
-    set_default_database,
-    unregister_database,
-)
+from jvspatial.db.factory import create_database
 from jvspatial.db.jsondb import JsonDB
 from jvspatial.db.query import QueryBuilder, query
 
@@ -214,6 +207,20 @@ class MockDatabase(Database):
                         return False
         return True
 
+    async def begin_transaction(self):
+        """Begin a new transaction."""
+        from jvspatial.db.transaction import JsonDBTransaction
+
+        return JsonDBTransaction(self)
+
+    async def commit_transaction(self, transaction):
+        """Commit a transaction."""
+        pass
+
+    async def rollback_transaction(self, transaction):
+        """Rollback a transaction."""
+        pass
+
 
 @pytest.fixture
 async def temp_db_path():
@@ -284,142 +291,6 @@ def mock_context(mock_database):
     context._get_collection_name = mock_get_collection_name
 
     return context
-
-
-class TestDatabaseFactory:
-    """Test database factory and registry functionality."""
-
-    def setup_method(self):
-        """Set up clean state for each test."""
-        # Reset to default state
-        from jvspatial.db.factory import (
-            _DATABASE_CONFIGURATORS,
-            _DATABASE_REGISTRY,
-            set_default_database,
-        )
-
-        # Clean up test databases from previous runs
-        unregister_database("mock")
-        unregister_database("temp")
-        unregister_database("test")
-
-        # Ensure json database is properly registered first
-        if "json" not in _DATABASE_REGISTRY:
-            from jvspatial.db.factory import register_database
-            from jvspatial.db.jsondb import JsonDB
-
-            def json_configurator(kwargs):
-                base_path = kwargs.get("base_path", "jvdb")
-                cache_size = kwargs.get("cache_size")
-                return JsonDB(str(base_path), cache_size=cache_size)
-
-            register_database("json", JsonDB, json_configurator, set_as_default=True)
-
-        # Now set as default
-        set_default_database("json")
-
-    def teardown_method(self):
-        """Clean up after each test."""
-        # Ensure clean state
-        from jvspatial.db.factory import set_default_database
-
-        set_default_database("json")
-
-    async def test_register_database(self):
-        """Test database registration."""
-        # Register mock database
-        register_database("mock", MockDatabase)
-
-        # Check it's available
-        available = list_available_databases()
-        assert "mock" in available
-
-        # Get instance
-        db = get_database("mock")
-        assert isinstance(db, MockDatabase)
-
-        # Cleanup
-        unregister_database("mock")
-
-    async def test_unregister_database(self):
-        """Test database unregistration."""
-        register_database("temp", MockDatabase)
-        assert "temp" in list_available_databases()
-
-        unregister_database("temp")
-        assert "temp" not in list_available_databases()
-
-        # Should raise error when getting unregistered database
-        with pytest.raises(ValueError, match="Unsupported database type: 'temp'"):
-            get_database("temp")
-
-    async def test_set_default_database(self):
-        """Test setting default database type."""
-        register_database("mock", MockDatabase)
-
-        # Set as default
-        set_default_database("mock")
-        assert get_default_database_type() == "mock"
-
-        # Get default instance
-        db = get_database()
-        assert isinstance(db, MockDatabase)
-
-        # Cleanup
-        unregister_database("mock")
-        set_default_database("json")
-
-    async def test_list_available_databases(self):
-        """Test listing available databases."""
-        available = list_available_databases()
-        assert "json" in available
-
-        # Register additional database
-        register_database("test", MockDatabase)
-        updated_available = list_available_databases()
-        assert "test" in updated_available
-        assert len(updated_available) > len(available)
-
-        # Cleanup
-        unregister_database("test")
-
-    async def test_get_database_with_config(self):
-        """Test getting database with configuration.
-
-        Note: JsonDB requires an event loop to initialize its async lock.
-        We need to ensure there's an event loop available.
-        """
-        import asyncio
-
-        # Ensure json database is registered
-        from jvspatial.db.factory import (
-            _DATABASE_CONFIGURATORS,
-            _DATABASE_REGISTRY,
-            register_database,
-        )
-        from jvspatial.db.jsondb import JsonDB
-
-        if "json" not in _DATABASE_REGISTRY:
-            register_database("json", JsonDB, set_as_default=True)
-
-        # Ensure we have an event loop for JsonDB's async lock
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        # This should work with JsonDB
-        db = get_database("json", base_path="/tmp/test")
-        assert isinstance(db, JsonDB)
-        assert str(db.base_path).endswith("/tmp/test")
-
-    async def test_get_nonexistent_database(self):
-        """Test getting non-existent database type."""
-        with pytest.raises(
-            ValueError, match="Unsupported database type: 'nonexistent'"
-        ):
-            get_database("nonexistent")
 
 
 class TestDatabaseBasicOperations:
@@ -703,10 +574,9 @@ class TestEdgeDatabaseIntegration:
         with patch(
             "jvspatial.core.context.get_default_context", return_value=mock_context
         ):
-            # Find edges by source
-            source_edges = await DbTestEdge.find(
-                {"name": "DbTestEdge", "source": node1.id}
-            )
+            # Find edges by source - edges store source/target at top level
+            # Object.find() now handles edge-specific top-level fields (source, target, bidirectional)
+            source_edges = await DbTestEdge.find(source=node1.id)
             assert len(source_edges) == 1
             assert source_edges[0].target == node2.id
 
@@ -923,6 +793,18 @@ class TestDatabaseErrorHandling:
             async def find(self, collection, query):
                 raise ConnectionError("Database connection failed")
 
+            async def begin_transaction(self):
+                """Begin a new transaction."""
+                raise ConnectionError("Database connection failed")
+
+            async def commit_transaction(self, transaction):
+                """Commit a transaction."""
+                raise ConnectionError("Database connection failed")
+
+            async def rollback_transaction(self, transaction):
+                """Rollback a transaction."""
+                raise ConnectionError("Database connection failed")
+
         failing_db = FailingDatabase()
 
         # Test that errors are properly raised
@@ -1009,8 +891,7 @@ class TestJsonDatabaseSpecific:
     async def test_json_db_initialization(self, temp_db_path):
         """Test JsonDB initialization."""
         db = JsonDB(base_path=temp_db_path)
-        await db.initialize()
-
+        # JsonDB doesn't need initialization - it creates directories automatically
         # Check data directory exists
         assert os.path.exists(temp_db_path)
 
@@ -1022,8 +903,7 @@ class TestJsonDatabaseSpecific:
         await json_database.save("test", record)
 
         # Create new instance of same database
-        new_db = JsonDB(base_path=str(json_database.data_dir))
-        await new_db.initialize()
+        new_db = JsonDB(base_path=str(json_database.base_path))
 
         # Should be able to retrieve the record
         retrieved = await new_db.get("test", "persist_test")
@@ -1037,9 +917,13 @@ class TestJsonDatabaseSpecific:
         await json_database.save("nodes", {"id": "n1", "type": "node"})
         await json_database.save("edges", {"id": "e1", "type": "edge"})
 
-        # Check that separate collection files are created (JsonDB creates directories, not single files)
-        nodes_dir = os.path.join(str(json_database.data_dir), "nodes")
-        edges_dir = os.path.join(str(json_database.data_dir), "edges")
+        # Check that separate collection directories are created (JsonDB creates directories with individual JSON files)
+        nodes_dir = os.path.join(str(json_database.base_path), "nodes")
+        edges_dir = os.path.join(str(json_database.base_path), "edges")
+        nodes_file = os.path.join(nodes_dir, "n1.json")
+        edges_file = os.path.join(edges_dir, "e1.json")
 
         assert os.path.exists(nodes_dir)
         assert os.path.exists(edges_dir)
+        assert os.path.exists(nodes_file)
+        assert os.path.exists(edges_file)

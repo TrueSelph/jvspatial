@@ -1,5 +1,32 @@
 # Core Examples
 
+## Graph Visualization Example
+
+**File:** `graph_visualization_example.py`
+
+Demonstrates how to generate renderable graph representations using the `graph` module.
+Creates a realistic graph of interconnected nodes (Organizations, People, Projects, Skills)
+and exports it in multiple formats:
+
+- **DOT/Graphviz format** - For rendering with Graphviz tools
+- **Mermaid format** - For rendering in Markdown, GitHub, or Mermaid tools
+
+The example showcases:
+- Creating diverse node types with attributes
+- Connecting nodes with bidirectional and unidirectional edges
+- Generating visualizations with different layouts and styles
+- Filtering graphs to show specific node types
+- Using both direct function calls and the convenience `export_graph()` function
+
+**Usage:**
+```bash
+python examples/core/graph_visualization_example.py
+```
+
+Outputs 8 files (4 DOT + 4 Mermaid variations) that can be rendered with appropriate tools.
+
+---
+
 This directory contains examples demonstrating core jvspatial features and graph operations.
 
 ## Example Files

@@ -69,10 +69,10 @@ The endpoint system consists of two main files:
 
 **Walker Endpoints** - Graph traversal via HTTP:
 ```python
-from jvspatial.api import walker_endpoint
-from jvspatial.api.endpoint import EndpointField
+from jvspatial.api import endpoint
+from jvspatial.api.decorators import EndpointField
 
-@walker_endpoint("/process", methods=["POST"])
+@endpoint("/process", methods=["POST"])
 class DataProcessor(Walker):
     query: str = EndpointField(description="Search query")
     limit: int = EndpointField(default=10, ge=1, le=100)
@@ -84,7 +84,8 @@ from jvspatial.api import endpoint
 
 @endpoint("/users/count", methods=["GET"])
 async def get_user_count(endpoint) -> Dict[str, Any]:
-    count = await User.count()
+    users = await User.find({})
+    count = len(users)
     return endpoint.success(data={"count": count})
 ```
 
@@ -133,21 +134,20 @@ async def get_user_count(endpoint) -> Dict[str, Any]:
 - [`JWTManager`](../../jvspatial/api/auth/middleware.py:1) - JWT token handling
 - [`RateLimiter`](../../jvspatial/api/auth/middleware.py:1) - Rate limiting
 
-**Decorators** ([`auth/decorators.py`](../../jvspatial/api/auth/decorators.py:1)):
-- `@auth_endpoint` - Unified authenticated endpoint (auto-detects functions/walkers)
-- `@admin_endpoint` - Unified admin-only endpoint (auto-detects functions/walkers)
-- `@webhook_endpoint` - Unified webhook endpoint (auto-detects functions/walkers)
-- `@require_permissions` - Permission-based access control
-- `@require_roles` - Role-based access control
+**Decorators** - Use the unified `@endpoint` decorator with parameters:
+- `@endpoint(..., auth=True)` - Authenticated endpoint
+- `@endpoint(..., auth=True, roles=["admin"])` - Role-based access control
+- `@endpoint(..., auth=True, permissions=["read_data"])` - Permission-based access control
+- `@endpoint(..., webhook=True)` - Webhook endpoint
 
 ```python
-from jvspatial.api.auth import auth_endpoint, admin_endpoint
+from jvspatial.api import endpoint
 
-@auth_endpoint("/protected/data", permissions=["read_data"])
+@endpoint("/protected/data", methods=["GET"], auth=True, permissions=["read_data"])
 async def get_protected_data(endpoint):
     return endpoint.success(data={"secret": "info"})
 
-@admin_endpoint("/admin/process")
+@endpoint("/admin/process", methods=["POST"], auth=True, roles=["admin"])
 class AdminProcessor(Walker):
     pass
 ```

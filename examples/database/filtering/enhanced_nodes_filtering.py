@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from jvspatial.core import Edge, Node
-from jvspatial.db import get_database
+from jvspatial.db import create_database
 
 
 class City(Node):
@@ -68,7 +68,8 @@ async def demonstrate_enhanced_filtering():
         name="Washington DC", population=700_000, state="DC", founded_year=1790
     )
 
-    print(f"Created {await City.count()} cities")
+    cities = await City.find({})
+    print(f"Created {len(cities)} cities")
 
     # Create highways with various properties
     print("\n🛣️  Creating highways...")
@@ -136,7 +137,7 @@ async def demonstrate_enhanced_filtering():
     )
 
     print(
-        f"Created {await Highway.count()} highways and {await Railroad.count()} railroads"
+        f"Created {len(await Highway.find({}))} highways and {len(await Railroad.find({}))} railroads"
     )
 
     # DEMONSTRATE ENHANCED FILTERING

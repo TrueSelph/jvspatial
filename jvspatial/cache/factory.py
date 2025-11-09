@@ -1,63 +1,38 @@
-"""Cache factory for creating cache backends based on configuration.
+"""Simplified cache creation utilities.
 
-This module provides utilities for creating cache backends from
-environment variables or explicit configuration.
+This module provides simple utilities for creating cache backends,
+replacing the complex factory pattern with direct instantiation.
 """
 
 import os
-from typing import Optional
 
 from .base import CacheBackend
 from .memory import MemoryCache
 
 
-def get_cache_backend(
-    backend: Optional[str] = None, cache_size: Optional[int] = None, **kwargs
+def create_cache(
+    backend: str = "memory", cache_size: int = 1000, **kwargs
 ) -> CacheBackend:
-    """Create a cache backend based on configuration.
+    """Create a cache backend with direct instantiation.
 
     Args:
-        backend: Backend type ('memory', 'redis', 'layered').
-                If None, reads from JVSPATIAL_CACHE_BACKEND environment variable.
-                Defaults to 'memory' for single-server, 'layered' if Redis is configured.
-        cache_size: Cache size (for memory backend).
-                   If None, reads from JVSPATIAL_CACHE_SIZE environment variable.
+        backend: Backend type ('memory', 'redis', 'layered')
+        cache_size: Cache size for memory backend
         **kwargs: Additional backend-specific arguments
 
     Returns:
         Configured cache backend instance
 
     Examples:
-        # Use environment variables
-        cache = get_cache_backend()
+        # Memory cache
+        cache = create_cache("memory", cache_size=1000)
 
-        # Explicit memory cache
-        cache = get_cache_backend('memory', cache_size=1000)
-
-        # Explicit Redis cache
-        cache = get_cache_backend('redis', redis_url='redis://localhost:6379')
+        # Redis cache
+        cache = create_cache("redis", redis_url="redis://localhost:6379")
 
         # Layered cache
-        cache = get_cache_backend('layered', l1_size=500)
+        cache = create_cache("layered", l1_size=500)
     """
-    # Determine backend type
-    if backend is None:
-        backend = os.getenv("JVSPATIAL_CACHE_BACKEND", "").lower()
-
-        # Auto-detect based on environment
-        if not backend:
-            # Check if Redis is configured
-            redis_url = os.getenv("JVSPATIAL_REDIS_URL")
-            if redis_url:
-                backend = "layered"  # Default to layered for distributed
-            else:
-                backend = "memory"  # Default to memory for single-server
-
-    # Get cache size from environment if not provided
-    if cache_size is None:
-        cache_size = int(os.getenv("JVSPATIAL_CACHE_SIZE", "1000"))
-
-    # Create backend
     if backend == "memory":
         return MemoryCache(max_size=cache_size)
 
@@ -91,15 +66,15 @@ def get_cache_backend(
 def create_default_cache() -> CacheBackend:
     """Create the default cache backend based on environment.
 
-    This is a convenience function that automatically selects
-    the best cache backend based on available configuration.
-
-    Selection logic:
-    1. If JVSPATIAL_CACHE_BACKEND is set, use that
-    2. If JVSPATIAL_REDIS_URL is set, use layered cache
-    3. Otherwise, use memory cache
-
     Returns:
         Configured cache backend instance
     """
-    return get_cache_backend()
+    # Check environment variables
+    backend = os.getenv("JVSPATIAL_CACHE_BACKEND", "memory")
+    cache_size = int(os.getenv("JVSPATIAL_CACHE_SIZE", "1000"))
+
+    # Auto-detect Redis if available
+    if backend == "memory" and os.getenv("JVSPATIAL_REDIS_URL"):
+        backend = "layered"
+
+    return create_cache(backend, cache_size)

@@ -18,7 +18,11 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, cast
 
 from jvspatial.api import Server, endpoint
-from jvspatial.api.scheduler import on_schedule
+
+try:
+    from jvspatial.api.integrations.scheduler.decorators import on_schedule
+except ImportError:
+    on_schedule = None
 from jvspatial.core import Object
 
 # Configure logging
@@ -40,12 +44,29 @@ class DataJob(Object):
     retry_count: int = 0
     max_retries: int = 3
 
+    @classmethod
+    def _get_top_level_fields(cls) -> set:
+        """Return all fields that are stored at top level in the database."""
+        return {
+            "job_type",
+            "status",
+            "input_data",
+            "output_data",
+            "started_at",
+            "completed_at",
+            "error_message",
+            "retry_count",
+            "max_retries",
+        }
+
 
 # Task stages
 @on_schedule("every 5 minutes", task_id="data_collector")
 async def collect_data():
     """Simulated data collection task."""
     logger.info("📥 Starting data collection...")
+
+    job = None
 
     try:
         # Create a new job record
@@ -83,24 +104,23 @@ async def process_data():
     logger.info("⚙️ Starting data processing...")
 
     # Find completed collection jobs
-    collection_jobs = await DataJob.find(
-        {"context.job_type": "collect", "context.status": "completed"}
-    )
+    collection_jobs = await DataJob.find({"job_type": "collect", "status": "completed"})
 
     for collection_job in collection_jobs:
         if not collection_job.output_data:
             continue
 
         # Check if already processed
-        existing = await DataJob.find_one(
+        existing_list = await DataJob.find(
             {
-                "context.job_type": "process",
-                "context.input_data": collection_job.output_data,
+                "job_type": "process",
+                "input_data": collection_job.output_data,
             }
         )
-        if existing:
+        if existing_list:
             continue
 
+        job = None
         try:
             # Create processing job
             job = await DataJob.create(
@@ -147,24 +167,23 @@ async def analyze_data():
     logger.info("🔍 Starting data analysis...")
 
     # Find completed processing jobs
-    process_jobs = await DataJob.find(
-        {"context.job_type": "process", "context.status": "completed"}
-    )
+    process_jobs = await DataJob.find({"job_type": "process", "status": "completed"})
 
     for process_job in process_jobs:
         if not process_job.output_data:
             continue
 
         # Check if already analyzed
-        existing = await DataJob.find_one(
+        existing_list = await DataJob.find(
             {
-                "context.job_type": "analyze",
-                "context.input_data": process_job.output_data,
+                "job_type": "analyze",
+                "input_data": process_job.output_data,
             }
         )
-        if existing:
+        if existing_list:
             continue
 
+        job = None
         try:
             # Create analysis job
             job = await DataJob.create(
@@ -201,9 +220,7 @@ async def generate_report():
     logger.info("📊 Starting report generation...")
 
     # Find completed analysis jobs
-    analysis_jobs = await DataJob.find(
-        {"context.job_type": "analyze", "context.status": "completed"}
-    )
+    analysis_jobs = await DataJob.find({"job_type": "analyze", "status": "completed"})
 
     # Group by date for reporting
     for analysis_job in analysis_jobs:
@@ -211,15 +228,16 @@ async def generate_report():
             continue
 
         # Check if already reported
-        existing = await DataJob.find_one(
+        existing_list = await DataJob.find(
             {
-                "context.job_type": "report",
-                "context.input_data": analysis_job.output_data,
+                "job_type": "report",
+                "input_data": analysis_job.output_data,
             }
         )
-        if existing:
+        if existing_list:
             continue
 
+        job = None
         try:
             # Create report job
             job = await DataJob.create(

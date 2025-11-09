@@ -14,7 +14,7 @@ Phase 3 (Current):
     URL Proxy Manager with MongoDB integration for secure file access.
 
 Example:
-    >>> from jvspatial.storage import get_file_interface, get_proxy_manager
+    >>> from jvspatial.storage import create_storage, get_proxy_manager
     >>> from jvspatial.storage.security import PathSanitizer, FileValidator
     >>>
     >>> # Sanitize paths
@@ -25,7 +25,7 @@ Example:
     >>> result = validator.validate_file(file_bytes, "doc.pdf")
     >>>
     >>> # Get storage interface
-    >>> storage = get_file_interface("local", root_dir=".files")
+    >>> storage = create_storage("local", root_dir=".files")
     >>>
     >>> # Create URL proxy for secure file access
     >>> manager = get_proxy_manager()
@@ -53,7 +53,7 @@ For detailed documentation, see:
 
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 # Import core components
 from .interfaces import FileStorageInterface, LocalFileInterface, S3FileInterface
@@ -85,6 +85,14 @@ from .exceptions import (
 
 logger = logging.getLogger(__name__)
 
+# Default storage configuration
+_default_config: Dict[str, Any] = {
+    "max_file_size_mb": 100,
+    "allowed_extensions": [],
+    "blocked_extensions": [".exe", ".bat", ".sh", ".cmd"],
+    "max_path_depth": 10,
+    "max_path_length": 255,
+}
 
 # Environment variable constants (for backward compatibility with old file_interface)
 FILE_INTERFACE_TYPE = os.environ.get("JVSPATIAL_FILE_INTERFACE", "local")
@@ -94,7 +102,8 @@ DEFAULT_FILES_ROOT = os.environ.get("JVSPATIAL_FILES_ROOT_PATH", ".files")
 __version__ = "1.0.0-phase3"
 __all__ = [
     # Main factory function
-    "get_file_interface",
+    "create_storage",
+    "create_default_storage",
     # Core interfaces
     "FileStorageInterface",
     "LocalFileInterface",
@@ -123,161 +132,73 @@ __all__ = [
 ]
 
 
-def get_file_interface(
-    provider: Optional[str] = None,
-    root_dir: Optional[str] = None,
-    config: Optional[Dict[str, Any]] = None,
-    **kwargs,
-) -> FileStorageInterface:
-    """Factory function to get file storage interface.
-
-    Creates and returns a storage provider instance based on the
-    specified provider type and configuration.
-
-    Provider can be specified via:
-        1. provider parameter
-        2. JVSPATIAL_FILE_INTERFACE environment variable
-        3. Default: "local"
+def create_storage(provider: str = "local", **kwargs: Any) -> FileStorageInterface:
+    """Create a storage interface with direct instantiation.
 
     Args:
-        provider: Storage provider type. Options:
-            - "local": Local filesystem storage
-            - "s3": AWS S3 storage
-        root_dir: Root directory for local storage (convenience parameter)
-        config: Provider-specific configuration dict. May include:
-            Local:
-                - root_dir: Root directory for files (default: ".files")
-                - base_url: Base URL for file URLs
-                - create_root: Auto-create root directory (default: True)
-            S3:
-                - bucket_name: S3 bucket name (required)
-                - region_name: AWS region (default: us-east-1)
-                - access_key_id: AWS access key ID
-                - secret_access_key: AWS secret access key
-                - endpoint_url: Custom endpoint URL (for S3-compatible services)
-                - url_expiration: Default URL expiration in seconds
-        **kwargs: Additional provider-specific parameters
+        provider: Storage provider type ('local', 's3')
+        **kwargs: Provider-specific configuration
 
     Returns:
-        FileStorageInterface implementation for the specified provider
+        FileStorageInterface implementation
 
-    Raises:
-        ValueError: If provider type is invalid or required config missing
-        StorageError: If provider initialization fails
+    Examples:
+        # Local storage
+        storage = create_storage("local", root_dir="./files")
 
-    Example:
-        >>> # Local filesystem storage (simplest)
-        >>> storage = get_file_interface()
-        >>>
-        >>> # Local with custom root directory
-        >>> storage = get_file_interface(provider="local", root_dir="/var/files")
-        >>>
-        >>> # AWS S3 storage
-        >>> storage = get_file_interface(
-        ...     provider="s3",
-        ...     config={
-        ...         "bucket_name": "my-bucket",
-        ...         "region_name": "us-west-2"
-        ...     }
-        ... )
-        >>>
-        >>> # Use environment variable (JVSPATIAL_FILE_INTERFACE=s3)
-        >>> storage = get_file_interface()  # Will use S3 if env var set
-
-    Environment Variables:
-        - JVSPATIAL_FILE_INTERFACE: Provider type (local, s3)
-
-        For S3:
-            - JVSPATIAL_S3_BUCKET_NAME: S3 bucket name
-            - JVSPATIAL_S3_REGION_NAME: AWS region
-            - JVSPATIAL_S3_ACCESS_KEY_ID: AWS access key ID
-            - JVSPATIAL_S3_SECRET_ACCESS_KEY: AWS secret access key
-            - JVSPATIAL_S3_ENDPOINT_URL: Custom endpoint URL
+        # S3 storage
+        storage = create_storage("s3", bucket_name="my-bucket")
     """
-    # Determine provider (parameter > env var > default)
-    provider = provider or os.getenv("JVSPATIAL_FILE_INTERFACE", "local")
-    provider = provider.lower() if provider else "local"
+    if provider == "local":
+        root_dir = kwargs.get("root_dir", ".files")
+        base_url = kwargs.get("base_url")
+        create_root = kwargs.get("create_root", True)
 
-    # Merge config with kwargs
-    config = config or {}
-    config.update(kwargs)
-
-    logger.info(f"Initializing file storage interface: provider={provider}")
-
-    try:
-        if provider == "local":
-            # Local filesystem storage
-            local_root_dir = root_dir or config.get("root_dir", ".files")
-            base_url = config.get("base_url")
-            create_root = config.get("create_root", True)
-
-            # Create validator if custom settings provided
-            validator = None
-            if "max_size_mb" in config or "allowed_mime_types" in config:
-                validator = FileValidator(
-                    max_size_mb=config.get("max_size_mb"),
-                    allowed_mime_types=config.get("allowed_mime_types"),
-                )
-
-            logger.info(f"Creating LocalFileInterface: root_dir={local_root_dir}")
-            return LocalFileInterface(
-                root_dir=local_root_dir,
-                base_url=base_url,
-                validator=validator,
-                create_root=create_root,
+        # Create validator if custom settings provided
+        validator = None
+        if "max_size_mb" in kwargs or "allowed_mime_types" in kwargs:
+            validator = FileValidator(
+                max_size_mb=kwargs.get("max_size_mb"),
+                allowed_mime_types=kwargs.get("allowed_mime_types"),
             )
 
-        elif provider == "s3":
-            # AWS S3 storage
-            s3_config = {
-                "bucket_name": config.get("bucket_name"),
-                "region_name": config.get("region_name"),
-                "access_key_id": config.get("access_key_id"),
-                "secret_access_key": config.get("secret_access_key"),
-                "endpoint_url": config.get("endpoint_url"),
-                "url_expiration": config.get("url_expiration", 3600),
-            }
-
-            # Create validator if custom settings provided
-            if "max_size_mb" in config or "allowed_mime_types" in config:
-                s3_config["validator"] = FileValidator(
-                    max_size_mb=config.get("max_size_mb"),
-                    allowed_mime_types=config.get("allowed_mime_types"),
-                )
-
-            logger.info(
-                f"Creating S3FileInterface: bucket={s3_config.get('bucket_name')}"
-            )
-            return S3FileInterface(**s3_config)
-
-        else:
-            # Unknown provider
-            available = ["local", "s3"]
-            raise ValueError(
-                f"Unknown storage provider: '{provider}'. "
-                f"Available providers: {', '.join(available)}"
-            )
-
-    except Exception as e:
-        if isinstance(e, ValueError):
-            raise
-
-        logger.error(f"Failed to initialize storage provider '{provider}': {e}")
-        raise StorageProviderError(
-            f"Failed to initialize {provider} storage: {e}",
-            provider=provider,
-            operation="init",
+        return LocalFileInterface(
+            root_dir=root_dir,
+            base_url=base_url,
+            create_root=create_root,
+            validator=validator,
         )
 
+    elif provider == "s3":
+        bucket_name = kwargs.get("bucket_name") or os.getenv("JVSPATIAL_S3_BUCKET_NAME")
+        if not bucket_name:
+            raise ValueError("S3 bucket_name is required")
 
-# Module-level configuration
-_default_config = {
-    "max_file_size_mb": 100,
-    "max_path_depth": 10,
-    "max_filename_length": 255,
-    "strict_mime_check": True,
-    "allow_hidden_files": False,
-}
+        return S3FileInterface(
+            bucket_name=bucket_name,
+            region_name=kwargs.get("region_name")
+            or os.getenv("JVSPATIAL_S3_REGION_NAME", "us-east-1"),
+            access_key_id=kwargs.get("access_key_id")
+            or os.getenv("JVSPATIAL_S3_ACCESS_KEY_ID"),
+            secret_access_key=kwargs.get("secret_access_key")
+            or os.getenv("JVSPATIAL_S3_SECRET_ACCESS_KEY"),
+            endpoint_url=kwargs.get("endpoint_url")
+            or os.getenv("JVSPATIAL_S3_ENDPOINT_URL"),
+            url_expiration=kwargs.get("url_expiration", 3600),
+        )
+
+    else:
+        raise ValueError(f"Unsupported storage provider: '{provider}'")
+
+
+def create_default_storage() -> FileStorageInterface:
+    """Create the default storage based on environment.
+
+    Returns:
+        Configured storage interface
+    """
+    provider = os.getenv("JVSPATIAL_FILE_INTERFACE", "local")
+    return create_storage(provider)
 
 
 def get_default_config() -> Dict[str, Any]:

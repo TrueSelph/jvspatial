@@ -12,7 +12,7 @@ import os
 from typing import Any, Dict, Optional
 
 from jvspatial.core import GraphContext, Node
-from jvspatial.db.factory import get_database
+from jvspatial.db.factory import create_database
 from jvspatial.exceptions import (
     ConfigurationError,
     ConnectionError,
@@ -20,7 +20,6 @@ from jvspatial.exceptions import (
     EntityNotFoundError,
     InvalidConfigurationError,
     QueryError,
-    ValidationError,
 )
 
 
@@ -43,20 +42,21 @@ def setup_database_with_fallback() -> Optional[str]:
         # Try MongoDB first (will fail if not configured)
         os.environ["JVSPATIAL_DB_TYPE"] = "mongodb"
         os.environ["JVSPATIAL_MONGODB_URI"] = "invalid://connection"
-        db = get_database("mongodb")
+        db = create_database("mongodb")
         print("✅ Connected to MongoDB")
         return "mongodb"
 
-    except InvalidConfigurationError as e:
-        print(f"❌ MongoDB configuration invalid: {e.message}")
-        print(f"  • Config key: {e.config_key}")
-        print(f"  • Value: {e.config_value}")
+    except (InvalidConfigurationError, ValueError) as e:
+        print(f"❌ MongoDB configuration invalid: {e}")
+        if isinstance(e, InvalidConfigurationError):
+            print(f"  • Config key: {e.config_key}")
+            print(f"  • Value: {e.config_value}")
 
         # Fall back to JSON database
         try:
             os.environ["JVSPATIAL_DB_TYPE"] = "json"
             os.environ["JVSPATIAL_JSONDB_PATH"] = "./jvdb"
-            db = get_database("json")
+            db = create_database("json", base_path="./jvdb")
             print("✅ Fallback: Connected to JSON database")
             return "json"
 
@@ -120,8 +120,10 @@ async def demonstrate_transaction_safety():
         except EntityNotFoundError as e:
             print(f"❌ Product not found: {e.message}")
 
-        except ValidationError as e:
-            print(f"❌ Validation failed: {e.message}")
+        except DatabaseError as e:
+            print(f"❌ Database error: {e.message}")
+            if e.details:
+                print(f"  • Details: {e.details}")
             # Rollback changes
             if "product" in locals() and product is not None:
                 product.price = original_values["price"]
@@ -129,10 +131,15 @@ async def demonstrate_transaction_safety():
                 await product.save()
                 print("↩️  Rolled back changes")
 
-        except DatabaseError as e:
-            print(f"❌ Database error: {e.message}")
-            if e.details:
-                print(f"  • Details: {e.details}")
+        except Exception as e:
+            # Handle validation or other errors
+            print(f"❌ Error during update: {e}")
+            # Rollback changes
+            if "product" in locals() and product is not None:
+                product.price = original_values["price"]
+                product.stock = original_values["stock"]
+                await product.save()
+                print("↩️  Rolled back changes")
 
 
 async def demonstrate_connection_handling():
@@ -140,14 +147,27 @@ async def demonstrate_connection_handling():
     print("\n🔌 Demonstrating connection handling:")
 
     try:
-        # Force a connection error
+        # Force a connection error by trying to create MongoDB with invalid URI
+        # Note: MongoDB connection is lazy, so we need to actually use it to trigger connection
         os.environ["JVSPATIAL_MONGODB_URI"] = "mongodb://invalid:27017"
-        ctx = GraphContext()
-        await ctx.connect()
+        db = create_database("mongodb", uri="mongodb://invalid:27017")
+        # Try to use the database (will fail on actual operation)
+        ctx = GraphContext(database=db)
+        # Test connection by attempting a simple operation with timeout
+        try:
+            # Use asyncio.wait_for to add timeout to connection attempt
+            await asyncio.wait_for(ctx.database.get("node", "test_id"), timeout=5.0)
+        except asyncio.TimeoutError:
+            raise ConnectionError(
+                database_type="mongodb",
+                connection_string="mongodb://invalid:27017",
+                details={"reason": "Connection timeout"},
+            )
 
-    except ConnectionError as e:
-        print(f"❌ Connection failed: {e.message}")
-        print(f"  • Database type: {e.database_type}")
+    except (ConnectionError, ValueError, Exception) as e:
+        print(f"❌ Connection failed: {e}")
+        if isinstance(e, ConnectionError):
+            print(f"  • Database type: {e.database_type}")
 
         # Implement retry logic
         max_retries = 3
@@ -156,10 +176,12 @@ async def demonstrate_connection_handling():
         while retry_count < max_retries:
             try:
                 print(f"\n🔄 Retry attempt {retry_count + 1}/{max_retries}")
-                # Use different connection settings
+                # Use different connection settings - fallback to JSON
                 os.environ["JVSPATIAL_DB_TYPE"] = "json"
-                ctx = GraphContext()
-                await ctx.connect()
+                db = create_database("json", base_path="./jvdb")
+                ctx = GraphContext(database=db)
+                # Test connection
+                await ctx.database.get("node", "test_id")
                 print("✅ Connected successfully using fallback")
                 break
 
@@ -167,6 +189,10 @@ async def demonstrate_connection_handling():
                 retry_count += 1
                 if retry_count == max_retries:
                     print(f"❌ All retry attempts failed: {e.message}")
+            except Exception as e:
+                retry_count += 1
+                if retry_count == max_retries:
+                    print(f"❌ All retry attempts failed: {e}")
 
 
 async def main():

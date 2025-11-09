@@ -1,142 +1,209 @@
-"""OpenAPI security configuration for authenticated endpoints.
+"""OpenAPI security configuration for jvspatial API.
 
-This module provides automatic configuration of OpenAPI security schemes
-when authentication decorators are used, ensuring Swagger UI displays
-the 'Authorize' button for testing authenticated endpoints.
+This module provides OpenAPI security scheme configuration for authentication
+endpoints, including JWT Bearer tokens and API key authentication.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, cast
+from typing import Any, Dict, List, Optional
 
-if TYPE_CHECKING:
-    from fastapi import FastAPI
-
-
-# Track if security schemes have been configured
-_security_schemes_configured = False
+from fastapi import FastAPI
+from fastapi.openapi.utils import get_openapi
 
 
-def get_security_schemes() -> Dict[str, Dict[str, Any]]:
-    """Get the OpenAPI security schemes for authentication.
+def configure_openapi_security(app: FastAPI) -> None:
+    """Configure OpenAPI security schemes for the FastAPI application.
 
-    Returns:
-        Dictionary of security scheme definitions for OpenAPI spec
+    Args:
+        app: FastAPI application instance to configure
     """
-    return {
+    # Get the current server from context to check auth configuration
+    from jvspatial.api.context import get_current_server
+
+    server = get_current_server()
+
+    # Get the current OpenAPI schema
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+
+    # Add security schemes based on server configuration
+    security_schemes = {
         "BearerAuth": {
             "type": "http",
             "scheme": "bearer",
             "bearerFormat": "JWT",
-            "description": (
-                "JWT token authentication. Obtain token from /auth/login endpoint. "
-                "Format: Bearer <token>"
-            ),
-        },
-        "ApiKeyAuth": {
-            "type": "apiKey",
-            "in": "header",
-            "name": "X-API-Key",
-            "description": (
-                "API Key authentication. Format: key_id:secret_key. "
-                "Create keys at /auth/api-keys endpoint."
-            ),
-        },
+            "description": "JWT token authentication",
+        }
     }
 
+    # Only add API key authentication if it's enabled
+    if server and server.config.api_key_auth_enabled:
+        security_schemes["ApiKeyAuth"] = {
+            "type": "apiKey",
+            "in": "header",
+            "name": server.config.api_key_header,
+            "description": "API key authentication",
+        }
 
-def configure_openapi_security(app: "FastAPI") -> None:
-    """Configure OpenAPI security schemes in FastAPI app.
+    # Ensure components key exists
+    if "components" not in openapi_schema:
+        openapi_schema["components"] = {}
 
-    This function modifies the FastAPI app's OpenAPI schema generation
-    to include security scheme definitions, enabling Swagger UI to show
-    the 'Authorize' button.
+    openapi_schema["components"]["securitySchemes"] = security_schemes
 
-    Args:
-        app: FastAPI application instance
-    """
-    global _security_schemes_configured
+    # Add security requirements to endpoints that need authentication
+    for path, path_item in openapi_schema["paths"].items():
+        for method, operation in path_item.items():
+            if method in ["get", "post", "put", "delete", "patch"]:
+                # Check if this endpoint requires authentication
+                endpoint_func = None
+                for route in app.routes:
+                    if (
+                        hasattr(route, "path")
+                        and route.path == path
+                        and hasattr(route, "endpoint")
+                    ):
+                        endpoint_func = route.endpoint
+                        break
 
-    if _security_schemes_configured:
-        return  # Already configured
+                if endpoint_func:
+                    # Check for endpoint configuration on the function
+                    endpoint_config = getattr(
+                        endpoint_func, "_jvspatial_endpoint_config", None
+                    )
 
-    # Store original openapi function
-    original_openapi = app.openapi
+                    # Also check if this is a Walker endpoint by looking at the route's methods
+                    # Walker endpoints are registered through EndpointRouter with auth parameters
+                    auth_required = False
+                    permissions = []
+                    roles = []
 
-    def custom_openapi() -> Dict[str, Any]:
-        """Custom OpenAPI schema generator with security schemes."""
-        # Call original to get base schema
-        if hasattr(original_openapi, "__self__"):
-            # It's a bound method, call it normally
-            schema = original_openapi()
-        else:
-            # It's a function, call it
-            schema = original_openapi()
+                    if endpoint_config and endpoint_config.get("auth_required"):
+                        auth_required = True
+                        permissions = endpoint_config.get("permissions", [])
+                        roles = endpoint_config.get("roles", [])
+                    else:
+                        # Check if this is a Walker endpoint by examining the route
+                        # Walker endpoints are typically POST endpoints with specific patterns
+                        if (
+                            method == "post"
+                            and "/api/" in path
+                            and hasattr(endpoint_func, "__self__")
+                            and hasattr(endpoint_func.__self__, "__class__")
+                        ):
+                            walker_class = endpoint_func.__self__.__class__
+                            walker_config = getattr(
+                                walker_class, "_jvspatial_endpoint_config", None
+                            )
+                            if walker_config and walker_config.get("auth_required"):
+                                auth_required = True
+                                permissions = walker_config.get("permissions", [])
+                                roles = walker_config.get("roles", [])
 
-        # Add security schemes if not already present
-        if "components" not in schema:
-            schema["components"] = {}
+                    # Additional check: if this is a Walker endpoint path pattern, check for auth attributes
+                    if (
+                        not auth_required
+                        and method == "post"
+                        and "/api/" in path
+                        and hasattr(endpoint_func, "_auth_required")
+                        and endpoint_func._auth_required
+                    ):
+                        auth_required = True
+                        permissions = getattr(
+                            endpoint_func, "_required_permissions", []
+                        )
+                        roles = getattr(endpoint_func, "_required_roles", [])
 
-        if "securitySchemes" not in schema["components"]:
-            schema["components"]["securitySchemes"] = get_security_schemes()
-        else:
-            # Merge with existing schemes
-            schema["components"]["securitySchemes"].update(get_security_schemes())
+                    # Additional check: if this is an auth endpoint, check for auth attributes
+                    if (
+                        not auth_required
+                        and "/auth/" in path
+                        and hasattr(endpoint_func, "_auth_required")
+                        and endpoint_func._auth_required
+                    ):
+                        auth_required = True
+                        permissions = getattr(
+                            endpoint_func, "_required_permissions", []
+                        )
+                        roles = getattr(endpoint_func, "_required_roles", [])
 
-        return cast(Dict[str, Any], schema)
+                    if auth_required:
+                        # Add security requirements to this operation
+                        operation["security"] = get_endpoint_security_requirements(
+                            permissions=permissions, roles=roles
+                        )
 
-    # Replace openapi function
-    app.openapi = custom_openapi
-    _security_schemes_configured = True
+    # Update the app's OpenAPI schema
+    app.openapi_schema = openapi_schema
 
 
 def get_endpoint_security_requirements(
-    permissions: Optional[list] = None, roles: Optional[list] = None
-) -> list:
-    """Get security requirements for an endpoint based on permissions/roles.
+    permissions: Optional[List[str]] = None,
+    roles: Optional[List[str]] = None,
+) -> List[Dict[str, List[str]]]:
+    """Get security requirements for an endpoint based on permissions and roles.
 
     Args:
         permissions: List of required permissions
         roles: List of required roles
 
     Returns:
-        List of security requirement dictionaries for OpenAPI spec
+        List of security requirement dictionaries
     """
-    # For authenticated endpoints, allow EITHER Bearer OR API Key auth
-    # This means the client can use either authentication method, not both
-    return [
-        {"BearerAuth": []},  # Option 1: Bearer token only
-        {"ApiKeyAuth": []},  # Option 2: API key only
-    ]
+    # Get the current server from context to check auth configuration
+    from jvspatial.api.context import get_current_server
+
+    server = get_current_server()
+
+    security_requirements: List[Dict[str, Any]] = []
+
+    # Add JWT Bearer authentication
+    security_requirements.append({"BearerAuth": []})
+
+    # Only add API key authentication if it's enabled
+    if server and server.config.api_key_auth_enabled:
+        security_requirements.append({"ApiKeyAuth": []})
+
+    return security_requirements
 
 
-def ensure_server_has_security_config(server=None) -> None:
-    """Ensure server's FastAPI app has security schemes configured.
-
-    This is called automatically by auth decorators to configure
-    OpenAPI security schemes on first use.
+def add_security_to_endpoint(
+    endpoint_func: Any,
+    auth_required: bool = False,
+    permissions: Optional[List[str]] = None,
+    roles: Optional[List[str]] = None,
+) -> Any:
+    """Add security requirements to an endpoint function.
 
     Args:
-        server: Server instance (uses current server if None)
+        endpoint_func: The endpoint function to modify
+        auth_required: Whether authentication is required
+        permissions: List of required permissions
+        roles: List of required roles
+
+    Returns:
+        Modified endpoint function with security requirements
     """
-    if server is None:
-        from jvspatial.api.context import get_current_server
+    if not auth_required:
+        return endpoint_func
 
-        server = get_current_server()
+    # Add security requirements to the function
+    if not hasattr(endpoint_func, "__annotations__"):
+        endpoint_func.__annotations__ = {}
 
-    if server is None:
-        # No server available yet - will be configured later
-        return
+    # Store security requirements as function attributes
+    endpoint_func._security_requirements = get_endpoint_security_requirements(
+        permissions=permissions, roles=roles
+    )
 
-    # Only configure if app already exists - don't create it prematurely
-    # The security config will be applied when get_app() is called
-    app = getattr(server, "app", None)
-
-    if app is not None:
-        configure_openapi_security(app)
+    return endpoint_func
 
 
 __all__ = [
-    "get_security_schemes",
     "configure_openapi_security",
     "get_endpoint_security_requirements",
-    "ensure_server_has_security_config",
+    "add_security_to_endpoint",
 ]
