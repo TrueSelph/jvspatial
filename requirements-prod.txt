@@ -1,0 +1,25 @@
+# Production deployment requirements for jvspatial
+# Include base requirements
+-r requirements.txt
+
+# Production ASGI server
+gunicorn[gthread]  # Production ASGI/WSGI server with threading support
+
+# Distributed caching (for multi-instance deployments)
+redis[hiredis]>=5.0.0  # Redis client with C parser for performance
+
+# Environment management
+python-dotenv  # Environment variable loading
+
+# Enhanced performance and monitoring
+orjson  # Fast JSON serialization
+psutil  # System monitoring (optional, uncomment if needed)
+
+# Security enhancements
+cryptography  # Additional cryptographic functions
+
+# Production logging
+structlog  # Structured logging for production
+
+# Database connection pooling (if using PostgreSQL in future)
+# psycopg2-binary  # PostgreSQL adapter

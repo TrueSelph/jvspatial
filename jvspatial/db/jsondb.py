@@ -1,17 +1,17 @@
-"""JSON-based database implementation for spatial graph persistence."""
+"""Simplified JSON-based database implementation."""
 
 import asyncio
 import json
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from jvspatial.db.database import Database
 
 
 class JsonDB(Database):
-    """JSON file-based database implementation."""
+    """Simplified JSON file-based database implementation."""
 
-    def __init__(self: "JsonDB", base_path: str = "jvdb") -> None:
+    def __init__(self, base_path: str = "jvdb") -> None:
         """Initialize JSON database.
 
         Args:
@@ -19,163 +19,115 @@ class JsonDB(Database):
         """
         self.base_path = Path(base_path).resolve()
         self.base_path.mkdir(parents=True, exist_ok=True)
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
 
-    def _get_collection_path(self: "JsonDB", collection: str) -> Path:
-        """Get path for collection directory.
+    def _ensure_lock(self) -> asyncio.Lock:
+        """Ensure lock is initialized (lazy initialization for async context)."""
+        if self._lock is None:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            self._lock = asyncio.Lock()
+        return self._lock
 
-        Args:
-            collection: Collection name
+    def _get_collection_dir(self, collection: str) -> Path:
+        """Get the directory path for a collection."""
+        collection_dir = self.base_path / collection
+        collection_dir.mkdir(parents=True, exist_ok=True)
+        return collection_dir
 
-        Returns:
-            Path to collection directory
-        """
-        path = self.base_path / collection
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+    def _get_record_path(self, collection: str, record_id: str) -> Path:
+        """Get the file path for a specific record."""
+        collection_dir = self._get_collection_dir(collection)
+        return collection_dir / f"{record_id}.json"
 
-    def _get_file_path(self: "JsonDB", collection: str, id: str) -> Path:
-        """Get file path for a document.
+    async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Save a record to the database."""
+        async with self._ensure_lock():
+            # Ensure record has an ID
+            if "id" not in data:
+                import uuid
 
-        Args:
-            collection: Collection name
-            id: Document ID
+                data["id"] = str(uuid.uuid4())
 
-        Returns:
-            Path to document file
-        """
-        return self._get_collection_path(collection) / f"{id}.json"
-
-    async def save(self: "JsonDB", collection: str, data: dict) -> dict:
-        """Save document to JSON file.
-
-        Args:
-            collection: Collection name
-            data: Document data
-
-        Returns:
-            Saved document
-        """
-        file_path = self._get_file_path(collection, data["id"])
-        async with self._lock:
-            with open(file_path, "w") as f:
+            # Save the record to its own file
+            record_path = self._get_record_path(collection, data["id"])
+            with open(record_path, "w") as f:
                 json.dump(data, f, indent=2)
-        return data
 
-    async def get(self: "JsonDB", collection: str, id: str) -> Optional[dict]:
-        """Get document by ID.
+            return data
 
-        Args:
-            collection: Collection name
-            id: Document ID
+    async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a record by ID."""
+        record_path = self._get_record_path(collection, id)
 
-        Returns:
-            Document data or None if not found
-        """
-        file_path = self._get_file_path(collection, id)
-        if not file_path.exists():
+        if not record_path.exists():
             return None
 
-        async with self._lock:
-            with open(file_path, "r") as f:
-                result = json.load(f)
-                return dict(result) if isinstance(result, dict) else None
+        try:
+            with open(record_path, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return None
 
-    async def delete(self: "JsonDB", collection: str, id: str) -> None:
-        """Delete document by ID.
+    async def delete(self, collection: str, id: str) -> None:
+        """Delete a record by ID."""
+        async with self._ensure_lock():
+            record_path = self._get_record_path(collection, id)
 
-        Args:
-            collection: Collection name
-            id: Document ID
-        """
-        file_path = self._get_file_path(collection, id)
-        if file_path.exists():
-            async with self._lock:
-                file_path.unlink()
+            if record_path.exists():
+                record_path.unlink()
 
-    async def find(self: "JsonDB", collection: str, query: dict) -> List[dict]:
-        """Find documents matching query.
+    async def find(
+        self, collection: str, query: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Find records matching a query."""
+        collection_dir = self._get_collection_dir(collection)
 
-        Args:
-            collection: Collection name
-            query: Query parameters
+        if not collection_dir.exists():
+            return []
 
-        Returns:
-            List of matching documents
-        """
-        collection_path = self._get_collection_path(collection)
         results = []
-        seen_ids = set()
 
-        for file_path in collection_path.glob("*.json"):
+        # Iterate through all JSON files in the collection directory
+        for json_file in collection_dir.glob("*.json"):
             try:
-                async with self._lock:
-                    with open(file_path, "r") as f:
-                        doc = json.load(f)
+                with open(json_file, "r") as f:
+                    record = json.load(f)
 
-                # Skip duplicate documents
-                if doc["id"] in seen_ids:
-                    continue
-                seen_ids.add(doc["id"])
+                # Check if record matches query
+                if not query or self._matches_query(record, query):
+                    results.append(record)
 
-                # Check if document matches query
-                if self._matches_query(doc, query):
-                    results.append(doc)
-            except (json.JSONDecodeError, KeyError, IOError):
-                # Skip invalid JSON files or files without proper structure
-                continue
+            except (json.JSONDecodeError, IOError):
+                continue  # Skip invalid files
 
         return results
 
-    def _matches_query(self: "JsonDB", doc: dict, query: dict) -> bool:
-        """Check if document matches query.
+    def _matches_query(self, record: Dict[str, Any], query: Dict[str, Any]) -> bool:
+        """Check if a record matches a query."""
+        for key, expected_value in query.items():
+            if key.startswith("$"):
+                continue  # Skip MongoDB operators for now
 
-        Args:
-            doc: Document to check
-            query: Query parameters
+            actual_value = self._get_nested_value(record, key)
 
-        Returns:
-            True if document matches query, else False
-        """
-        for key, condition in query.items():
-            # Handle nested fields using dot notation
-            doc_value: Any = None
-            if "." in key:
-                keys = key.split(".")
-                current: Any = doc
-                for k in keys:
-                    if isinstance(current, dict) and k in current:
-                        current = current[k]
-                    else:
-                        current = None
-                        break
-                doc_value = current
-            else:
-                doc_value = doc.get(key)
+            if actual_value != expected_value:
+                return False
 
-            # If condition is a dict, it contains operators
-            if not isinstance(condition, dict):
-                # Simple equality check
-                if doc_value != condition:
-                    return False
-            else:
-                # Handle operator conditions
-                for op, value in condition.items():
-                    if (
-                        (op == "$eq" and doc_value != value)
-                        or (op == "$ne" and doc_value == value)
-                        or (op == "$gt" and (doc_value is None or doc_value <= value))
-                        or (op == "$gte" and (doc_value is None or doc_value < value))
-                        or (op == "$lt" and (doc_value is None or doc_value >= value))
-                        or (op == "$lte" and (doc_value is None or doc_value > value))
-                        or (
-                            op == "$in"
-                            and (doc_value is None or doc_value not in value)
-                        )
-                        or (
-                            op == "$nin"
-                            and (doc_value is not None and doc_value in value)
-                        )
-                    ):
-                        return False
         return True
+
+    def _get_nested_value(self, data: Dict[str, Any], key: str) -> Any:
+        """Get a nested value using dot notation."""
+        keys = key.split(".")
+        current = data
+
+        for k in keys:
+            if isinstance(current, dict) and k in current:
+                current = current[k]
+            else:
+                return None
+
+        return current

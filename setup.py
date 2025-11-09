@@ -23,18 +23,39 @@ setup(
         "python-multipart",
         "motor",
         "pymongo",
+        "PyJWT",  # JWT token handling for authentication
+        "bcrypt",  # Password hashing for authentication
+        "schedule>=1.2.2",  # Job scheduling
+        "typing-extensions",  # For @override decorator and enhanced typing
+        "boto3",  # AWS SDK for S3 storage support
     ],
     extras_require={
         "dev": [
-            "pytest",
-            "pytest-asyncio",
-            "httpx",
-            "pre-commit",
+            "pytest>=7.0",
+            "pytest-asyncio>=0.21.0",
+            "httpx>=0.24.0",
+            "pre-commit>=3.0.0",
+            "black",  # Code formatter
+            "isort",  # Import sorting
+            "flake8",  # Linting
+            "mypy",  # Type checking
+            "pytest-cov",  # Coverage reporting
+            "python-dotenv>=1.0.0",  # Environment variable management
         ],
         "test": [
-            "pytest",
-            "pytest-asyncio",
-            "httpx",
+            "pytest>=7.0",
+            "pytest-asyncio>=0.21.0",
+            "httpx>=0.24.0",
+            "pytest-cov",  # Coverage reporting
+            "python-dotenv>=1.0.0",  # Environment variable management
+        ],
+        "scheduler": [
+            "schedule>=1.2.2",  # Job scheduling
+            "psutil>=5.9.0",  # System monitoring
+            "python-dotenv>=1.0.0",  # Environment variable management
+        ],
+        "cache": [
+            "redis[hiredis]>=5.0.0",  # Redis client with C parser for performance
         ],
     },
     classifiers=[

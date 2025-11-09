@@ -299,3 +299,15 @@ These operations integrate seamlessly with existing Walker functionality:
 - Queue operations can be used within visit hooks during traversal
 - All operations work with the same internal queue used by `spawn()` and traversal logic
 - No breaking changes to existing Walker behavior
+
+## See Also
+
+- [Entity Reference](entity-reference.md) - Complete Walker API reference
+- [Examples](examples.md) - Walker usage examples and patterns
+- [MongoDB-Style Query Interface](mongodb-query-interface.md) - Query capabilities in walker hooks
+- [GraphContext & Database Management](graph-context.md) - Database integration
+- [REST API Integration](rest-api.md) - Using walkers in API endpoints
+
+---
+
+**[← Back to README](../../README.md)** | **[Entity Reference →](entity-reference.md)**

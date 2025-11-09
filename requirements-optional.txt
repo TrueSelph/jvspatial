@@ -1,0 +1,34 @@
+# Optional dependencies for jvspatial
+# These provide additional functionality but are not required for core operation
+
+# Distributed Caching (for Kubernetes/multi-instance deployments)
+redis[hiredis]>=5.0.0  # Redis client with C parser for performance
+
+# Enhanced JSON support (for better serialization)
+orjson  # Fast JSON library
+
+# Production ASGI server alternatives
+gunicorn[gthread]  # WSGI/ASGI server with threading support
+hypercorn  # Alternative ASGI server
+
+# Environment management
+python-dotenv  # Load environment variables from .env files
+
+# Logging enhancements
+structlog  # Structured logging
+coloredlogs  # Colored console logs
+
+# Performance monitoring
+psutil>=5.9.0  # System and process monitoring
+# prometheus-client  # Prometheus metrics
+
+# Security enhancements
+cryptography  # Additional cryptographic functions
+
+# Database connection pooling alternatives
+# asyncpg  # Fast PostgreSQL adapter (future support)
+# psycopg2-binary  # PostgreSQL adapter
+
+# Documentation generation
+# mkdocs  # Documentation site generator
+# mkdocs-material  # Material theme for MkDocs

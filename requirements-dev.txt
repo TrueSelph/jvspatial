@@ -1,0 +1,24 @@
+# Development dependencies for jvspatial
+# Include base requirements
+-r requirements.txt
+
+# Testing framework and utilities
+pytest>=7.0
+pytest-asyncio>=0.21.0
+httpx>=0.24.0  # For testing FastAPI endpoints
+pytest-mock  # For mocking in tests
+pytest-cov  # Coverage reporting
+
+# Additional testing dependencies
+email-validator>=2.0.0  # For pydantic email validation in tests
+
+# Code quality and formatting
+pre-commit>=3.0.0
+black  # Code formatter
+isort  # Import sorting
+flake8  # Linting
+mypy  # Type checking
+coverage  # Coverage tool
+
+# Development utilities
+python-dotenv>=1.0.0  # Environment variable management

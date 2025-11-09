@@ -1,0 +1,22 @@
+# Core dependencies for jvspatial
+
+# Web framework and async server
+fastapi>=0.95.0  # Web framework
+uvicorn>=0.21.0  # ASGI server
+python-multipart>=0.0.6  # Form data parsing
+
+# Data validation and modeling
+pydantic>=2.0  # Data validation and serialization
+typing-extensions>=4.6.0  # For @override decorator and enhanced typing
+
+# Database drivers
+motor>=3.1.1  # Async MongoDB driver
+pymongo>=4.3.3  # MongoDB support
+
+# Authentication
+PyJWT>=2.7.0  # JWT token handling
+bcrypt>=4.0.1  # Password hashing
+email-validator>=2.0.0  # Email validation for pydantic
+
+# Task management
+schedule>=1.2.2  # Job scheduling

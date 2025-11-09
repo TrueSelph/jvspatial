@@ -1,117 +1,94 @@
-"""MongoDB database implementation for spatial graph persistence."""
+"""Simplified MongoDB database implementation."""
 
-import asyncio
-import os
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
-from pymongo import ReturnDocument
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from pymongo.errors import PyMongoError
 
 from jvspatial.db.database import Database
+from jvspatial.exceptions import DatabaseError
 
 
 class MongoDB(Database):
-    """MongoDB-based database implementation."""
+    """Simplified MongoDB-based database implementation."""
 
-    _client: Optional[AsyncIOMotorClient] = None
-    _db = None
-    _lock = asyncio.Lock()
+    def __init__(
+        self, uri: str = "mongodb://localhost:27017", db_name: str = "jvdb"
+    ) -> None:
+        """Initialize MongoDB database.
 
-    async def get_db(self: "MongoDB") -> Any:
-        """Get database instance with thread-safe initialization.
-
-        Returns:
-            MongoDB database instance
+        Args:
+            uri: MongoDB connection URI
+            db_name: Database name
         """
+        self.uri = uri
+        self.db_name = db_name
+        self._client: Optional[AsyncIOMotorClient] = None
+        self._db: Optional[AsyncIOMotorDatabase] = None
+
+    async def _ensure_connected(self) -> None:
+        """Ensure database connection is established."""
         if self._client is None:
-            async with self._lock:
-                if self._client is None:  # Double-check locking
-                    uri = os.getenv(
-                        "JVSPATIAL_MONGODB_URI", "mongodb://localhost:27017"
-                    )
-                    db_name = os.getenv("JVSPATIAL_MONGODB_DB_NAME", "jvspatial_db")
+            self._client = AsyncIOMotorClient(self.uri)
+            self._db = self._client[self.db_name]
 
-                    self._client = AsyncIOMotorClient(
-                        uri,
-                        maxPoolSize=10,
-                        minPoolSize=5,
-                        connectTimeoutMS=30000,
-                        socketTimeoutMS=30000,
-                    )
-                    self._db = self._client.get_database(db_name)
-        return self._db
+    async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Save a record to the database."""
+        await self._ensure_connected()
 
-    async def _get_collection(
-        self: "MongoDB", collection: str
-    ) -> AsyncIOMotorCollection:
-        """Get collection with connection pooling.
+        # Ensure record has an ID
+        if "_id" not in data and "id" not in data:
+            import uuid
 
-        Args:
-            collection: Collection name
+            data["_id"] = str(uuid.uuid4())
+        elif "id" in data and "_id" not in data:
+            data["_id"] = data["id"]
 
-        Returns:
-            MongoDB collection instance
-        """
-        db = await self.get_db()
-        return db[collection]
-
-    async def save(self: "MongoDB", collection: str, data: dict) -> dict:
-        """Save document to MongoDB.
-
-        Args:
-            collection: Collection name
-            data: Document data
-
-        Returns:
-            Saved document
-        """
-        coll = await self._get_collection(collection)
-        if "id" in data:
-            result = await coll.find_one_and_update(
-                {"id": data["id"]},
-                {"$set": data},
-                return_document=ReturnDocument.AFTER,
-                upsert=True,
-            )
-            return dict(result or {})
-        else:
-            result = await coll.insert_one(data)
-            data["id"] = str(result.inserted_id)
+        try:
+            collection_obj = self._db[collection]
+            await collection_obj.replace_one({"_id": data["_id"]}, data, upsert=True)
             return data
+        except PyMongoError as e:
+            raise DatabaseError(f"MongoDB save error: {e}") from e
 
-    async def get(self: "MongoDB", collection: str, id: str) -> Optional[dict]:
-        """Get document by ID.
+    async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a record by ID."""
+        await self._ensure_connected()
 
-        Args:
-            collection: Collection name
-            id: Document ID
+        try:
+            collection_obj = self._db[collection]
+            result = await collection_obj.find_one({"_id": id})
+            return result
+        except PyMongoError as e:
+            raise DatabaseError(f"MongoDB get error: {e}") from e
 
-        Returns:
-            Document data or None if not found
-        """
-        coll = await self._get_collection(collection)
-        result = await coll.find_one({"id": id})
-        return dict(result) if result is not None else None
+    async def delete(self, collection: str, id: str) -> None:
+        """Delete a record by ID."""
+        await self._ensure_connected()
 
-    async def delete(self: "MongoDB", collection: str, id: str) -> None:
-        """Delete document by ID.
+        try:
+            collection_obj = self._db[collection]
+            await collection_obj.delete_one({"_id": id})
+        except PyMongoError as e:
+            raise DatabaseError(f"MongoDB delete error: {e}") from e
 
-        Args:
-            collection: Collection name
-            id: Document ID
-        """
-        coll = await self._get_collection(collection)
-        await coll.delete_one({"id": id})
+    async def find(
+        self, collection: str, query: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Find records matching a query."""
+        await self._ensure_connected()
 
-    async def find(self: "MongoDB", collection: str, query: dict) -> List[dict]:
-        """Find documents matching query.
+        try:
+            collection_obj = self._db[collection]
+            cursor = collection_obj.find(query)
+            results = await cursor.to_list(length=None)
+            return results
+        except PyMongoError as e:
+            raise DatabaseError(f"MongoDB find error: {e}") from e
 
-        Args:
-            collection: Collection name
-            query: Query parameters
-
-        Returns:
-            List of matching documents
-        """
-        coll = await self._get_collection(collection)
-        return [doc async for doc in coll.find(query)]
+    async def close(self) -> None:
+        """Close the database connection."""
+        if self._client:
+            self._client.close()
+            self._client = None
+            self._db = None
