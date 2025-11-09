@@ -24,6 +24,8 @@ An async-first Python library for building graph-based spatial applications with
 
 jvspatial is an async-first Python library for building graph-based spatial applications with FastAPI integration. It provides entity-centric database operations with automatic context management.
 
+Inspired by [Jaseci's](https://jaseci.org) object-spatial paradigm and leveraging Python's async capabilities, jvspatial empowers developers to model complex relationships, traverse object graphs, and implement agent-based architectures that scale with modern cloud-native concurrency requirements.
+
 **Key Design Principles:**
 - **Hierarchy**: Object → Node → Edge/Walker inheritance
 - **Entity-Centric**: Direct database operations via entity methods
