@@ -251,6 +251,14 @@ server = Server(
 - [Graph Visualization](docs/md/graph-visualization.md) - Export graphs in DOT/Mermaid formats
 - [Pagination](docs/md/pagination.md) - ObjectPager usage
 
+## Contributors
+
+<p align="center">
+    <a href="https://github.com/TrueSelph/jvspatial/graphs/contributors">
+        <img src="https://contrib.rocks/image?repo=TrueSelph/jvspatial" />
+    </a>
+</p>
+
 ## Contributing
 
 We welcome contributions! Please see our [Contributing Guide](docs/md/contributing.md) for details.
