@@ -15,6 +15,12 @@ from jvspatial.storage.exceptions import StorageProviderError
 from jvspatial.storage.interfaces.local import LocalFileInterface
 from jvspatial.storage.interfaces.s3 import S3FileInterface
 
+# Check if boto3 is available for S3 tests
+try:
+    from jvspatial.storage.interfaces.s3 import HAS_BOTO3
+except ImportError:
+    HAS_BOTO3 = False
+
 
 class TestStorageFactory:
     """Test storage factory functions."""
@@ -26,6 +32,7 @@ class TestStorageFactory:
             assert isinstance(storage, LocalFileInterface)
             assert storage.root_dir.resolve() == Path(temp_dir).resolve()
 
+    @pytest.mark.skipif(not HAS_BOTO3, reason="boto3 is required for S3 storage")
     def test_create_storage_s3(self):
         """Test creating S3 storage."""
         with patch("jvspatial.storage.interfaces.s3.boto3"):
@@ -59,6 +66,7 @@ class TestStorageFactory:
             assert isinstance(storage, LocalFileInterface)
             assert storage.root_dir.resolve() == Path(temp_dir).resolve()
 
+    @pytest.mark.skipif(not HAS_BOTO3, reason="boto3 is required for S3 storage")
     def test_create_storage_s3_with_config(self):
         """Test creating S3 storage with configuration."""
         with patch("jvspatial.storage.interfaces.s3.boto3"):

@@ -745,8 +745,10 @@ class TestRecoveryAndResilience:
         from jvspatial.db.jsondb import JsonDB
 
         # Should handle invalid paths gracefully by raising exception
-        with pytest.raises(OSError, match="Read-only file system"):
-            db = JsonDB(base_path="/invalid/path/that/does/not/exist")
+        # The actual error message varies by OS: "Permission denied" on Linux, "Read-only file system" on some systems
+        with pytest.raises(OSError, match="Permission denied|Read-only file system"):
+            # Use /invalid which typically doesn't exist and will fail on permission check
+            db = JsonDB(base_path="/invalid")
 
 
 class TestComplexScenarios:

@@ -29,6 +29,12 @@ from jvspatial.storage.interfaces import (
 )
 from jvspatial.storage.security import FileValidator, PathSanitizer
 
+# Check if boto3 is available for S3 tests
+try:
+    from jvspatial.storage.interfaces.s3 import HAS_BOTO3
+except ImportError:
+    HAS_BOTO3 = False
+
 # ============================================================================
 # Fixtures
 # ============================================================================
@@ -567,6 +573,11 @@ class TestLocalFileEdgeCases:
 # ============================================================================
 # S3FileInterface Tests (with mocking)
 # ============================================================================
+
+# Skip all S3 tests if boto3 is not available
+pytestmark = pytest.mark.skipif(
+    not HAS_BOTO3, reason="boto3 is required for S3 storage tests"
+)
 
 
 class TestS3FileInterfaceInit:
