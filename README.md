@@ -52,7 +52,7 @@ Inspired by [Jaseci's](https://jaseci.org) object-spatial paradigm and leveragin
 ### 🗄️ Entity-Centric Database Operations
 - Entity methods: `Entity.get()`, `Entity.find()`, `Entity.create()`, `entity.save()`, `entity.delete()`
 - Automatic context management
-- Support for JSON and MongoDB backends
+- Support for JSON, SQLite, and MongoDB backends
 - Multi-database support with prime database for core persistence
 - Custom database registration for extensibility
 - Pagination with `ObjectPager`

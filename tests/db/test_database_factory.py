@@ -22,6 +22,14 @@ from jvspatial.db.factory import (
 from jvspatial.db.jsondb import JsonDB
 from jvspatial.db.mongodb import MongoDB
 
+try:
+    from jvspatial.db.sqlite import SQLiteDB
+
+    HAS_SQLITE = True
+except ImportError:  # pragma: no cover - exercised when aiosqlite missing
+    SQLiteDB = None  # type: ignore[misc]
+    HAS_SQLITE = False
+
 
 class TestDatabaseFactory:
     """Test database factory functions."""
@@ -38,6 +46,21 @@ class TestDatabaseFactory:
         with patch("jvspatial.db.mongodb.AsyncIOMotorClient"):
             db = create_database("mongodb", uri="mongodb://localhost:27017/test")
             assert isinstance(db, MongoDB)
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not HAS_SQLITE, reason="aiosqlite is required for SQLite tests")
+    async def test_create_database_sqlite(self):
+        """Test creating SQLite database."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "test.db"
+            db = create_database("sqlite", db_path=db_path)
+            try:
+                assert isinstance(db, SQLiteDB)
+                # Compare resolved paths for consistency (handles Path objects and strings)
+                assert db.db_path.resolve() == db_path.resolve()
+            finally:
+                if hasattr(db, "close"):
+                    await db.close()
 
     def test_create_database_invalid_type(self):
         """Test error handling for invalid database type."""
@@ -73,6 +96,38 @@ class TestDatabaseFactory:
             # Restore original instance
             DatabaseManager._instance = original_instance
 
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not HAS_SQLITE, reason="aiosqlite is required for SQLite tests")
+    async def test_create_database_default_sqlite(self):
+        """Test default database creation with SQLite."""
+        from jvspatial.db.manager import DatabaseManager
+
+        original_instance = DatabaseManager._instance
+        db: Optional[SQLiteDB] = None
+
+        try:
+            DatabaseManager._instance = None
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+                db_path = str(Path(temp_dir) / "prime.db")
+                with patch.dict(
+                    os.environ,
+                    {
+                        "JVSPATIAL_DB_TYPE": "sqlite",
+                        "JVSPATIAL_SQLITE_PATH": db_path,
+                    },
+                    clear=False,
+                ):
+                    database = create_default_database()
+                    assert isinstance(database, SQLiteDB)
+                    db = database
+                    # Compare resolved paths for consistency
+                    assert db.db_path.resolve() == Path(db_path).resolve()
+        finally:
+            if db is not None and hasattr(db, "close"):
+                await db.close()
+            DatabaseManager._instance = original_instance
+
     def test_create_database_json_with_config(self):
         """Test creating JSON database with configuration."""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -87,6 +142,30 @@ class TestDatabaseFactory:
             config = {"uri": "mongodb://localhost:27017/test", "db_name": "test_db"}
             db = create_database("mongodb", **config)
             assert isinstance(db, MongoDB)
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not HAS_SQLITE, reason="aiosqlite is required for SQLite tests")
+    async def test_create_database_sqlite_with_config(self):
+        """Test creating SQLite database with configuration."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "configured.db"
+            db = create_database(
+                "sqlite",
+                db_path=db_path,
+                timeout=1.5,
+                journal_mode="DELETE",
+                synchronous="OFF",
+            )
+            try:
+                assert isinstance(db, SQLiteDB)
+                # Compare resolved paths for consistency
+                assert db.db_path.resolve() == db_path.resolve()
+                assert db.timeout == 1.5
+                assert db.journal_mode == "DELETE"
+                assert db.synchronous == "OFF"
+            finally:
+                if hasattr(db, "close"):
+                    await db.close()
 
     @pytest.mark.asyncio
     async def test_database_integration(self):
@@ -110,6 +189,36 @@ class TestDatabaseFactory:
             await db.delete("test_collection", "test-id")
             result = await db.get("test_collection", "test-id")
             assert result is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not HAS_SQLITE, reason="aiosqlite is required for SQLite tests")
+    async def test_sqlite_database_integration(self):
+        """Test SQLite database CRUD integration."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "integration.db"
+            db = create_database("sqlite", db_path=db_path)
+
+            try:
+                data = {"id": "item-1", "name": "Widget", "quantity": 10}
+                await db.save("inventory", data)
+
+                retrieved = await db.get("inventory", "item-1")
+                assert retrieved is not None
+                assert retrieved["name"] == "Widget"
+
+                matches = await db.find("inventory", {"name": "Widget"})
+                assert len(matches) == 1
+                assert matches[0]["quantity"] == 10
+
+                # Ensure count helper works (calls find internally)
+                count = await db.count("inventory", {"name": "Widget"})
+                assert count == 1
+
+                await db.delete("inventory", "item-1")
+                assert await db.get("inventory", "item-1") is None
+            finally:
+                if hasattr(db, "close"):
+                    await db.close()
 
 
 class TestCustomDatabaseRegistration:
@@ -278,6 +387,12 @@ class TestCustomDatabaseRegistration:
 
         assert "built-in" in str(exc_info.value).lower()
 
+        # Try to register "sqlite" (built-in)
+        with pytest.raises(ValueError) as exc_info:
+            register_database_type("sqlite", create_test_db)
+
+        assert "built-in" in str(exc_info.value).lower()
+
     def test_unregister_database_type(self):
         """Test unregistering a custom database type."""
 
@@ -312,6 +427,11 @@ class TestCustomDatabaseRegistration:
 
         assert "built-in" in str(exc_info.value).lower()
 
+        with pytest.raises(ValueError) as exc_info:
+            unregister_database_type("sqlite")
+
+        assert "built-in" in str(exc_info.value).lower()
+
     def test_list_database_types(self):
         """Test listing all database types."""
         types = list_database_types()
@@ -319,8 +439,13 @@ class TestCustomDatabaseRegistration:
         # Should include built-in types
         assert "json" in types
         assert "mongodb" in types
+        assert "sqlite" in types
         assert "json" in str(types["json"]).lower()
         assert "mongodb" in str(types["mongodb"]).lower()
+        if HAS_SQLITE:
+            assert "built-in" in types["sqlite"].lower()
+        else:  # pragma: no cover - requires uninstalling aiosqlite
+            assert "requires aiosqlite" in types["sqlite"].lower()
 
         # Register custom type and verify it appears
         def create_test_db(

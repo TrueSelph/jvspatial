@@ -71,6 +71,16 @@ class DatabaseManager:
                 uri = os.getenv("JVSPATIAL_MONGODB_URI", "mongodb://localhost:27017")
                 db_name = os.getenv("JVSPATIAL_MONGODB_DB_NAME", "jvdb")
                 self._prime_database = MongoDB(uri=uri, db_name=db_name)
+            elif db_type == "sqlite":
+                try:
+                    from .sqlite import SQLiteDB
+                except ImportError as exc:  # pragma: no cover - dependency missing
+                    raise ImportError(
+                        "aiosqlite is required for SQLite support. Install it with: pip install aiosqlite"
+                    ) from exc
+
+                db_path = os.getenv("JVSPATIAL_SQLITE_PATH", "jvdb/sqlite/jvspatial.db")
+                self._prime_database = SQLiteDB(db_path=db_path)
             else:
                 # Fallback to JSON
                 base_path = os.getenv("JVSPATIAL_JSONDB_PATH", "jvdb")

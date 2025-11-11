@@ -731,6 +731,7 @@ The server automatically sets these environment variables:
 
 - `JVSPATIAL_DB_TYPE` - Database type
 - `JVSPATIAL_JSONDB_PATH` - JSON database path
+- `JVSPATIAL_SQLITE_PATH` - SQLite database file path
 - `JVSPATIAL_MONGODB_URI` - MongoDB connection URI
 - `JVSPATIAL_MONGODB_DATABASE` - MongoDB database name
 
@@ -976,6 +977,7 @@ The Server class respects these environment variables:
 
 - `JVSPATIAL_DB_TYPE` - Database type override
 - `JVSPATIAL_JSONDB_PATH` - JSON database path
+- `JVSPATIAL_SQLITE_PATH` - SQLite database file path
 - `JVSPATIAL_MONGODB_URI` - MongoDB connection string
 - `JVSPATIAL_MONGODB_DATABASE` - MongoDB database name
 

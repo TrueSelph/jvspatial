@@ -23,6 +23,7 @@ setup(
         "python-multipart",
         "motor",
         "pymongo",
+        "aiosqlite>=0.19.0",  # SQLite database backend
         "PyJWT",  # JWT token handling for authentication
         "bcrypt",  # Password hashing for authentication
         "schedule>=1.2.2",  # Job scheduling
