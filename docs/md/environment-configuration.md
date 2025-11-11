@@ -30,13 +30,19 @@ jvspatial uses environment variables to configure database connections, file pat
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `JVSPATIAL_DB_TYPE` | string | `json` | Database backend to use (`json`, `mongodb`) |
+| `JVSPATIAL_DB_TYPE` | string | `json` | Database backend to use (`json`, `sqlite`, `mongodb`) |
 
 ### JSON Database Configuration
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `JVSPATIAL_JSONDB_PATH` | string | `jvdb` | Base directory path for JSON database files |
+
+### SQLite Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `JVSPATIAL_SQLITE_PATH` | string | `jvdb/sqlite/jvspatial.db` | SQLite database file location (directories are created automatically) |
 
 ### MongoDB Configuration
 
@@ -67,6 +73,10 @@ Set variables directly in your shell:
 export JVSPATIAL_DB_TYPE=mongodb
 export JVSPATIAL_MONGODB_URI=mongodb://localhost:27017
 export JVSPATIAL_MONGODB_DB_NAME=my_spatial_db
+
+# SQLite example
+export JVSPATIAL_DB_TYPE=sqlite
+export JVSPATIAL_SQLITE_PATH=/var/data/jvspatial/app.db
 ```
 
 ### 2. .env Files

@@ -20,45 +20,43 @@ from .factory import (
 from .jsondb import JsonDB
 from .manager import DatabaseManager, get_database_manager, set_database_manager
 
-# MongoDB is optional and may not be available
-try:
+try:  # Optional dependency (requires aiosqlite)
+    from .sqlite import SQLiteDB  # noqa: F401
+
+    _SQLITE_AVAILABLE = True
+except ImportError:  # pragma: no cover - exercised when dependency missing
+    SQLiteDB = None  # type: ignore[misc]
+    _SQLITE_AVAILABLE = False
+
+try:  # Optional dependency (requires Motor)
     from .mongodb import MongoDB  # noqa: F401
 
-    __all__ = [
-        "Database",
-        "DatabaseError",
-        "VersionConflictError",
-        "create_database",
-        "create_default_database",
-        "get_prime_database",
-        "get_current_database",
-        "switch_database",
-        "unregister_database",
-        "register_database_type",
-        "unregister_database_type",
-        "list_database_types",
-        "DatabaseManager",
-        "get_database_manager",
-        "set_database_manager",
-        "JsonDB",
-        "MongoDB",
-    ]
-except ImportError:
-    __all__ = [
-        "Database",
-        "DatabaseError",
-        "VersionConflictError",
-        "create_database",
-        "create_default_database",
-        "get_prime_database",
-        "get_current_database",
-        "switch_database",
-        "unregister_database",
-        "register_database_type",
-        "unregister_database_type",
-        "list_database_types",
-        "DatabaseManager",
-        "get_database_manager",
-        "set_database_manager",
-        "JsonDB",
-    ]
+    _MONGODB_AVAILABLE = True
+except ImportError:  # pragma: no cover - mongo optional
+    MongoDB = None  # type: ignore[misc]
+    _MONGODB_AVAILABLE = False
+
+__all__ = [
+    "Database",
+    "DatabaseError",
+    "VersionConflictError",
+    "create_database",
+    "create_default_database",
+    "get_prime_database",
+    "get_current_database",
+    "switch_database",
+    "unregister_database",
+    "register_database_type",
+    "unregister_database_type",
+    "list_database_types",
+    "DatabaseManager",
+    "get_database_manager",
+    "set_database_manager",
+    "JsonDB",
+]
+
+if _SQLITE_AVAILABLE:
+    __all__.append("SQLiteDB")
+
+if _MONGODB_AVAILABLE:
+    __all__.append("MongoDB")

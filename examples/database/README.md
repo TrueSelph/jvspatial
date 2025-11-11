@@ -2,6 +2,7 @@
 
 This directory contains examples demonstrating database features and customization:
 
+- `sqlite_example.py` - **SQLite database integration** - Complete guide to using SQLite with jvspatial, including CRUD operations, multi-database management, configuration, and Server integration
 - `multi_database_example.py` - **Multi-database support with prime database** - Managing multiple databases, switching between them, and removing non-prime databases
 - `custom_database_example.py` - How to create custom database backends
 - `database_switching_example.py` - Dynamic database switching

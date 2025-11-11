@@ -22,18 +22,17 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from jvspatial.api.components import AppBuilder, EndpointManager, ErrorHandler
 from jvspatial.api.config import ServerConfig
 from jvspatial.api.constants import APIRoutes
+from jvspatial.api.endpoints.response import create_endpoint_helper
+from jvspatial.api.endpoints.router import EndpointRouter
+from jvspatial.api.middleware.manager import MiddlewareManager
+from jvspatial.api.services.discovery import PackageDiscoveryService
+from jvspatial.api.services.lifecycle import LifecycleManager
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node, Root, Walker
 from jvspatial.db.factory import create_database
-
-from .components import AppBuilder, EndpointManager, ErrorHandler
-from .endpoints.response import create_endpoint_helper
-from .endpoints.router import EndpointRouter
-from .middleware.manager import MiddlewareManager
-from .services.discovery import PackageDiscoveryService
-from .services.lifecycle import LifecycleManager
 
 
 class Server:
@@ -339,6 +338,11 @@ class Server:
                     db_type="mongodb",
                     uri=self.config.db_connection_string or "mongodb://localhost:27017",
                     db_name=self.config.db_database_name or "jvdb",
+                )
+            elif self.config.db_type == "sqlite":
+                prime_db = create_database(
+                    db_type="sqlite",
+                    db_path=self.config.db_path or "jvdb/sqlite/jvspatial.db",
                 )
             else:
                 raise ValueError(f"Unsupported database type: {self.config.db_type}")

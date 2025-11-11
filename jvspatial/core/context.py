@@ -14,12 +14,12 @@ from typing import (
     cast,
 )
 
-if TYPE_CHECKING:
-    from .entities import Object
-
 from jvspatial.db.database import Database
 from jvspatial.db.factory import create_database, get_current_database
 from jvspatial.db.manager import get_database_manager
+
+if TYPE_CHECKING:
+    from .entities import Object
 
 T = TypeVar("T", bound="Object")
 
@@ -439,6 +439,9 @@ class GraphContext:
 
                 record = serialize_datetime(record)
                 # Add class name for type filtering in find() queries
+                # Always add it, even if entity has a "name" field (use "_class" for class name)
+                record["_class"] = entity.__class__.__name__
+                # Also add "name" if not present for backward compatibility
                 if "name" not in record:
                     record["name"] = entity.__class__.__name__
         else:

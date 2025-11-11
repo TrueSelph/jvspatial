@@ -13,6 +13,14 @@ from .database import Database
 from .jsondb import JsonDB
 from .manager import get_database_manager
 
+try:  # Optional dependency (requires aiosqlite)
+    from .sqlite import SQLiteDB  # noqa: F401
+
+    _SQLITE_AVAILABLE = True
+except ImportError:  # pragma: no cover - dependency missing
+    SQLiteDB = None  # type: ignore[misc]
+    _SQLITE_AVAILABLE = False
+
 # Registry for custom database implementations
 _DATABASE_REGISTRY: Dict[str, Callable[..., Database]] = {}
 
@@ -51,7 +59,7 @@ def register_database_type(db_type: str, factory: Callable[..., Database]) -> No
     Raises:
         ValueError: If db_type is already registered or conflicts with built-in types
     """
-    if db_type in ("json", "mongodb"):
+    if db_type in ("json", "mongodb", "sqlite"):
         raise ValueError(f"Cannot register '{db_type}' - it's a built-in database type")
     if db_type in _DATABASE_REGISTRY:
         raise ValueError(
@@ -70,7 +78,7 @@ def unregister_database_type(db_type: str) -> None:
     Raises:
         ValueError: If db_type is not registered or is a built-in type
     """
-    if db_type in ("json", "mongodb"):
+    if db_type in ("json", "mongodb", "sqlite"):
         raise ValueError(
             f"Cannot unregister '{db_type}' - it's a built-in database type"
         )
@@ -89,6 +97,11 @@ def list_database_types() -> Dict[str, str]:
         "json": "JSON file-based database (built-in)",
         "mongodb": "MongoDB database (built-in)",
     }
+
+    if _SQLITE_AVAILABLE:
+        types["sqlite"] = "SQLite database (built-in)"
+    else:
+        types["sqlite"] = "SQLite database (requires aiosqlite)"
     for db_type, factory in _DATABASE_REGISTRY.items():
         types[db_type] = f"Custom database: {factory.__name__}"
     return types
@@ -102,7 +115,7 @@ def create_database(
 ) -> Database:
     """Create a database instance with direct instantiation.
 
-    Supports both built-in database types ('json', 'mongodb') and custom
+    Supports both built-in database types ('json', 'sqlite', 'mongodb') and custom
     database types registered via register_database_type().
 
     Args:
@@ -121,6 +134,9 @@ def create_database(
         # MongoDB database (registered with manager)
         db = create_database("mongodb", uri="mongodb://localhost:27017",
                             register=True, name="app_db")
+
+        # SQLite database (file-based storage)
+        db = create_database("sqlite", db_path="./data/app.db")
 
         # Custom database (after registration)
         db = create_database("my_custom", connection_string="custom://",
@@ -155,6 +171,20 @@ def create_database(
             kwargs["db_name"] = os.getenv("JVSPATIAL_MONGODB_DB_NAME", "jvdb")
 
         db = MongoDB(**kwargs)
+
+    elif db_type == "sqlite":
+        if not _SQLITE_AVAILABLE:
+            raise ImportError(
+                "aiosqlite is required for SQLite support. Install it with: pip install aiosqlite"
+            )
+
+        sqlite_kwargs = kwargs.copy()
+        db_path = (
+            sqlite_kwargs.pop("db_path", None)
+            or sqlite_kwargs.pop("path", None)
+            or os.getenv("JVSPATIAL_SQLITE_PATH", "jvdb/sqlite/jvspatial.db")
+        )
+        db = SQLiteDB(db_path=db_path, **sqlite_kwargs)
 
     # Check registered custom types
     elif db_type in _DATABASE_REGISTRY:

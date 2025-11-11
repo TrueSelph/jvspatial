@@ -46,9 +46,10 @@ if __name__ == "__main__":
 ```
 
 **Default Configuration:**
-- Database: JSON file-based storage
+- Database: JSON file-based storage (default)
 - Location: `./jv_data/` directory
 - Auto-creation: Enabled
+- Alternative backends: set `JVSPATIAL_DB_TYPE` to `sqlite` (requires `aiosqlite`) or `mongodb` to switch backends. For SQLite, configure the database file with `JVSPATIAL_SQLITE_PATH` (defaults to `jvdb/sqlite/jvspatial.db`).
 
 ### 2. Explicit GraphContext Configuration
 
@@ -71,8 +72,8 @@ class Partnership(Edge):
 async def main():
     # Create custom database
     db = create_database(
-        db_type="json",
-        base_path="./business_data"
+        db_type="sqlite",
+        db_path="./business_data/app.db"
     )
 
     # Create GraphContext

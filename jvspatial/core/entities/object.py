@@ -286,26 +286,57 @@ class Object(AttributeMixin, BaseModel):
             query = {}
 
         # Add class name filter for type safety
-        db_query = {"name": cls.__name__}
+        # Use "_class" field (always added for Objects) with fallback to "name" for backward compatibility
+        # We'll handle this in the query building to support both formats
+        db_query: Dict[str, Any] = {}
 
         # Process kwargs and query - convert property names to database format
         combined_filters = {**query, **kwargs}
 
+        # Build class name filter - check both "_class" and "name" for backward compatibility
+        # Use $or to match records with either field matching the class name
+        class_name_filter: Dict[str, Any] = {
+            "$or": [{"_class": cls.__name__}, {"name": cls.__name__}]
+        }
+
         # Get top-level fields for this entity type (fields stored at root level in persistence)
         top_level_fields = cls._get_top_level_fields()
+
+        # For Objects (type_code == "o"), fields are stored at root level, not under "context"
+        # For Nodes/Edges/Walkers, fields are stored under "context" when for_persistence=True
+        is_object = type_code == "o"
 
         for key, value in combined_filters.items():
             if key == "name":
                 # Skip "name" as it's already set for class filtering
                 continue
-            elif key.startswith("context.") or key in top_level_fields:
-                # Already in database format or top-level field
+            elif key in top_level_fields:
+                # Top-level field (e.g., source, target for Edges) - use as-is
                 db_query[key] = value
+            elif key.startswith("context."):
+                # Already in database format
+                if is_object:
+                    # For Objects, fields are at root level, so remove "context." prefix
+                    db_query[key[8:]] = value  # Remove "context." prefix (8 chars)
+                else:
+                    # For Nodes/Edges/Walkers, keep "context." prefix
+                    db_query[key] = value
             else:
                 # Property name - convert to database format
-                db_query[f"context.{key}"] = value
+                if is_object:
+                    # For Objects, fields are at root level
+                    db_query[key] = value
+                else:
+                    # For Nodes/Edges/Walkers, add "context." prefix
+                    db_query[f"context.{key}"] = value
 
-        results = await context.database.find(collection, db_query)
+        # Combine class name filter with other filters using $and
+        if db_query:
+            final_query = {"$and": [class_name_filter, db_query]}
+        else:
+            final_query = class_name_filter
+
+        results = await context.database.find(collection, final_query)
 
         objects = []
         for data in results:
