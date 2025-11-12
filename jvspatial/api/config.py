@@ -56,6 +56,23 @@ class ServerConfig(BaseModel):
     db_connection_string: Optional[str] = None
     db_database_name: Optional[str] = None
 
+    # DynamoDB Configuration (only used if db_type is "dynamodb")
+    dynamodb_table_name: Optional[str] = Field(
+        default=None, validation_alias="JVSPATIAL_DYNAMODB_TABLE_NAME"
+    )
+    dynamodb_region: Optional[str] = Field(
+        default=None, validation_alias="JVSPATIAL_DYNAMODB_REGION"
+    )
+    dynamodb_endpoint_url: Optional[str] = Field(
+        default=None, validation_alias="JVSPATIAL_DYNAMODB_ENDPOINT_URL"
+    )
+    dynamodb_access_key_id: Optional[str] = Field(
+        default=None, validation_alias="AWS_ACCESS_KEY_ID"
+    )
+    dynamodb_secret_access_key: Optional[str] = Field(
+        default=None, validation_alias="AWS_SECRET_ACCESS_KEY"
+    )
+
     # Logging Configuration
     log_level: str = "info"
 
@@ -156,4 +173,19 @@ class ServerConfig(BaseModel):
             "/auth/logout",
             "/auth/register",
         ]
+    )
+
+    # Serverless Configuration
+    serverless_mode: bool = Field(
+        default=False,
+        description="Enable serverless mode (AWS Lambda) with automatic handler setup",
+        validation_alias="JVSPATIAL_SERVERLESS_MODE",
+    )
+    serverless_lifespan: str = Field(
+        default="auto",
+        description="Mangum lifespan mode: 'auto', 'on', or 'off'",
+    )
+    serverless_api_gateway_base_path: Optional[str] = Field(
+        default=None,
+        description="API Gateway base path (e.g., '/prod', '/v1')",
     )

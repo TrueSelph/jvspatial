@@ -11,6 +11,10 @@ orjson  # Fast JSON library
 gunicorn[gthread]  # WSGI/ASGI server with threading support
 hypercorn  # Alternative ASGI server
 
+# Serverless deployment
+mangum>=0.17.0  # ASGI adapter for AWS Lambda and other serverless platforms
+aioboto3>=12.0.0  # Async AWS SDK for DynamoDB support in Lambda
+
 # Environment management
 python-dotenv  # Load environment variables from .env files
 

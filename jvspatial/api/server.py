@@ -7,6 +7,7 @@ setup, lifecycle management, and endpoint routing.
 
 import inspect
 import logging
+import sys
 from typing import (
     Any,
     Callable,
@@ -125,6 +126,9 @@ class Server:
         self._auth_config: Optional[Any] = None
         self._auth_endpoints_registered = False
 
+        # Serverless/Lambda handler
+        self._lambda_handler: Optional[Any] = None
+
         # Automatically set this server as the current server in context
         # The most recently instantiated Server becomes the current one
         from jvspatial.api.context import set_current_server
@@ -141,6 +145,10 @@ class Server:
         # Initialize file storage if enabled
         if self.config.file_storage_enabled:
             self._initialize_file_storage()
+
+        # Initialize serverless handler if enabled
+        if self.config.serverless_mode:
+            self._initialize_serverless_handler()
 
     def _configure_authentication(self: "Server") -> None:
         """Configure authentication middleware and register auth endpoints if enabled."""
@@ -344,6 +352,15 @@ class Server:
                     db_type="sqlite",
                     db_path=self.config.db_path or "jvdb/sqlite/jvspatial.db",
                 )
+            elif self.config.db_type == "dynamodb":
+                prime_db = create_database(
+                    db_type="dynamodb",
+                    table_name=self.config.dynamodb_table_name or "jvspatial",
+                    region_name=self.config.dynamodb_region or "us-east-1",
+                    endpoint_url=self.config.dynamodb_endpoint_url,
+                    aws_access_key_id=self.config.dynamodb_access_key_id,
+                    aws_secret_access_key=self.config.dynamodb_secret_access_key,
+                )
             else:
                 raise ValueError(f"Unsupported database type: {self.config.db_type}")
 
@@ -421,6 +438,88 @@ class Server:
         except Exception as e:
             self._logger.error(f"❌ Failed to initialize file storage: {e}")
             raise
+
+    def _initialize_serverless_handler(self: "Server") -> None:
+        """Initialize serverless Lambda handler if serverless mode is enabled.
+
+        This method automatically creates a Mangum adapter for the FastAPI app
+        when serverless_mode is True in the configuration.
+        """
+        try:
+            from mangum import Mangum
+        except ImportError:
+            self._logger.warning(
+                "Mangum is required for serverless deployment but not installed. "
+                "Install it with: pip install mangum>=0.17.0 "
+                "or pip install jvspatial[serverless]"
+            )
+            return
+
+        # Get the app (this will create it if it doesn't exist)
+        app = self.get_app()
+
+        # Configure Mangum with serverless settings
+        mangum_config: Dict[str, Any] = {
+            "lifespan": self.config.serverless_lifespan,
+        }
+
+        if self.config.serverless_api_gateway_base_path:
+            mangum_config["api_gateway_base_path"] = (
+                self.config.serverless_api_gateway_base_path
+            )
+
+        # Create Mangum adapter
+        self._lambda_handler = Mangum(app, **mangum_config)
+
+        # Automatically expose handler at module level for Lambda deployment
+        self._expose_handler_to_caller_module()
+
+        self._logger.info(
+            "🚀 Serverless Lambda handler initialized and ready for deployment"
+        )
+
+    def _expose_handler_to_caller_module(self: "Server") -> None:
+        """Expose the Lambda handler as a module-level variable in the caller's module.
+
+        This allows AWS Lambda to access the handler without requiring
+        manual assignment (e.g., `handler = server.lambda_handler`).
+        """
+        try:
+            # Get the caller's frame (skip this method and _initialize_serverless_handler)
+            frame = inspect.currentframe()
+            if frame is None:
+                return
+
+            # Go up 2 frames: _expose_handler_to_caller_module -> _initialize_serverless_handler -> caller
+            caller_frame = frame.f_back
+            if caller_frame is None:
+                return
+            caller_frame = caller_frame.f_back
+            if caller_frame is None:
+                return
+
+            # Get the caller's module
+            caller_module = sys.modules.get(caller_frame.f_globals.get("__name__"))
+            if caller_module is None:
+                return
+
+            # Only expose if 'handler' doesn't already exist in the module
+            # This prevents overwriting user-defined handlers
+            handler_attr = "handler"  # Use variable to avoid B010 flake8 warning
+            if not hasattr(caller_module, handler_attr):
+                # Dynamically set handler attribute on module for Lambda deployment
+                # Using setattr with variable to satisfy flake8 B010, with type ignore for mypy
+                setattr(caller_module, handler_attr, self._lambda_handler)  # type: ignore[attr-defined]
+                self._logger.debug(
+                    f"✅ Lambda handler automatically exposed as 'handler' in {caller_module.__name__}"
+                )
+            else:
+                self._logger.debug(
+                    f"⚠️  'handler' already exists in {caller_module.__name__}, skipping auto-exposure"
+                )
+        except Exception as e:
+            # Don't fail if we can't expose the handler - user can still access it manually
+            self._logger.debug(f"Could not auto-expose handler: {e}")
 
     def middleware(self: "Server", middleware_type: str = "http") -> Callable:
         """Add middleware to the application.
@@ -1033,6 +1132,91 @@ class Server:
             self.app = self._create_app()
         return self.app
 
+    @property
+    def lambda_handler(self: "Server") -> Optional[Any]:
+        """Get the Lambda handler if serverless mode is enabled.
+
+        Returns:
+            Lambda handler function if serverless is enabled, None otherwise
+
+        Example:
+            ```python
+            server = Server(serverless_mode=True, title="My Lambda API")
+
+            # Access handler directly
+            handler = server.lambda_handler
+            ```
+        """
+        return self._lambda_handler
+
+    def get_lambda_handler(self: "Server", **mangum_kwargs: Any) -> Any:
+        """Get an AWS Lambda handler for serverless deployment.
+
+        This method wraps the FastAPI application with Mangum, an ASGI adapter
+        for AWS Lambda. If serverless mode is enabled, returns the pre-configured
+        handler. Otherwise, creates a new handler with the provided options.
+
+        Args:
+            **mangum_kwargs: Additional Mangum configuration options (only used
+                if serverless mode is not enabled). Common options include:
+                - lifespan: "off" to disable lifespan events (default: "auto")
+                - api_gateway_base_path: Base path for API Gateway
+                - text_mime_types: List of text MIME types
+
+        Returns:
+            Lambda handler function compatible with AWS Lambda
+
+        Example:
+            ```python
+            # Option 1: Enable serverless mode (handler created automatically)
+            server = Server(serverless_mode=True, title="My API")
+            handler = server.get_lambda_handler()  # Returns pre-configured handler
+
+            # Option 2: Manual handler creation
+            server = Server(title="My API")
+            handler = server.get_lambda_handler(lifespan="auto")
+            ```
+
+        Note:
+            Requires the 'mangum' package to be installed:
+            pip install mangum>=0.17.0
+            Or install optional dependencies:
+            pip install jvspatial[serverless]
+        """
+        # If serverless mode is enabled, return the pre-configured handler
+        if self.config.serverless_mode and self._lambda_handler is not None:
+            if mangum_kwargs:
+                self._logger.warning(
+                    "Serverless mode is enabled. Additional mangum_kwargs are ignored. "
+                    "Configure serverless options via ServerConfig instead."
+                )
+            return self._lambda_handler
+
+        # Otherwise, create handler on-demand
+        try:
+            from mangum import Mangum
+        except ImportError:
+            raise ImportError(
+                "Mangum is required for serverless deployment. "
+                "Install it with: pip install mangum>=0.17.0 "
+                "or pip install jvspatial[serverless]"
+            )
+
+        app = self.get_app()
+
+        # Configure Mangum with sensible defaults for Lambda
+        mangum_config = {
+            "lifespan": "auto",  # Enable lifespan events (startup/shutdown)
+            **mangum_kwargs,
+        }
+
+        # Create Mangum adapter
+        handler = Mangum(app, **mangum_config)
+
+        self._logger.info("🚀 Lambda handler created for serverless deployment")
+
+        return handler
+
     def run(
         self: "Server",
         host: Optional[str] = None,
@@ -1324,3 +1508,66 @@ def create_server(
     return Server(
         title=title, description=description, version=version, **config_kwargs
     )
+
+
+def create_lambda_handler(
+    server: Optional[Server] = None,
+    **server_kwargs: Any,
+) -> Any:
+    """Create a Lambda handler from a Server instance or create a new one.
+
+    This is a convenience function for creating Lambda handlers. If a server
+    instance is provided, it will use that. Otherwise, it creates a new server
+    with the provided configuration.
+
+    Args:
+        server: Optional Server instance. If None, a new server will be created.
+        **server_kwargs: Configuration for creating a new server if server is None.
+            Also accepts **mangum_kwargs for Mangum configuration.
+
+    Returns:
+        Lambda handler function compatible with AWS Lambda
+
+    Example:
+        ```python
+        from jvspatial.api import endpoint, create_lambda_handler
+
+        @endpoint("/hello")
+        async def hello():
+            return {"message": "Hello from Lambda!"}
+
+        # Create handler - server will be auto-created
+        handler = create_lambda_handler(title="My Lambda API")
+        ```
+
+    Note:
+        Requires the 'mangum' package to be installed:
+        pip install mangum>=0.17.0
+        Or install optional dependencies:
+        pip install jvspatial[serverless]
+    """
+    # Separate mangum kwargs from server kwargs
+    mangum_kwargs = {}
+    server_config = {}
+
+    # Known Mangum configuration keys
+    mangum_keys = {
+        "lifespan",
+        "api_gateway_base_path",
+        "text_mime_types",
+        "exclude_headers",
+        "exclude_query_strings",
+    }
+
+    for key, value in server_kwargs.items():
+        if key in mangum_keys:
+            mangum_kwargs[key] = value
+        else:
+            server_config[key] = value
+
+    # Use provided server or create a new one
+    if server is None:
+        server = Server(**server_config)
+
+    # Get Lambda handler from server
+    return server.get_lambda_handler(**mangum_kwargs)
