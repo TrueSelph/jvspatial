@@ -41,7 +41,7 @@ class JsonDB(Database):
     def _get_record_path(self, collection: str, record_id: str) -> Path:
         """Get the file path for a specific record."""
         collection_dir = self._get_collection_dir(collection)
-        return collection_dir / f"{record_id.replace(":", ".")}.json"
+        return collection_dir / f"{record_id.replace(':', '.')}.json"
 
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Save a record to the database."""

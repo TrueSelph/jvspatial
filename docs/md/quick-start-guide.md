@@ -1,6 +1,6 @@
 # Quick Start Guide
 
-**Version**: 0.2.0
+**Version**: 0.0.1
 **Date**: 2025-10-20
 
 Get started with jvspatial in 5 minutes! This guide covers installation, basic concepts, and your first application.
@@ -416,6 +416,6 @@ You now know the basics of jvspatial! Start building your graph-based applicatio
 ---
 
 **Last Updated**: 2025-10-20
-**Version**: 0.2.0
+**Version**: 0.0.1
 **Maintainer**: JVspatial Team
 

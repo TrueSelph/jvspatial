@@ -1,6 +1,6 @@
 # JVspatial Documentation
 
-**Version**: 0.2.0
+**Version**: 0.0.1
 **Last Updated**: 2025-10-20
 
 Welcome to the jvspatial documentation! This guide will help you understand and use the jvspatial library effectively.
@@ -81,7 +81,7 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 | [Contributing](contributing.md) | Contribution guide | Developers |
 | [Custom Database Guide](custom-database-guide.md) | Extending with custom databases | Advanced |
 | [Troubleshooting](troubleshooting.md) | Common issues | All levels |
-| [Migration Guide](../../MIGRATION_GUIDE_COMMON_TO_UTILS.md) | Upgrading from 0.1.x | Users |
+| [Migration Guide](migration.md) | Adopting jvspatial | Users |
 
 ### **Reference**
 
@@ -150,7 +150,7 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 |-------|----------|----------|
 | Import errors | [Troubleshooting](troubleshooting.md) | Import Issues |
 | Context errors | [Context Management](context-management-guide.md) | Usage Patterns |
-| Deprecation warnings | [Migration Guide](../../MIGRATION_GUIDE_COMMON_TO_UTILS.md) | Update Imports |
+| Import patterns | [Import Patterns](import-patterns.md) | Best Practices |
 | Authentication fails | [Troubleshooting](troubleshooting.md) | Auth Issues |
 
 ---
@@ -318,5 +318,5 @@ See [License](license.md) for details.
 ---
 
 **Last Updated**: 2025-10-20
-**Version**: 0.2.0
+**Version**: 0.0.1
 **Maintainer**: JVspatial Team

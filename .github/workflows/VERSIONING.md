@@ -64,13 +64,34 @@ __version__ = "1.0.0"
 
 ## Workflow Behavior
 
-### On Push to Main
+### Trigger Conditions
 
-1. **Reads version** from `jvspatial/version.py`
-2. **Checks for existing tag**: If tag `v{version}` already exists, skips tag creation
-3. **Creates tag**: If tag doesn't exist, creates `v{version}` tag automatically
-4. **Builds package**: Uses the version from `version.py`
-5. **Publishes to PyPI**: Automatically uploads the package
+The workflow triggers when:
+- Code is pushed to the `main` branch (including PR merges)
+- **AND** source code files have changed (not just documentation)
+
+**Source code changes that trigger publishing:**
+- Python files in `jvspatial/` directory
+- `setup.py`, `pyproject.toml`, `requirements*.txt`
+- `jvspatial/version.py` (version changes)
+
+**Files that do NOT trigger publishing:**
+- Documentation files (`.md`, `docs/`)
+- Example code (`examples/`)
+- Test files (`tests/`)
+- Build artifacts, cache files, etc.
+
+### Publishing Process
+
+When triggered, the workflow:
+
+1. **Checks for source code changes**: Verifies actual code changed (not just docs)
+2. **Reads version** from `jvspatial/version.py`
+3. **Checks for existing tag**: If tag `v{version}` already exists, skips tag creation
+4. **Creates tag**: If tag doesn't exist, creates `v{version}` tag automatically
+5. **Builds package**: Uses the version from `version.py`
+6. **Validates package**: Runs `twine check` to ensure package is valid
+7. **Publishes to PyPI**: Automatically uploads the package
 
 ### Tag Creation
 

@@ -647,8 +647,10 @@ class TestJsonDBEntityOperations:
         assert obj_data["value"] == 42
         assert obj_data["category"] == "test"
 
-        # Verify file was created
-        obj_file = context.database.base_path / "object" / f"{obj.id}.json"
+        # Verify file was created (JsonDB replaces colons with dots in filenames)
+        obj_file = (
+            context.database.base_path / "object" / f"{obj.id.replace(':', '.')}.json"
+        )
         assert obj_file.exists()
 
     @pytest.mark.asyncio
@@ -673,8 +675,10 @@ class TestJsonDBEntityOperations:
         assert node_data["context"]["category"] == "test"
         assert node_data["edges"] == []  # No edges initially
 
-        # Verify file was created
-        node_file = context.database.base_path / "node" / f"{node.id}.json"
+        # Verify file was created (JsonDB replaces colons with dots in filenames)
+        node_file = (
+            context.database.base_path / "node" / f"{node.id.replace(':', '.')}.json"
+        )
         assert node_file.exists()
 
     @pytest.mark.asyncio
@@ -696,8 +700,10 @@ class TestJsonDBEntityOperations:
         assert edge_data["target"] == node2.id
         assert edge_data["bidirectional"] == True  # Default value
 
-        # Verify file was created
-        edge_file = context.database.base_path / "edge" / f"{edge.id}.json"
+        # Verify file was created (JsonDB replaces colons with dots in filenames)
+        edge_file = (
+            context.database.base_path / "edge" / f"{edge.id.replace(':', '.')}.json"
+        )
         assert edge_file.exists()
 
     @pytest.mark.asyncio
@@ -725,8 +731,10 @@ class TestJsonDBEntityOperations:
         assert edge.id in node1_data["edges"]
         assert edge.id in node2_data["edges"]
 
-        # Verify files exist
-        edge_file = context.database.base_path / "edge" / f"{edge.id}.json"
+        # Verify files exist (JsonDB replaces colons with dots in filenames)
+        edge_file = (
+            context.database.base_path / "edge" / f"{edge.id.replace(':', '.')}.json"
+        )
         assert edge_file.exists()
 
     @pytest.mark.asyncio
@@ -776,13 +784,27 @@ class TestJsonDBEntityOperations:
         assert located_edge.id in company_data["edges"]
         assert located_edge.id in location_data["edges"]
 
-        # Verify all files exist
-        assert (context.database.base_path / "node" / f"{person.id}.json").exists()
-        assert (context.database.base_path / "node" / f"{company.id}.json").exists()
-        assert (context.database.base_path / "node" / f"{location.id}.json").exists()
-        assert (context.database.base_path / "edge" / f"{works_edge.id}.json").exists()
+        # Verify all files exist (JsonDB replaces colons with dots in filenames)
         assert (
-            context.database.base_path / "edge" / f"{located_edge.id}.json"
+            context.database.base_path / "node" / f"{person.id.replace(':', '.')}.json"
+        ).exists()
+        assert (
+            context.database.base_path / "node" / f"{company.id.replace(':', '.')}.json"
+        ).exists()
+        assert (
+            context.database.base_path
+            / "node"
+            / f"{location.id.replace(':', '.')}.json"
+        ).exists()
+        assert (
+            context.database.base_path
+            / "edge"
+            / f"{works_edge.id.replace(':', '.')}.json"
+        ).exists()
+        assert (
+            context.database.base_path
+            / "edge"
+            / f"{located_edge.id.replace(':', '.')}.json"
         ).exists()
 
     @pytest.mark.asyncio
@@ -809,8 +831,10 @@ class TestJsonDBEntityOperations:
         edge_data = await context.database.get("edge", edge.id)
         assert edge_data is None
 
-        # Verify edge file was deleted
-        edge_file = context.database.base_path / "edge" / f"{edge.id}.json"
+        # Verify edge file was deleted (JsonDB replaces colons with dots in filenames)
+        edge_file = (
+            context.database.base_path / "edge" / f"{edge.id.replace(':', '.')}.json"
+        )
         assert not edge_file.exists()
 
         # Verify nodes no longer reference the edge
@@ -1217,14 +1241,22 @@ class TestJsonDBPersistentOperations:
         assert company_data is not None
         assert edge_data is not None
 
-        # Verify file structure
+        # Verify file structure (JsonDB replaces colons with dots in filenames)
         person_file = (
-            persistent_context.database.base_path / "node" / f"{person.id}.json"
+            persistent_context.database.base_path
+            / "node"
+            / f"{person.id.replace(':', '.')}.json"
         )
         company_file = (
-            persistent_context.database.base_path / "node" / f"{company.id}.json"
+            persistent_context.database.base_path
+            / "node"
+            / f"{company.id.replace(':', '.')}.json"
         )
-        edge_file = persistent_context.database.base_path / "edge" / f"{edge.id}.json"
+        edge_file = (
+            persistent_context.database.base_path
+            / "edge"
+            / f"{edge.id.replace(':', '.')}.json"
+        )
 
         assert person_file.exists()
         assert company_file.exists()

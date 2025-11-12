@@ -379,9 +379,9 @@ print(f"Cleaned up {cleanup_stats['events_cleaned']} events")
 9. **Use permissions and roles** to restrict access to sensitive webhook endpoints
 10. **Test webhook endpoints thoroughly** including edge cases and error conditions
 
-## Response Method Migration
+## Response Methods
 
-Webhook endpoints use standard endpoint response methods. This change provides consistency across all endpoint types.
+Webhook endpoints use standard endpoint response methods, providing consistency across all endpoint types.
 
 # Standard endpoint response methods
 @webhook_endpoint("/webhook/new")

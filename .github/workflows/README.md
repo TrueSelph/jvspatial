@@ -61,8 +61,13 @@ If you prefer to use an API token instead:
 
 ### Workflow Behavior
 
-- **Triggers:** Automatically runs on pushes to the `main` branch
-- **Ignores:** Documentation-only changes (`.md` files, `docs/` directory)
+- **Triggers:** Automatically runs on pushes to the `main` branch (including PR merges)
+- **Source Code Detection:** Only triggers when source code files change:
+  - Python files in `jvspatial/` directory
+  - `setup.py`, `pyproject.toml`, `requirements*.txt`
+  - `jvspatial/version.py` (version changes)
+- **Ignores:** Documentation, examples, tests, and build artifacts
+- **Tag Creation:** Automatically creates git tag if it doesn't exist
 - **Builds:** Creates both wheel and source distribution
 - **Validates:** Runs `twine check` to validate the package before publishing
 - **Publishes:** Uploads to PyPI automatically
@@ -70,11 +75,14 @@ If you prefer to use an API token instead:
 
 ### Version Management
 
-The workflow uses the version specified in `pyproject.toml`. To release a new version:
+The workflow uses the version specified in `jvspatial/version.py`. To release a new version:
 
-1. Update the version in `pyproject.toml`
-2. Commit and push to `main`
-3. The workflow will automatically publish the new version
+1. Update the version in `jvspatial/version.py`
+2. Commit and push to `main` (or merge PR to main)
+3. The workflow will automatically:
+   - Read the version from `version.py`
+   - Create git tag if it doesn't exist
+   - Build and publish to PyPI
 
 ### Troubleshooting
 

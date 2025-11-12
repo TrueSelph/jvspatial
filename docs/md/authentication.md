@@ -692,23 +692,23 @@ from jvspatial.api.auth import (
 )
 ```
 
-## Migration Guide
+## Adding Authentication
 
-### From Unprotected API
+### Protecting Endpoints
 
 ```python
-# Before: Unprotected API
+# Public endpoint (anyone can access)
 @endpoint("/data")
 async def get_data():
     return {"data": "anyone can access"}
 
-# After: Protected API
+# Protected endpoint (requires authentication and permissions)
 @auth_endpoint("/data", permissions=["read_data"])
 async def get_data():
     return {"data": "authenticated users with read_data permission"}
 ```
 
-### Adding Authentication to Existing Server
+### Setting Up Authentication
 
 ```python
 # Step 1: Configure authentication

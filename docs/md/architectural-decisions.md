@@ -1,7 +1,7 @@
 # Architectural Decision Records (ADR)
 
 **Project**: jvspatial
-**Version**: 0.2.0
+**Version**: 0.0.1
 **Date**: 2025-10-20
 
 This document records key architectural decisions made during the development and refactoring of the jvspatial library.
@@ -130,34 +130,28 @@ The `common/` module name was generic and didn't clearly indicate its purpose. U
 
 ### **Decision**
 
-Rename `common/` to `utils/` with backward compatibility:
-- Create new `utils/` module with expanded functionality
-- Add deprecation warning to `common/`
-- Re-export everything from `utils/` in `common/`
-- Remove `common/` in v1.0.0
+Use `utils/` module for utility functions:
+- Provides clear, descriptive naming
+- Follows Python conventions
+- Allows for organized utility categories
 
 ### **Rationale**
 
 - **Clarity**: "utils" is more descriptive than "common"
 - **Convention**: "utils" is a Python convention
 - **Expansion**: Allows adding more utility categories
-- **Backward Compatibility**: Gradual migration path
 
 ### **Consequences**
 
 **Positive**:
 - Clearer module purpose
 - Room for utility expansion
-- No breaking changes (yet)
-
-**Negative**:
-- Two modules during transition
-- Deprecation warnings for users
+- Consistent with Python ecosystem
 
 ### **Alternatives Considered**
 
 1. **Keep as common**: Rejected - unclear naming
-2. **Immediate breaking change**: Rejected - disrupts users
+2. **Immediate change**: Rejected - would disrupt users
 3. **Rename to helpers**: Rejected - less conventional
 
 ---
@@ -414,6 +408,6 @@ When making architectural decisions, we consider:
 ---
 
 **Last Updated**: 2025-10-20
-**Version**: 0.2.0
+**Version**: 0.0.1
 **Maintainer**: JVspatial Team
 
