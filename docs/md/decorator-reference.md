@@ -1,7 +1,7 @@
 # JVspatial Decorator Reference
 
 **Date**: 2025-10-20
-**Version**: 0.2.0
+**Version**: 0.0.1
 
 This document provides a comprehensive reference for all decorators available in the JVspatial library, organized by category and use case.
 
@@ -455,6 +455,6 @@ from jvspatial.api.endpoints.response import (
 ---
 
 **Last Updated**: 2025-10-20
-**Version**: 0.2.0
+**Version**: 0.0.1
 **Maintainer**: JVspatial Team
 

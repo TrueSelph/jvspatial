@@ -290,17 +290,15 @@ Get all protected attributes (includes inherited).
 #### `get_transient_attrs(cls) -> Set[str]`
 Get all transient attributes (includes inherited).
 
-## Migration Guide
+## Protected Attributes
 
-### For Existing Code
-
-The `id` field is now automatically protected in all entities. Update code that modifies IDs:
+The `id` field is automatically protected in all entities. You cannot modify IDs after object creation:
 
 ```python
-# Old (no longer works)
+# This will raise AttributeProtectionError
 obj.id = "new-id"  # ✗ AttributeProtectionError
 
-# New approach
+# Correct approach: Create a new object with the desired ID
 new_obj = MyEntity(id="new-id", **other_attrs)
 ```
 

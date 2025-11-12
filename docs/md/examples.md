@@ -581,13 +581,13 @@ class CreateTask(Walker):
 - Database dependency injection
 - Multiple database contexts
 - Testing patterns with isolation
-- Backward compatibility with original API
+- Clean API design
 
 ### Key Features Shown
 
-**Original API (No Changes Needed)**:
+**Standard API**:
 ```python path=examples/graphcontext_demo.py start=65
-# All original syntax works exactly the same!
+# Standard entity creation syntax
 chicago = await City.create(
     name="Chicago", population=2700000, latitude=41.88, longitude=-87.63
 )

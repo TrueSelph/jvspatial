@@ -1,6 +1,6 @@
 # Import Patterns Guide
 
-**Version**: 0.2.0
+**Version**: 0.0.1
 **Date**: 2025-10-20
 
 This guide documents recommended import patterns for the jvspatial library, ensuring consistency and maintainability across your codebase.
@@ -174,7 +174,6 @@ from jvspatial.utils import (
     memoize,
     retry,
     timeout,
-    deprecated,
     validate_args,
     log_calls,
 )
@@ -182,8 +181,7 @@ from jvspatial.utils import (
 # ✅ Also good: Import from decorators module
 from jvspatial.utils.decorators import memoize, retry
 
-# ⚠️ Deprecated: Import from common (still works but shows warning)
-from jvspatial.common import memoize  # Shows deprecation warning
+# ✅ All imports should use the utils module
 ```
 
 ### **Type System**
@@ -465,11 +463,10 @@ Add to `.vscode/settings.json`:
 - [Module Responsibility Matrix](module-responsibility-matrix.md)
 - [API Architecture](api-architecture.md)
 - [Decorator Reference](decorator-reference.md)
-- [Migration Guide: common → utils](../../MIGRATION_GUIDE_COMMON_TO_UTILS.md)
 
 ---
 
 **Last Updated**: 2025-10-20
-**Version**: 0.2.0
+**Version**: 0.0.1
 **Maintainer**: JVspatial Team
 

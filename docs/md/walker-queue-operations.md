@@ -295,10 +295,10 @@ The queue operations are designed to be robust:
 
 These operations integrate seamlessly with existing Walker functionality:
 
-- The existing `visit()` method continues to work as before
+- The `visit()` method works with queue operations
 - Queue operations can be used within visit hooks during traversal
 - All operations work with the same internal queue used by `spawn()` and traversal logic
-- No breaking changes to existing Walker behavior
+- Queue operations integrate seamlessly with Walker behavior
 
 ## See Also
 

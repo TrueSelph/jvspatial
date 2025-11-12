@@ -52,8 +52,6 @@ Example:
     await walker.spawn(node)
 """
 
-__version__ = "0.2.0"
-
 # API server
 from .api import Server
 from .api.decorators.route import endpoint
@@ -74,6 +72,10 @@ from .db import Database, create_database
 
 # Utilities
 from .utils.serialization import deserialize_datetime, serialize_datetime
+
+# Version is managed in version.py
+# Update version.py to release a new version
+from .version import __version__
 
 __all__ = [
     # Version

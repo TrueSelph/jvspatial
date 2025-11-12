@@ -1,7 +1,7 @@
 # Module Responsibility Matrix
 
 **Date**: 2025-10-20
-**Version**: 0.2.0
+**Version**: 0.0.1
 
 This document provides a clear matrix of module responsibilities, helping developers understand where to find specific functionality.
 
@@ -348,5 +348,5 @@ cache  (depends on: utils)
 ---
 
 **Last Updated**: 2025-10-20
-**Version**: 0.2.0
+**Version**: 0.0.1
 **Maintainer**: JVspatial Team

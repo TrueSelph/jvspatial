@@ -1345,11 +1345,11 @@ class ExampleWalker(Walker):
         exclude_endpoint=True  # Completely excluded from endpoint
     )
 
-    # Mark field as deprecated in API documentation
-    legacy_field: Optional[str] = EndpointField(
+    # Mark field as optional in API documentation
+    optional_field: Optional[str] = EndpointField(
         default=None,
-        endpoint_deprecated=True,
-        description="Use 'userId' instead"
+        endpoint_required=False,
+        description="Optional field example"
     )
 ```
 
@@ -1386,7 +1386,7 @@ EndpointField(
     endpoint_name="customName",     # Custom parameter name in API
     endpoint_required=None,         # Override required status (True/False/None)
     endpoint_hidden=False,          # Hide from OpenAPI docs
-    endpoint_deprecated=False,      # Mark as deprecated
+    endpoint_deprecated=False,      # Mark field as deprecated in OpenAPI
     endpoint_group="groupName",     # Group related parameters
     endpoint_constraints={          # Additional OpenAPI constraints
         "format": "email",

@@ -1,6 +1,6 @@
 # Migration Guide
 
-This guide helps you migrate existing applications to jvspatial, covering common scenarios and patterns.
+This guide helps you migrate existing applications **from other libraries** to jvspatial, covering common scenarios and patterns for adopting jvspatial in your projects.
 
 ## Table of Contents
 

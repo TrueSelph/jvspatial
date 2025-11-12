@@ -1,6 +1,6 @@
 # GraphContext: Database Management & Dependency Injection
 
-GraphContext is jvspatial's centralized database management system that provides clean dependency injection for all database operations. It replaces the previous scattered database connection pattern with a unified, testable, and maintainable approach.
+GraphContext is jvspatial's centralized database management system that provides clean dependency injection for all database operations. It uses a unified, testable, and maintainable approach to database management.
 
 ## Overview
 
@@ -12,7 +12,7 @@ GraphContext serves as the single source of truth for database operations in you
 - **Dependency Injection**: Database instances are injected rather than globally managed
 - **Testing Isolation**: Easy to create isolated test environments with different databases
 - **Configuration Flexibility**: Switch database backends without changing entity code
-- **Backward Compatibility**: Existing API (`Node.create()`, `Edge.create()`) works unchanged
+- **Convenient API**: Simple methods like `Node.create()`, `Edge.create()` for common operations
 - **Explicit Control**: When needed, full programmatic control over database operations
 
 ## Usage Patterns
@@ -92,7 +92,7 @@ async def main():
         value=1000000.0
     )
 
-    # Standard API still works
+    # Standard API methods
     retrieved = await Company.get(apple.id)
     print(f"Company: {retrieved.name}")
 
@@ -479,44 +479,9 @@ async def test_social_network(test_context):
     assert counter.count == 3  # Alice + Bob + Charlie
 ```
 
-## Migration from Previous Versions
+## Using GraphContext
 
-If you're migrating from a previous version that used scattered database management:
-
-### Before (Old Pattern)
-```python
-# Old: Scattered database management
-from jvspatial.core.entities import set_db
-
-db = create_database("json", base_path="./data")
-set_db(db)
-
-user = await User.create(name="Alice")
-```
-
-### After (GraphContext Pattern)
-```python
-# New: Clean GraphContext management
-from jvspatial.core.context import GraphContext
-
-db = create_database("json", base_path="./data")
-ctx = GraphContext(database=db)
-
-# Option 1: Use context directly
-user = await ctx.create_node(User, name="Alice")
-
-# Option 2: Use automatic context (default database)
-user = await User.create(name="Alice")
-```
-
-### Migration Steps
-
-1. **Remove `set_db()` calls**: No longer needed with GraphContext
-2. **Update test setup**: Use GraphContext fixtures instead of global database setup
-3. **Consider explicit context**: For applications needing database control
-4. **Update imports**: Add GraphContext imports where needed
-
-### Backward Compatibility
+GraphContext provides clean, centralized database management:
 
 All existing entity methods continue to work:
 - `await Node.create(**kwargs)`
@@ -711,7 +676,7 @@ db = create_database(
 
 ## Summary
 
-GraphContext provides a clean, testable, and maintainable approach to database management in jvspatial applications. It offers both automatic convenience for simple use cases and explicit control for complex scenarios, while maintaining full backward compatibility with existing code.
+GraphContext provides a clean, testable, and maintainable approach to database management in jvspatial applications. It offers both automatic convenience for simple use cases and explicit control for complex scenarios.
 
 Key takeaways:
 - Use automatic GraphContext for simple applications

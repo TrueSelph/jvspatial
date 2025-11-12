@@ -2,12 +2,32 @@
 
 from setuptools import find_packages, setup
 
-with open("README.md", "r") as f:
+with open("README.md", "r", encoding="utf-8") as f:
     long_description = f.read()
+
+# Read version from version.py without importing the package
+# This avoids dependency issues during setup
+import re
+from pathlib import Path
+
+
+def get_version():
+    """Read version from jvspatial/version.py without importing the package."""
+    version_file = Path(__file__).parent / "jvspatial" / "version.py"
+    with open(version_file, "r") as f:
+        content = f.read()
+        match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+        if match:
+            return match.group(1)
+        else:
+            raise ValueError("Could not find __version__ in jvspatial/version.py")
+
+
+__version__ = get_version()
 
 setup(
     name="jvspatial",
-    version="0.0.1",
+    version=__version__,
     description="An asynchronous object-spatial Python library for persistence and business logic application layers.",
     long_description=long_description,
     long_description_content_type="text/markdown",
