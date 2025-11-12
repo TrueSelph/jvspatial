@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jvspatial"
-version = "0.0.1"
+dynamic = ["version"]  # Version is read from jvspatial/version.py via setup.py
+# Update jvspatial/version.py to release a new version - the workflow will create the tag automatically
 description = "An asynchronous object-spatial Python library for persistence and business logic application layers."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -156,3 +157,6 @@ exclude_lines = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
 ]
+
+# Version is now managed in jvspatial/version.py
+# The workflow reads from there and creates tags automatically

@@ -1,0 +1,139 @@
+name: Publish to PyPI
+
+on:
+  push:
+    branches:
+      - main  # Trigger on push to main branch
+    # Only trigger on actual code changes, not on documentation-only commits
+    # Note: version.py changes WILL trigger the workflow to create tags and publish
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/**'
+
+jobs:
+  publish:
+    name: Build and publish to PyPI
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for trusted publishing
+      contents: write  # Required to create and push git tags
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Read version from version.py
+        id: get_version
+        run: |
+          # Extract version from jvspatial/version.py
+          # Use a simple Python script to read the version string
+          VERSION=$(python3 << 'EOF'
+          import re
+          with open('jvspatial/version.py', 'r') as f:
+              content = f.read()
+              match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+              if match:
+                  print(match.group(1))
+              else:
+                  raise ValueError("Could not find __version__ in jvspatial/version.py")
+          EOF
+          )
+          TAG_NAME="v${VERSION}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "Found version: $VERSION"
+          echo "Tag name: $TAG_NAME"
+
+          # Validate version format (semantic versioning)
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Error: Version must be in format X.Y.Z (e.g., 0.2.0)"
+            exit 1
+          fi
+
+      - name: Check if tag already exists
+        id: check_tag
+        run: |
+          TAG_NAME="${{ steps.get_version.outputs.tag_name }}"
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Tag $TAG_NAME already exists"
+            echo "tag_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Tag $TAG_NAME does not exist, will create it"
+            echo "tag_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create and push git tag
+        if: steps.check_tag.outputs.tag_exists == 'false'
+        run: |
+          TAG_NAME="${{ steps.get_version.outputs.tag_name }}"
+          VERSION="${{ steps.get_version.outputs.version }}"
+
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create tag with message
+          git tag -a "$TAG_NAME" -m "Release version $VERSION"
+
+          # Push tag
+          git push origin "$TAG_NAME"
+          echo "Created and pushed tag: $TAG_NAME"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build package
+        env:
+          VERSION: ${{ steps.get_version.outputs.version }}
+        run: |
+          # Build package with version from version.py
+          python -m build
+
+      - name: Check package
+        run: |
+          twine check dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Trusted publishing (recommended) - no credentials needed
+          # Make sure to enable trusted publishing on PyPI:
+          # 1. Go to https://pypi.org/manage/account/
+          # 2. Go to "API tokens" section
+          # 3. Click "Add a new pending publisher"
+          # 4. Set:
+          #    - PyPI project name: jvspatial
+          #    - Owner: TrueSelph (your GitHub org/username)
+          #    - Repository name: jvspatial
+          #    - Workflow filename: publish.yml
+          #    - Environment name: (leave empty or use 'production')
+          #    - Specific branch: main
+          #
+          # Alternative: If you prefer using API tokens instead:
+          # 1. Create an API token on PyPI: https://pypi.org/manage/account/token/
+          # 2. Add it as a GitHub secret named PYPI_API_TOKEN
+          # 3. Uncomment the following lines and comment out the trusted publishing section:
+          #
+          # password: ${{ secrets.PYPI_API_TOKEN }}
+          # username: __token__
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
