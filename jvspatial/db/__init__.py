@@ -36,6 +36,14 @@ except ImportError:  # pragma: no cover - mongo optional
     MongoDB = None  # type: ignore[misc]
     _MONGODB_AVAILABLE = False
 
+try:  # Optional dependency (requires aioboto3)
+    from .dynamodb import DynamoDB  # noqa: F401
+
+    _DYNAMODB_AVAILABLE = True
+except ImportError:  # pragma: no cover - dynamodb optional
+    DynamoDB = None  # type: ignore[misc]
+    _DYNAMODB_AVAILABLE = False
+
 __all__ = [
     "Database",
     "DatabaseError",
@@ -60,3 +68,6 @@ if _SQLITE_AVAILABLE:
 
 if _MONGODB_AVAILABLE:
     __all__.append("MongoDB")
+
+if _DYNAMODB_AVAILABLE:
+    __all__.append("DynamoDB")

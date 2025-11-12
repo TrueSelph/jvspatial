@@ -52,6 +52,62 @@ python examples/api/unauthenticated_endpoints_example.py
 
 **Access**: `http://127.0.0.1:8000/docs`
 
+### 3. **Lambda Serverless Deployment Example** ⭐
+📁 **File**: [`lambda_example.py`](lambda_example.py)
+
+**AWS Lambda serverless deployment with Mangum**
+
+This example demonstrates how to deploy a jvspatial FastAPI server to AWS Lambda using Mangum as the ASGI adapter. It shows:
+
+- ✅ Serverless-compatible FastAPI application
+- ✅ Automatic Mangum integration via `get_lambda_handler()`
+- ✅ Works with AWS Lambda and API Gateway
+- ✅ Supports all jvspatial features (walkers, endpoints, etc.)
+- ✅ Database configuration for Lambda environment
+- ✅ Local testing and Lambda deployment patterns
+
+**When to use**: Deploy your jvspatial API to AWS Lambda or other serverless platforms.
+
+**Installation**:
+```bash
+pip install mangum>=0.17.0
+# Or install optional dependencies:
+pip install jvspatial[serverless]
+```
+
+**Usage**:
+```python
+from jvspatial.api import Server, endpoint
+
+# Enable serverless mode - handler is automatically created
+server = Server(
+    title="Lambda API",
+    serverless_mode=True,  # Automatic handler setup
+    serverless_lifespan="auto",
+)
+
+@endpoint("/hello")
+async def hello():
+    return {"message": "Hello from Lambda!"}
+
+# Access the automatically created handler
+handler = server.lambda_handler  # Direct property access
+# Or: handler = server.get_lambda_handler()  # Method access
+```
+
+**For AWS Lambda deployment**:
+1. Package this file and dependencies
+2. Set Lambda handler to: `lambda_example.handler`
+3. Configure API Gateway trigger
+4. Set environment variables for database configuration
+
+**Run it locally**:
+```bash
+python examples/api/lambda_example.py
+```
+
+**Access**: `http://127.0.0.1:8000/docs`
+
 ## Key Differences
 
 | Feature | Authenticated Example | Unauthenticated Example |

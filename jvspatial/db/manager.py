@@ -81,6 +81,26 @@ class DatabaseManager:
 
                 db_path = os.getenv("JVSPATIAL_SQLITE_PATH", "jvdb/sqlite/jvspatial.db")
                 self._prime_database = SQLiteDB(db_path=db_path)
+            elif db_type == "dynamodb":
+                try:
+                    from .dynamodb import DynamoDB
+                except ImportError as exc:  # pragma: no cover - dependency missing
+                    raise ImportError(
+                        "aioboto3 is required for DynamoDB support. Install it with: pip install aioboto3"
+                    ) from exc
+
+                table_name = os.getenv("JVSPATIAL_DYNAMODB_TABLE_NAME", "jvspatial")
+                region_name = os.getenv("JVSPATIAL_DYNAMODB_REGION", "us-east-1")
+                endpoint_url = os.getenv("JVSPATIAL_DYNAMODB_ENDPOINT_URL")
+                aws_access_key_id = os.getenv("AWS_ACCESS_KEY_ID")
+                aws_secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+                self._prime_database = DynamoDB(
+                    table_name=table_name,
+                    region_name=region_name,
+                    endpoint_url=endpoint_url,
+                    aws_access_key_id=aws_access_key_id,
+                    aws_secret_access_key=aws_secret_access_key,
+                )
             else:
                 # Fallback to JSON
                 base_path = os.getenv("JVSPATIAL_JSONDB_PATH", "jvdb")

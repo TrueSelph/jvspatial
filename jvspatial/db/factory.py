@@ -21,6 +21,14 @@ except ImportError:  # pragma: no cover - dependency missing
     SQLiteDB = None  # type: ignore[misc]
     _SQLITE_AVAILABLE = False
 
+try:  # Optional dependency (requires aioboto3)
+    from .dynamodb import DynamoDB  # noqa: F401
+
+    _DYNAMODB_AVAILABLE = True
+except ImportError:  # pragma: no cover - dependency missing
+    DynamoDB = None  # type: ignore[misc]
+    _DYNAMODB_AVAILABLE = False
+
 # Registry for custom database implementations
 _DATABASE_REGISTRY: Dict[str, Callable[..., Database]] = {}
 
@@ -59,7 +67,7 @@ def register_database_type(db_type: str, factory: Callable[..., Database]) -> No
     Raises:
         ValueError: If db_type is already registered or conflicts with built-in types
     """
-    if db_type in ("json", "mongodb", "sqlite"):
+    if db_type in ("json", "mongodb", "sqlite", "dynamodb"):
         raise ValueError(f"Cannot register '{db_type}' - it's a built-in database type")
     if db_type in _DATABASE_REGISTRY:
         raise ValueError(
@@ -78,7 +86,7 @@ def unregister_database_type(db_type: str) -> None:
     Raises:
         ValueError: If db_type is not registered or is a built-in type
     """
-    if db_type in ("json", "mongodb", "sqlite"):
+    if db_type in ("json", "mongodb", "sqlite", "dynamodb"):
         raise ValueError(
             f"Cannot unregister '{db_type}' - it's a built-in database type"
         )
@@ -102,6 +110,11 @@ def list_database_types() -> Dict[str, str]:
         types["sqlite"] = "SQLite database (built-in)"
     else:
         types["sqlite"] = "SQLite database (requires aiosqlite)"
+
+    if _DYNAMODB_AVAILABLE:
+        types["dynamodb"] = "DynamoDB database (built-in, for AWS Lambda)"
+    else:
+        types["dynamodb"] = "DynamoDB database (requires aioboto3)"
     for db_type, factory in _DATABASE_REGISTRY.items():
         types[db_type] = f"Custom database: {factory.__name__}"
     return types
@@ -115,11 +128,11 @@ def create_database(
 ) -> Database:
     """Create a database instance with direct instantiation.
 
-    Supports both built-in database types ('json', 'sqlite', 'mongodb') and custom
+    Supports both built-in database types ('json', 'sqlite', 'mongodb', 'dynamodb') and custom
     database types registered via register_database_type().
 
     Args:
-        db_type: Database type ('json', 'mongodb', or a registered custom type)
+        db_type: Database type ('json', 'mongodb', 'sqlite', 'dynamodb', or a registered custom type)
         register: If True, register the database with DatabaseManager
         name: Database name for registration (required if register=True)
         **kwargs: Database-specific configuration passed to the database constructor
@@ -137,6 +150,9 @@ def create_database(
 
         # SQLite database (file-based storage)
         db = create_database("sqlite", db_path="./data/app.db")
+
+        # DynamoDB database (AWS Lambda serverless)
+        db = create_database("dynamodb", table_name="myapp", region_name="us-east-1")
 
         # Custom database (after registration)
         db = create_database("my_custom", connection_string="custom://",
@@ -185,6 +201,37 @@ def create_database(
             or os.getenv("JVSPATIAL_SQLITE_PATH", "jvdb/sqlite/jvspatial.db")
         )
         db = SQLiteDB(db_path=db_path, **sqlite_kwargs)
+
+    elif db_type == "dynamodb":
+        if not _DYNAMODB_AVAILABLE:
+            raise ImportError(
+                "aioboto3 is required for DynamoDB support. Install it with: pip install aioboto3"
+            )
+
+        from .dynamodb import DynamoDB
+
+        # Provide defaults from environment
+        dynamodb_kwargs = kwargs.copy()
+        if "table_name" not in dynamodb_kwargs:
+            dynamodb_kwargs["table_name"] = os.getenv(
+                "JVSPATIAL_DYNAMODB_TABLE_NAME", "jvspatial"
+            )
+        if "region_name" not in dynamodb_kwargs:
+            dynamodb_kwargs["region_name"] = os.getenv(
+                "JVSPATIAL_DYNAMODB_REGION", "us-east-1"
+            )
+        if "endpoint_url" not in dynamodb_kwargs:
+            dynamodb_kwargs["endpoint_url"] = os.getenv(
+                "JVSPATIAL_DYNAMODB_ENDPOINT_URL"
+            )
+        if "aws_access_key_id" not in dynamodb_kwargs:
+            dynamodb_kwargs["aws_access_key_id"] = os.getenv("AWS_ACCESS_KEY_ID")
+        if "aws_secret_access_key" not in dynamodb_kwargs:
+            dynamodb_kwargs["aws_secret_access_key"] = os.getenv(
+                "AWS_SECRET_ACCESS_KEY"
+            )
+
+        db = DynamoDB(**dynamodb_kwargs)
 
     # Check registered custom types
     elif db_type in _DATABASE_REGISTRY:
