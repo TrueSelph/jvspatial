@@ -43,6 +43,80 @@ class APIErrorHandler:
             response_data["path"] = request.url.path
             return JSONResponse(status_code=exc.status_code, content=response_data)
 
+        # Handle ValidationError with detailed messages
+        from pydantic import ValidationError
+
+        if isinstance(exc, ValidationError):
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Validation error: {exc}", exc_info=False)
+
+            # Extract detailed validation error information
+            error_details = []
+            if hasattr(exc, "errors"):
+                for err in exc.errors():
+                    field_path = " -> ".join(str(loc) for loc in err.get("loc", []))
+                    error_type = err.get("type", "validation_error")
+                    error_msg = err.get("msg", "Validation failed")
+                    error_details.append(
+                        {"field": field_path, "type": error_type, "message": error_msg}
+                    )
+
+            error_message = "Validation failed"
+            if error_details:
+                # Create a more readable error message
+                field_errors = [f"{e['field']}: {e['message']}" for e in error_details]
+                error_message = "Validation failed: " + "; ".join(field_errors)
+            elif str(exc):
+                error_message = f"Validation failed: {str(exc)}"
+
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error_code": "validation_error",
+                    "message": error_message,
+                    "details": error_details if error_details else None,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "path": request.url.path,
+                    "request_id": getattr(request.state, "request_id", None),
+                },
+            )
+
+        # Handle HTTPException from FastAPI (raised by raise_error)
+        from fastapi import HTTPException
+
+        if isinstance(exc, HTTPException):
+            logger = logging.getLogger(__name__)
+            # Determine error code from status code
+            error_code_map = {
+                400: "bad_request",
+                401: "unauthorized",
+                403: "forbidden",
+                404: "not_found",
+                409: "conflict",
+                422: "validation_error",
+                500: "internal_error",
+            }
+            error_code = error_code_map.get(exc.status_code, "internal_error")
+
+            # Log based on status code severity
+            if exc.status_code >= 500:
+                logger.error(
+                    f"HTTP Error [{exc.status_code}]: {exc.detail}", exc_info=True
+                )
+            else:
+                logger.warning(f"HTTP Error [{exc.status_code}]: {exc.detail}")
+
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={
+                    "error_code": error_code,
+                    "message": str(exc.detail) if exc.detail else "An error occurred",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "path": request.url.path,
+                    "request_id": getattr(request.state, "request_id", None),
+                },
+            )
+
         # Handle unexpected errors
         logger = logging.getLogger(__name__)
         logger.error(f"Unexpected error: {exc}", exc_info=True)
@@ -50,7 +124,7 @@ class APIErrorHandler:
             status_code=500,
             content={
                 "error_code": "internal_error",
-                "message": "An unexpected error occurred",
+                "message": f"An unexpected error occurred: {str(exc)}",
                 "timestamp": datetime.utcnow().isoformat(),
                 "path": request.url.path,
                 "request_id": getattr(request.state, "request_id", None),

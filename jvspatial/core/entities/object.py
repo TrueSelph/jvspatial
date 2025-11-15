@@ -221,14 +221,21 @@ class Object(AttributeMixin, BaseModel):
         await context.save(self)
         return self
 
-    async def delete(self: "Object", cascade: bool = True) -> None:
+    async def delete(self: "Object", cascade: bool = False) -> None:
         """Delete the object from the database.
 
+        Object is a fundamental entity type that is NOT connected by edges on the graph.
+        This method simply removes the entity from the database. The cascade parameter
+        is ignored for Object entities as they have no graph connections.
+
+        For Node entities, use Node.delete() which handles cascading deletion of edges
+        and dependent nodes.
+
         Args:
-            cascade: Whether to delete related entities
+            cascade: Ignored for Object entities (kept for API compatibility)
         """
         context = await self.get_context()
-        await context.delete(self, cascade=cascade)
+        await context.delete(self, cascade=False)
 
     @classmethod
     async def get(cls: Type["Object"], obj_id: str) -> Optional["Object"]:

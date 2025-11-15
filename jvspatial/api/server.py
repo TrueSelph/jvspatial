@@ -251,7 +251,11 @@ class Server:
         # Register endpoint
         @auth_router.post("/register", response_model=UserResponse)
         async def register(user_data: UserCreate):
-            """Register a new user."""
+            """Register a new user.
+
+            The email field is validated by Pydantic's EmailStr type,
+            which ensures proper email format before this function is called.
+            """
             try:
                 # Initialize authentication service with current context
                 auth_service = get_auth_service()
@@ -1046,6 +1050,71 @@ class Server:
             )
 
         return removed_count
+
+    def disable_auth_endpoint(self: "Server", path: str) -> bool:
+        """Disable a specific authentication endpoint by removing it from the auth router.
+
+        This method removes routes from the auth router before the app is created.
+        It only works with auth endpoints registered through the auth router.
+
+        Args:
+            path: The path of the auth endpoint to disable (e.g., "/register", "/login")
+                  Can be relative to router prefix or full path including prefix.
+
+        Returns:
+            True if the endpoint was found and disabled, False otherwise
+        """
+        if not hasattr(self, "_auth_router") or self._auth_router is None:
+            self._logger.debug("Auth router not found - cannot disable endpoint")
+            return False
+
+        # Normalize path (ensure it starts with "/")
+        normalized_path = path if path.startswith("/") else f"/{path}"
+
+        # Get router prefix (default is "/auth")
+        router_prefix = getattr(self._auth_router, "prefix", "/auth")
+        if not router_prefix:
+            router_prefix = ""
+
+        # Build full path with prefix for matching
+        # FastAPI routes store the full path including the router prefix
+        full_path_with_prefix = f"{router_prefix}{normalized_path}"
+
+        # Find and remove routes matching the path
+        routes_to_remove = []
+        for route in self._auth_router.routes:
+            # FastAPI routes include the router prefix in the path
+            # So "/auth/register" is stored as "/auth/register", not "/register"
+            if hasattr(route, "path") and route.path == full_path_with_prefix:
+                routes_to_remove.append(route)
+                self._logger.debug(
+                    f"Found route to remove: {route.path} (matches {full_path_with_prefix})"
+                )
+
+        if routes_to_remove:
+            for route in routes_to_remove:
+                self._auth_router.routes.remove(route)
+            self._logger.info(f"🔒 Disabled auth endpoint: {full_path_with_prefix}")
+
+            # If the app has already been created, mark it for rebuilding
+            # so the changes take effect
+            if hasattr(self, "app") and self.app is not None:
+                self._app_needs_rebuild = True
+                self._logger.debug("App already exists - marked for rebuild")
+
+            return True
+        else:
+            # Log available routes for debugging
+            available_paths = [
+                route.path
+                for route in self._auth_router.routes
+                if hasattr(route, "path")
+            ]
+            self._logger.debug(
+                f"Could not find endpoint {full_path_with_prefix} to disable. "
+                f"Available routes: {available_paths}"
+            )
+            return False
 
     async def list_function_endpoints(self: "Server") -> Dict[str, Dict[str, Any]]:
         """Get information about all registered function endpoints.

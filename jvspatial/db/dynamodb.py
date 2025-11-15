@@ -14,6 +14,7 @@ except ImportError:
     ClientError = Exception  # type: ignore[assignment, misc]
 
 from jvspatial.db.database import Database
+from jvspatial.db.query import QueryEngine
 from jvspatial.exceptions import DatabaseError
 
 
@@ -288,18 +289,9 @@ class DynamoDB(Database):
                     # Deserialize data from JSON string
                     data = json.loads(item["data"]["S"])
 
-                    # Client-side filtering for simple queries
-                    if not query:
+                    # Use QueryEngine for proper operator support ($or, $and, etc.)
+                    if not query or QueryEngine.match(data, query):
                         results.append(data)
-                    else:
-                        # Simple equality matching
-                        match = True
-                        for key, value in query.items():
-                            if data.get(key) != value:
-                                match = False
-                                break
-                        if match:
-                            results.append(data)
 
                 # Handle pagination if needed
                 while "LastEvaluatedKey" in response:

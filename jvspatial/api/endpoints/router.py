@@ -151,6 +151,35 @@ class BaseRouter:
             ]
         }
 
+        # Extract summary and description from docstring if not explicitly provided
+        # FastAPI uses __doc__ automatically, but we should also extract summary/description
+        # for better OpenAPI documentation. Prefer endpoint's docstring, then source_obj's docstring
+        if not fastapi_kwargs.get("summary") and not fastapi_kwargs.get("description"):
+            # Prefer endpoint's docstring (which may have been set from source_obj)
+            docstring = getattr(endpoint, "__doc__", None)
+            # If endpoint doesn't have a docstring, try source_obj (e.g., Walker class)
+            if not docstring and source_obj:
+                docstring = getattr(source_obj, "__doc__", None)
+
+            if docstring:
+                # Clean and split docstring into lines
+                # Remove common indentation and empty lines
+                doc_lines = [
+                    line.strip()
+                    for line in docstring.strip().split("\n")
+                    if line.strip()
+                ]
+                if doc_lines:
+                    # First non-empty line is the summary
+                    fastapi_kwargs["summary"] = doc_lines[0]
+                    # Rest is the description
+                    if len(doc_lines) > 1:
+                        fastapi_kwargs["description"] = "\n".join(doc_lines[1:])
+                    elif len(doc_lines[0]) > 120:
+                        # If first line is very long, use it as description and create a shorter summary
+                        fastapi_kwargs["summary"] = doc_lines[0][:120] + "..."
+                        fastapi_kwargs["description"] = doc_lines[0]
+
         # Add response model if defined
         if response_schema:
             fastapi_kwargs["response_model"] = response_schema
@@ -390,8 +419,14 @@ class EndpointRouter(BaseRouter):
                 description=field.description,
             )
 
+        # Get Walker class docstring for the handler function
+        walker_docstring = (
+            (walker_cls.__doc__ or f"Execute {walker_cls.__name__} Walker")
+            if walker_cls.__doc__
+            else f"Execute {walker_cls.__name__} Walker"
+        )
+
         async def get_handler(**kwargs) -> Dict[str, Any]:
-            """Handle GET request."""
             try:
                 # Create walker instance
                 start_node = kwargs.pop("start_node", None)
@@ -484,20 +519,45 @@ class EndpointRouter(BaseRouter):
                         if not isinstance(report, dict):
                             continue
 
-                        # Check for error reports
-                        if (
-                            isinstance(report.get("status"), int)
-                            and report["status"] >= 400
-                        ):
-                            error_msg = str(
-                                report.get("error")
-                                or report.get("detail")
-                                or "Unknown error"
-                            )
-                            self.raise_error(
-                                report["status"],
-                                error_msg,
-                            )
+                        # Check for error reports - look for status field or error field
+                        status = report.get("status")
+                        error_msg = report.get("error") or report.get("detail")
+
+                        # Determine error status code
+                        if isinstance(status, int) and status >= 400:
+                            # Explicit status code in report
+                            error_status = status
+                        elif error_msg:
+                            # Error message present - determine status from context
+                            if report.get("conflict"):
+                                error_status = 409  # Conflict
+                            elif report.get("not_found"):
+                                error_status = 404  # Not Found
+                            elif report.get("unauthorized"):
+                                error_status = 401  # Unauthorized
+                            elif report.get("forbidden"):
+                                error_status = 403  # Forbidden
+                            elif report.get("validation_error"):
+                                error_status = 422  # Unprocessable Entity
+                            else:
+                                error_status = (
+                                    400  # Bad Request (default for error messages)
+                                )
+                        else:
+                            error_status = None
+
+                        # If this is an error report, raise it before validation
+                        if error_status is not None:
+                            error_message = str(error_msg or "An error occurred")
+                            # Include additional details if available
+                            details = {
+                                k: v
+                                for k, v in report.items()
+                                if k not in ("status", "error", "detail")
+                            }
+                            if details:
+                                error_message += f" | Details: {details}"
+                            self.raise_error(error_status, error_message)
 
                         response.update(report)
 
@@ -513,7 +573,24 @@ class EndpointRouter(BaseRouter):
                     )
 
             except ValidationError as e:
-                self.raise_error(422, str(e))
+                # Extract useful information from ValidationError
+                error_details = []
+                if hasattr(e, "errors"):
+                    for err in e.errors():
+                        field_path = " -> ".join(str(loc) for loc in err.get("loc", []))
+                        error_type = err.get("type", "validation_error")
+                        error_msg = err.get("msg", "Validation failed")
+                        error_details.append(
+                            f"{field_path}: {error_msg} ({error_type})"
+                        )
+
+                error_message = "Validation failed"
+                if error_details:
+                    error_message = "Validation failed: " + "; ".join(error_details)
+                elif str(e):
+                    error_message = f"Validation failed: {str(e)}"
+
+                self.raise_error(422, error_message)
                 raise  # Unreachable, but helps type checkers
             except Exception as e:  # pragma: no cover
                 # Ensure walker endpoint errors are consistently reported
@@ -533,6 +610,10 @@ class EndpointRouter(BaseRouter):
                 )
             )
         get_handler.__signature__ = _inspect.Signature(parameters=sig_params)  # type: ignore[attr-defined]
+
+        # Set the docstring and name from Walker class
+        get_handler.__doc__ = walker_docstring
+        get_handler.__name__ = f"{walker_cls.__name__}_endpoint"
 
         # Add route
         self.add_route(
@@ -565,10 +646,17 @@ class EndpointRouter(BaseRouter):
 
         if param_model is not None:
             # Walker has parameters - create handler with parameter model
+            # Get Walker class docstring for the handler function
+            walker_docstring = (
+                (walker_cls.__doc__ or f"Execute {walker_cls.__name__} Walker")
+                if walker_cls.__doc__
+                else f"Execute {walker_cls.__name__} Walker"
+            )
+
+            # Create handler function - docstring will be set from Walker class
             async def post_handler(
                 params: Any = DEFAULT_BODY,  # type: ignore[assignment]
             ) -> Dict[str, Any]:  # noqa: B008
-                """Handle POST request for Walker endpoint."""
                 # Copy auth metadata from walker class to handler
                 from typing import Any, cast
 
@@ -594,11 +682,8 @@ class EndpointRouter(BaseRouter):
                     "is_function": False,
                 }
 
-                # Set proper metadata for OpenAPI
-                handler.__doc__ = (
-                    walker_cls.__doc__ or f"Execute {walker_cls.__name__} Walker"
-                )
                 handler.__name__ = f"{walker_cls.__name__}_endpoint"
+
                 try:
                     # Extract parameters
                     if isinstance(params, dict):
@@ -719,20 +804,45 @@ class EndpointRouter(BaseRouter):
                             if not isinstance(report, dict):
                                 continue
 
-                            # Check for error reports
-                            if (
-                                isinstance(report.get("status"), int)
-                                and report["status"] >= 400
-                            ):
-                                error_msg = str(
-                                    report.get("error")
-                                    or report.get("detail")
-                                    or "Unknown error"
-                                )
-                                self.raise_error(
-                                    report["status"],
-                                    error_msg,
-                                )
+                            # Check for error reports - look for status field or error field
+                            status = report.get("status")
+                            error_msg = report.get("error") or report.get("detail")
+
+                            # Determine error status code
+                            if isinstance(status, int) and status >= 400:
+                                # Explicit status code in report
+                                error_status = status
+                            elif error_msg:
+                                # Error message present - determine status from context
+                                if report.get("conflict"):
+                                    error_status = 409  # Conflict
+                                elif report.get("not_found"):
+                                    error_status = 404  # Not Found
+                                elif report.get("unauthorized"):
+                                    error_status = 401  # Unauthorized
+                                elif report.get("forbidden"):
+                                    error_status = 403  # Forbidden
+                                elif report.get("validation_error"):
+                                    error_status = 422  # Unprocessable Entity
+                                else:
+                                    error_status = (
+                                        400  # Bad Request (default for error messages)
+                                    )
+                            else:
+                                error_status = None
+
+                            # If this is an error report, raise it before validation
+                            if error_status is not None:
+                                error_message = str(error_msg or "An error occurred")
+                                # Include additional details if available
+                                details = {
+                                    k: v
+                                    for k, v in report.items()
+                                    if k not in ("status", "error", "detail")
+                                }
+                                if details:
+                                    error_message += f" | Details: {details}"
+                                self.raise_error(error_status, error_message)
 
                             response.update(report)
 
@@ -748,17 +858,47 @@ class EndpointRouter(BaseRouter):
                         )
 
                 except ValidationError as e:
-                    self.raise_error(422, str(e))
+                    # Extract useful information from ValidationError
+                    error_details = []
+                    if hasattr(e, "errors"):
+                        for err in e.errors():
+                            field_path = " -> ".join(
+                                str(loc) for loc in err.get("loc", [])
+                            )
+                            error_type = err.get("type", "validation_error")
+                            error_msg = err.get("msg", "Validation failed")
+                            error_details.append(
+                                f"{field_path}: {error_msg} ({error_type})"
+                            )
+
+                    error_message = "Validation failed"
+                    if error_details:
+                        error_message = "Validation failed: " + "; ".join(error_details)
+                    elif str(e):
+                        error_message = f"Validation failed: {str(e)}"
+
+                    self.raise_error(422, error_message)
                     raise  # Unreachable, but helps type checkers
                 except Exception as e:  # pragma: no cover
                     # Ensure walker endpoint errors are consistently reported
                     self.raise_error(500, f"Walker execution error: {e}")
                     raise
 
+            # Set the docstring from Walker class - MUST be done outside the function
+            # so FastAPI can read it when the route is registered
+            post_handler.__doc__ = walker_docstring
+            post_handler.__name__ = f"{walker_cls.__name__}_endpoint"
+
         else:
             # Walker has no parameters - create handler without parameter model
+            # Get Walker class docstring for the handler function
+            walker_docstring = (
+                (walker_cls.__doc__ or f"Execute {walker_cls.__name__} Walker")
+                if walker_cls.__doc__
+                else f"Execute {walker_cls.__name__} Walker"
+            )
+
             async def post_handler() -> Dict[str, Any]:  # type: ignore[misc]
-                """Handle POST request for Walker endpoint with no parameters."""
                 # Copy auth metadata from walker class to handler
                 from typing import Any, cast
 
@@ -784,11 +924,8 @@ class EndpointRouter(BaseRouter):
                     "is_function": False,
                 }
 
-                # Set proper metadata for OpenAPI
-                handler.__doc__ = (
-                    walker_cls.__doc__ or f"Execute {walker_cls.__name__} Walker"
-                )
                 handler.__name__ = f"{walker_cls.__name__}_endpoint"
+
                 try:
                     # Create walker instance with no parameters
                     walker = walker_cls()
@@ -883,20 +1020,45 @@ class EndpointRouter(BaseRouter):
                             if not isinstance(report, dict):
                                 continue
 
-                            # Check for error reports
-                            if (
-                                isinstance(report.get("status"), int)
-                                and report["status"] >= 400
-                            ):
-                                error_msg = str(
-                                    report.get("error")
-                                    or report.get("detail")
-                                    or "Unknown error"
-                                )
-                                self.raise_error(
-                                    report["status"],
-                                    error_msg,
-                                )
+                            # Check for error reports - look for status field or error field
+                            status = report.get("status")
+                            error_msg = report.get("error") or report.get("detail")
+
+                            # Determine error status code
+                            if isinstance(status, int) and status >= 400:
+                                # Explicit status code in report
+                                error_status = status
+                            elif error_msg:
+                                # Error message present - determine status from context
+                                if report.get("conflict"):
+                                    error_status = 409  # Conflict
+                                elif report.get("not_found"):
+                                    error_status = 404  # Not Found
+                                elif report.get("unauthorized"):
+                                    error_status = 401  # Unauthorized
+                                elif report.get("forbidden"):
+                                    error_status = 403  # Forbidden
+                                elif report.get("validation_error"):
+                                    error_status = 422  # Unprocessable Entity
+                                else:
+                                    error_status = (
+                                        400  # Bad Request (default for error messages)
+                                    )
+                            else:
+                                error_status = None
+
+                            # If this is an error report, raise it before validation
+                            if error_status is not None:
+                                error_message = str(error_msg or "An error occurred")
+                                # Include additional details if available
+                                details = {
+                                    k: v
+                                    for k, v in report.items()
+                                    if k not in ("status", "error", "detail")
+                                }
+                                if details:
+                                    error_message += f" | Details: {details}"
+                                self.raise_error(error_status, error_message)
 
                             response.update(report)
 
@@ -912,8 +1074,32 @@ class EndpointRouter(BaseRouter):
                         )
 
                 except ValidationError as e:
-                    self.raise_error(422, str(e))
+                    # Extract useful information from ValidationError
+                    error_details = []
+                    if hasattr(e, "errors"):
+                        for err in e.errors():
+                            field_path = " -> ".join(
+                                str(loc) for loc in err.get("loc", [])
+                            )
+                            error_type = err.get("type", "validation_error")
+                            error_msg = err.get("msg", "Validation failed")
+                            error_details.append(
+                                f"{field_path}: {error_msg} ({error_type})"
+                            )
+
+                    error_message = "Validation failed"
+                    if error_details:
+                        error_message = "Validation failed: " + "; ".join(error_details)
+                    elif str(e):
+                        error_message = f"Validation failed: {str(e)}"
+
+                    self.raise_error(422, error_message)
                     raise  # Unreachable, but helps type checkers
+
+            # Set the docstring from Walker class - MUST be done outside the function
+            # so FastAPI can read it when the route is registered
+            post_handler.__doc__ = walker_docstring
+            post_handler.__name__ = f"{walker_cls.__name__}_endpoint"
 
         # Add route
         self.add_route(

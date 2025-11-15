@@ -471,16 +471,38 @@ class GraphContext:
         await self._add_to_cache(entity.id, entity)
         return entity
 
-    async def delete(self, entity, cascade: bool = True) -> None:
+    async def delete(self, entity, cascade: bool = False) -> None:
         """Delete an entity from the database.
+
+        For Node entities, this method delegates to Node.delete() which handles
+        cascading deletion of edges and dependent nodes. For Object entities (including
+        Edge), this method performs simple entity deletion.
 
         Args:
             entity: Entity instance to delete
-            cascade: Whether to delete related entities
+            cascade: Whether to cascade deletion (only applies to Node entities)
         """
-        if cascade and entity.type_code == "n":
-            await self._cascade_delete(entity)
+        # For Node entities, delegate to Node.delete() to ensure proper edge cleanup
+        # and cascade handling. However, if cascade=False and we're being called
+        # from within Node.delete() (which has already cleaned up edges), we should
+        # do simple deletion to avoid infinite recursion.
+        from .entities.node import Node
 
+        if isinstance(entity, Node):
+            # Check if this is a recursive call from Node.delete() by checking
+            # if cascade=False and the node has no edges (already cleaned up)
+            if not cascade and len(entity.edge_ids) == 0:
+                # Node.delete() has already cleaned up edges, just delete the entity
+                collection = self._get_collection_name(entity.type_code)
+                db = self.database
+                await db.delete(collection, entity.id)
+                await self._cache.delete(entity.id)
+            else:
+                # Delegate to Node.delete() for proper edge cleanup and cascading
+                await entity.delete(cascade=cascade)
+            return
+
+        # For Object entities (including Edge), perform simple deletion
         collection = self._get_collection_name(entity.type_code)
         db = self.database
         await db.delete(collection, entity.id)
@@ -533,22 +555,6 @@ class GraphContext:
         return await export_graph(
             self, format=format, output_file=output_file, **kwargs
         )
-
-    async def _cascade_delete(self, node_entity) -> None:
-        """Delete related objects when cascading."""
-        if hasattr(node_entity, "edge_ids"):
-            edge_ids = getattr(node_entity, "edge_ids", [])
-
-            # Import Edge here to avoid circular imports
-            from .entities import Edge
-
-            for edge_id in edge_ids:
-                try:
-                    edge = self.get(Edge, edge_id)
-                    if edge:
-                        await self.delete(edge, cascade=False)
-                except Exception:
-                    pass  # Continue with other edges
 
     def _get_collection_name(self, type_code: str) -> str:
         """Get the database collection name for a type code."""
@@ -621,21 +627,27 @@ class GraphContext:
     async def delete_node(self, node, cascade: bool = True):
         """Delete a node with this context.
 
+        Note: This method calls Node.delete() which handles cascading deletion
+        of edges and dependent nodes. The cascade parameter is passed to Node.delete().
+
         Args:
             node: Node instance to delete
-            cascade: Whether to cascade delete related edges
+            cascade: Whether to cascade delete related edges and dependent nodes
 
         Returns:
             True if deletion was successful
         """
         try:
-            await self.delete(node, cascade=cascade)
+            # Use Node.delete() which handles cascading
+            await node.delete(cascade=cascade)
             return True
         except Exception:
             return False
 
     async def delete_edge(self, edge):
         """Delete an edge with this context.
+
+        Edge entities are not connected by edges and are simply removed from the database.
 
         Args:
             edge: Edge instance to delete

@@ -226,24 +226,63 @@ def _wrap_function_with_params(
     has_body_params = param_model is not None
 
     if has_path_params and has_body_params:
-        # Function has both path and body parameters - create wrapper that accepts both
+        # Function has both path and body parameters - create wrapper with proper signature
+        # Create a proper function signature that FastAPI can introspect
+        # Body is already imported above
+
+        # Build parameters for the new signature
+        new_params = []
+
+        # Add path parameters first (preserve their original annotations)
+        for param_name in func_sig.parameters:
+            if param_name in path_params:
+                orig_param = func_sig.parameters[param_name]
+                new_params.append(
+                    inspect.Parameter(
+                        param_name,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        default=orig_param.default,
+                        annotation=orig_param.annotation,
+                    )
+                )
+
+        # Add body parameter with the param_model type
+        new_params.append(
+            inspect.Parameter(
+                "body",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=Body(),
+                annotation=param_model,
+            )
+        )
+
+        # Create new signature
+        new_sig = inspect.Signature(
+            new_params, return_annotation=func_sig.return_annotation
+        )
+
         async def wrapped_func(*args: Any, **kwargs: Any) -> Any:
             """Wrapped function with parameter validation for both path and body."""
             # Separate path params from body params
             body_data = {}
-            if "params" in kwargs and isinstance(kwargs["params"], param_model):
-                # Extract body parameters from the model
-                params_obj = kwargs.pop("params")
-                if hasattr(params_obj, "model_dump"):
-                    body_data = params_obj.model_dump(
-                        exclude_none=False, exclude_unset=False
-                    )
-                else:
-                    body_data = {
-                        k: getattr(params_obj, k)
-                        for k in dir(params_obj)
-                        if not k.startswith("_")
-                    }
+            body_obj = kwargs.pop("body", None)
+
+            if body_obj is not None:
+                if isinstance(body_obj, param_model):
+                    # Extract body parameters from the model
+                    if hasattr(body_obj, "model_dump"):
+                        body_data = body_obj.model_dump(
+                            exclude_none=False, exclude_unset=False
+                        )
+                    else:
+                        body_data = {
+                            k: getattr(body_obj, k)
+                            for k in dir(body_obj)
+                            if not k.startswith("_")
+                        }
+                elif isinstance(body_obj, dict):
+                    # Already a dict (from FastAPI)
+                    body_data = body_obj
 
             # Remove start_node if it exists (it's added by the base model)
             body_data.pop("start_node", None)
@@ -269,6 +308,16 @@ def _wrap_function_with_params(
 
             # Call original function with all parameters
             return await func(**combined)
+
+        # Set the proper signature so FastAPI can introspect it
+        # Type ignore: We're dynamically setting __signature__ on a callable for FastAPI introspection
+        wrapped_func.__signature__ = new_sig  # type: ignore[attr-defined]
+
+        # Set annotations to match the signature
+        wrapped_func.__annotations__ = {
+            param.name: param.annotation for param in new_sig.parameters.values()
+        }
+        wrapped_func.__annotations__["return"] = new_sig.return_annotation
 
     elif has_path_params and not has_body_params:
         # Only path parameters - FastAPI handles these directly, no wrapper needed
@@ -314,14 +363,16 @@ def _wrap_function_with_params(
     wrapped_func.__doc__ = func.__doc__
     wrapped_func.__module__ = func.__module__
 
-    # Copy function signature annotations, preserving path parameters
-    # Add params annotation if we have body params (with or without path params)
-    if (has_path_params and has_body_params) or (not has_path_params):
-        # For functions with both path and body params, or only body params
-        # preserve original signature and add body params annotation
-        wrapped_func.__annotations__ = dict(func.__annotations__)
-        wrapped_func.__annotations__["params"] = param_model
-    # else: only path params, already returned func above
+    # Set annotations if not already set (for the case without path params)
+    if not has_path_params and has_body_params:
+        # No path parameters - simple body parameter model
+        # The signature already has the correct annotation for 'params'
+        wrapped_func.__annotations__ = {
+            "params": param_model,
+            "return": func_sig.return_annotation,
+        }
+    # For has_path_params and has_body_params case, annotations were already set above
+    # For only path params case, func was returned directly above
 
     return wrapped_func
 

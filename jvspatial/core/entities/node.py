@@ -709,6 +709,176 @@ class Node(Object):
         """
         return len(self.edge_ids)
 
+    async def delete(self: "Node", cascade: bool = True) -> None:
+        """Delete this node and cascade deletion of all related edges and dependent nodes.
+
+        This method performs a clean cascade deletion for Node entities:
+        1. Deletes all incoming edges (where this node is the target)
+        2. Deletes all outgoing edges (where this node is the source)
+        3. For each connected node, checks if it's solely connected to this node
+        4. If a node is solely connected (only has edges to/from this node), recursively deletes it
+        5. Finally deletes this node itself
+
+        Note: Node entities are the only entities that can be connected by edges on the graph.
+        Object entities are fundamental entities not connected by edges and use Object.delete()
+        which simply removes the entity.
+
+        Args:
+            cascade: Whether to cascade deletion to dependent nodes (default: True)
+                    If False, only deletes edges and the node itself
+
+        Examples:
+            # Full cascade deletion (default)
+            await node.delete()
+
+            # Delete node and edges only, don't cascade to dependent nodes
+            await node.delete(cascade=False)
+        """
+        context = await self.get_context()
+
+        # Get all edges connected to this node (both incoming and outgoing)
+        # We need to find edges where this node is either source or target
+        all_edges = []
+
+        # Get edges where this node is the source (outgoing)
+        outgoing_edges = await context.find_edges_between(source_id=self.id)
+        all_edges.extend(outgoing_edges)
+
+        # Get edges where this node is the target (incoming)
+        # Query database directly for edges where target is this node's ID
+        from .edge import Edge as EdgeClass
+
+        edge_query = {"target": self.id}
+        edge_results = await context.database.find("edge", edge_query)
+        for edge_data in edge_results:
+            try:
+                edge_obj = await context._deserialize_entity(EdgeClass, edge_data)
+                # Check if not already in list (avoid duplicates)
+                if edge_obj and not any(e.id == edge_obj.id for e in all_edges):
+                    all_edges.append(edge_obj)
+            except Exception:
+                continue
+
+        # Also check edges from edge_ids (in case some are bidirectional or stored differently)
+        for edge_id in self.edge_ids:
+            try:
+                edge = await Edge.get(edge_id)
+                # Check if this edge is actually connected to this node
+                if (
+                    edge
+                    and edge not in all_edges
+                    and (edge.source == self.id or edge.target == self.id)
+                ):
+                    all_edges.append(edge)
+            except Exception:
+                # Edge might already be deleted or invalid, continue
+                continue
+
+        # Remove duplicates while preserving order
+        seen_edge_ids = set()
+        unique_edges = []
+        for edge in all_edges:
+            if edge.id not in seen_edge_ids:
+                seen_edge_ids.add(edge.id)
+                unique_edges.append(edge)
+        all_edges = unique_edges
+
+        # Collect all connected nodes before deleting edges
+        connected_node_ids = set()
+        for edge in all_edges:
+            if edge.source == self.id:
+                connected_node_ids.add(edge.target)
+            if edge.target == self.id:
+                connected_node_ids.add(edge.source)
+
+        # If cascade is enabled, check for solely connected nodes BEFORE deleting edges
+        # This is important because we need to check the node's edge_ids before we modify them
+        solely_connected_node_ids = set()
+        if cascade:
+            for connected_node_id in connected_node_ids:
+                try:
+                    connected_node = await Node.get(connected_node_id)
+                    if not connected_node:
+                        continue
+
+                    # Get all edges of the connected node (before we delete them)
+                    connected_node_edges = []
+                    for edge_id in connected_node.edge_ids:
+                        try:
+                            edge = await Edge.get(edge_id)
+                            if edge:
+                                connected_node_edges.append(edge)
+                        except Exception:
+                            continue
+
+                    # If the node has no edges, skip it (orphaned node, will be cleaned up)
+                    if not connected_node_edges:
+                        continue
+
+                    # Check if ALL edges connect to the node being destroyed
+                    is_solely_connected = True
+                    for edge in connected_node_edges:
+                        # Check if this edge connects to a node other than self or the connected_node itself
+                        other_node_id = None
+                        if edge.source == connected_node_id:
+                            other_node_id = edge.target
+                        elif edge.target == connected_node_id:
+                            other_node_id = edge.source
+
+                        # If the edge connects to a node that is NOT the node being destroyed,
+                        # then the connected node is NOT solely connected
+                        if other_node_id and other_node_id != self.id:
+                            is_solely_connected = False
+                            break
+
+                    # If the node is solely connected (all edges go to the node being deleted),
+                    # mark it for deletion
+                    if is_solely_connected:
+                        solely_connected_node_ids.add(connected_node_id)
+                except Exception:
+                    # Continue even if check fails
+                    continue
+
+        # Delete all edges connected to this node
+        for edge in all_edges:
+            try:
+                # Remove edge from connected nodes' edge_ids lists
+                if edge.source != self.id:
+                    source_node = await Node.get(edge.source)
+                    if source_node and edge.id in source_node.edge_ids:
+                        source_node.edge_ids.remove(edge.id)
+                        await source_node.save()
+
+                if edge.target != self.id:
+                    target_node = await Node.get(edge.target)
+                    if target_node and edge.id in target_node.edge_ids:
+                        target_node.edge_ids.remove(edge.id)
+                        await target_node.save()
+
+                # Delete the edge
+                await context.delete(edge, cascade=False)
+            except Exception:
+                # Continue even if edge deletion fails
+                continue
+
+        # If cascade is enabled, delete solely connected nodes
+        if cascade:
+            for solely_connected_node_id in solely_connected_node_ids:
+                try:
+                    solely_connected_node = await Node.get(solely_connected_node_id)
+                    if solely_connected_node:
+                        await solely_connected_node.delete(cascade=True)
+                except Exception:
+                    # Continue even if dependent node destruction fails
+                    continue
+
+        # Clear edge_ids before final deletion to avoid recursion in context.delete()
+        # All edges have already been deleted from the database
+        self.edge_ids = []
+
+        # Finally, delete this node itself (no cascade needed, we've already handled it)
+        await context.delete(self, cascade=False)
+
     @classmethod
     async def create_and_connect(
         cls: Type["Node"],

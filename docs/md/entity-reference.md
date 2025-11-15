@@ -7,6 +7,10 @@
 #### `Object`
 Base class for all persistent objects.
 
+**Important**: Object is a fundamental entity type that is NOT connected by edges on the graph.
+Object.delete() simply removes the entity from the database. The cascade parameter is ignored
+for Object entities as they have no graph connections.
+
 ```python
 class Object(BaseModel):
     id: str = Field(default="")
@@ -16,12 +20,16 @@ class Object(BaseModel):
     async def get(cls, id: str) -> Optional["Object"]
     @classmethod
     async def create(cls, **kwargs) -> "Object"
-    async def destroy(cascade: bool = True) -> None
+    async def delete(cascade: bool = False) -> None  # cascade is ignored for Object entities
     def export() -> dict
 ```
 
 #### `Node(Object)`
 Represents graph nodes with connection capabilities.
+
+**Important**: Node is the only entity type that can be connected by edges on the graph.
+Node.delete() performs cascade deletion by default, removing all connected edges and
+dependent nodes (nodes that are solely connected to the node being deleted).
 
 ```python
 class Node(Object):
@@ -34,6 +42,7 @@ class Node(Object):
                    edge: Optional[...] = None, **kwargs) -> List["Node"]
     async def node(direction: str = "out", node: Optional[...] = None,
                   edge: Optional[...] = None, **kwargs) -> Optional["Node"]
+    async def delete(cascade: bool = True) -> None  # Cascades by default
     @classmethod
     async def all() -> List["Node"]
 ```
@@ -42,15 +51,22 @@ class Node(Object):
 
 - **`nodes()`**: Returns a list of connected nodes with filtering options
 - **`node()`**: Returns a single connected node (first match) or None - convenience method when you expect only one result
+- **`delete(cascade=True)`**: Deletes the node and cascades deletion of all connected edges and dependent nodes
 
 #### `Edge(Object)`
 Represents connections between nodes.
+
+**Important**: Edge entities are not connected by edges themselves. Edge.delete() simply
+removes the edge from the database. Edge entities connect Node entities but are not
+part of the graph structure themselves.
 
 ```python
 class Edge(Object):
     source: str  # Source node ID
     target: str  # Target node ID
     direction: str = "both"  # "in", "out", or "both"
+
+    async def delete() -> None  # Simple deletion, no cascading
 ```
 
 #### `Walker`

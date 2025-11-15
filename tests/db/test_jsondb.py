@@ -1394,3 +1394,136 @@ class TestJsonDBPersistentOperations:
         assert "City" in walker.node_types
         assert "Organization" in walker.node_types
         assert "Agent" in walker.node_types
+
+
+class TestJsonDBQueryOperators:
+    """Test JsonDB support for MongoDB-style query operators ($or, $and)."""
+
+    @pytest.fixture
+    def jsondb(self):
+        """Create a JsonDB instance for testing."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import uuid
+
+            unique_path = f"{tmpdir}/test_{uuid.uuid4().hex}"
+            db = JsonDB(base_path=unique_path)
+            yield db
+
+    @pytest.mark.asyncio
+    async def test_or_operator(self, jsondb):
+        """Test that JsonDB properly handles $or operator."""
+        # Create test records
+        records = [
+            {"id": "1", "name": "Alice", "category": "person"},
+            {"id": "2", "name": "Bob", "category": "person"},
+            {"id": "3", "name": "Charlie", "category": "animal"},
+        ]
+
+        for record in records:
+            await jsondb.save("test", record)
+
+        # Query with $or: name="Alice" OR category="animal"
+        query = {"$or": [{"name": "Alice"}, {"category": "animal"}]}
+        results = await jsondb.find("test", query)
+
+        assert len(results) == 2
+        names = {r["name"] for r in results}
+        assert "Alice" in names
+        assert "Charlie" in names
+        assert "Bob" not in names
+
+    @pytest.mark.asyncio
+    async def test_and_operator(self, jsondb):
+        """Test that JsonDB properly handles $and operator."""
+        # Create test records
+        records = [
+            {"id": "1", "name": "Alice", "category": "person", "age": 25},
+            {"id": "2", "name": "Bob", "category": "person", "age": 30},
+            {"id": "3", "name": "Charlie", "category": "animal", "age": 25},
+        ]
+
+        for record in records:
+            await jsondb.save("test", record)
+
+        # Query with $and: category="person" AND age=25
+        query = {"$and": [{"category": "person"}, {"age": 25}]}
+        results = await jsondb.find("test", query)
+
+        assert len(results) == 1
+        assert results[0]["name"] == "Alice"
+
+    @pytest.mark.asyncio
+    async def test_nested_operators(self, jsondb):
+        """Test nested $or and $and operators."""
+        # Create test records
+        records = [
+            {"id": "1", "name": "Alice", "category": "person", "age": 25},
+            {"id": "2", "name": "Bob", "category": "person", "age": 30},
+            {"id": "3", "name": "Charlie", "category": "animal", "age": 25},
+        ]
+
+        for record in records:
+            await jsondb.save("test", record)
+
+        # Query: (name="Alice" OR name="Bob") AND age=25
+        query = {
+            "$and": [
+                {"$or": [{"name": "Alice"}, {"name": "Bob"}]},
+                {"age": 25},
+            ]
+        }
+        results = await jsondb.find("test", query)
+
+        assert len(results) == 1
+        assert results[0]["name"] == "Alice"
+
+    @pytest.mark.asyncio
+    async def test_or_operator_with_class_name_filter(self, jsondb):
+        """Test $or operator used in class name filtering (as in Object.find())."""
+        # Simulate how Object.find() creates queries with $or for class name filtering
+        # Records with either _class="TestNode" OR name="TestNode"
+        records = [
+            {"id": "1", "name": "TestNode", "value": 10},  # Uses "name" field
+            {"id": "2", "_class": "TestNode", "value": 20},  # Uses "_class" field
+            {"id": "3", "name": "OtherNode", "value": 30},  # Different class
+        ]
+
+        for record in records:
+            await jsondb.save("test", record)
+
+        # Query that matches either _class="TestNode" OR name="TestNode"
+        query = {"$or": [{"_class": "TestNode"}, {"name": "TestNode"}]}
+        results = await jsondb.find("test", query)
+
+        assert len(results) == 2
+        ids = {r["id"] for r in results}
+        assert "1" in ids
+        assert "2" in ids
+        assert "3" not in ids
+
+    @pytest.mark.asyncio
+    async def test_and_operator_with_class_name_filter(self, jsondb):
+        """Test $and operator combining class name filter with property filter."""
+        # Simulate how Object.find() combines class name filter with user query
+        records = [
+            {"id": "1", "name": "TestNode", "value": 10, "category": "test"},
+            {"id": "2", "name": "TestNode", "value": 20, "category": "prod"},
+            {"id": "3", "name": "OtherNode", "value": 10, "category": "test"},
+        ]
+
+        for record in records:
+            await jsondb.save("test", record)
+
+        # Query: (name="TestNode" OR _class="TestNode") AND category="test"
+        query = {
+            "$and": [
+                {"$or": [{"_class": "TestNode"}, {"name": "TestNode"}]},
+                {"category": "test"},
+            ]
+        }
+        results = await jsondb.find("test", query)
+
+        assert len(results) == 1
+        assert results[0]["id"] == "1"
+        assert results[0]["name"] == "TestNode"
+        assert results[0]["category"] == "test"

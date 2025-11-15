@@ -1,6 +1,7 @@
 """Authentication models for user management and JWT tokens."""
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -57,6 +58,39 @@ class User(Node):
         """Pydantic configuration."""
 
         json_encoders = {datetime: lambda v: v.isoformat()}
+
+    @classmethod
+    async def create(cls, **kwargs: Any) -> "User":
+        """Create and save a new user instance with email validation.
+
+        Args:
+            **kwargs: User attributes including 'email' which must be a valid email format
+
+        Returns:
+            Created and saved user instance
+
+        Raises:
+            ValueError: If email format is invalid
+        """
+        from pydantic import ValidationError
+
+        # Validate email if provided
+        if "email" in kwargs:
+            email = kwargs["email"]
+            try:
+                # Use Pydantic's email validator to validate email format
+                # Create a temporary model to leverage Pydantic's EmailStr validation
+                class EmailValidator(BaseModel):
+                    email: EmailStr
+
+                # This will raise ValidationError if email is invalid
+                validator = EmailValidator(email=email)
+                kwargs["email"] = validator.email
+            except ValidationError as e:
+                raise ValueError(f"Invalid email format: {email}") from e
+
+        # Call parent create method
+        return await super().create(**kwargs)
 
 
 class TokenBlacklist(Node):

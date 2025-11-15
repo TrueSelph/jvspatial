@@ -317,7 +317,7 @@ All jvspatial entities automatically integrate with GraphContext:
 await Node.create(**kwargs)           # Uses default or current context
 await Node.get(node_id)               # Uses default or current context
 await node.save()                     # Uses node's context
-await node.destroy()                  # Uses node's context
+await node.delete()                   # Uses node's context, cascades by default
 ```
 
 #### Edge Methods
@@ -327,7 +327,7 @@ await node.destroy()                  # Uses node's context
 await Edge.create(source, target, **kwargs)
 await Edge.get(edge_id)
 await edge.save()
-await edge.destroy()
+await edge.delete()                   # Simple deletion, no cascading
 ```
 
 ## Database Configuration
@@ -487,7 +487,7 @@ All existing entity methods continue to work:
 - `await Node.create(**kwargs)`
 - `await Node.get(id)`
 - `await node.save()`
-- `await node.destroy()`
+- `await node.delete()` (cascades by default for Node entities)
 - `await Edge.create(source, target, **kwargs)`
 
 The main difference is that database management is now centralized and configurable through GraphContext.

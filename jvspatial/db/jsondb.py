@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from jvspatial.db.database import Database
+from jvspatial.db.query import QueryEngine
 
 
 class JsonDB(Database):
@@ -97,27 +98,14 @@ class JsonDB(Database):
                 with open(json_file, "r") as f:
                     record = json.load(f)
 
-                # Check if record matches query
-                if not query or self._matches_query(record, query):
+                # Check if record matches query using QueryEngine for proper operator support
+                if not query or QueryEngine.match(record, query):
                     results.append(record)
 
             except (json.JSONDecodeError, IOError):
                 continue  # Skip invalid files
 
         return results
-
-    def _matches_query(self, record: Dict[str, Any], query: Dict[str, Any]) -> bool:
-        """Check if a record matches a query."""
-        for key, expected_value in query.items():
-            if key.startswith("$"):
-                continue  # Skip MongoDB operators for now
-
-            actual_value = self._get_nested_value(record, key)
-
-            if actual_value != expected_value:
-                return False
-
-        return True
 
     def _get_nested_value(self, data: Dict[str, Any], key: str) -> Any:
         """Get a nested value using dot notation."""
