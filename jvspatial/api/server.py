@@ -1469,7 +1469,7 @@ def endpoint(
     route_kwargs = {k: v for k, v in kwargs.items() if k != "server"}
 
     def decorator(
-        target: Union[Type[Walker], Callable]
+        target: Union[Type[Walker], Callable],
     ) -> Union[Type[Walker], Callable]:
         from jvspatial.api.context import get_current_server
 

@@ -46,7 +46,7 @@ class EndpointManager:
         """
 
         def decorator(
-            target: Union[Type[Walker], Callable]
+            target: Union[Type[Walker], Callable],
         ) -> Union[Type[Walker], Callable]:
             # Handle Walker class
             if inspect.isclass(target) and issubclass(target, Walker):

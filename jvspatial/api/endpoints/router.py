@@ -335,7 +335,7 @@ class EndpointRouter(BaseRouter):
         """
 
         def decorator(
-            target: Union[Type[Walker], Callable]
+            target: Union[Type[Walker], Callable],
         ) -> Union[Type[Walker], Callable]:
             if isinstance(target, type) and issubclass(target, Walker):
                 # Handle Walker class
