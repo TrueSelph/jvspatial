@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel, EmailStr, Field
 
 from jvspatial.core.entities.node import Node
+from jvspatial.core.entities.object import Object
 
 
 class UserCreate(BaseModel):
@@ -43,8 +44,14 @@ class TokenResponse(BaseModel):
     user: UserResponse = Field(..., description="User information")
 
 
-class User(Node):
-    """User entity model for authentication."""
+class User(Object):
+    """User entity model for authentication.
+
+    User is an Object entity (not a Node) as authentication entities are
+    fundamental data objects that are not connected to the graph by edges.
+    Users are stored in the database and managed through standard Object
+    CRUD operations (create, find, get, save, delete).
+    """
 
     email: str = Field(..., description="User email address")
     password_hash: str = Field(..., description="Hashed password")

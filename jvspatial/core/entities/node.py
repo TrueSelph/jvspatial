@@ -110,6 +110,10 @@ class Node(Object):
         Creates a default directed Edge if no edge type is specified. The edge
         is created with direction='out' by default (forward connection).
 
+        This method is idempotent - if an edge already exists between the nodes
+        (matching the edge type and direction), it will return the existing edge
+        instead of creating a duplicate.
+
         Args:
             other: Target node to connect to
             edge: Edge class to use for connection. If omitted or None, defaults
@@ -120,7 +124,7 @@ class Node(Object):
             **kwargs: Additional edge properties (e.g., name, distance)
 
         Returns:
-            Created edge instance
+            Existing edge instance if one exists, otherwise a newly created edge
 
         Examples:
             # Create a default directed edge (most common case)
@@ -132,10 +136,67 @@ class Node(Object):
             # Bidirectional connection
             await node1.connect(node2, direction="both", name="mutual")
         """
+        context = await self.get_context()
+
         if edge is None:
             edge = Edge
 
-        # Create edge using the new async pattern
+        # Check if an edge already exists between these nodes
+        # This prevents duplicate edges from being created on repeated calls
+        # Check both directions (self->other and other->self) to catch all existing edges
+        existing_edges_forward = await context.find_edges_between(
+            source_id=self.id,
+            target_id=other.id,
+            edge_class=edge,
+        )
+        existing_edges_reverse = await context.find_edges_between(
+            source_id=other.id,
+            target_id=self.id,
+            edge_class=edge,
+        )
+
+        # Combine both directions
+        all_existing_edges = existing_edges_forward + existing_edges_reverse
+
+        # Filter existing edges by direction if specified
+        # For bidirectional edges, we accept any edge between these nodes
+        # For unidirectional edges, we need to match the direction
+        matching_edge = None
+        for existing_edge in all_existing_edges:
+            # Check if direction matches
+            # If direction is "both", accept any edge between these nodes
+            # If direction is "out", accept edges where source=self.id and target=other.id
+            # If direction is "in", accept edges where source=other.id and target=self.id
+            if direction == "both":
+                # For bidirectional, accept any edge between these nodes
+                matching_edge = existing_edge
+                break
+            elif direction == "out":
+                # For outgoing, check source and target match
+                if existing_edge.source == self.id and existing_edge.target == other.id:
+                    matching_edge = existing_edge
+                    break
+            elif (
+                direction == "in"
+                and existing_edge.source == other.id
+                and existing_edge.target == self.id
+            ):
+                # For incoming, check source and target are reversed
+                matching_edge = existing_edge
+                break
+
+        # If an existing edge is found, return it instead of creating a duplicate
+        if matching_edge:
+            # Ensure edge IDs are in both nodes' edge_ids lists (in case they're missing)
+            if matching_edge.id not in self.edge_ids:
+                self.edge_ids.append(matching_edge.id)
+                await self.save()
+            if matching_edge.id not in other.edge_ids:
+                other.edge_ids.append(matching_edge.id)
+                await other.save()
+            return matching_edge
+
+        # No existing edge found, create a new one
         connection = await edge.create(
             source=self.id, target=other.id, direction=direction, **kwargs
         )
