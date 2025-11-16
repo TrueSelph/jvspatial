@@ -654,6 +654,7 @@ class EndpointRouter(BaseRouter):
             )
 
             # Create handler function - docstring will be set from Walker class
+            # We'll set the proper type annotation after function creation
             async def post_handler(
                 params: Any = DEFAULT_BODY,  # type: ignore[assignment]
             ) -> Dict[str, Any]:  # noqa: B008
@@ -663,6 +664,7 @@ class EndpointRouter(BaseRouter):
                 handler = cast(
                     Any, post_handler
                 )  # cast to Any to allow attribute setting
+
                 handler._auth_required = getattr(walker_cls, "_auth_required", False)
                 handler._required_permissions = getattr(
                     walker_cls, "_required_permissions", []
@@ -888,6 +890,14 @@ class EndpointRouter(BaseRouter):
             # so FastAPI can read it when the route is registered
             post_handler.__doc__ = walker_docstring
             post_handler.__name__ = f"{walker_cls.__name__}_endpoint"
+
+            # Explicitly set annotations so FastAPI can introspect the type
+            # This MUST be done outside the function body so FastAPI can read it during registration
+            # This allows FastAPI to generate proper request body schema with field definitions
+            post_handler.__annotations__ = {
+                "params": param_model,
+                "return": Dict[str, Any],
+            }
 
         else:
             # Walker has no parameters - create handler without parameter model
