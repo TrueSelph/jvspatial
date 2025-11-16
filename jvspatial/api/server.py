@@ -699,6 +699,19 @@ class Server:
         for exc_class, handler in self._exception_handlers.items():
             app.add_exception_handler(exc_class, handler)
 
+        # Explicitly register JVSpatialAPIException handler BEFORE HTTPException
+        # This ensures function endpoints that raise ResourceNotFoundError, etc.
+        # are handled gracefully without triggering Starlette's error logging
+        from jvspatial.exceptions import JVSpatialAPIException
+
+        @app.exception_handler(JVSpatialAPIException)
+        async def jvspatial_exception_handler(
+            request: Request, exc: JVSpatialAPIException
+        ) -> JSONResponse:
+            # Known errors (4xx) are handled gracefully - no stack trace needed
+            # Only 5xx errors will be logged with stack traces for debugging
+            return await ErrorHandler.handle_exception(request, exc)
+
         # Explicitly register HTTPException handler to ensure consistent formatting
         # This must be registered before the generic Exception handler
         # FastAPI's default HTTPException handler returns {"detail": "..."} format
@@ -709,14 +722,99 @@ class Server:
         async def http_exception_handler(
             request: Request, exc: HTTPException
         ) -> JSONResponse:
+            # Known errors (4xx) are handled gracefully - no stack trace needed
+            # Only 5xx errors will be logged with stack traces for debugging
             return await ErrorHandler.handle_exception(request, exc)
 
         # Add default exception handler using the unified ErrorHandler
+        # This catches unexpected exceptions (not HTTPException, not JVSpatialAPIException)
+        # These are treated as 500 errors and logged with full stack traces
         @app.exception_handler(Exception)
         async def global_exception_handler(
             request: Request, exc: Exception
         ) -> JSONResponse:
+            # All unexpected exceptions are treated as 500 errors
+            # They will be logged with stack traces for debugging
             return await ErrorHandler.handle_exception(request, exc)
+
+        # Configure Starlette's error logger to suppress stack traces for known errors
+        # Starlette logs exceptions before they reach our handlers, so we need to
+        # configure the logger to not print stack traces for HTTPException and JVSpatialAPIException
+        import logging
+
+        from fastapi import HTTPException
+
+        from jvspatial.exceptions import JVSpatialAPIException
+
+        starlette_error_logger = logging.getLogger("starlette.error")
+
+        # Create a custom formatter that suppresses tracebacks for known errors
+        class KnownErrorFormatter(logging.Formatter):
+            """Formatter that suppresses stack traces for known errors (HTTPException, JVSpatialAPIException)."""
+
+            def formatException(self, ei):  # noqa: N802
+                """Override to return empty string for known errors."""
+                if ei:
+                    exc_type, exc_value, _ = ei
+                    # Suppress stack traces for known errors (4xx) - they're not real exceptions
+                    is_known_error = (
+                        exc_type is HTTPException
+                        or exc_type is JVSpatialAPIException
+                        or isinstance(exc_value, JVSpatialAPIException)
+                    )
+                    if (
+                        is_known_error
+                        and hasattr(exc_value, "status_code")
+                        and exc_value.status_code < 500
+                    ):
+                        return ""  # No stack trace for client errors
+                return super().formatException(ei) if ei else ""
+
+            def format(self, record: logging.LogRecord) -> str:
+                """Format the record, suppressing stack traces for known errors."""
+                # Check if this record has exception info for known errors
+                if record.exc_info:
+                    exc_type, exc_value, _ = record.exc_info
+                    # Suppress stack traces for client errors (4xx)
+                    is_known_error = (
+                        exc_type is HTTPException
+                        or exc_type is JVSpatialAPIException
+                        or isinstance(exc_value, JVSpatialAPIException)
+                    )
+                    if (
+                        is_known_error
+                        and hasattr(exc_value, "status_code")
+                        and exc_value.status_code < 500
+                    ):
+                        # Temporarily remove exc_info to prevent traceback formatting
+                        original_exc_info = record.exc_info
+                        record.exc_info = None
+                        try:
+                            result = super().format(record)
+                        finally:
+                            record.exc_info = original_exc_info
+                        return result
+                return super().format(record)
+
+        # Apply the formatter to Starlette's error logger handlers
+        known_error_formatter = KnownErrorFormatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
+
+        # Apply to existing handlers
+        from logging import Handler
+
+        # mypy infers handlers as Callable, but they're actually Handler instances
+        for handler_item in starlette_error_logger.handlers:  # type: ignore[assignment]
+            log_handler: Handler = handler_item  # type: ignore[assignment]
+            log_handler.setFormatter(known_error_formatter)
+
+        # Also configure the logger to use this formatter for any new handlers
+        if not starlette_error_logger.handlers:
+            # If no handlers exist yet, create one with our formatter
+            new_handler: Handler = logging.StreamHandler()
+            new_handler.setFormatter(known_error_formatter)
+            starlette_error_logger.addHandler(new_handler)
 
     def _configure_auth_middleware(self: "Server", app: FastAPI) -> None:
         """Configure authentication middleware if authentication is enabled."""

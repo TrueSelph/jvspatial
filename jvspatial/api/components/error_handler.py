@@ -37,6 +37,33 @@ class APIErrorHandler:
             JSONResponse with error details
         """
         if isinstance(exc, JVSpatialAPIException):
+            # Log based on status code severity - same logic as HTTPException
+            logger = logging.getLogger(__name__)
+            if exc.status_code >= 500:
+                logger.error(
+                    f"API Error [{exc.error_code}]: {exc.message}",
+                    exc_info=True,  # Include stack trace for server errors
+                    extra={
+                        "error_code": exc.error_code,
+                        "status_code": exc.status_code,
+                        "path": request.url.path,
+                        "method": request.method,
+                        "details": exc.details,
+                    },
+                )
+            else:
+                # Client errors (4xx) - log at INFO level without stack trace
+                logger.info(
+                    f"API Error [{exc.error_code}]: {exc.message}",
+                    exc_info=False,  # No stack trace for client errors
+                    extra={
+                        "error_code": exc.error_code,
+                        "status_code": exc.status_code,
+                        "path": request.url.path,
+                        "method": request.method,
+                    },
+                )
+
             response_data = await exc.to_dict()
             response_data["request_id"] = getattr(request.state, "request_id", None)
             response_data["timestamp"] = datetime.utcnow().isoformat()
@@ -48,7 +75,8 @@ class APIErrorHandler:
 
         if isinstance(exc, ValidationError):
             logger = logging.getLogger(__name__)
-            logger.warning(f"Validation error: {exc}", exc_info=False)
+            # Validation errors are client errors (422) - log at INFO level without stack trace
+            logger.info(f"Validation error: {exc}", exc_info=False)
 
             # Extract detailed validation error information
             error_details = []
@@ -98,15 +126,8 @@ class APIErrorHandler:
             }
             error_code = error_code_map.get(exc.status_code, "internal_error")
 
-            # Log based on status code severity
-            if exc.status_code >= 500:
-                logger.error(
-                    f"HTTP Error [{exc.status_code}]: {exc.detail}", exc_info=True
-                )
-            else:
-                logger.warning(f"HTTP Error [{exc.status_code}]: {exc.detail}")
-
             # Extract error message from detail - handle string, dict, list, or None
+            # Do this before logging so we can use it in log messages
             error_detail = exc.detail
             if error_detail is None:
                 error_message = "An error occurred"
@@ -123,6 +144,34 @@ class APIErrorHandler:
                 # For list or other types, convert to string
                 error_message = str(error_detail)
 
+            # Log based on status code severity
+            # For server errors (5xx), log with full context including stack trace
+            # For client errors (4xx), log at INFO level without stack trace for clean output
+            if exc.status_code >= 500:
+                logger.error(
+                    f"HTTP Error [{exc.status_code}]: {error_message}",
+                    exc_info=True,  # Include stack trace for server errors
+                    extra={
+                        "status_code": exc.status_code,
+                        "error_code": error_code,
+                        "path": request.url.path,
+                        "method": request.method,
+                    },
+                )
+            else:
+                # Client errors (4xx) - log at INFO level without stack trace
+                # This produces clean log output like: "INFO: HTTP Error [404]: Agent not found"
+                logger.info(
+                    f"HTTP Error [{exc.status_code}]: {error_message}",
+                    exc_info=False,  # No stack trace for client errors
+                    extra={
+                        "status_code": exc.status_code,
+                        "error_code": error_code,
+                        "path": request.url.path,
+                        "method": request.method,
+                    },
+                )
+
             return JSONResponse(
                 status_code=exc.status_code,
                 content={
@@ -134,14 +183,23 @@ class APIErrorHandler:
                 },
             )
 
-        # Handle unexpected errors
+        # Handle unexpected errors (not HTTPException, not ValidationError, not JVSpatialAPIException)
+        # These are truly unexpected and should be logged with full context
         logger = logging.getLogger(__name__)
-        logger.error(f"Unexpected error: {exc}", exc_info=True)
+        logger.error(
+            f"Unexpected error: {type(exc).__name__}: {exc}",
+            exc_info=True,  # Always include stack trace for unexpected errors
+            extra={
+                "error_type": type(exc).__name__,
+                "path": request.url.path,
+                "method": request.method,
+            },
+        )
         return JSONResponse(
             status_code=500,
             content={
                 "error_code": "internal_error",
-                "message": f"An unexpected error occurred: {str(exc)}",
+                "message": "An unexpected error occurred. Please contact support if this persists.",
                 "timestamp": datetime.utcnow().isoformat(),
                 "path": request.url.path,
                 "request_id": getattr(request.state, "request_id", None),

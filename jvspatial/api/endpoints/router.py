@@ -569,6 +569,9 @@ class EndpointRouter(BaseRouter):
                         else self.format_response(data=response)
                     )
 
+            except HTTPException:
+                # Re-raise HTTPException as-is to preserve status code
+                raise
             except ValidationError as e:
                 # Extract useful information from ValidationError
                 error_details = []
@@ -856,6 +859,9 @@ class EndpointRouter(BaseRouter):
                             else self.format_response(data=response)
                         )
 
+                except HTTPException:
+                    # Re-raise HTTPException as-is to preserve status code
+                    raise
                 except ValidationError as e:
                     # Extract useful information from ValidationError
                     error_details = []
