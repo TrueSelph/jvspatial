@@ -699,6 +699,18 @@ class Server:
         for exc_class, handler in self._exception_handlers.items():
             app.add_exception_handler(exc_class, handler)
 
+        # Explicitly register HTTPException handler to ensure consistent formatting
+        # This must be registered before the generic Exception handler
+        # FastAPI's default HTTPException handler returns {"detail": "..."} format
+        # We override it to use our consistent error structure
+        from fastapi import HTTPException
+
+        @app.exception_handler(HTTPException)
+        async def http_exception_handler(
+            request: Request, exc: HTTPException
+        ) -> JSONResponse:
+            return await ErrorHandler.handle_exception(request, exc)
+
         # Add default exception handler using the unified ErrorHandler
         @app.exception_handler(Exception)
         async def global_exception_handler(

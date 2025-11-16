@@ -548,15 +548,12 @@ class EndpointRouter(BaseRouter):
 
                         # If this is an error report, raise it before validation
                         if error_status is not None:
-                            error_message = str(error_msg or "An error occurred")
-                            # Include additional details if available
-                            details = {
-                                k: v
-                                for k, v in report.items()
-                                if k not in ("status", "error", "detail")
-                            }
-                            if details:
-                                error_message += f" | Details: {details}"
+                            # Extract error message - use the error field from report
+                            error_message = (
+                                str(error_msg) if error_msg else "An error occurred"
+                            )
+                            # Don't append details to message - error handler will format consistently
+                            # Just pass the clean error message
                             self.raise_error(error_status, error_message)
 
                         response.update(report)

@@ -106,11 +106,28 @@ class APIErrorHandler:
             else:
                 logger.warning(f"HTTP Error [{exc.status_code}]: {exc.detail}")
 
+            # Extract error message from detail - handle string, dict, list, or None
+            error_detail = exc.detail
+            if error_detail is None:
+                error_message = "An error occurred"
+            elif isinstance(error_detail, str):
+                error_message = error_detail
+            elif isinstance(error_detail, dict):
+                # If detail is a dict, try to extract message/error field, otherwise stringify
+                error_message = (
+                    error_detail.get("message")
+                    or error_detail.get("error")
+                    or str(error_detail)
+                )
+            else:
+                # For list or other types, convert to string
+                error_message = str(error_detail)
+
             return JSONResponse(
                 status_code=exc.status_code,
                 content={
                     "error_code": error_code,
-                    "message": str(exc.detail) if exc.detail else "An error occurred",
+                    "message": error_message,
                     "timestamp": datetime.utcnow().isoformat(),
                     "path": request.url.path,
                     "request_id": getattr(request.state, "request_id", None),
