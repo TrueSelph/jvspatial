@@ -189,3 +189,7 @@ class ServerConfig(BaseModel):
         default=None,
         description="API Gateway base path (e.g., '/prod', '/v1')",
     )
+    lambda_temp_dir: Optional[str] = Field(
+        default=None,
+        description="Lambda temp directory path (auto-detected if serverless_mode=True)",
+    )

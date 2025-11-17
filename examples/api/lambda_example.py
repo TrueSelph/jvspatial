@@ -71,6 +71,8 @@ server = Server(
     # Option 2: JSON (ephemeral, uses /tmp)
     # db_type="json",
     # db_path="/tmp/jvdb",  # Lambda /tmp directory (ephemeral)
+    # Note: With serverless_mode=True, Lambda temp directory is auto-detected
+    # You can also access it via: server.get_lambda_temp_dir()
     # Disable docs in production Lambda if desired
     docs_url="/docs",
     auth_enabled=False,

@@ -341,9 +341,18 @@ class Server:
 
             # Create prime database based on configuration
             if self.config.db_type == "json":
+                # Use Lambda temp directory if in serverless mode and no explicit path
+                db_path = self.config.db_path
+                if not db_path and self.config.serverless_mode:
+                    lambda_temp = self.get_lambda_temp_dir()
+                    if lambda_temp:
+                        db_path = f"{lambda_temp}/jvdb"
+                        self._logger.info(
+                            f"📁 Using Lambda temp directory for JSON database: {db_path}"
+                        )
                 prime_db = create_database(
                     db_type="json",
-                    base_path=self.config.db_path or "./jvdb",
+                    base_path=db_path or "./jvdb",
                 )
             elif self.config.db_type == "mongodb":
                 prime_db = create_database(
@@ -352,9 +361,18 @@ class Server:
                     db_name=self.config.db_database_name or "jvdb",
                 )
             elif self.config.db_type == "sqlite":
+                # Use Lambda temp directory if in serverless mode and no explicit path
+                db_path = self.config.db_path
+                if not db_path and self.config.serverless_mode:
+                    lambda_temp = self.get_lambda_temp_dir()
+                    if lambda_temp:
+                        db_path = f"{lambda_temp}/jvdb/sqlite/jvspatial.db"
+                        self._logger.info(
+                            f"📁 Using Lambda temp directory for SQLite database: {db_path}"
+                        )
                 prime_db = create_database(
                     db_type="sqlite",
-                    db_path=self.config.db_path or "jvdb/sqlite/jvspatial.db",
+                    db_path=db_path or "jvdb/sqlite/jvspatial.db",
                 )
             elif self.config.db_type == "dynamodb":
                 prime_db = create_database(
@@ -404,9 +422,18 @@ class Server:
 
             # Initialize file interface
             if self.config.file_storage_provider == "local":
+                # Use Lambda temp directory if in serverless mode and no explicit root
+                storage_root = self.config.file_storage_root
+                if storage_root == ".files" and self.config.serverless_mode:
+                    lambda_temp = self.get_lambda_temp_dir()
+                    if lambda_temp:
+                        storage_root = f"{lambda_temp}/.files"
+                        self._logger.info(
+                            f"📁 Using Lambda temp directory for file storage: {storage_root}"
+                        )
                 self._file_interface = create_storage(
                     provider="local",
-                    root_dir=self.config.file_storage_root,
+                    root_dir=storage_root,
                     base_url=self.config.file_storage_base_url,
                     max_file_size=self.config.file_storage_max_size,
                 )
@@ -448,6 +475,7 @@ class Server:
 
         This method automatically creates a Mangum adapter for the FastAPI app
         when serverless_mode is True in the configuration.
+        Also captures the Lambda temp directory path if running in Lambda.
         """
         try:
             from mangum import Mangum
@@ -458,6 +486,14 @@ class Server:
                 "or pip install jvspatial[serverless]"
             )
             return
+
+        # Capture Lambda temp directory if running in Lambda environment
+        if self._is_lambda_environment():
+            lambda_temp = self._get_lambda_temp_dir()
+            if lambda_temp and not self.config.lambda_temp_dir:
+                # Update config with detected Lambda temp directory
+                self.config.lambda_temp_dir = lambda_temp
+                self._logger.info(f"📁 Lambda temp directory detected: {lambda_temp}")
 
         # Get the app (this will create it if it doesn't exist)
         app = self.get_app()
@@ -481,6 +517,38 @@ class Server:
         self._logger.info(
             "🚀 Serverless Lambda handler initialized and ready for deployment"
         )
+
+    @staticmethod
+    def _is_lambda_environment() -> bool:
+        """Check if running in AWS Lambda environment.
+
+        Returns:
+            True if running in Lambda, False otherwise
+        """
+        import os
+
+        # LAMBDA_TASK_ROOT is set by AWS Lambda runtime
+        return os.getenv("LAMBDA_TASK_ROOT") is not None
+
+    @staticmethod
+    def _get_lambda_temp_dir() -> Optional[str]:
+        """Get the Lambda temp directory path.
+
+        In AWS Lambda, /tmp is the only writable directory.
+        This method detects if running in Lambda and returns /tmp.
+
+        Returns:
+            Lambda temp directory path (/tmp) if in Lambda, None otherwise
+        """
+        import os
+
+        if Server._is_lambda_environment():
+            # Lambda temp directory is always /tmp
+            temp_dir = "/tmp"
+            # Verify it exists and is writable
+            if os.path.exists(temp_dir) and os.access(temp_dir, os.W_OK):
+                return temp_dir
+        return None
 
     def _expose_handler_to_caller_module(self: "Server") -> None:
         """Expose the Lambda handler as a module-level variable in the caller's module.
@@ -1327,6 +1395,35 @@ class Server:
             ```
         """
         return self._lambda_handler
+
+    def get_lambda_temp_dir(self: "Server") -> Optional[str]:
+        """Get the Lambda temp directory path.
+
+        Returns the Lambda temp directory path if running in serverless mode
+        and Lambda environment is detected. This is useful for configuring
+        database paths, file storage, and other temporary file operations.
+
+        Returns:
+            Lambda temp directory path (/tmp) if in Lambda, None otherwise
+
+        Example:
+            ```python
+            server = Server(serverless_mode=True)
+            temp_dir = server.get_lambda_temp_dir()
+            if temp_dir:
+                # Use temp_dir for database or file storage
+                db_path = f"{temp_dir}/jvdb"
+            ```
+        """
+        # Return configured temp dir if set
+        if self.config.lambda_temp_dir:
+            return self.config.lambda_temp_dir
+
+        # Auto-detect if in Lambda environment
+        if self._is_lambda_environment():
+            return self._get_lambda_temp_dir()
+
+        return None
 
     def get_lambda_handler(self: "Server", **mangum_kwargs: Any) -> Any:
         """Get an AWS Lambda handler for serverless deployment.
