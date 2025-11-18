@@ -280,11 +280,13 @@ class DynamoDB(Database):
                 # Scan all items in the collection
                 response = await client.scan(
                     TableName=table_name,
-                    FilterExpression="collection = :collection",
-                    ExpressionAttributeValues={":collection": {"S": collection}},
+                    FilterExpression="#coll = :collection_val",
+                    ExpressionAttributeNames={"#coll": "collection"},
+                    ExpressionAttributeValues={":collection_val": {"S": collection}},
                 )
 
                 results = []
+
                 for item in response.get("Items", []):
                     # Deserialize data from JSON string
                     data = json.loads(item["data"]["S"])
@@ -297,10 +299,14 @@ class DynamoDB(Database):
                 while "LastEvaluatedKey" in response:
                     response = await client.scan(
                         TableName=table_name,
-                        FilterExpression="collection = :collection",
-                        ExpressionAttributeValues={":collection": {"S": collection}},
+                        FilterExpression="#coll = :collection_val",
+                        ExpressionAttributeNames={"#coll": "collection"},
+                        ExpressionAttributeValues={
+                            ":collection_val": {"S": collection}
+                        },
                         ExclusiveStartKey=response["LastEvaluatedKey"],
                     )
+
                     for item in response.get("Items", []):
                         data = json.loads(item["data"]["S"])
                         if not query:
