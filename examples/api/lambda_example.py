@@ -151,8 +151,9 @@ async def get_product(product_id: str) -> Dict[str, Any]:
 # - server.lambda_handler (property)
 # - server.get_lambda_handler() (method)
 
-# Note: If you need to override the auto-exposed handler, you can still assign it:
-# handler = server.lambda_handler  # or custom handler
+# The handler is automatically exposed as 'handler' at module level.
+# If auto-exposure fails for any reason, you can manually assign it:
+# handler = server.lambda_handler
 
 # Alternative: Manual handler creation (if serverless_mode=False)
 # handler = create_lambda_handler(server)

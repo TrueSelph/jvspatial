@@ -512,7 +512,15 @@ class Server:
         self._lambda_handler = Mangum(app, **mangum_config)
 
         # Automatically expose handler at module level for Lambda deployment
-        self._expose_handler_to_caller_module()
+        # This must happen after handler creation but before returning
+        try:
+            self._expose_handler_to_caller_module()
+        except Exception as e:
+            # Log but don't fail - handler is still accessible via server.lambda_handler
+            self._logger.warning(
+                f"Could not auto-expose Lambda handler: {e}. "
+                "Handler is still available via server.lambda_handler"
+            )
 
         self._logger.info(
             "🚀 Serverless Lambda handler initialized and ready for deployment"
@@ -557,21 +565,33 @@ class Server:
         manual assignment (e.g., `handler = server.lambda_handler`).
         """
         try:
-            # Get the caller's frame (skip this method and _initialize_serverless_handler)
+            # Get the caller's frame
+            # We need to go up 3 frames:
+            # 0. _expose_handler_to_caller_module (current)
+            # 1. _initialize_serverless_handler
+            # 2. __init__ (Server.__init__)
+            # 3. The actual caller module where Server() was instantiated
             frame = inspect.currentframe()
             if frame is None:
                 return
 
-            # Go up 2 frames: _expose_handler_to_caller_module -> _initialize_serverless_handler -> caller
-            caller_frame = frame.f_back
+            # Go up 3 frames to reach the caller's module
+            caller_frame = frame.f_back  # _initialize_serverless_handler
             if caller_frame is None:
                 return
-            caller_frame = caller_frame.f_back
+            caller_frame = caller_frame.f_back  # __init__
+            if caller_frame is None:
+                return
+            caller_frame = caller_frame.f_back  # Actual caller module
             if caller_frame is None:
                 return
 
             # Get the caller's module
-            caller_module = sys.modules.get(caller_frame.f_globals.get("__name__"))
+            caller_module_name = caller_frame.f_globals.get("__name__")
+            if caller_module_name is None:
+                return
+
+            caller_module = sys.modules.get(caller_module_name)
             if caller_module is None:
                 return
 
@@ -582,7 +602,7 @@ class Server:
                 # Dynamically set handler attribute on module for Lambda deployment
                 # Using setattr with variable to satisfy flake8 B010, with type ignore for mypy
                 setattr(caller_module, handler_attr, self._lambda_handler)  # type: ignore[attr-defined]
-                self._logger.debug(
+                self._logger.info(
                     f"✅ Lambda handler automatically exposed as 'handler' in {caller_module.__name__}"
                 )
             else:
@@ -590,8 +610,12 @@ class Server:
                     f"⚠️  'handler' already exists in {caller_module.__name__}, skipping auto-exposure"
                 )
         except Exception as e:
-            # Don't fail if we can't expose the handler - user can still access it manually
-            self._logger.debug(f"Could not auto-expose handler: {e}")
+            # Log warning but don't fail - handler exposure is a convenience feature
+            # Users can still access handler via server.lambda_handler
+            self._logger.warning(
+                f"Could not auto-expose handler to module: {e}. "
+                "You can still access it via server.lambda_handler or assign it manually: handler = server.lambda_handler"
+            )
 
     def middleware(self: "Server", middleware_type: str = "http") -> Callable:
         """Add middleware to the application.
