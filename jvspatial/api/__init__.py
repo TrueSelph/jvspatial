@@ -20,11 +20,13 @@ from .decorators.route import endpoint
 #     BaseRouter,
 #     EndpointRouter,
 # )
+from .lambda_server import LambdaServer
 from .server import Server, create_server
 
 __all__ = [
     # Main exports
     "Server",
+    "LambdaServer",
     "ServerConfig",
     "create_server",
     "get_current_server",

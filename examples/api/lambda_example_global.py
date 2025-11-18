@@ -25,6 +25,7 @@ Key Features:
 from typing import Any, Dict
 
 from jvspatial.api import endpoint, get_current_server
+from jvspatial.api.lambda_server import LambdaServer
 from jvspatial.core import Node
 
 # =============================================================================
@@ -62,19 +63,14 @@ def _initialize_app_server():
     This function simulates server initialization that happens in the library
     or a separate configuration module, not in the main handler file.
     """
-    from jvspatial.api import Server
-
-    # Create server instance with serverless mode enabled
+    # Create LambdaServer instance
     # This would typically be in app_config.py or similar
-    server = Server(
+    server = LambdaServer(
         title="Lambda API Example (Global Server)",
         description="jvspatial API deployed on AWS Lambda with global server pattern",
         version="1.0.0",
-        # Enable serverless mode
-        serverless_mode=True,
         serverless_lifespan="auto",
-        # Database configuration
-        db_type="dynamodb",
+        # Database configuration (DynamoDB is default)
         dynamodb_table_name="jvspatial_lambda_global",
         dynamodb_region="us-east-1",
         docs_url="/docs",
@@ -150,11 +146,11 @@ async def get_product(product_id: str) -> Dict[str, Any]:
 # LAMBDA HANDLER
 # =============================================================================
 
-# With serverless_mode=True, the handler is automatically created during server initialization.
-# However, AWS Lambda requires the handler to be explicitly available at module level.
+# LambdaServer automatically creates the handler during initialization.
+# AWS Lambda requires the handler to be available at module level.
 #
 # Since the server is instantiated in the library/separate module, we get it
-# via get_current_server() and then use server.get_lambda_handler() to expose it.
+# via get_current_server() and then use server.get_lambda_handler() to get the handler.
 
 # Get the current server instance (created in _initialize_app_server or library)
 server = get_current_server()
@@ -162,15 +158,19 @@ server = get_current_server()
 if server is None:
     raise RuntimeError(
         "No server instance found. Ensure the server is initialized before "
-        "exposing the Lambda handler."
+        "getting the Lambda handler."
     )
 
-# Get and expose handler at module level (required for Lambda deployment)
-# By default, get_lambda_handler() exposes the handler at module level (expose=True)
-handler = server.get_lambda_handler()
+# Type check: ensure server is a LambdaServer instance
+if not isinstance(server, LambdaServer):
+    raise RuntimeError(
+        "Server instance is not a LambdaServer. "
+        "Lambda handler is only available for LambdaServer instances."
+    )
 
-# The handler is now available as 'handler' at module level.
+# Get handler and assign to module-level variable (required for Lambda deployment)
 # Lambda will call this handler (e.g., "lambda_example_global.handler")
+handler = server.get_lambda_handler()
 
 
 # =============================================================================
@@ -190,15 +190,9 @@ if __name__ == "__main__":
     print("  2. Set Lambda handler to: lambda_example_global.handler")
     print("  3. Configure API Gateway trigger")
     print("  4. The server is accessed via get_current_server()")
-    print("  5. The handler is exposed using server.get_lambda_handler()")
+    print("  5. The handler is obtained using server.get_lambda_handler()")
     print()
-    print("For local testing, the server will run normally:")
-    print("  - Visit http://localhost:8000/docs for API documentation")
-    print("  - Test endpoints at http://localhost:8000/api/...")
+    print("Note: LambdaServer does not support run() - Lambda handles execution.")
+    print("      For local testing, use Server class instead.")
     print()
     print("=" * 80)
-
-    # For local development/testing, run the server normally
-    server = get_current_server()
-    if server:
-        server.run(host="127.0.0.1", port=8000)

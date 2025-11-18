@@ -174,22 +174,3 @@ class ServerConfig(BaseModel):
             "/auth/register",
         ]
     )
-
-    # Serverless Configuration
-    serverless_mode: bool = Field(
-        default=False,
-        description="Enable serverless mode (AWS Lambda) with automatic handler setup",
-        validation_alias="JVSPATIAL_SERVERLESS_MODE",
-    )
-    serverless_lifespan: str = Field(
-        default="auto",
-        description="Mangum lifespan mode: 'auto', 'on', or 'off'",
-    )
-    serverless_api_gateway_base_path: Optional[str] = Field(
-        default=None,
-        description="API Gateway base path (e.g., '/prod', '/v1')",
-    )
-    lambda_temp_dir: Optional[str] = Field(
-        default=None,
-        description="Lambda temp directory path (auto-detected if serverless_mode=True)",
-    )

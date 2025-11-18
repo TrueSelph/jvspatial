@@ -27,7 +27,8 @@ Key Features:
 
 from typing import Any, Dict
 
-from jvspatial.api import Server, endpoint
+from jvspatial.api import endpoint
+from jvspatial.api.lambda_server import LambdaServer
 from jvspatial.core import Node
 
 # =============================================================================
@@ -49,38 +50,27 @@ class ProductNode(Node):
 # SERVER SETUP
 # =============================================================================
 
-# Create server instance with serverless mode enabled
-# When serverless_mode=True:
-# - Lambda handler is automatically created and exposed as 'handler'
-# - Lambda temp directory (/tmp) is automatically detected and used for db_path
-# - No need to explicitly set db_path - it's automatically configured
-server = Server(
+# Create LambdaServer instance
+# LambdaServer automatically:
+# - Sets DynamoDB as default database (can be overridden)
+# - Creates and exposes Lambda handler as 'handler'
+# - Detects and uses Lambda temp directory (/tmp) for file-based databases
+# - Configures Mangum for AWS Lambda compatibility
+server = LambdaServer(
     title="Lambda API Example",
     description="jvspatial API deployed on AWS Lambda",
     version="1.0.0",
-    # Enable serverless mode - this is the ONLY setting needed!
-    serverless_mode=True,
     # Serverless configuration options (optional)
     serverless_lifespan="auto",  # Enable startup/shutdown events
     # serverless_api_gateway_base_path="/prod",  # Uncomment if using API Gateway base path
-    # Database configuration for serverless mode
-    # Option 1: DynamoDB (persistent, recommended for production serverless)
-    db_type="dynamodb",
+    # Database configuration (DynamoDB is default)
     dynamodb_table_name="jvspatial_lambda",  # Or use environment variable
     dynamodb_region="us-east-1",  # Or use environment variable
-    # Option 2: JSON/SQLite with S3 (auto-switches to DynamoDB)
-    # When S3 is configured and you specify json/sqlite, it automatically switches to DynamoDB
-    # db_type="json",  # Will auto-switch to DynamoDB if S3 is configured
-    # s3_bucket_name="jvspatial-lambda-db",  # Or use environment variable: JVSPATIAL_S3_BUCKET_NAME
-    # s3_region="us-east-1",  # Or use environment variable: JVSPATIAL_S3_REGION
-    # Option 3: JSON/SQLite without S3 (ephemeral, uses /tmp - data will be lost)
-    # db_type="json",  # Uses /tmp/jvdb (ephemeral)
-    # Option 4: Custom temp directory (if needed)
-    # lambda_temp_dir="/custom/tmp",  # Override default /tmp if needed
-    # Note: File-based databases (json, sqlite) don't support S3 paths directly.
-    # When S3 is configured in serverless mode, they automatically switch to DynamoDB.
-    # Without S3, they use ephemeral /tmp storage (data lost between invocations).
-    # You can specify a custom temp directory via lambda_temp_dir or JVSPATIAL_LAMBDA_TEMP_DIR env var.
+    # Alternative: Use file-based databases with Lambda temp directory
+    # db_type="json",  # Will use /tmp/jvdb (ephemeral)
+    # db_type="sqlite",  # Will use /tmp/jvdb/sqlite/jvspatial.db (ephemeral)
+    # Note: File-based databases use ephemeral /tmp storage in Lambda.
+    # Data will be lost between invocations. Use DynamoDB for persistence.
     docs_url="/docs",
     auth_enabled=False,
 )
@@ -146,18 +136,13 @@ async def get_product(product_id: str) -> Dict[str, Any]:
 # LAMBDA HANDLER
 # =============================================================================
 
-# With serverless_mode=True, the handler is automatically created during server initialization.
-# However, AWS Lambda requires the handler to be explicitly available at module level.
-# Use server.get_lambda_handler() to get and expose it - just one line!
+# LambdaServer automatically creates the handler during initialization.
+# AWS Lambda requires the handler to be available at module level.
+# Simply call get_lambda_handler() and assign it to a module-level variable.
 
-# Get and expose handler at module level (required for Lambda deployment)
-# This ensures Lambda can find 'handler' in this module (e.g., "lambda_example.handler")
-# By default, get_lambda_handler() exposes the handler at module level (expose=True)
+# Get handler and assign to module-level variable (required for Lambda deployment)
+# Lambda will call this handler (e.g., "lambda_example.handler")
 handler = server.get_lambda_handler()
-
-# Alternative patterns:
-# - With custom handler name: handler = server.get_lambda_handler(handler_name="my_handler")
-# - Without module-level exposure: handler = server.get_lambda_handler(expose=False)
 
 # The handler is now available as 'handler' at module level.
 # You can also access it via:
@@ -180,15 +165,11 @@ if __name__ == "__main__":
     print("  2. Set Lambda handler to: lambda_example.handler")
     print("  3. Configure API Gateway trigger")
     print("  4. That's it! No additional configuration needed.")
-    print("     - Handler is automatically exposed as 'handler'")
+    print("     - Handler is available via server.get_lambda_handler()")
     print("     - Lambda temp directory (/tmp) is automatically used")
-    print("     - Database path is automatically configured to /tmp/jvdb")
+    print("     - DynamoDB is the default database (persistent)")
     print()
-    print("For local testing, the server will run normally:")
-    print("  - Visit http://localhost:8000/docs for API documentation")
-    print("  - Test endpoints at http://localhost:8000/api/...")
+    print("Note: LambdaServer does not support run() - Lambda handles execution.")
+    print("      For local testing, use Server class instead.")
     print()
     print("=" * 80)
-
-    # For local development/testing, run the server normally
-    server.run(host="127.0.0.1", port=8000)

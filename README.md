@@ -28,7 +28,7 @@ jvspatial is an async-first Python library for building graph-based spatial appl
 
 Inspired by [Jaseci's](https://jaseci.org) object-spatial paradigm and leveraging Python's async capabilities, jvspatial empowers developers to model complex relationships, traverse object graphs, and implement agent-based architectures that scale with modern cloud-native concurrency requirements.
 
-**🚀 Serverless Ready**: Deploy to AWS Lambda with zero configuration changes. Enable `serverless_mode=True` and your FastAPI app is automatically wrapped with Mangum for Lambda compatibility. Includes native DynamoDB support for persistent storage in serverless environments.
+**🚀 Serverless Ready**: Deploy to AWS Lambda with zero configuration changes. Use `LambdaServer` and your FastAPI app is automatically wrapped with Mangum for Lambda compatibility. Includes native DynamoDB support for persistent storage in serverless environments.
 
 **Key Design Principles:**
 - **Hierarchy**: Object → Node → Edge/Walker inheritance
@@ -62,7 +62,7 @@ Inspired by [Jaseci's](https://jaseci.org) object-spatial paradigm and leveragin
 - Pagination with `ObjectPager`
 
 ### ☁️ Serverless Deployment (AWS Lambda)
-- **Zero-configuration Lambda deployment** with `serverless_mode=True`
+- **Zero-configuration Lambda deployment** with `LambdaServer`
 - Automatic Mangum integration for FastAPI → Lambda compatibility
 - **Native DynamoDB support** for persistent storage in serverless environments
 - Handler automatically exposed at module level for Lambda
@@ -136,14 +136,14 @@ if __name__ == "__main__":
 Deploy to AWS Lambda with zero configuration changes:
 
 ```python
-from jvspatial.api import Server, endpoint
+from jvspatial.api import endpoint
+from jvspatial.api.lambda_server import LambdaServer
 from jvspatial.core import Node
 
-# Enable serverless mode - handler is automatically created and exposed
-server = Server(
+# Use LambdaServer for Lambda deployments - handler is automatically created and exposed
+# DynamoDB is the default database (can be overridden)
+server = LambdaServer(
     title="Lambda API",
-    serverless_mode=True,  # Automatic Lambda handler setup
-    db_type="dynamodb",    # Use DynamoDB for persistent storage
     dynamodb_table_name="myapp",
     dynamodb_region="us-east-1",
 )

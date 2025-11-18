@@ -718,15 +718,16 @@ Enable serverless mode when creating the Server instance. The Lambda handler wil
 ```python
 from jvspatial.api import Server, endpoint
 
-# Create server with serverless mode enabled
-server = Server(
+# Create LambdaServer for Lambda deployments
+from jvspatial.api.lambda_server import LambdaServer
+
+server = LambdaServer(
     title="Lambda API",
     description="jvspatial API on AWS Lambda",
-    serverless_mode=True,  # Enable automatic handler setup
     serverless_lifespan="auto",  # Enable startup/shutdown events
     # serverless_api_gateway_base_path="/prod",  # Optional: API Gateway base path
-    db_type="json",
-    db_path="/tmp/jvdb",  # Lambda /tmp directory (ephemeral)
+    # DynamoDB is default, but can override with file-based databases
+    # db_type="json",  # Will use /tmp/jvdb (ephemeral)
 )
 
 @endpoint("/hello", methods=["GET"])
@@ -761,11 +762,11 @@ handler = server.get_lambda_handler(
 
 ### Serverless Configuration Options
 
-When using `serverless_mode=True`, you can configure the handler via ServerConfig:
+When using `LambdaServer`, you can configure the handler via ServerConfig:
 
-- `serverless_mode`: Enable automatic Lambda handler creation (default: `False`)
 - `serverless_lifespan`: Mangum lifespan mode - `"auto"`, `"on"`, or `"off"` (default: `"auto"`)
 - `serverless_api_gateway_base_path`: Optional API Gateway base path (e.g., `"/prod"`, `"/v1"`)
+- `lambda_temp_dir`: Lambda temp directory path (auto-detected in Lambda environment)
 
 ### Lambda Deployment Steps
 
@@ -796,11 +797,11 @@ When using `serverless_mode=True`, you can configure the handler via ServerConfi
 ### Lambda-Specific Considerations
 
 **Database Configuration**:
-- **DynamoDB (Recommended)**: Native AWS service, perfect for Lambda deployments
+- **DynamoDB (Default)**: Native AWS service, perfect for Lambda deployments
   ```python
-  server = Server(
-      serverless_mode=True,
-      db_type="dynamodb",
+  from jvspatial.api.lambda_server import LambdaServer
+
+  server = LambdaServer(
       dynamodb_table_name="myapp",
       dynamodb_region="us-east-1",
   )
@@ -816,14 +817,14 @@ When using `serverless_mode=True`, you can configure the handler via ServerConfi
 **Example Lambda Configuration**:
 ```python
 import os
-from jvspatial.api import Server, endpoint
+from jvspatial.api import endpoint
+from jvspatial.api.lambda_server import LambdaServer
 
-# Configure from environment variables with serverless mode enabled
-server = Server(
+# Configure from environment variables using LambdaServer
+server = LambdaServer(
     title="Lambda API",
-    serverless_mode=True,  # Automatic handler setup
     serverless_lifespan="auto",
-    # Use DynamoDB for persistent storage (recommended)
+    # DynamoDB is default, but can override
     db_type=os.getenv("JVSPATIAL_DB_TYPE", "dynamodb"),
     dynamodb_table_name=os.getenv("JVSPATIAL_DYNAMODB_TABLE_NAME", "jvspatial"),
     dynamodb_region=os.getenv("JVSPATIAL_DYNAMODB_REGION", "us-east-1"),
