@@ -7,6 +7,7 @@ setup, lifecycle management, and endpoint routing.
 
 import inspect
 import logging
+import os
 import sys
 from typing import (
     Any,
@@ -90,7 +91,140 @@ class Server:
             **kwargs: Additional configuration parameters
         """
         # Initialize configuration using clean merging
-        self.config = ServerConfig(**self._merge_config(config, kwargs))
+        merged_config = self._merge_config(config, kwargs)
+
+        # Early Lambda environment detection and configuration setup
+        # This must happen before database initialization to ensure db_path is properly configured
+        if (
+            merged_config.get("serverless_mode", False)
+            and self._is_lambda_environment()
+        ):
+            # Get lambda temp directory - use explicit config or auto-detect
+            lambda_temp = (
+                merged_config.get("lambda_temp_dir")
+                or os.getenv("JVSPATIAL_LAMBDA_TEMP_DIR")
+                or self._get_lambda_temp_dir()
+            )
+            if lambda_temp:
+                # Store lambda temp directory in config if not already set
+                if "lambda_temp_dir" not in merged_config or not merged_config.get(
+                    "lambda_temp_dir"
+                ):
+                    merged_config["lambda_temp_dir"] = lambda_temp
+
+                # CRITICAL: Force environment variables to use /tmp in serverless mode
+                # This prevents DatabaseManager from using default paths that would resolve to read-only /var/task
+                # This must happen before any database manager initialization
+                # Use direct assignment (not setdefault) to FORCE the value
+                if "db_type" not in merged_config or not merged_config.get("db_type"):
+                    # Default to json if not specified
+                    merged_config["db_type"] = "json"
+                    os.environ["JVSPATIAL_DB_TYPE"] = "json"
+                db_type = merged_config.get("db_type")
+                os.environ["JVSPATIAL_DB_TYPE"] = db_type
+
+                # FORCE environment variables to use /tmp for file-based databases in serverless mode
+                # This overrides any existing values to ensure we use writable /tmp
+                if db_type == "json":
+                    os.environ["JVSPATIAL_JSONDB_PATH"] = f"{lambda_temp}/jvdb"
+                elif db_type == "sqlite":
+                    os.environ["JVSPATIAL_SQLITE_PATH"] = (
+                        f"{lambda_temp}/jvdb/sqlite/jvspatial.db"
+                    )
+
+            # For file-based databases (JSON, SQLite), use S3 paths instead of ephemeral /tmp
+            # This ensures data persistence in serverless environments
+            s3_bucket = merged_config.get("s3_bucket_name") or os.getenv(
+                "JVSPATIAL_S3_BUCKET_NAME"
+            )
+
+            if "db_path" not in merged_config or not merged_config.get("db_path"):
+                # Default to JSON database if db_type not specified
+                if "db_type" not in merged_config or not merged_config.get("db_type"):
+                    merged_config["db_type"] = "json"
+
+                db_type = merged_config.get("db_type")
+
+                # For file-based databases in serverless mode, handle S3 configuration
+                if db_type in ["json", "sqlite"]:
+                    if s3_bucket:
+                        # File-based databases (JSON, SQLite) don't support S3 paths directly
+                        # Automatically switch to DynamoDB for persistent storage in serverless mode
+                        merged_config["db_type"] = "dynamodb"
+                        # Use S3 bucket name as DynamoDB table name if not explicitly set
+                        if (
+                            "dynamodb_table_name" not in merged_config
+                            or not merged_config.get("dynamodb_table_name")
+                        ):
+                            # Create a safe table name from bucket name
+                            table_name = s3_bucket.replace("/", "-").replace("_", "-")
+                            merged_config["dynamodb_table_name"] = (
+                                f"{table_name}-jvspatial"
+                            )
+                        # Use S3 region for DynamoDB if not explicitly set
+                        s3_region = merged_config.get("s3_region") or os.getenv(
+                            "JVSPATIAL_S3_REGION"
+                        )
+                        if s3_region and (
+                            "dynamodb_region" not in merged_config
+                            or not merged_config.get("dynamodb_region")
+                        ):
+                            merged_config["dynamodb_region"] = s3_region
+                        # Logging will happen after logger is initialized
+                        merged_config["_s3_db_path_log"] = (
+                            f"🔄 Automatically switching from {db_type} to DynamoDB for serverless mode. "
+                            f"File-based databases don't support S3 paths directly. "
+                            f"Using DynamoDB table: {merged_config['dynamodb_table_name']}"
+                        )
+                    else:
+                        # S3 not configured - use ephemeral /tmp with warning
+                        # Logging will happen after logger is initialized
+                        merged_config["_s3_db_path_warning"] = (
+                            f"⚠️  S3 bucket not configured for {db_type} database in serverless mode. "
+                            "File-based databases are ephemeral in Lambda (/tmp). "
+                            "Data will be lost between invocations. "
+                            "For persistence, configure S3 (will auto-switch to DynamoDB) or use DynamoDB directly."
+                        )
+                        # Fallback to Lambda temp (ephemeral) with warning
+                        if lambda_temp:
+                            if db_type == "json":
+                                merged_config["db_path"] = f"{lambda_temp}/jvdb"
+                                # Force environment variable to use /tmp (already set above, but ensure it's correct)
+                                os.environ["JVSPATIAL_JSONDB_PATH"] = (
+                                    f"{lambda_temp}/jvdb"
+                                )
+                            else:  # sqlite
+                                merged_config["db_path"] = (
+                                    f"{lambda_temp}/jvdb/sqlite/jvspatial.db"
+                                )
+                                # Force environment variable to use /tmp (already set above, but ensure it's correct)
+                                os.environ["JVSPATIAL_SQLITE_PATH"] = (
+                                    f"{lambda_temp}/jvdb/sqlite/jvspatial.db"
+                                )
+
+            # Automatically set file storage root to Lambda temp if using local storage
+            # (File storage should use S3 provider in serverless mode)
+            if (
+                merged_config.get("file_storage_provider") == "local"
+                and (
+                    "file_storage_root" not in merged_config
+                    or merged_config.get("file_storage_root") == ".files"
+                )
+                and lambda_temp
+            ):
+                merged_config["file_storage_root"] = f"{lambda_temp}/.files"
+                # Logging will happen after logger is initialized
+                merged_config["_file_storage_warning"] = (
+                    "⚠️  Using local file storage in serverless mode. "
+                    "Consider using S3 file storage provider for persistence."
+                )
+
+        # Remove temporary logging flags before creating config
+        s3_db_path_log = merged_config.pop("_s3_db_path_log", None)
+        s3_db_path_warning = merged_config.pop("_s3_db_path_warning", None)
+        file_storage_warning = merged_config.pop("_file_storage_warning", None)
+
+        self.config = ServerConfig(**merged_config)
 
         # Initialize focused components
         self.app_builder = AppBuilder(self.config)
@@ -105,6 +239,14 @@ class Server:
         self.endpoint_router = EndpointRouter()  # Main router for all endpoints
         self._exception_handlers: Dict[Union[int, Type[Exception]], Callable] = {}
         self._logger = logging.getLogger(__name__)
+
+        # Log S3 database path configuration messages (now that logger is initialized)
+        if s3_db_path_log:
+            self._logger.info(s3_db_path_log)
+        if s3_db_path_warning:
+            self._logger.warning(s3_db_path_warning)
+        if file_storage_warning:
+            self._logger.warning(file_storage_warning)
         self._graph_context: Optional[GraphContext] = None
 
         # File storage components
@@ -128,6 +270,39 @@ class Server:
 
         # Serverless/Lambda handler
         self._lambda_handler: Optional[Any] = None
+        self._caller_module: Optional[str] = (
+            None  # Store caller module for handler exposure
+        )
+
+        # Capture caller module for reliable handler exposure
+        # This works even when jvspatial is used as a library
+        try:
+            frame = inspect.currentframe()
+            if frame and frame.f_back:
+                caller_frame = frame.f_back
+                caller_module_name = caller_frame.f_globals.get("__name__")
+                caller_file = caller_frame.f_globals.get("__file__")
+
+                # If __main__, try to determine the actual module name from file path
+                if caller_module_name == "__main__" and caller_file:
+                    # Extract module name from file path (e.g., /path/to/lambda_example.py -> lambda_example)
+                    file_name = os.path.basename(caller_file)
+                    if file_name.endswith(".py"):
+                        module_name = file_name[:-3]  # Remove .py extension
+                        # Check if this module exists in sys.modules
+                        if module_name in sys.modules:
+                            self._caller_module = module_name
+                        else:
+                            # Store __main__ as fallback
+                            self._caller_module = caller_module_name
+                    else:
+                        self._caller_module = caller_module_name
+                elif caller_module_name:
+                    # Store the actual module name
+                    self._caller_module = caller_module_name
+        except Exception:
+            # If we can't determine caller module, handler exposure will use fallback
+            pass
 
         # Automatically set this server as the current server in context
         # The most recently instantiated Server becomes the current one
@@ -334,25 +509,86 @@ class Server:
         that uses the current database from DatabaseManager.
         """
         try:
-            from jvspatial.db.manager import get_database_manager
+            from jvspatial.db.manager import (
+                DatabaseManager,
+                get_database_manager,
+                set_database_manager,
+            )
 
-            # Get or create database manager
-            manager = get_database_manager()
+            # CRITICAL: In serverless mode, ensure environment variables are FORCED to /tmp
+            # This must happen before creating the database or getting the manager
+            # Also reset the DatabaseManager singleton if it was created with wrong paths
+            if self.config.serverless_mode and self._is_lambda_environment():
+                lambda_temp = self.get_lambda_temp_dir()
+                if lambda_temp:
+                    db_type = self.config.db_type or os.getenv(
+                        "JVSPATIAL_DB_TYPE", "json"
+                    )
+                    # FORCE environment variables to use /tmp - override any existing values
+                    os.environ["JVSPATIAL_DB_TYPE"] = db_type
+                    if db_type == "json":
+                        os.environ["JVSPATIAL_JSONDB_PATH"] = f"{lambda_temp}/jvdb"
+                    elif db_type == "sqlite":
+                        os.environ["JVSPATIAL_SQLITE_PATH"] = (
+                            f"{lambda_temp}/jvdb/sqlite/jvspatial.db"
+                        )
 
-            # Create prime database based on configuration
+                    # Reset DatabaseManager singleton if it exists to force re-initialization with correct paths
+                    # This ensures we don't use a manager that was created with wrong paths
+                    if DatabaseManager._instance is not None:
+                        DatabaseManager._instance = None
+                        self._logger.debug(
+                            "Reset DatabaseManager singleton to use correct Lambda temp paths"
+                        )
+
+            # Create prime database based on configuration FIRST
+            # This ensures we use the server's configuration, not default environment variables
+            prime_db = None
+
             if self.config.db_type == "json":
-                # Use Lambda temp directory if in serverless mode and no explicit path
-                db_path = self.config.db_path
-                if not db_path and self.config.serverless_mode:
+                # Check if db_path is an S3 path (not supported for file-based databases)
+                db_path = self.config.db_path or "./jvdb"
+                if db_path.startswith("s3://"):
+                    raise ValueError(
+                        f"JSON database does not support S3 paths. "
+                        f"Received: {db_path}. "
+                        f"For serverless mode with S3, use DynamoDB (db_type='dynamodb') instead. "
+                        f"Or configure S3 bucket to auto-switch to DynamoDB."
+                    )
+                # In serverless mode, ALWAYS use Lambda temp directory (/tmp)
+                # This prevents trying to write to read-only /var/task
+                if self.config.serverless_mode and self._is_lambda_environment():
+                    lambda_temp = self.get_lambda_temp_dir()
+                    if lambda_temp:
+                        # ALWAYS use /tmp for file-based databases in serverless mode
+                        # Override any db_path that would resolve to /var/task
+                        db_path = f"{lambda_temp}/jvdb"
+
+                        # Force environment variable to /tmp
+                        os.environ["JVSPATIAL_JSONDB_PATH"] = db_path
+
+                        if self.config.db_path and self.config.db_path != db_path:
+                            self._logger.info(
+                                f"📁 Overriding db_path '{self.config.db_path}' to use Lambda temp directory: {db_path}"
+                            )
+                        else:
+                            self._logger.info(
+                                f"📁 Using Lambda temp directory for JSON database: {db_path}"
+                            )
+                elif self.config.serverless_mode:
+                    # Serverless mode but not in Lambda environment - still use /tmp for safety
                     lambda_temp = self.get_lambda_temp_dir()
                     if lambda_temp:
                         db_path = f"{lambda_temp}/jvdb"
+                        os.environ["JVSPATIAL_JSONDB_PATH"] = db_path
                         self._logger.info(
-                            f"📁 Using Lambda temp directory for JSON database: {db_path}"
+                            f"📁 Serverless mode: Using temp directory for JSON database: {db_path}"
                         )
+
+                # Create database with the (potentially overridden) db_path
                 prime_db = create_database(
                     db_type="json",
-                    base_path=db_path or "./jvdb",
+                    base_path=db_path,
                 )
             elif self.config.db_type == "mongodb":
                 prime_db = create_database(
@@ -361,18 +597,38 @@ class Server:
                     db_name=self.config.db_database_name or "jvdb",
                 )
             elif self.config.db_type == "sqlite":
-                # Use Lambda temp directory if in serverless mode and no explicit path
-                db_path = self.config.db_path
-                if not db_path and self.config.serverless_mode:
+                # Check if db_path is an S3 path (not supported for file-based databases)
+                db_path = self.config.db_path or "jvdb/sqlite/jvspatial.db"
+                if db_path.startswith("s3://"):
+                    raise ValueError(
+                        f"SQLite database does not support S3 paths. "
+                        f"Received: {db_path}. "
+                        f"For serverless mode with S3, use DynamoDB (db_type='dynamodb') instead. "
+                        f"Or configure S3 bucket to auto-switch to DynamoDB."
+                    )
+                # In serverless mode, ALWAYS use Lambda temp directory (/tmp)
+                # This prevents trying to write to read-only /var/task
+                if self.config.serverless_mode and self._is_lambda_environment():
                     lambda_temp = self.get_lambda_temp_dir()
                     if lambda_temp:
+                        # ALWAYS use /tmp for file-based databases in serverless mode
+                        # Override any db_path that would resolve to /var/task
                         db_path = f"{lambda_temp}/jvdb/sqlite/jvspatial.db"
-                        self._logger.info(
-                            f"📁 Using Lambda temp directory for SQLite database: {db_path}"
-                        )
+
+                        # Force environment variable to /tmp
+                        os.environ["JVSPATIAL_SQLITE_PATH"] = db_path
+
+                        if self.config.db_path and self.config.db_path != db_path:
+                            self._logger.info(
+                                f"📁 Overriding db_path '{self.config.db_path}' to use Lambda temp directory: {db_path}"
+                            )
+                        else:
+                            self._logger.info(
+                                f"📁 Using Lambda temp directory for SQLite database: {db_path}"
+                            )
                 prime_db = create_database(
                     db_type="sqlite",
-                    db_path=db_path or "jvdb/sqlite/jvspatial.db",
+                    db_path=db_path,
                 )
             elif self.config.db_type == "dynamodb":
                 prime_db = create_database(
@@ -386,17 +642,22 @@ class Server:
             else:
                 raise ValueError(f"Unsupported database type: {self.config.db_type}")
 
-            # Initialize manager with prime database if not already initialized
+            # Get or create database manager and set the prime database
+            # This ensures the manager uses our configured database, not defaults
+            # CRITICAL: Always reset the singleton in serverless mode to ensure correct paths
+            if self.config.serverless_mode and self._is_lambda_environment():
+                # Reset singleton to force re-initialization with correct paths
+                DatabaseManager._instance = None
+
             try:
-                manager.get_prime_database()
-                # Update prime database if it was already initialized
+                manager = get_database_manager()
+                # Update prime database if manager already exists
                 manager._prime_database = prime_db
                 manager._databases["prime"] = prime_db
             except (RuntimeError, AttributeError):
-                # Manager not initialized yet, set it up
-                manager._prime_database = prime_db
-                manager._databases["prime"] = prime_db
-                manager._current_database_name = "prime"
+                # Manager doesn't exist yet, create it with our prime database
+                manager = DatabaseManager(prime_database=prime_db)
+                set_database_manager(manager)
 
             # Create GraphContext using current database (which defaults to prime)
             self._graph_context = GraphContext(database=manager.get_current_database())
@@ -422,11 +683,12 @@ class Server:
 
             # Initialize file interface
             if self.config.file_storage_provider == "local":
-                # Use Lambda temp directory if in serverless mode and no explicit root
+                # storage_root should already be set to Lambda temp if in serverless mode
+                # (handled in __init__), but use it if available
                 storage_root = self.config.file_storage_root
-                if storage_root == ".files" and self.config.serverless_mode:
+                if self.config.serverless_mode and self._is_lambda_environment():
                     lambda_temp = self.get_lambda_temp_dir()
-                    if lambda_temp:
+                    if lambda_temp and storage_root == ".files":
                         storage_root = f"{lambda_temp}/.files"
                         self._logger.info(
                             f"📁 Using Lambda temp directory for file storage: {storage_root}"
@@ -487,11 +749,10 @@ class Server:
             )
             return
 
-        # Capture Lambda temp directory if running in Lambda environment
-        if self._is_lambda_environment():
+        # Lambda temp directory should already be set in __init__, but ensure it's set
+        if self._is_lambda_environment() and not self.config.lambda_temp_dir:
             lambda_temp = self._get_lambda_temp_dir()
-            if lambda_temp and not self.config.lambda_temp_dir:
-                # Update config with detected Lambda temp directory
+            if lambda_temp:
                 self.config.lambda_temp_dir = lambda_temp
                 self._logger.info(f"📁 Lambda temp directory detected: {lambda_temp}")
 
@@ -513,18 +774,128 @@ class Server:
 
         # Automatically expose handler at module level for Lambda deployment
         # This must happen after handler creation but before returning
+        # Lambda looks for 'handler' in the module specified in the handler configuration
+        # We need to expose it to multiple potential module names to ensure it's found
+
+        handler_exposed = False
+        import sys
+
+        # Strategy 1: Try to expose to caller module (most reliable for library usage)
         try:
-            self._expose_handler_to_caller_module()
+            handler_exposed = self._expose_handler_to_caller_module()
         except Exception as e:
-            # Log but don't fail - handler is still accessible via server.lambda_handler
-            self._logger.warning(
-                f"Could not auto-expose Lambda handler: {e}. "
-                "Handler is still available via server.lambda_handler"
+            self._logger.debug(f"Could not expose to caller module: {e}")
+
+        # Strategy 2: CRITICAL - Expose to 'main' module (Lambda often uses this)
+        # Lambda handler configuration like "main.handler" looks for 'handler' in 'main' module
+        # We need to ensure 'main' module exists and has the handler
+        try:
+            # Try to get existing 'main' module
+            main_module = sys.modules.get("main")
+            if main_module:
+                main_module.handler = self._lambda_handler  # type: ignore[attr-defined]
+                self._logger.info(
+                    "✅ Lambda handler automatically exposed as 'handler' in 'main' module"
+                )
+                handler_exposed = True
+            else:
+                # 'main' module doesn't exist yet - create it if we're in Lambda
+                # This ensures the handler is available when Lambda looks for it
+                if self._is_lambda_environment():
+                    import types
+
+                    # Create a new module object for 'main'
+                    main_module = types.ModuleType("main")
+                    main_module.handler = self._lambda_handler  # type: ignore[attr-defined]
+                    sys.modules["main"] = main_module
+                    self._logger.info(
+                        "✅ Lambda handler automatically exposed as 'handler' in created 'main' module"
+                    )
+                    handler_exposed = True
+        except Exception as e:
+            self._logger.debug(f"Could not expose handler to 'main' module: {e}")
+
+        # Strategy 3: Expose to __main__ (Python's main module)
+        try:
+            import __main__
+
+            __main__.handler = self._lambda_handler  # type: ignore[attr-defined]
+            if not handler_exposed:
+                self._logger.info(
+                    "✅ Lambda handler automatically exposed as 'handler' in __main__"
+                )
+            handler_exposed = True
+        except Exception as e:
+            self._logger.debug(f"Could not expose handler to __main__: {e}")
+
+        # Strategy 4: Expose to sys.modules['__main__'] directly
+        try:
+            main_module = sys.modules.get("__main__")
+            if main_module:
+                main_module.handler = self._lambda_handler  # type: ignore[attr-defined]
+                if not handler_exposed:
+                    self._logger.info(
+                        "✅ Lambda handler exposed via sys.modules['__main__']"
+                    )
+                handler_exposed = True
+        except Exception as e:
+            self._logger.debug(
+                f"Could not expose handler via sys.modules['__main__']: {e}"
             )
 
-        self._logger.info(
-            "🚀 Serverless Lambda handler initialized and ready for deployment"
-        )
+        # Strategy 5: If in Lambda, try to expose to the actual entry point module
+        # Lambda sets __name__ to the handler module name, so we can use that
+        if self._is_lambda_environment():
+            try:
+                # Get the module where Server was instantiated (from stored caller_module)
+                if self._caller_module:
+                    caller_module = sys.modules.get(self._caller_module)
+                    if caller_module:
+                        caller_module.handler = self._lambda_handler  # type: ignore[attr-defined]
+                        if not handler_exposed:
+                            self._logger.info(
+                                f"✅ Lambda handler exposed to caller module: {self._caller_module}"
+                            )
+                        handler_exposed = True
+            except Exception as e:
+                self._logger.debug(f"Could not expose handler to caller module: {e}")
+
+        # Strategy 6: Try all loaded modules that might be the entry point
+        # This is a last resort to find the right module
+        if not handler_exposed and self._is_lambda_environment():
+            try:
+                # Look for modules that might be the entry point
+                # Common patterns: main, lambda_function, handler, app
+                potential_modules = [
+                    "main",
+                    "lambda_function",
+                    "handler",
+                    "app",
+                    "__main__",
+                ]
+                for module_name in potential_modules:
+                    module = sys.modules.get(module_name)
+                    if module:
+                        module.handler = self._lambda_handler  # type: ignore[attr-defined]
+                        self._logger.info(
+                            f"✅ Lambda handler exposed to '{module_name}' module (fallback)"
+                        )
+                        handler_exposed = True
+                        break
+            except Exception as e:
+                self._logger.debug(
+                    f"Could not expose handler via potential modules: {e}"
+                )
+
+        if handler_exposed:
+            self._logger.info(
+                "🚀 Serverless Lambda handler initialized and ready for deployment"
+            )
+        else:
+            self._logger.warning(
+                "⚠️  Lambda handler initialized but auto-exposure may have failed. "
+                "If you see 'HandlerNotFound' errors, manually assign: handler = server.lambda_handler"
+            )
 
     @staticmethod
     def _is_lambda_environment() -> bool:
@@ -536,7 +907,11 @@ class Server:
         import os
 
         # LAMBDA_TASK_ROOT is set by AWS Lambda runtime
-        return os.getenv("LAMBDA_TASK_ROOT") is not None
+        # Also check for AWS_EXECUTION_ENV which is set in Lambda
+        return (
+            os.getenv("LAMBDA_TASK_ROOT") is not None
+            or os.getenv("AWS_EXECUTION_ENV") is not None
+        )
 
     @staticmethod
     def _get_lambda_temp_dir() -> Optional[str]:
@@ -558,64 +933,81 @@ class Server:
                 return temp_dir
         return None
 
-    def _expose_handler_to_caller_module(self: "Server") -> None:
+    def _expose_handler_to_caller_module(self: "Server") -> bool:
         """Expose the Lambda handler as a module-level variable in the caller's module.
 
         This allows AWS Lambda to access the handler without requiring
         manual assignment (e.g., `handler = server.lambda_handler`).
+
+        Uses stored caller module name from __init__ for reliable exposure
+        when jvspatial is used as a library.
+
+        Returns:
+            True if handler was successfully exposed, False otherwise
         """
         try:
-            # Get the caller's frame
-            # We need to go up 3 frames:
-            # 0. _expose_handler_to_caller_module (current)
-            # 1. _initialize_serverless_handler
-            # 2. __init__ (Server.__init__)
-            # 3. The actual caller module where Server() was instantiated
+            # First, try using the stored caller module name (most reliable)
+            if self._caller_module:
+                caller_module = sys.modules.get(self._caller_module)
+                if caller_module:
+                    if not hasattr(caller_module, "handler"):
+                        caller_module.handler = self._lambda_handler  # type: ignore[attr-defined]
+                        self._logger.info(
+                            f"✅ Lambda handler automatically exposed as 'handler' in {self._caller_module}"
+                        )
+                        return True
+                    else:
+                        self._logger.debug(
+                            f"⚠️  'handler' already exists in {self._caller_module}, skipping auto-exposure"
+                        )
+                        return True  # Handler exists, consider it exposed
+
+            # Fallback: Try frame inspection (less reliable but works as backup)
             frame = inspect.currentframe()
             if frame is None:
-                return
+                return False
 
-            # Go up 3 frames to reach the caller's module
+            # Go up frames to find the caller module
             caller_frame = frame.f_back  # _initialize_serverless_handler
             if caller_frame is None:
-                return
+                return False
             caller_frame = caller_frame.f_back  # __init__
             if caller_frame is None:
-                return
+                return False
             caller_frame = caller_frame.f_back  # Actual caller module
             if caller_frame is None:
-                return
+                return False
 
             # Get the caller's module
             caller_module_name = caller_frame.f_globals.get("__name__")
             if caller_module_name is None:
-                return
+                return False
 
             caller_module = sys.modules.get(caller_module_name)
             if caller_module is None:
-                return
+                return False
 
             # Only expose if 'handler' doesn't already exist in the module
-            # This prevents overwriting user-defined handlers
-            handler_attr = "handler"  # Use variable to avoid B010 flake8 warning
-            if not hasattr(caller_module, handler_attr):
-                # Dynamically set handler attribute on module for Lambda deployment
-                # Using setattr with variable to satisfy flake8 B010, with type ignore for mypy
-                setattr(caller_module, handler_attr, self._lambda_handler)  # type: ignore[attr-defined]
+            if not hasattr(caller_module, "handler"):
+                caller_module.handler = self._lambda_handler  # type: ignore[attr-defined]
                 self._logger.info(
                     f"✅ Lambda handler automatically exposed as 'handler' in {caller_module.__name__}"
                 )
+                return True
             else:
                 self._logger.debug(
                     f"⚠️  'handler' already exists in {caller_module.__name__}, skipping auto-exposure"
                 )
+                return True  # Handler exists, consider it exposed
         except Exception as e:
             # Log warning but don't fail - handler exposure is a convenience feature
             # Users can still access handler via server.lambda_handler
             self._logger.warning(
                 f"Could not auto-expose handler to module: {e}. "
-                "You can still access it via server.lambda_handler or assign it manually: handler = server.lambda_handler"
+                "Handler is still available via server.lambda_handler. "
+                "You can manually assign: handler = server.lambda_handler"
             )
+            return False
 
     def middleware(self: "Server", middleware_type: str = "http") -> Callable:
         """Add middleware to the application.
@@ -1449,14 +1841,26 @@ class Server:
 
         return None
 
-    def get_lambda_handler(self: "Server", **mangum_kwargs: Any) -> Any:
-        """Get an AWS Lambda handler for serverless deployment.
+    def get_lambda_handler(
+        self: "Server",
+        handler_name: str = "handler",
+        expose: bool = True,
+        **mangum_kwargs: Any,
+    ) -> Any:
+        """Get and optionally expose Lambda handler at module level for AWS Lambda deployment.
 
         This method wraps the FastAPI application with Mangum, an ASGI adapter
         for AWS Lambda. If serverless mode is enabled, returns the pre-configured
         handler. Otherwise, creates a new handler with the provided options.
 
+        By default, the handler is automatically exposed at module level, which is
+        required by AWS Lambda. Set expose=False to get the handler without exposure.
+
         Args:
+            handler_name: Name of the handler variable to expose (default: "handler").
+                Only used if expose=True.
+            expose: Whether to expose the handler at module level (default: True).
+                Set to False to get handler without module-level exposure.
             **mangum_kwargs: Additional Mangum configuration options (only used
                 if serverless mode is not enabled). Common options include:
                 - lifespan: "off" to disable lifespan events (default: "auto")
@@ -1468,11 +1872,14 @@ class Server:
 
         Example:
             ```python
-            # Option 1: Enable serverless mode (handler created automatically)
+            # Option 1: Enable serverless mode (handler created and exposed automatically)
             server = Server(serverless_mode=True, title="My API")
-            handler = server.get_lambda_handler()  # Returns pre-configured handler
+            handler = server.get_lambda_handler()  # Returns handler and exposes at module level
 
-            # Option 2: Manual handler creation
+            # Option 2: Get handler without module-level exposure
+            handler = server.get_lambda_handler(expose=False)
+
+            # Option 3: Manual handler creation
             server = Server(title="My API")
             handler = server.get_lambda_handler(lifespan="auto")
             ```
@@ -1482,40 +1889,106 @@ class Server:
             pip install mangum>=0.17.0
             Or install optional dependencies:
             pip install jvspatial[serverless]
+
+            When expose=True (default), this function must be called at module level
+            (not inside a function) for Lambda to find the handler.
         """
-        # If serverless mode is enabled, return the pre-configured handler
+        import inspect
+        import sys
+
+        # Get or create the handler
         if self.config.serverless_mode and self._lambda_handler is not None:
             if mangum_kwargs:
                 self._logger.warning(
                     "Serverless mode is enabled. Additional mangum_kwargs are ignored. "
                     "Configure serverless options via ServerConfig instead."
                 )
-            return self._lambda_handler
+            lambda_handler = self._lambda_handler
+        else:
+            # Create handler on-demand
+            try:
+                from mangum import Mangum
+            except ImportError:
+                raise ImportError(
+                    "Mangum is required for serverless deployment. "
+                    "Install it with: pip install mangum>=0.17.0 "
+                    "or pip install jvspatial[serverless]"
+                ) from None
 
-        # Otherwise, create handler on-demand
-        try:
-            from mangum import Mangum
-        except ImportError:
-            raise ImportError(
-                "Mangum is required for serverless deployment. "
-                "Install it with: pip install mangum>=0.17.0 "
-                "or pip install jvspatial[serverless]"
-            )
+            app = self.get_app()
 
-        app = self.get_app()
+            # Configure Mangum with sensible defaults for Lambda
+            mangum_config = {
+                "lifespan": "auto",  # Enable lifespan events (startup/shutdown)
+                **mangum_kwargs,
+            }
 
-        # Configure Mangum with sensible defaults for Lambda
-        mangum_config = {
-            "lifespan": "auto",  # Enable lifespan events (startup/shutdown)
-            **mangum_kwargs,
-        }
+            # Create Mangum adapter
+            lambda_handler = Mangum(app, **mangum_config)
+            self._logger.info("🚀 Lambda handler created for serverless deployment")
 
-        # Create Mangum adapter
-        handler = Mangum(app, **mangum_config)
+        # Expose handler at module level if requested
+        if expose:
+            try:
+                # Get the calling module using frame inspection
+                frame = inspect.currentframe()
+                if frame is None:
+                    self._logger.warning(
+                        "Could not determine calling module for handler exposure"
+                    )
+                else:
+                    # Go up one frame to get the caller's frame
+                    caller_frame = frame.f_back
+                    if caller_frame is not None:
+                        # Get the caller's module
+                        caller_module = caller_frame.f_globals
+                        caller_module_name = caller_module.get("__name__")
 
-        self._logger.info("🚀 Lambda handler created for serverless deployment")
+                        if caller_module_name:
+                            # Expose handler in the calling module
+                            # Use setattr with variable handler_name (flake8 B010 allows this for dynamic names)
+                            setattr(
+                                caller_module, handler_name, lambda_handler
+                            )  # noqa: B010
 
-        return handler
+                            # Also try to expose to sys.modules for reliability
+                            if caller_module_name in sys.modules:
+                                setattr(  # noqa: B010
+                                    sys.modules[caller_module_name],
+                                    handler_name,
+                                    lambda_handler,
+                                )
+
+                            # Also expose to 'main' module if that's what Lambda expects
+                            if caller_module_name != "main":
+                                main_module = sys.modules.get("main")
+                                if main_module:
+                                    setattr(
+                                        main_module, handler_name, lambda_handler
+                                    )  # noqa: B010
+                                else:
+                                    # Check if we're in Lambda environment
+                                    import os
+
+                                    if os.getenv("LAMBDA_TASK_ROOT") or os.getenv(
+                                        "AWS_EXECUTION_ENV"
+                                    ):
+                                        # In Lambda, create 'main' module if it doesn't exist
+                                        import types
+
+                                        main_module = types.ModuleType("main")
+                                        setattr(  # noqa: B010
+                                            main_module, handler_name, lambda_handler
+                                        )
+                                        sys.modules["main"] = main_module
+
+                            self._logger.debug(
+                                f"✅ Lambda handler exposed as '{handler_name}' in {caller_module_name}"
+                            )
+            except Exception as e:
+                self._logger.warning(f"Could not expose handler at module level: {e}")
+
+        return lambda_handler
 
     def run(
         self: "Server",
@@ -1808,66 +2281,3 @@ def create_server(
     return Server(
         title=title, description=description, version=version, **config_kwargs
     )
-
-
-def create_lambda_handler(
-    server: Optional[Server] = None,
-    **server_kwargs: Any,
-) -> Any:
-    """Create a Lambda handler from a Server instance or create a new one.
-
-    This is a convenience function for creating Lambda handlers. If a server
-    instance is provided, it will use that. Otherwise, it creates a new server
-    with the provided configuration.
-
-    Args:
-        server: Optional Server instance. If None, a new server will be created.
-        **server_kwargs: Configuration for creating a new server if server is None.
-            Also accepts **mangum_kwargs for Mangum configuration.
-
-    Returns:
-        Lambda handler function compatible with AWS Lambda
-
-    Example:
-        ```python
-        from jvspatial.api import endpoint, create_lambda_handler
-
-        @endpoint("/hello")
-        async def hello():
-            return {"message": "Hello from Lambda!"}
-
-        # Create handler - server will be auto-created
-        handler = create_lambda_handler(title="My Lambda API")
-        ```
-
-    Note:
-        Requires the 'mangum' package to be installed:
-        pip install mangum>=0.17.0
-        Or install optional dependencies:
-        pip install jvspatial[serverless]
-    """
-    # Separate mangum kwargs from server kwargs
-    mangum_kwargs = {}
-    server_config = {}
-
-    # Known Mangum configuration keys
-    mangum_keys = {
-        "lifespan",
-        "api_gateway_base_path",
-        "text_mime_types",
-        "exclude_headers",
-        "exclude_query_strings",
-    }
-
-    for key, value in server_kwargs.items():
-        if key in mangum_keys:
-            mangum_kwargs[key] = value
-        else:
-            server_config[key] = value
-
-    # Use provided server or create a new one
-    if server is None:
-        server = Server(**server_config)
-
-    # Get Lambda handler from server
-    return server.get_lambda_handler(**mangum_kwargs)

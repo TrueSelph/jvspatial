@@ -241,8 +241,10 @@ if user:
     await user.save()
     await user.delete()
 
-# Counting: use len() with find() - Object.count() doesn't exist
-count = len(await User.find({"context.active": True}))
+# Efficient counting
+total_users = await User.count()  # Count all users
+active_users = await User.count({"context.active": True})  # Count filtered users using query dict
+active_users = await User.count(active=True)  # Count filtered users using keyword arguments
 ```
 
 ## Configuration

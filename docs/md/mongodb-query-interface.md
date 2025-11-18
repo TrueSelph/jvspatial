@@ -11,6 +11,7 @@ The query interface provides:
 - **Comprehensive Operators**: Support for comparison, logical, array, and string operators
 - **Entity-Centric Integration**: Works seamlessly with `Node.find()`, `User.find()`, etc.
 - **Dot Notation**: Support for nested field queries using `context.field` notation
+- **Efficient Counting**: Use `.count()` method with query filters for efficient record counting without loading all data
 
 ## Basic Query Structure
 

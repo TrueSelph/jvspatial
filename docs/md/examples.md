@@ -358,11 +358,13 @@ async def admin_list_users(request: Request):
     current_user = get_current_user(request)
 
     all_users = await User.all()
+    # Efficient counting
+    total_users = await User.count()  # Much faster than len(all_users)
     return {
         "message": "User management - Admin access only",
         "authentication": "JWT token + admin role required",
         "admin_user": current_user.email,
-        "total_users": len(all_users),
+        "total_users": total_users,
         "users": [user.export() for user in all_users]
     }
 ```

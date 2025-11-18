@@ -416,17 +416,17 @@ async def get_agent_statistics() -> Dict[str, Any]:
     """
     try:
         # RECOMMENDED: Use entity-centric count operations
-        total_apps = len(await App.find({"context.status": "active"}))
-        total_agents = len(await MyAgent.find({}))
-        active_agents = len(await MyAgent.find({"context.status": "active"}))
-        published_agents = len(await MyAgent.find({"context.published": True}))
-        total_actions = len(await Action.find({}))
-        enabled_actions = len(await Action.find({"context.enabled": True}))
+        total_apps = await App.count({"context.status": "active"})
+        total_agents = await MyAgent.count()
+        active_agents = await MyAgent.count({"context.status": "active"})
+        published_agents = await MyAgent.count({"context.published": True})
+        total_actions = await Action.count()
+        enabled_actions = await Action.count({"context.enabled": True})
 
         # Get action type breakdown
-        first_actions = len(await FirstAction.find({}))
-        second_actions = len(await SecondAction.find({}))
-        third_actions = len(await ThirdAction.find({}))
+        first_actions = await FirstAction.count()
+        second_actions = await SecondAction.count()
+        third_actions = await ThirdAction.count()
 
         return {
             "system_stats": {
@@ -637,7 +637,7 @@ async def demonstrate_entity_queries():
         # Count different action types
         action_counts = {}
         for action_class in [FirstAction, SecondAction, ThirdAction]:
-            count = len(await action_class.find({"context.enabled": True}))
+            count = await action_class.count({"context.enabled": True})
             action_counts[action_class.__name__] = count
 
         print("✅ Action type counts:", action_counts)

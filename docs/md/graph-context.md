@@ -486,6 +486,8 @@ GraphContext provides clean, centralized database management:
 All existing entity methods continue to work:
 - `await Node.create(**kwargs)`
 - `await Node.get(id)`
+- `await Node.find(query, **kwargs)` - Returns list of matching nodes
+- `await Node.count(query, **kwargs)` - Efficiently count matching records
 - `await node.save()`
 - `await node.delete()` (cascades by default for Node entities)
 - `await Edge.create(source, target, **kwargs)`

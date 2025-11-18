@@ -94,11 +94,10 @@ async def collect_metrics() -> None:
     cpu_percent = psutil.cpu_percent()
     memory = psutil.virtual_memory()
 
-    # Count active jobs using MongoDB-style query
-    active_jobs_list = await ScheduledJob.find({
+    # Count active jobs efficiently using .count()
+    active_jobs = await ScheduledJob.count({
         "context.status": {"$in": ["pending", "running"]}
     })
-    active_jobs = len(active_jobs_list)
 
     # Create metrics record
     await SystemMetrics.create(
@@ -151,15 +150,12 @@ async def get_scheduler_status() -> Dict[str, Any]:
     # Get scheduler status
     status = server.scheduler_service.get_status()
 
-    # Get job statistics using entity queries
-    total_jobs_list = await ScheduledJob.find({})
-    total_jobs = len(total_jobs_list)
+    # Get job statistics efficiently using .count()
+    total_jobs = await ScheduledJob.count()
 
-    completed_jobs_list = await ScheduledJob.find({"context.status": "completed"})
-    completed_jobs = len(completed_jobs_list)
+    completed_jobs = await ScheduledJob.count({"context.status": "completed"})
 
-    failed_jobs_list = await ScheduledJob.find({"context.status": "failed"})
-    failed_jobs = len(failed_jobs_list)
+    failed_jobs = await ScheduledJob.count({"context.status": "failed"})
 
     return {
         "scheduler": status,
@@ -334,15 +330,11 @@ async def analyze_job_patterns():
         "context.job_name": {"$regex": "cleanup", "$options": "i"}
     })
 
-    # Count jobs by status
-    completed_list = await ScheduledJob.find({"context.status": "completed"})
-    failed_list = await ScheduledJob.find({"context.status": "failed"})
-    total_list = await ScheduledJob.find({})
-
+    # Count jobs by status efficiently using .count()
     job_counts = {
-        "completed": len(completed_list),
-        "failed": len(failed_list),
-        "total": len(total_list)
+        "completed": await ScheduledJob.count({"context.status": "completed"}),
+        "failed": await ScheduledJob.count({"context.status": "failed"}),
+        "total": await ScheduledJob.count()
     }
 
     # Find slow jobs
@@ -544,14 +536,14 @@ logger.error(f"Data sync {sync_id} failed: {str(e)}")
         await update_job_status(job_record.id, "failed", str(e))
 
         # Check failure patterns for circuit breaker
-        recent_failures_list = await ScheduledJob.find({
+        # Count recent failures efficiently
+        recent_failures = await ScheduledJob.count({
             "$and": [
                 {"context.job_name": "resilient_data_sync"},
                 {"context.status": {"$in": ["failed", "timeout"]}},
                 {"context.execution_time": {"$gte": (datetime.now() - timedelta(hours=2)).timestamp()}}
             ]
         })
-        recent_failures = len(recent_failures_list)
 
         if recent_failures >= 3:
 logger.critical("Circuit breaker activated for data sync")
@@ -689,15 +681,14 @@ async def monitor_system():
 ```python
 @on_schedule("every 10 minutes", description="Task with circuit breaker")
 async def task_with_circuit_breaker():
-    # Check recent failures
-    failure_list = await ScheduledJob.find({
+    # Check recent failures efficiently using .count()
+    failure_count = await ScheduledJob.count({
         "$and": [
             {"context.job_name": "task_with_circuit_breaker"},
             {"context.status": "failed"},
             {"context.execution_time": {"$gte": (datetime.now() - timedelta(hours=1)).timestamp()}}
         ]
     })
-    failure_count = len(failure_list)
 
     if failure_count >= 3:
         logger.warning("🔒 Circuit breaker open, skipping execution")

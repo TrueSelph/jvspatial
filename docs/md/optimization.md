@@ -151,6 +151,9 @@ users = await User.find(
     {"active": True},
     projection=["id", "name", "email"]
 )
+
+# Efficient counting without loading records
+active_count = await User.count({"active": True})  # Much faster than len(await User.find(...))
 ```
 
 ### Connection Pooling

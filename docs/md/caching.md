@@ -262,9 +262,10 @@ user = await User.get(user_id)  # Cached
 users = await User.find({"context.department": "engineering"})  # Not cached
 all_users = await User.all()  # Not cached
 
-# Count and distinct operations hit database
-count = await User.count({"context.active": True})  # Not cached
-depts = await User.distinct("department")  # Not cached
+# Efficient counting operations hit database (but don't load records)
+total_count = await User.count()  # Not cached, but efficient
+active_count = await User.count({"context.active": True})  # Not cached, but efficient
+active_count = await User.count(active=True)  # Alternative: keyword arguments
 ```
 
 **Why aren't queries cached?** Query results can change frequently and are often filtered differently each time. Caching individual entities by ID provides better hit rates and more predictable behavior.

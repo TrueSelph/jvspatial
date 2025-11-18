@@ -110,7 +110,7 @@ all_entities = await Entity.find({})
 departments = set(e.department for e in all_entities if hasattr(e, 'department'))
 ```
 
-**Note**: Caching is automatic and transparent. Individual entity retrievals by ID (`Entity.get(id)`) are cached. Queries (`find()`, `all()`) always hit the database as they can change frequently. For counting, use `len(await Entity.find(...))` instead of a non-existent `count()` method.
+**Note**: Caching is automatic and transparent. Individual entity retrievals by ID (`Entity.get(id)`) are cached. Queries (`find()`, `all()`) always hit the database as they can change frequently. For counting, use `Entity.count(query)` for efficient counting without loading all records.
 
 ### save() Operation Rules
 **✅ save() is ONLY required when:**

@@ -20,9 +20,19 @@ class Object(BaseModel):
     async def get(cls, id: str) -> Optional["Object"]
     @classmethod
     async def create(cls, **kwargs) -> "Object"
+    @classmethod
+    async def find(cls, query: Optional[dict] = None, **filters) -> List["Object"]
+    @classmethod
+    async def count(cls, query: Optional[dict] = None, **filters) -> int
     async def delete(cascade: bool = False) -> None  # cascade is ignored for Object entities
     def export() -> dict
 ```
+
+**Convenience Counting**
+
+- `await Object.count()` → count all objects of that type
+- `await Object.count({"context.active": True})` → count filtered objects using query dict
+- `await Object.count(active=True)` → count filtered objects using keyword arguments
 
 #### `Node(Object)`
 Represents graph nodes with connection capabilities.
@@ -45,6 +55,8 @@ class Node(Object):
     async def delete(cascade: bool = True) -> None  # Cascades by default
     @classmethod
     async def all() -> List["Node"]
+    @classmethod
+    async def count(cls, query: Optional[dict] = None, **kwargs) -> int  # Inherited from Object
 ```
 
 **Key Methods:**
@@ -67,6 +79,8 @@ class Edge(Object):
     direction: str = "both"  # "in", "out", or "both"
 
     async def delete() -> None  # Simple deletion, no cascading
+    @classmethod
+    async def count(cls, query: Optional[dict] = None, **kwargs) -> int  # Inherited from Object
 ```
 
 #### `Walker`

@@ -267,7 +267,7 @@ class SearchUsers(Walker):
                     "active": user.active
                 } for user in users
             ],
-            "total_found": len(users),
+            "total_found": await User.count(query),  # Efficient counting
             "query_used": query
         }
 

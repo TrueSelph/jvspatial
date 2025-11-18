@@ -232,7 +232,7 @@ class Object(AttributeMixin, BaseModel):
         and dependent nodes.
 
         Args:
-            cascade: Ignored for Object entities (kept for API compatibility)
+            cascade: Ignored for Object entities
         """
         context = await self.get_context()
         await context.delete(self, cascade=False)
@@ -256,96 +256,29 @@ class Object(AttributeMixin, BaseModel):
     async def find(
         cls: Type["Object"], query: Optional[Dict[str, Any]] = None, **kwargs: Any
     ) -> List["Object"]:
-        """Find objects matching the query.
-
-        Supports both dictionary queries and keyword arguments for property-based filtering.
-        Property queries can use either direct property names or "context.property" format.
+        """Find objects matching the given filters.
 
         Args:
-            query: Query dictionary (optional). If None, uses kwargs for filtering.
-                  Can include property names directly or use "context.property" format.
-            **kwargs: Property-based filters (e.g., email="test@example.com")
+            query: Optional query dictionary (e.g., {"context.active": True})
+            **kwargs: Additional filters as keyword arguments (e.g., active=True)
 
         Returns:
-            List of matching objects
+            List of matching Object instances
 
         Examples:
-            # Find by property
-            users = await User.find(email="test@example.com")
+            # Fetch all matching objects
+            users = await User.find({"context.active": True})
 
-            # Find with query dict
-            users = await User.find({"context.email": "test@example.com"})
-
-            # Find all of a type
-            users = await User.find()
-
-            # Multiple criteria
-            users = await User.find(role="admin", department="engineering")
+            # Count matching objects
+            count = await User.count({"context.active": True})
         """
         from ..context import get_default_context
 
         context = get_default_context()
-        type_code = context._get_entity_type_code(cls)
-        collection = context._get_collection_name(type_code)
-
-        # Build database query
-        if query is None:
-            query = {}
-
-        # Add class name filter for type safety
-        # Use "_class" field (always added for Objects) with fallback to "name" for backward compatibility
-        # We'll handle this in the query building to support both formats
-        db_query: Dict[str, Any] = {}
-
-        # Process kwargs and query - convert property names to database format
-        combined_filters = {**query, **kwargs}
-
-        # Build class name filter - check both "_class" and "name" for backward compatibility
-        # Use $or to match records with either field matching the class name
-        class_name_filter: Dict[str, Any] = {
-            "$or": [{"_class": cls.__name__}, {"name": cls.__name__}]
-        }
-
-        # Get top-level fields for this entity type (fields stored at root level in persistence)
-        top_level_fields = cls._get_top_level_fields()
-
-        # For Objects (type_code == "o"), fields are stored at root level, not under "context"
-        # For Nodes/Edges/Walkers, fields are stored under "context" when for_persistence=True
-        is_object = type_code == "o"
-
-        for key, value in combined_filters.items():
-            if key == "name":
-                # Skip "name" as it's already set for class filtering
-                continue
-            elif key in top_level_fields:
-                # Top-level field (e.g., source, target for Edges) - use as-is
-                db_query[key] = value
-            elif key.startswith("context."):
-                # Already in database format
-                if is_object:
-                    # For Objects, fields are at root level, so remove "context." prefix
-                    db_query[key[8:]] = value  # Remove "context." prefix (8 chars)
-                else:
-                    # For Nodes/Edges/Walkers, keep "context." prefix
-                    db_query[key] = value
-            else:
-                # Property name - convert to database format
-                if is_object:
-                    # For Objects, fields are at root level
-                    db_query[key] = value
-                else:
-                    # For Nodes/Edges/Walkers, add "context." prefix
-                    db_query[f"context.{key}"] = value
-
-        # Combine class name filter with other filters using $and
-        if db_query:
-            final_query = {"$and": [class_name_filter, db_query]}
-        else:
-            final_query = class_name_filter
+        collection, final_query = cls._build_database_query(context, query, kwargs)
 
         results = await context.database.find(collection, final_query)
-
-        objects = []
+        objects: List["Object"] = []
         for data in results:
             try:
                 obj = await context._deserialize_entity(cls, data)
@@ -353,8 +286,82 @@ class Object(AttributeMixin, BaseModel):
                     objects.append(obj)
             except Exception:
                 continue
-
         return objects
+
+    @classmethod
+    async def count(
+        cls: Type["Object"], query: Optional[Dict[str, Any]] = None, **kwargs: Any
+    ) -> int:
+        """Count objects matching the provided filters.
+
+        Args:
+            query: Optional query dictionary (e.g., {"context.active": True})
+            **kwargs: Additional filters as keyword arguments (e.g., active=True)
+
+        Returns:
+            Number of matching records
+
+        Examples:
+            # Count all objects
+            total = await User.count()
+
+            # Count filtered objects using query dict
+            active = await User.count({"context.active": True})
+
+            # Count filtered objects using keyword arguments
+            active = await User.count(active=True)
+        """
+        from ..context import get_default_context
+
+        context = get_default_context()
+        collection, final_query = cls._build_database_query(context, query, kwargs)
+        return await context.database.count(collection, final_query)
+
+    @classmethod
+    def _build_database_query(
+        cls: Type["Object"],
+        context: GraphContext,
+        query: Optional[Dict[str, Any]],
+        kwargs: Dict[str, Any],
+    ) -> tuple[str, Dict[str, Any]]:
+        """Build the database collection name and query dict."""
+        type_code = context._get_entity_type_code(cls)
+        collection = context._get_collection_name(type_code)
+
+        combined_filters: Dict[str, Any] = {}
+        if query:
+            combined_filters.update(query)
+        if kwargs:
+            combined_filters.update(kwargs)
+
+        class_name_filter: Dict[str, Any] = {
+            "$or": [{"_class": cls.__name__}, {"name": cls.__name__}]
+        }
+
+        top_level_fields = cls._get_top_level_fields()
+        is_object = type_code == "o"
+        db_query: Dict[str, Any] = {}
+
+        for key, value in combined_filters.items():
+            if key == "name":
+                continue
+            if key in top_level_fields:
+                db_query[key] = value
+            elif key.startswith("context."):
+                if is_object:
+                    db_query[key[8:]] = value
+                else:
+                    db_query[key] = value
+            else:
+                if is_object:
+                    db_query[key] = value
+                else:
+                    db_query[f"context.{key}"] = value
+
+        final_query = (
+            {"$and": [class_name_filter, db_query]} if db_query else class_name_filter
+        )
+        return collection, final_query
 
     @classmethod
     async def all(cls: Type["Object"]) -> List["Object"]:
@@ -363,22 +370,7 @@ class Object(AttributeMixin, BaseModel):
         Returns:
             List of all objects of this type
         """
-        from ..context import get_default_context
-
-        context = get_default_context()
-        collection = context._get_collection_name(cls.type_code)
-        results = await context.database.find(collection, {"name": cls.__name__})
-
-        objects = []
-        for data in results:
-            try:
-                obj = await context._deserialize_entity(cls, data)
-                if obj:
-                    objects.append(obj)
-            except Exception:
-                continue
-
-        return objects
+        return await cls.find()
 
     def __getitem__(self: "Object", key: str) -> Any:
         """Get item from internal data storage.

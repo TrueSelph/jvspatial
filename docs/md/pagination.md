@@ -359,6 +359,10 @@ large_cities = await paginate_objects(
 
 # Bad: Python-level filtering (loads all data)
 all_cities = await City.all()
+
+# Efficient counting
+total_cities = await City.count()  # Count all cities
+large_cities_count = await City.count({"population": {"$gt": 1000000}})  # Count filtered
 large_cities = [c for c in all_cities if c.population > 1000000]
 ```
 

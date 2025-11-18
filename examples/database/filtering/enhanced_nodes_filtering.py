@@ -137,7 +137,7 @@ async def demonstrate_enhanced_filtering():
     )
 
     print(
-        f"Created {len(await Highway.find({}))} highways and {len(await Railroad.find({}))} railroads"
+        f"Created {await Highway.count()} highways and {await Railroad.count()} railroads"
     )
 
     # DEMONSTRATE ENHANCED FILTERING

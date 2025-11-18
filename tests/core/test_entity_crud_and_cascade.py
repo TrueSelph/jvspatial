@@ -48,6 +48,7 @@ class TestObject(Object):
 
     name: str = ""
     value: int = 0
+    active: bool = True
     type_code: str = Field(default="o")
 
 
@@ -172,6 +173,142 @@ class TestGraphContextCRUD:
         # Verify deletion
         retrieved = await TestObject.get(obj_id)
         assert retrieved is None
+
+    @pytest.mark.asyncio
+    async def test_object_count_all(self, temp_context):
+        """Test counting all objects of a type."""
+        from jvspatial.core.context import set_default_context
+
+        set_default_context(temp_context)
+        # Create multiple objects
+        await TestObject.create(name="obj1", value=1, active=True)
+        await TestObject.create(name="obj2", value=2, active=True)
+        await TestObject.create(name="obj3", value=3, active=False)
+
+        # Count all objects
+        count = await TestObject.count()
+        assert count == 3
+
+    @pytest.mark.asyncio
+    async def test_object_count_filtered(self, temp_context):
+        """Test counting filtered objects."""
+        from jvspatial.core.context import set_default_context
+
+        set_default_context(temp_context)
+        # Create multiple objects
+        await TestObject.create(name="obj1", value=1, active=True)
+        await TestObject.create(name="obj2", value=2, active=True)
+        await TestObject.create(name="obj3", value=3, active=False)
+
+        # Count filtered objects
+        active_count = await TestObject.count({"context.active": True})
+        assert active_count == 2
+
+        inactive_count = await TestObject.count(active=False)
+        assert inactive_count == 1
+
+    @pytest.mark.asyncio
+    async def test_node_count_all(self, temp_context):
+        """Test counting all nodes of a type."""
+        from jvspatial.core.context import set_default_context
+
+        set_default_context(temp_context)
+        # Create multiple nodes
+        await TestNode.create(name="node1", value=1)
+        await TestNode.create(name="node2", value=2)
+        await TestNode.create(name="node3", value=3)
+
+        # Count all nodes
+        count = await TestNode.count()
+        assert count == 3
+
+    @pytest.mark.asyncio
+    async def test_node_count_filtered(self, temp_context):
+        """Test counting filtered nodes."""
+        from jvspatial.core.context import set_default_context
+
+        set_default_context(temp_context)
+        # Create multiple nodes
+        await TestNode.create(name="node1", value=1)
+        await TestNode.create(name="node2", value=2)
+        await TestNode.create(name="node3", value=3)
+
+        # Count filtered nodes
+        count = await TestNode.count({"context.value": 2})
+        assert count == 1
+
+        count_kwargs = await TestNode.count(value=3)
+        assert count_kwargs == 1
+
+    @pytest.mark.asyncio
+    async def test_edge_count_all(self, temp_context):
+        """Test counting all edges of a type."""
+        from jvspatial.core.context import set_default_context
+
+        set_default_context(temp_context)
+        # Create nodes
+        node1 = await TestNode.create(name="node1")
+        node2 = await TestNode.create(name="node2")
+        node3 = await TestNode.create(name="node3")
+
+        # Create multiple edges
+        await TestEdge.create(source=node1.id, target=node2.id, weight=1)
+        await TestEdge.create(source=node2.id, target=node3.id, weight=2)
+        await TestEdge.create(source=node1.id, target=node3.id, weight=3)
+
+        # Count all edges
+        count = await TestEdge.count()
+        assert count == 3
+
+    @pytest.mark.asyncio
+    async def test_edge_count_filtered(self, temp_context):
+        """Test counting filtered edges."""
+        from jvspatial.core.context import set_default_context
+
+        set_default_context(temp_context)
+        # Create nodes
+        node1 = await TestNode.create(name="node1")
+        node2 = await TestNode.create(name="node2")
+        node3 = await TestNode.create(name="node3")
+
+        # Create multiple edges
+        await TestEdge.create(source=node1.id, target=node2.id, weight=1)
+        await TestEdge.create(source=node2.id, target=node3.id, weight=2)
+        await TestEdge.create(source=node1.id, target=node3.id, weight=1)
+
+        # Count filtered edges
+        count = await TestEdge.count({"weight": 1})
+        assert count == 2
+
+        count_kwargs = await TestEdge.count(weight=2)
+        assert count_kwargs == 1
+
+    @pytest.mark.asyncio
+    async def test_count_with_query_dict(self, temp_context):
+        """Test that count() works with query dictionaries for all entity types."""
+        from jvspatial.core.context import set_default_context
+
+        set_default_context(temp_context)
+        # Create test data
+        await TestObject.create(name="obj1", value=1, active=True)
+        await TestObject.create(name="obj2", value=2, active=False)
+
+        node1 = await TestNode.create(name="node1", value=10)
+        node2 = await TestNode.create(name="node2", value=20)
+
+        await TestEdge.create(source=node1.id, target=node2.id, weight=5)
+
+        # Test Object.count() with query dict
+        obj_count = await TestObject.count({"context.active": True})
+        assert obj_count == 1
+
+        # Test Node.count() with query dict
+        node_count = await TestNode.count({"context.value": 10})
+        assert node_count == 1
+
+        # Test Edge.count() with query dict
+        edge_count = await TestEdge.count({"weight": 5})
+        assert edge_count == 1
 
     @pytest.mark.asyncio
     async def test_edge_create(self, temp_context):
