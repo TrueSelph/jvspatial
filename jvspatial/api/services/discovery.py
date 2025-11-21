@@ -178,7 +178,28 @@ class EndpointDiscoveryService:
                 continue
 
             methods = endpoint_config.get("methods", ["POST"])
-            kwargs = endpoint_config.get("kwargs", {})
+
+            # Extract all route parameters from config (including tags)
+            route_kwargs = {
+                k: v
+                for k, v in endpoint_config.items()
+                if k
+                not in [
+                    "path",
+                    "methods",
+                    "is_function",
+                    "auth_required",
+                    "permissions",
+                    "roles",
+                    "webhook",
+                    "signature_required",
+                    "response",
+                ]
+            }
+
+            # Merge in any nested kwargs
+            if "kwargs" in endpoint_config:
+                route_kwargs.update(endpoint_config["kwargs"])
 
             # Check if already registered - if so, still log it but skip registration
             if self.server._endpoint_registry.has_walker(obj):
@@ -191,16 +212,22 @@ class EndpointDiscoveryService:
             # Register the walker
             try:
                 self.server._endpoint_registry.register_walker(
-                    obj, path, methods, router=self.server.endpoint_router, **kwargs
+                    obj,
+                    path,
+                    methods,
+                    router=self.server.endpoint_router,
+                    **route_kwargs,
                 )
 
                 # Register with endpoint router
                 if self.server._is_running:
                     self.server._register_walker_dynamically(
-                        obj, path, methods, **kwargs
+                        obj, path, methods, **route_kwargs
                     )
                 else:
-                    self.server.endpoint_router.endpoint(path, methods, **kwargs)(obj)
+                    self.server.endpoint_router.endpoint(path, methods, **route_kwargs)(
+                        obj
+                    )
 
                 discovered_walkers.append((name, path, methods))
                 self._logger.debug(

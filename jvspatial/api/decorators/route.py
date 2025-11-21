@@ -128,7 +128,7 @@ def endpoint(
 
             if current_server:
                 if inspect.isclass(target):
-                    # Walker class - set authentication attributes
+                    # Walker class - set authentication attributes and register immediately
                     target._auth_required = auth
                     target._required_permissions = permissions or []
                     target._required_roles = roles or []
@@ -144,49 +144,13 @@ def endpoint(
                             target, path, methods, **kwargs
                         )
                 else:
-                    # Function - create parameter model and wrap with authentication
-                    from jvspatial.api.endpoints.factory import ParameterModelFactory
-
-                    # Create parameter model for function
-                    # Pass the path to detect path parameters that should be excluded
-                    param_model = ParameterModelFactory.create_model(target, path=path)
-
-                    if param_model is not None:
-                        # Function has parameters - wrap with parameter handling
-                        # Pass methods so GET requests use query params instead of body
-                        wrapped_func = _wrap_function_with_params(
-                            target, param_model, methods or ["GET"], path=path
-                        )
-                    else:
-                        # Function has no parameters - use as-is
-                        wrapped_func = target
-
-                    if auth:
-                        wrapped_func = _wrap_function_with_auth(
-                            wrapped_func, auth, permissions, roles
-                        )
-
-                    # Propagate endpoint config (including response) onto the wrapped function
-                    config = getattr(target, "_jvspatial_endpoint_config", {})
-                    config = dict(config)
-                    config["is_function"] = True
-                    wrapped_func._jvspatial_endpoint_config = config  # type: ignore[attr-defined]  # noqa: B010
-
-                    # Register function via EndpointRouter to ensure response_model and security are applied
-                    current_server.endpoint_router.add_route(
-                        path=path,
-                        endpoint=wrapped_func,
-                        methods=methods or ["GET"],
-                        source_obj=wrapped_func,
-                        auth=auth,
-                        permissions=permissions or [],
-                        roles=roles or [],
-                        response=response,
-                        **kwargs,
+                    # Function endpoint - DO NOT register here, let discovery service handle it
+                    # This prevents duplicate registration and ensures consistent handling
+                    # The config is already stored above, discovery will find and register it
+                    logger.debug(
+                        f"@endpoint decorator: Function {target_name} config stored, "
+                        f"discovery service will register it"
                     )
-
-                    # Mark server as having auth endpoints
-                    current_server._has_auth_endpoints = True
         except ImportError:
             # No server context available, configuration will be picked up later
             pass

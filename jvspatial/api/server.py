@@ -573,7 +573,22 @@ class Server:
         # Register core routes using AppBuilder
         self.app_builder.register_core_routes(app, self._graph_context)
 
-        # Include routers
+        # Discover and register endpoints from pre-loaded modules BEFORE including routers
+        # This ensures all @endpoint decorated functions/classes are registered with the
+        # endpoint router before it's included in the FastAPI app
+        if self.discovery_service.enabled and not self._is_running:
+            try:
+                discovered_count = self.discovery_service.discover_and_register()
+                if discovered_count > 0:
+                    self._logger.info(
+                        f"🔍 Discovered {discovered_count} endpoint(s) from pre-loaded modules"
+                    )
+            except Exception as e:
+                self._logger.warning(
+                    f"⚠️ Endpoint discovery failed before app creation: {e}"
+                )
+
+        # Include routers (endpoint router now contains all discovered endpoints)
         self._include_routers(app)
 
         # Include authentication router if configured

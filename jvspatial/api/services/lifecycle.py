@@ -79,8 +79,11 @@ class LifecycleManager:
         2. Initializes database through GraphContext
         3. Ensures root node exists
         4. Verifies file storage if enabled
-        5. Discovers and registers packages
-        6. Runs user-defined startup hooks
+        5. Runs user-defined startup hooks
+
+        Note: Endpoint discovery runs before app creation in _create_app_instance(),
+        not during startup, to ensure all endpoints are registered before routers
+        are included in the FastAPI app.
         """
         self._logger.info(f"{LogIcons.START} Starting {self.server.config.title}...")
 
@@ -93,9 +96,6 @@ class LifecycleManager:
 
         # Verify file storage if enabled
         await self._verify_file_storage()
-
-        # Discover and register packages
-        await self._discover_packages()
 
         # Run user-defined startup hooks
         await self._execute_startup_hooks()
@@ -141,21 +141,6 @@ class LifecycleManager:
             )
             if self.server.config.proxy_enabled:
                 self._logger.info(f"{LogIcons.WEBHOOK} URL proxy enabled")
-
-    async def _discover_packages(self) -> None:
-        """Discover and register packages if enabled."""
-        if self.server.discovery_service.enabled:
-            try:
-                discovered_count = self.server.discovery_service.discover_and_register()
-                if discovered_count > 0:
-                    self._logger.info(
-                        f"{LogIcons.DISCOVERY} Package discovery complete: "
-                        f"{discovered_count} endpoints"
-                    )
-            except Exception as e:
-                self._logger.warning(
-                    f"{LogIcons.WARNING} Package discovery failed: {e}"
-                )
 
     async def _execute_startup_hooks(self) -> None:
         """Execute all registered startup hooks."""
