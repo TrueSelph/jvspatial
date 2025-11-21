@@ -179,6 +179,11 @@ class EndpointDiscoveryService:
 
             methods = endpoint_config.get("methods", ["POST"])
 
+            # Extract auth-related parameters
+            auth_required = endpoint_config.get("auth_required", False)
+            permissions = endpoint_config.get("permissions", [])
+            roles = endpoint_config.get("roles", [])
+
             # Extract all route parameters from config (including tags)
             route_kwargs = {
                 k: v
@@ -201,6 +206,11 @@ class EndpointDiscoveryService:
             if "kwargs" in endpoint_config:
                 route_kwargs.update(endpoint_config["kwargs"])
 
+            # Set authentication attributes on Walker class
+            obj._auth_required = auth_required
+            obj._required_permissions = permissions
+            obj._required_roles = roles
+
             # Check if already registered - if so, still log it but skip registration
             if self.server._endpoint_registry.has_walker(obj):
                 discovered_walkers.append((name, path, methods))
@@ -216,18 +226,32 @@ class EndpointDiscoveryService:
                     path,
                     methods,
                     router=self.server.endpoint_router,
+                    auth=auth_required,
+                    permissions=permissions,
+                    roles=roles,
                     **route_kwargs,
                 )
 
-                # Register with endpoint router
+                # Register with endpoint router (pass auth explicitly for OpenAPI security)
                 if self.server._is_running:
                     self.server._register_walker_dynamically(
-                        obj, path, methods, **route_kwargs
+                        obj,
+                        path,
+                        methods,
+                        auth=auth_required,
+                        permissions=permissions,
+                        roles=roles,
+                        **route_kwargs,
                     )
                 else:
-                    self.server.endpoint_router.endpoint(path, methods, **route_kwargs)(
-                        obj
-                    )
+                    self.server.endpoint_router.endpoint(
+                        path,
+                        methods,
+                        auth=auth_required,
+                        permissions=permissions,
+                        roles=roles,
+                        **route_kwargs,
+                    )(obj)
 
                 discovered_walkers.append((name, path, methods))
                 self._logger.debug(
