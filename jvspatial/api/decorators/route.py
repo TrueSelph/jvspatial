@@ -86,30 +86,45 @@ def endpoint(
     """
 
     def decorator(target: Union[Callable, type]) -> Union[Callable, type]:
+        # Determine if this is a function or class
+        is_func = inspect.isfunction(target)
+        target_name = getattr(target, "__name__", "unknown")
+
         # Store endpoint configuration on the target
         # Use setattr for dynamic attribute assignment (mypy compatibility)
-        setattr(  # noqa: B010
-            target,
-            "_jvspatial_endpoint_config",
-            {  # type: ignore[union-attr]  # noqa: B010
-                "path": path,
-                "methods": methods or ["GET"],
-                "auth_required": auth,
-                "permissions": permissions or [],
-                "roles": roles or [],
-                "webhook": webhook,
-                "signature_required": signature_required,
-                "response": response,
-                "is_function": inspect.isfunction(target),
-                **kwargs,
-            },
-        )
+        config = {
+            "path": path,
+            "methods": methods or ["GET"],
+            "auth_required": auth,
+            "permissions": permissions or [],
+            "roles": roles or [],
+            "webhook": webhook,
+            "signature_required": signature_required,
+            "response": response,
+            "is_function": is_func,
+            **kwargs,
+        }
+
+        setattr(target, "_jvspatial_endpoint_config", config)  # noqa: B010
 
         # Register with current server if available
         try:
             from jvspatial.api.context import get_current_server
 
             current_server = get_current_server()
+
+            # Log decorator execution for debugging
+            import logging
+
+            logger = logging.getLogger(__name__)
+            if current_server:
+                logger.debug(
+                    f"@endpoint decorator: Registering {target_name} at {path} (server exists)"
+                )
+            else:
+                logger.debug(
+                    f"@endpoint decorator: Storing config for {target_name} at {path} (no server yet, is_function={is_func})"
+                )
 
             if current_server:
                 if inspect.isclass(target):

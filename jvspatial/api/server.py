@@ -29,7 +29,7 @@ from jvspatial.api.constants import APIRoutes
 from jvspatial.api.endpoints.response import create_endpoint_helper
 from jvspatial.api.endpoints.router import EndpointRouter
 from jvspatial.api.middleware.manager import MiddlewareManager
-from jvspatial.api.services.discovery import PackageDiscoveryService
+from jvspatial.api.services.discovery import EndpointDiscoveryService
 from jvspatial.api.services.lifecycle import LifecycleManager
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node, Root, Walker
@@ -98,7 +98,7 @@ class Server:
         self.error_handler = ErrorHandler()
         self.middleware_manager = MiddlewareManager(self)
         self.lifecycle_manager = LifecycleManager(self)
-        self.discovery_service = PackageDiscoveryService(self)
+        self.discovery_service = EndpointDiscoveryService(self)
 
         # Initialize legacy components for backward compatibility
         self.app: Optional[FastAPI] = None

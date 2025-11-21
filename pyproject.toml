@@ -96,6 +96,12 @@ markers = [
 filterwarnings = [
     "ignore::DeprecationWarning:pydantic.*",
     "ignore::PendingDeprecationWarning",
+    "ignore::DeprecationWarning:starlette.*",
+    "ignore::cryptography.utils.CryptographyDeprecationWarning",
+    "ignore:'HTTP_413_REQUEST_ENTITY_TOO_LARGE' is deprecated:DeprecationWarning",
+    "ignore:'HTTP_414_REQUEST_URI_TOO_LONG' is deprecated:DeprecationWarning",
+    "ignore:'HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE' is deprecated:DeprecationWarning",
+    "ignore:'HTTP_422_UNPROCESSABLE_ENTITY' is deprecated:DeprecationWarning",
 ]
 
 [tool.black]

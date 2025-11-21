@@ -1,68 +1,73 @@
-"""Package discovery service for automatic endpoint registration.
+"""Endpoint discovery service for automatic endpoint registration.
 
-This module provides automatic discovery and registration of Walker classes
-and function endpoints from installed packages matching specified patterns.
+This module provides comprehensive automatic discovery and registration of all
+Walker classes and function endpoints decorated with @endpoint across ALL
+modules in the application. It scans all loaded modules (excluding jvspatial
+and built-in modules) to ensure complete endpoint discovery.
 """
 
-import fnmatch
-import importlib
 import inspect
 import logging
-import pkgutil
-from typing import TYPE_CHECKING, Any, List, Optional
+import sys
+import warnings
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from jvspatial.api.constants import LogIcons
 from jvspatial.core.entities import Walker
 
-from ..endpoints.response import create_endpoint_helper
+try:
+    from cryptography.utils import CryptographyDeprecationWarning
+
+    warnings.filterwarnings(
+        "ignore",
+        category=CryptographyDeprecationWarning,
+    )
+except ImportError:
+    pass
 
 if TYPE_CHECKING:
     from jvspatial.api.server import Server
 
 
-class PackageDiscoveryService:
-    """Service for discovering and registering endpoints from packages.
+class EndpointDiscoveryService:
+    """Service for discovering and registering all endpoints in the application.
 
-    This service scans installed packages matching specified patterns,
-    discovers Walker classes and function endpoints, and registers them
-    with the server's endpoint registry.
+    This service comprehensively scans ALL loaded modules in the application
+    (excluding jvspatial and built-in modules) to discover Walker classes and
+    function endpoints decorated with @endpoint. This ensures complete endpoint
+    discovery without requiring specific naming conventions or patterns.
 
     Example:
         ```python
-        discovery = PackageDiscoveryService(server)
+        discovery = EndpointDiscoveryService(server)
 
-        # Discover with default patterns
+        # Discover all endpoints in the application
         count = discovery.discover_and_register()
 
-        # Discover with custom patterns
-        count = discovery.discover_and_register(["my_*_walkers"])
-
         # Enable/disable discovery
-        discovery.enable(enabled=True, patterns=["*_api"])
+        discovery.enable(enabled=False)
         ```
     """
 
     def __init__(self, server: "Server") -> None:
-        """Initialize the package discovery service.
+        """Initialize the endpoint discovery service.
 
         Args:
             server: Server instance for registration
         """
         self.server = server
         self.enabled = True
-        self.patterns: List[str] = ["*_walkers", "*_endpoints", "*_api"]
         self._logger = logging.getLogger(__name__)
 
     def discover_and_register(self, patterns: Optional[List[str]] = None) -> int:
-        """Discover and register walker endpoints from packages.
+        """Discover and register ALL endpoints in the application.
 
-        Scans all installed packages matching the specified patterns,
-        discovers Walker classes and function endpoints, and registers
-        them with the server.
+        This method comprehensively scans ALL loaded modules in the application
+        (excluding jvspatial and built-in modules) to discover and register all
+        Walker classes and function endpoints decorated with @endpoint.
 
         Args:
-            patterns: List of package name patterns (glob-style).
-                     If None, uses configured patterns.
+            patterns: Optional patterns parameter (unused).
 
         Returns:
             Number of endpoints discovered and registered
@@ -70,42 +75,57 @@ class PackageDiscoveryService:
         if not self.enabled:
             return 0
 
-        search_patterns = patterns or self.patterns
-        discovered_count = 0
-
         self._logger.info(
-            f"{LogIcons.DISCOVERY} Discovering walker packages with patterns: {search_patterns}"
+            f"{LogIcons.DISCOVERY} Scanning for endpoints in loaded modules..."
         )
 
-        # Search through installed packages
-        for _finder, module_name, ispkg in pkgutil.iter_modules():
-            if not ispkg:
+        discovered_count = 0
+        discovered_endpoints = []
+
+        # Scan all loaded modules
+        for module_name, module in list(sys.modules.items()):
+            # Skip jvspatial modules, built-in modules, and special modules
+            if (
+                module_name.startswith("jvspatial.")
+                or module_name == "jvspatial"
+                or module_name in ("__main__", "__builtin__", "builtins")
+                or module is None
+            ):
                 continue
 
-            # Check if module matches any pattern
-            if not self._matches_any_pattern(module_name, search_patterns):
+            # Skip modules that don't have a __file__ (likely built-in or namespace)
+            if not hasattr(module, "__file__") or module.__file__ is None:
                 continue
 
             try:
-                # Import the package
-                module = importlib.import_module(module_name)
-                count = self.discover_in_module(module)
-                discovered_count += count
+                # Discover endpoints in this module
+                walkers, functions = self._discover_in_module(module)
 
-                if count > 0:
-                    self._logger.info(
-                        f"{LogIcons.PACKAGE} Discovered {count} endpoints in package: {module_name}"
-                    )
+                for walker_name, path, methods in walkers:
+                    discovered_count += 1
+                    discovered_endpoints.append(("walker", walker_name, path, methods))
+
+                for func_name, path, methods in functions:
+                    discovered_count += 1
+                    discovered_endpoints.append(("function", func_name, path, methods))
 
             except Exception as e:
-                self._logger.warning(
-                    f"{LogIcons.WARNING} Failed to import package {module_name}: {e}"
+                self._logger.debug(
+                    f"{LogIcons.WARNING} Error scanning module {module_name}: {e}"
                 )
 
-        if discovered_count > 0:
+        # Log discovered endpoints
+        if discovered_endpoints:
             self._logger.info(
-                f"{LogIcons.SUCCESS} Total endpoints discovered: {discovered_count}"
+                f"{LogIcons.SUCCESS} Discovered {discovered_count} endpoint(s):"
             )
+            for endpoint_type, name, path, methods in discovered_endpoints:
+                methods_str = ", ".join(methods) if methods else "GET"
+                self._logger.info(
+                    f"  {LogIcons.SUCCESS} {endpoint_type.capitalize()}: {name} -> {path} [{methods_str}]"
+                )
+        else:
+            self._logger.info(f"{LogIcons.DISCOVERY} No new endpoints discovered")
 
         return discovered_count
 
@@ -119,77 +139,32 @@ class PackageDiscoveryService:
             module: Python module to analyze
 
         Returns:
-            Number of endpoints discovered in the module
+            Number of endpoints discovered and registered
         """
-        discovered_count = 0
-        discovered_count += self._discover_walkers(module)
-        discovered_count += self._discover_functions(module)
-        return discovered_count
+        discovered_walkers, discovered_functions = self._discover_in_module(module)
+        return len(discovered_walkers) + len(discovered_functions)
 
-    def enable(
-        self, enabled: bool = True, patterns: Optional[List[str]] = None
-    ) -> None:
-        """Enable or disable package discovery.
+    def _discover_in_module(
+        self, module: Any
+    ) -> Tuple[List[Tuple[str, str, List[str]]], List[Tuple[str, str, List[str]]]]:
+        """Internal method to discover endpoints in a module.
 
         Args:
-            enabled: Whether to enable package discovery
-            patterns: Optional new list of package patterns to use
-        """
-        self.enabled = enabled
-        if patterns is not None:
-            self.patterns = patterns
-
-        status = "enabled" if enabled else "disabled"
-        self._logger.info(f"{LogIcons.CONFIG} Package discovery {status}")
-
-        if enabled and patterns:
-            self._logger.info(f"{LogIcons.DISCOVERY} Discovery patterns: {patterns}")
-
-    def _matches_pattern(self, name: str, pattern: str) -> bool:
-        """Check if name matches glob pattern.
-
-        Args:
-            name: Package name to check
-            pattern: Glob-style pattern (e.g., "*_walkers")
+            module: Python module to analyze
 
         Returns:
-            True if name matches pattern, False otherwise
+            Tuple of (walkers, functions) where each is a list of
+            (name, path, methods) tuples
         """
-        return fnmatch.fnmatch(name, pattern)
+        discovered_walkers = []
+        discovered_functions = []
 
-    def _matches_any_pattern(self, name: str, patterns: List[str]) -> bool:
-        """Check if name matches any of the provided patterns.
+        module_name = getattr(module, "__name__", "unknown")
 
-        Args:
-            name: Package name to check
-            patterns: List of glob-style patterns
-
-        Returns:
-            True if name matches any pattern, False otherwise
-        """
-        return any(self._matches_pattern(name, pattern) for pattern in patterns)
-
-    def _discover_walkers(self, module: Any) -> int:
-        """Discover walker classes in module.
-
-        Finds Walker subclasses with endpoint configuration and
-        registers them with the server.
-
-        Args:
-            module: Python module to search
-
-        Returns:
-            Number of walkers discovered
-        """
-        discovered_count = 0
-
-        for _name, obj in inspect.getmembers(module):
-            # Check if this is a Walker class
+        # Discover walkers
+        for name, obj in inspect.getmembers(module):
             if not (
-                inspect.isclass(obj)
-                and issubclass(obj, Walker)
-                and obj is not Walker
-                and not self.server._endpoint_registry.has_walker(obj)
+                inspect.isclass(obj) and issubclass(obj, Walker) and obj is not Walker
             ):
                 continue
 
@@ -205,50 +180,52 @@ class PackageDiscoveryService:
             methods = endpoint_config.get("methods", ["POST"])
             kwargs = endpoint_config.get("kwargs", {})
 
+            # Check if already registered - if so, still log it but skip registration
+            if self.server._endpoint_registry.has_walker(obj):
+                discovered_walkers.append((name, path, methods))
+                self._logger.debug(
+                    f"{LogIcons.DISCOVERY} Found already-registered walker: {module_name}.{name} -> {path}"
+                )
+                continue
+
             # Register the walker
             try:
                 self.server._endpoint_registry.register_walker(
                     obj, path, methods, router=self.server.endpoint_router, **kwargs
                 )
-            except Exception as e:
-                self._logger.warning(
-                    f"{LogIcons.WARNING} Walker {obj.__name__} already registered: {e}"
+
+                # Register with endpoint router
+                if self.server._is_running:
+                    self.server._register_walker_dynamically(
+                        obj, path, methods, **kwargs
+                    )
+                else:
+                    self.server.endpoint_router.endpoint(path, methods, **kwargs)(obj)
+
+                discovered_walkers.append((name, path, methods))
+                self._logger.debug(
+                    f"{LogIcons.SUCCESS} Registered walker: {module_name}.{name} -> {path}"
                 )
+
+            except Exception as e:
+                # Already registered or registration failed
+                self._logger.debug(f"{LogIcons.WARNING} Skipped walker {name}: {e}")
+
+        # Discover functions
+        for name, obj in module.__dict__.items():
+            # Skip private attributes
+            if name.startswith("_") and name != "_jvspatial_endpoint_config":
                 continue
 
-            # Register with endpoint router
-            if self.server._is_running:
-                self.server._register_walker_dynamically(obj, path, methods, **kwargs)
-            else:
-                self.server.endpoint_router.endpoint(path, methods, **kwargs)(obj)
-
-            discovered_count += 1
-
-        return discovered_count
-
-    def _discover_functions(self, module: Any) -> int:
-        """Discover function endpoints in module.
-
-        Finds functions with endpoint configuration and registers
-        them as custom routes.
-
-        Args:
-            module: Python module to search
-
-        Returns:
-            Number of function endpoints discovered
-        """
-        discovered_count = 0
-
-        for _name, obj in inspect.getmembers(module):
             # Check if this is a function with endpoint config
-            if not (
-                inspect.isfunction(obj) and hasattr(obj, "_jvspatial_endpoint_config")
-            ):
+            if not inspect.isfunction(obj):
                 continue
 
-            endpoint_config = obj._jvspatial_endpoint_config
-            if not endpoint_config.get("is_function"):
+            if not hasattr(obj, "_jvspatial_endpoint_config"):
+                continue
+
+            endpoint_config = getattr(obj, "_jvspatial_endpoint_config", {})
+            if not endpoint_config.get("is_function", False):
                 continue
 
             path = endpoint_config.get("path")
@@ -256,77 +233,129 @@ class PackageDiscoveryService:
                 continue
 
             methods = endpoint_config.get("methods", ["GET"])
-            kwargs = endpoint_config.get("kwargs", {})
 
-            # Create wrapper that injects endpoint helper
-            discovered_count += self._register_function_endpoint(
-                obj, path, methods, kwargs
-            )
+            # Check if already registered - if so, still log it but skip registration
+            if self.server._endpoint_registry.has_function(obj):
+                discovered_functions.append((name, path, methods))
+                self._logger.debug(
+                    f"{LogIcons.DISCOVERY} Found already-registered function: {module_name}.{name} -> {path}"
+                )
+                continue
 
-        return discovered_count
+            # Extract all route parameters from config
+            route_kwargs = {
+                k: v
+                for k, v in endpoint_config.items()
+                if k not in ["path", "methods", "is_function", "kwargs"]
+            }
 
-    def _register_function_endpoint(
-        self, func: Any, path: str, methods: List[str], kwargs: dict
-    ) -> int:
-        """Register a function as an endpoint.
+            if "kwargs" in endpoint_config:
+                route_kwargs.update(endpoint_config["kwargs"])
 
-        Creates a wrapper that injects the endpoint helper and
-        registers the function as a custom route.
+            # Register the function
+            try:
+                # Create parameter model if function has parameters
+                from jvspatial.api.endpoints.factory import ParameterModelFactory
+
+                param_model = ParameterModelFactory.create_model(obj, path=path)
+
+                # Wrap function with parameter handling if needed
+                if param_model is not None:
+                    from jvspatial.api.decorators.route import (
+                        _wrap_function_with_params,
+                    )
+
+                    wrapped_func = _wrap_function_with_params(
+                        obj, param_model, methods, path=path
+                    )
+                else:
+                    wrapped_func = obj
+
+                # Extract auth-related parameters
+                auth = route_kwargs.pop("auth_required", None)
+                if auth is None:
+                    auth = route_kwargs.pop("auth", False)
+                else:
+                    route_kwargs.pop("auth", None)
+                permissions = route_kwargs.pop("permissions", [])
+                roles = route_kwargs.pop("roles", [])
+                response = route_kwargs.pop("response", None)
+
+                # Wrap with auth if needed
+                if auth:
+                    from jvspatial.api.decorators.route import _wrap_function_with_auth
+
+                    wrapped_func = _wrap_function_with_auth(
+                        wrapped_func, auth, permissions, roles
+                    )
+
+                # Propagate endpoint config onto the wrapped function
+                config = getattr(obj, "_jvspatial_endpoint_config", {})
+                if config:
+                    config = dict(config)
+                    config["is_function"] = True
+                    wrapped_func._jvspatial_endpoint_config = config  # type: ignore[attr-defined]  # noqa: B010
+
+                # Register via endpoint router
+                self.server.endpoint_router.add_route(
+                    path=path,
+                    endpoint=wrapped_func,
+                    methods=methods,
+                    source_obj=obj,  # Use original function as source_obj
+                    auth=auth,
+                    permissions=permissions,
+                    roles=roles,
+                    response=response,
+                    **route_kwargs,
+                )
+
+                # Register with endpoint registry
+                self.server._endpoint_registry.register_function(
+                    obj,
+                    path,
+                    methods=methods,
+                    route_config={
+                        "path": path,
+                        "endpoint": wrapped_func,
+                        "methods": methods,
+                        "auth_required": auth,
+                        "permissions": permissions,
+                        "roles": roles,
+                        **route_kwargs,
+                    },
+                    auth_required=auth,
+                    permissions=permissions,
+                    roles=roles,
+                    **route_kwargs,
+                )
+
+                # Mark server as having auth endpoints if auth is required
+                if auth:
+                    self.server._has_auth_endpoints = True
+
+                discovered_functions.append((name, path, methods))
+                self._logger.debug(
+                    f"{LogIcons.SUCCESS} Registered function: {module_name}.{name} -> {path}"
+                )
+
+            except Exception as e:
+                # Already registered or registration failed
+                self._logger.debug(f"{LogIcons.WARNING} Skipped function {name}: {e}")
+
+        return discovered_walkers, discovered_functions
+
+    def enable(
+        self, enabled: bool = True, patterns: Optional[List[str]] = None
+    ) -> None:
+        """Enable or disable endpoint discovery.
 
         Args:
-            func: Function to register
-            path: URL path for endpoint
-            methods: HTTP methods
-            kwargs: Additional route parameters
-
-        Returns:
-            1 if registered, 0 if already exists
+            enabled: Whether to enable endpoint discovery
+            patterns: Optional patterns parameter (unused).
         """
-
-        async def endpoint_wrapper(
-            *args: Any, func_obj: Any = func, **kwargs_inner: Any
-        ) -> Any:
-            # Create endpoint helper for function endpoints
-            endpoint_helper = create_endpoint_helper(walker_instance=None)
-
-            # Inject endpoint helper into function kwargs
-            kwargs_inner["endpoint"] = endpoint_helper
-
-            # Call original function with injected endpoint
-            if inspect.iscoroutinefunction(func_obj):
-                return await func_obj(*args, **kwargs_inner)
-            else:
-                return func_obj(*args, **kwargs_inner)
-
-        # Preserve original function metadata
-        endpoint_wrapper.__name__ = func.__name__
-        endpoint_wrapper.__doc__ = func.__doc__
-
-        # Create route configuration
-        route_config = {
-            "path": path,
-            "endpoint": endpoint_wrapper,
-            "methods": methods,
-            **kwargs,
-        }
-
-        # Check if already registered
-        if route_config in self.server._custom_routes:
-            return 0
-
-        # Add to custom routes
-        self.server._custom_routes.append(route_config)
-
-        # If server is running, add route dynamically
-        if self.server._is_running and self.server.app is not None:
-            self.server.app.add_api_route(
-                path, endpoint_wrapper, methods=methods, **kwargs
-            )
-            self._logger.info(
-                f"{LogIcons.DYNAMIC} Dynamically registered function: {func.__name__} at {path}"
-            )
-
-        return 1
+        self.enabled = enabled
+        status = "enabled" if enabled else "disabled"
+        self._logger.debug(f"{LogIcons.CONFIG} Endpoint discovery {status}")
 
 
-__all__ = ["PackageDiscoveryService"]
+__all__ = ["EndpointDiscoveryService"]
