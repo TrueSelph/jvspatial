@@ -499,7 +499,7 @@ class EndpointRouter(BaseRouter):
                             )
                     else:
                         # Default to root node if no start node provided
-                        start = await get_default_context().get(Node, "n:Root:root")
+                        start = await get_default_context().get(Node, "n.Root.root")
                         if not start:
                             self.raise_error(
                                 500,
@@ -786,7 +786,7 @@ class EndpointRouter(BaseRouter):
                                 )
                         else:
                             # Default to root node if no start node provided
-                            start = await get_default_context().get(Node, "n:Root:root")
+                            start = await get_default_context().get(Node, "n.Root.root")
                             if not start:
                                 self.raise_error(
                                     500,
@@ -1013,7 +1013,7 @@ class EndpointRouter(BaseRouter):
                         )
                     else:
                         # Default to root node only when performing traversal
-                        start = await get_default_context().get(Node, "n:Root:root")
+                        start = await get_default_context().get(Node, "n.Root.root")
                         if not start:
                             self.raise_error(
                                 500,

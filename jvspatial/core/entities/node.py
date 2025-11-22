@@ -35,7 +35,6 @@ class Node(Object):
     Attributes:
         id: Unique identifier for the node (protected - inherited from Object)
         visitor: Current walker visiting the node (transient - not persisted)
-        is_root: Whether this is the root node
         edge_ids: List of connected edge IDs
     """
 
@@ -44,7 +43,6 @@ class Node(Object):
     _visitor_ref: Optional[weakref.ReferenceType] = attribute(
         private=True, default=None
     )
-    is_root: bool = False
     edge_ids: List[str] = Field(default_factory=list)
     _visit_hooks: ClassVar[Dict[Optional[Type["Walker"]], List[Callable]]] = {}
 
@@ -990,7 +988,7 @@ class Node(Object):
         if for_persistence:
             # Legacy persistence format - nested structure for database storage
             context_data = super().export(
-                exclude={"id", "_visitor_ref", "is_root", "edge_ids"},
+                exclude={"id", "_visitor_ref", "edge_ids"},
                 exclude_none=False,
                 exclude_transient=exclude_transient,
                 **kwargs,

@@ -367,8 +367,8 @@ class GraphValidator:
         Returns:
             True if valid format, False otherwise
         """
-        # Basic format validation: type:EntityType:id
-        parts = entity_id.split(":")
+        # Basic format validation: type.EntityType.id
+        parts = entity_id.split(".")
         return len(parts) == 3 and all(part for part in parts)
 
 

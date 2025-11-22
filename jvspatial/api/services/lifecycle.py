@@ -111,7 +111,7 @@ class LifecycleManager:
                 )
 
                 # Ensure root node exists
-                root = await self.server._graph_context.get(Root, "n:Root:root")
+                root = await self.server._graph_context.get(Root, "n.Root.root")
                 if not root:
                     root = await self.server._graph_context.create(Root)
                 self._logger.info(f"{LogIcons.TREE} Root node ready: {root.id}")
@@ -122,7 +122,7 @@ class LifecycleManager:
                 )
 
                 # Ensure root node exists
-                root = await Root.get("n:Root:root")
+                root = await Root.get("n.Root.root")
                 if not root:
                     root = await Root.create()
                 self._logger.info(f"{LogIcons.TREE} Root node ready: {root.id}")

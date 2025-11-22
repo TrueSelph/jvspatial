@@ -109,12 +109,12 @@ class AppBuilder:
                 # Test database connectivity through GraphContext
                 if graph_context:
                     # Use explicit GraphContext
-                    root = await graph_context.get(Root, "n:Root:root")
+                    root = await graph_context.get(Root, "n.Root.root")
                     if not root:
                         root = await graph_context.create(Root)
                 else:
                     # Use default GraphContext behavior
-                    root = await Root.get("n:Root:root")
+                    root = await Root.get("n.Root.root")
                     if not root:
                         root = await Root.create()
 

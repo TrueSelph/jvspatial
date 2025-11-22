@@ -298,12 +298,22 @@ def _wrap_function_with_params(
         }
         wrapped_func.__annotations__["return"] = new_sig.return_annotation
 
+        # Copy function metadata
+        wrapped_func.__name__ = func.__name__
+        wrapped_func.__doc__ = func.__doc__
+        wrapped_func.__module__ = func.__module__
+
+        return wrapped_func
+
     elif has_path_params and not has_body_params:
         # Only path parameters - FastAPI handles these directly, no wrapper needed
+        # Return func directly - no wrapped_func needed in this branch
         return func
     else:
         # No path parameters - simple body parameter model
+        # This branch handles: not has_path_params (with or without body params)
         # Note: Body() in default is required by FastAPI for body params
+        # wrapped_func is defined here and used only within this else block
         async def wrapped_func(params: Any = Body()) -> Any:  # type: ignore[assignment,misc]  # noqa: B008
             """Wrapped function with parameter validation."""
             # Extract parameters from the model
@@ -337,23 +347,18 @@ def _wrap_function_with_params(
             # Call original function with parameters
             return await func(**data)
 
-    # Copy function metadata
-    wrapped_func.__name__ = func.__name__
-    wrapped_func.__doc__ = func.__doc__
-    wrapped_func.__module__ = func.__module__
+        # Copy function metadata
+        wrapped_func.__name__ = func.__name__
+        wrapped_func.__doc__ = func.__doc__
+        wrapped_func.__module__ = func.__module__
 
-    # Set annotations if not already set (for the case without path params)
-    if not has_path_params and has_body_params:
-        # No path parameters - simple body parameter model
-        # The signature already has the correct annotation for 'params'
+        # Set annotations for the case without path params
         wrapped_func.__annotations__ = {
             "params": param_model,
             "return": func_sig.return_annotation,
         }
-    # For has_path_params and has_body_params case, annotations were already set above
-    # For only path params case, func was returned directly above
 
-    return wrapped_func
+        return wrapped_func
 
 
 def _wrap_function_with_auth(

@@ -190,7 +190,7 @@ class Walker(AttributeMixin, BaseModel):
 
         Examples:
             # Check by node ID
-            if walker.is_visited("n:City:abc123"):
+            if walker.is_visited("n.City.abc123"):
                 print("Already visited before")
 
             # Check by node instance

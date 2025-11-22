@@ -15,10 +15,10 @@ def generate_id(type_: str, class_name: str) -> str:
         class_name: Name of the class (e.g., 'City', 'Highway')
 
     Returns:
-        Unique ID string in the format "type:class_name:hex_id"
+        Unique ID string in the format "type.class_name.hex_id"
     """
     hex_id = uuid.uuid4().hex[:24]
-    return f"{type_}:{class_name}:{hex_id}"
+    return f"{type_}.{class_name}.{hex_id}"
 
 
 async def generate_id_async(type_: str, class_name: str) -> str:
@@ -29,10 +29,10 @@ async def generate_id_async(type_: str, class_name: str) -> str:
         class_name: Name of the class (e.g., 'City', 'Highway')
 
     Returns:
-        Unique ID string in the format "type:class_name:hex_id"
+        Unique ID string in the format "type.class_name.hex_id"
     """
     hex_id = uuid.uuid4().hex[:24]
-    return f"{type_}:{class_name}:{hex_id}"
+    return f"{type_}.{class_name}.{hex_id}"
 
 
 # Cache for subclass lookups to avoid repeated tree traversals

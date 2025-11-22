@@ -25,7 +25,7 @@ class EndpointParameterModel(BaseModel):
     start_node: Optional[str] = Field(
         default=None,
         description="Starting node ID for graph traversal",
-        examples=["n:Root:root"],
+        examples=["n.Root.root"],
     )
 
 

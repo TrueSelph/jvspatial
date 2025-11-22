@@ -116,8 +116,8 @@ async def generate_graph_dot(
         node_attrs = [f'label="{_escape_dot_string(node_label)}"']
         node_attrs.append(f"shape={node_shape}")
 
-        # Add custom styling based on node properties
-        if node_data.get("is_root"):
+        # Add custom styling for root node (identified by fixed ID)
+        if node_id == "n.Root.root":
             node_attrs.append('style="bold,filled"')
             node_attrs.append('fillcolor="lightblue"')
 
@@ -265,9 +265,9 @@ async def generate_graph_mermaid(
         node_identifier = _sanitize_mermaid_id(node_id)
         node_id_map[node_id] = node_identifier
 
-        # Add styling for root node
+        # Add styling for root node (identified by fixed ID)
         style = ""
-        if node_data.get("is_root"):
+        if node_id == "n.Root.root":
             style = ":::root"
 
         lines.append(
@@ -305,8 +305,8 @@ async def generate_graph_mermaid(
         else:
             lines.append(f"    {source_id} {connector} {target_id}")
 
-    # Add styling for root nodes if any
-    if any(n.get("is_root") for n in nodes_data):
+    # Add styling for root nodes if any (identified by fixed ID)
+    if any(n.get("id") == "n.Root.root" for n in nodes_data):
         lines.append("    classDef root fill:#e1f5ff,stroke:#01579b,stroke-width:2px")
 
     result = "\n".join(lines)
@@ -403,9 +403,9 @@ def _shorten_id(node_id: str, max_length: int = 20) -> str:
     if len(node_id) <= max_length:
         return node_id
     # Try to extract meaningful parts
-    parts = node_id.split(":")
+    parts = node_id.split(".")
     if len(parts) > 1:
-        return ":".join(parts[-2:])  # Keep last two parts
+        return ".".join(parts[-2:])  # Keep last two parts
     return node_id[: max_length - 3] + "..."
 
 

@@ -40,9 +40,13 @@ class JsonDB(Database):
         return collection_dir
 
     def _get_record_path(self, collection: str, record_id: str) -> Path:
-        """Get the file path for a specific record."""
+        """Get the file path for a specific record.
+
+        IDs use dot separators (format: "type.ClassName.id") which are
+        filesystem-compatible on all platforms including Windows.
+        """
         collection_dir = self._get_collection_dir(collection)
-        return collection_dir / f"{record_id.replace(':', '.')}.json"
+        return collection_dir / f"{record_id}.json"
 
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Save a record to the database."""

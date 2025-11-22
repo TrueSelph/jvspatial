@@ -1,8 +1,8 @@
 """Base Object class for jvspatial entities."""
 
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Set, Type, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from jvspatial.core.context import GraphContext
 
@@ -20,6 +20,8 @@ class Object(AttributeMixin, BaseModel):
         _data: Internal data storage (transient)
         _initializing: Initialization flag (transient)
     """
+
+    model_config = ConfigDict(extra="ignore")
 
     id: str = attribute(protected=True, description="Unique identifier for the object")
     type_code: str = attribute(transient=True, default="o")
@@ -318,6 +320,14 @@ class Object(AttributeMixin, BaseModel):
         return await context.database.count(collection, final_query)
 
     @classmethod
+    def _collect_class_names(cls: Type["Object"]) -> Set[str]:
+        """Collect class names for this class and all subclasses."""
+        names: Set[str] = {cls.__name__}
+        for subclass in cls.__subclasses__():
+            names.update(subclass._collect_class_names())
+        return names
+
+    @classmethod
     def _build_database_query(
         cls: Type["Object"],
         context: GraphContext,
@@ -334,8 +344,12 @@ class Object(AttributeMixin, BaseModel):
         if kwargs:
             combined_filters.update(kwargs)
 
+        class_names = sorted(cls._collect_class_names())
         class_name_filter: Dict[str, Any] = {
-            "$or": [{"_class": cls.__name__}, {"name": cls.__name__}]
+            "$or": (
+                [{"_class": name} for name in class_names]
+                + [{"name": name} for name in class_names]
+            )
         }
 
         top_level_fields = cls._get_top_level_fields()

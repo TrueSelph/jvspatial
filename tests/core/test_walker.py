@@ -177,7 +177,7 @@ class TestWalkerBasicFunctionality:
     async def test_walker_initialization(self):
         """Test Walker initialization."""
         walker = WalkerTestWalker()
-        assert walker.id.startswith("w:WalkerTestWalker:")
+        assert walker.id.startswith("w.WalkerTestWalker.")
         assert hasattr(walker.queue, "to_list")  # WalkerQueue object
         assert len(walker.queue) == 0
         assert await walker.get_report() == []
@@ -392,7 +392,7 @@ class TestWalkerTraversalBasic:
     @pytest.mark.asyncio
     async def test_spawn_with_root_node(self):
         """Test spawn() method with root node."""
-        root_node = WalkerTestNode(name="root", id="n:Root:root")
+        root_node = WalkerTestNode(name="root", id="n.Root.root")
         walker = WalkerTestWalker()
         result = await walker.spawn(root_node)
 
