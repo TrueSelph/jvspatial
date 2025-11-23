@@ -545,22 +545,20 @@ class SchedulerService:
             self._update_execution_stats(execution_record)
 
     def _execute_task(self, task_id: str, func: Callable, **kwargs: Any) -> None:
-        """Execute a scheduled task (legacy method).
+        """Execute a scheduled task.
 
         Args:
             task_id: Task identifier
             func: Function to execute
             **kwargs: Task configuration
         """
-        # Try to find task in new system first
+        # Try to find task in registered tasks first
         task = self._tasks.get(task_id)
         if task:
             self._execute_task_from_object(task)
             return
 
-        # Fallback to legacy execution (shouldn't happen with new system)
-        self.logger.warning(f"Using legacy execution for task {task_id}")
-
+        # Direct execution for tasks not in the registered system
         # Check if task is already running
         if task_id in self._running_tasks:
             self.logger.warning(
@@ -842,8 +840,7 @@ def get_scheduled_tasks() -> Dict[str, Dict[str, Any]]:
 
 def clear_scheduled_registry() -> None:
     """Clear the scheduled tasks registry."""
-    global _scheduled_tasks
-    _scheduled_tasks.clear()
+    _scheduled_tasks.clear()  # noqa: F823
 
 
 def register_scheduled_tasks(scheduler_service: SchedulerService) -> None:

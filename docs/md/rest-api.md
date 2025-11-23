@@ -35,7 +35,9 @@ server = Server(
 async def list_users(page: int = 1, per_page: int = 10):
     pager = ObjectPager(UserNode, page_size=per_page)
     users = await pager.get_page(page=page)
-    return {"users": [user.export() for user in users], ...}
+    import asyncio
+    users_list = await asyncio.gather(*[user.export() for user in users])
+    return {"users": users_list, ...}
 ```
 
 ### **Unauthenticated API Example** (Public Read-Only)
@@ -59,7 +61,9 @@ server = Server(
 async def list_articles(page: int = 1, per_page: int = 10):
     pager = ObjectPager(ArticleNode, page_size=per_page)
     articles = await pager.get_page(page=page)
-    return {"articles": [article.export() for article in articles], ...}
+    import asyncio
+    articles_list = await asyncio.gather(*[article.export() for article in articles])
+    return {"articles": articles_list, ...}
 ```
 
 ### When to Use Which Example
@@ -116,8 +120,10 @@ async def list_users(page: int = 1, per_page: int = 10):
     users = await pager.get_page(page=page)
     pagination_info = pager.to_dict()
 
+    import asyncio
+    users_list = await asyncio.gather(*[user.export() for user in users])
     return {
-        "users": [user.export() for user in users],
+        "users": users_list,
         **pagination_info
     }
 ```
@@ -154,13 +160,13 @@ async def list_users():
 
 ### 4. Export Pattern
 
-Use `entity.export()` for API responses - it automatically excludes transient fields and provides a clean, flat dictionary suitable for API responses:
+Use `await entity.export()` for API responses - it automatically excludes transient fields and provides a clean, flat dictionary suitable for API responses:
 
 ```python
 @endpoint("/users/{user_id}", methods=["GET"])
 async def get_user(user_id: str):
     user = await UserNode.get(user_id)
-    return {"user": user.export()}
+    return {"user": await user.export()}
 ```
 
 ### 5. Authentication Behavior
@@ -191,7 +197,7 @@ async def get_user(user_id: str):
     user = await UserNode.get(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"user": user.export()}
+    return {"user": await user.export()}
 ```
 
 ---
@@ -1516,7 +1522,7 @@ class SearchUsers(Walker):
         total = await User.count()
 
         self.response = {
-            "users": [user.export() for user in users],
+            "users": await asyncio.gather(*[user.export() for user in users]),
             "total": total
         }
 ```
@@ -1543,7 +1549,9 @@ class AdvancedSearch(Walker):
             ]
         }
         products = await Product.find(query)
-        self.response = {"products": [p.export() for p in products]}
+        import asyncio
+        products_list = await asyncio.gather(*[p.export() for p in products])
+        self.response = {"products": products_list}
 ```
 
 ### 3. Use Object Pagination for Large Datasets
@@ -1571,7 +1579,7 @@ class ListUsers(Walker):
         pagination_info = pager.to_dict()
 
         self.response = {
-            "users": [user.export() for user in users],
+            "users": await asyncio.gather(*[user.export() for user in users]),
             "pagination": pagination_info
         }
 ```
@@ -1606,8 +1614,8 @@ class UserConnections(Walker):
 
             self.response = {
                 "user": {"id": here.id, "name": here.name},
-                "colleagues": [u.export() for u in colleagues],
-                "skilled_colleagues": [u.export() for u in skilled_colleagues]
+                "colleagues": await asyncio.gather(*[u.export() for u in colleagues]),
+                "skilled_colleagues": await asyncio.gather(*[u.export() for u in skilled_colleagues])
             }
 ```
 
@@ -1643,7 +1651,7 @@ class CreateUser(Walker):
             )
 
             self.response = {
-                "user": user.export(),
+                "user": await user.export(),
                 "status": "created",
                 "code": 201
             }
@@ -1839,7 +1847,7 @@ class GeoQuery(Walker):
         if "results" not in self.response:
             self.response = {"results": []}
 
-        self.response["results"].append(here.export())
+        self.response["results"].append(await here.export())
 ```
 
 ### Rate Limiting

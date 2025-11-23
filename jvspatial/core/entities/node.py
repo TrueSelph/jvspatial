@@ -14,8 +14,6 @@ from typing import (
     Union,
 )
 
-from pydantic import Field
-
 from jvspatial.exceptions import ValidationError
 
 from ..annotations import attribute
@@ -39,11 +37,12 @@ class Node(Object):
     """
 
     type_code: str = attribute(transient=True, default="n")
-    id: str = Field(..., description="Unique identifier for the node")
     _visitor_ref: Optional[weakref.ReferenceType] = attribute(
         private=True, default=None
     )
-    edge_ids: List[str] = Field(default_factory=list)
+    edge_ids: List[str] = attribute(
+        transient=True, default_factory=list, description="List of connected edge IDs"
+    )
     _visit_hooks: ClassVar[Dict[Optional[Type["Walker"]], List[Callable]]] = {}
 
     @classmethod
@@ -618,7 +617,7 @@ class Node(Object):
                 if not criterion:  # $exists: False means property shouldn't exist
                     return False
             else:
-                # Unknown operator - ignore for forward compatibility
+                # Unknown operator - ignore
                 continue
 
         return True
@@ -862,7 +861,7 @@ class Node(Object):
 
                     # Get all edges of the connected node (before we delete them)
                     connected_node_edges = []
-                    for edge_id in connected_node.edge_ids:
+                    for edge_id in connected_node.edge_ids:  # type: ignore[attr-defined]
                         try:
                             edge = await Edge.get(edge_id)
                             if edge:
@@ -904,14 +903,14 @@ class Node(Object):
                 # Remove edge from connected nodes' edge_ids lists
                 if edge.source != self.id:
                     source_node = await Node.get(edge.source)
-                    if source_node and edge.id in source_node.edge_ids:
-                        source_node.edge_ids.remove(edge.id)
+                    if source_node and edge.id in source_node.edge_ids:  # type: ignore[attr-defined]
+                        source_node.edge_ids.remove(edge.id)  # type: ignore[attr-defined]
                         await source_node.save()
 
                 if edge.target != self.id:
                     target_node = await Node.get(edge.target)
-                    if target_node and edge.id in target_node.edge_ids:
-                        target_node.edge_ids.remove(edge.id)
+                    if target_node and edge.id in target_node.edge_ids:  # type: ignore[attr-defined]
+                        target_node.edge_ids.remove(edge.id)  # type: ignore[attr-defined]
                         await target_node.save()
 
                 # Delete the edge
@@ -961,73 +960,46 @@ class Node(Object):
         await node.connect(other, edge or Edge)
         return node
 
-    def export(
+    async def export(
         self: "Node",
         exclude_transient: bool = True,
         exclude: Optional[Union[set, Dict[str, Any]]] = None,
-        for_persistence: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Export node to a dictionary.
 
-        Uses the standard Object.export() method. By default, returns a clean
-        flat dictionary suitable for API responses.
-        Set for_persistence=True to get the nested database format.
+        Returns a nested persistence format with id, name, context, edges for database storage.
+        Includes all fields from the class hierarchy (class and parent classes, not child classes).
 
         Args:
             exclude_transient: Whether to automatically exclude transient fields (default: True)
             exclude: Additional fields to exclude (can be a set of field names or a dict)
-            for_persistence: If True, returns nested persistence format with id, name, context, edges (default: False)
             **kwargs: Additional arguments passed to base export/model_dump()
 
         Returns:
-            Dictionary representation of the node:
-            - If for_persistence=False: Clean flat dictionary (standard format)
-            - If for_persistence=True: Nested format with id, name, context, edges for database storage
+            Nested format dictionary with id, name, context, edges for database storage
         """
-        if for_persistence:
-            # Legacy persistence format - nested structure for database storage
-            context_data = super().export(
-                exclude={"id", "_visitor_ref", "edge_ids"},
-                exclude_none=False,
-                exclude_transient=exclude_transient,
-                **kwargs,
-            )
+        # Nested persistence format - structure for database storage
+        # Exclude _visitor_ref from context (id, edge_ids, and type_code are transient and auto-excluded)
+        # Object.export() returns nested format, extract the context
+        parent_export = await super().export(
+            exclude={"_visitor_ref"},
+            exclude_none=False,
+            exclude_transient=exclude_transient,
+            **kwargs,
+        )
 
-            # Include _data if it exists
-            if hasattr(self, "_data"):
-                context_data["_data"] = self._data
+        # Extract context from nested format (Object.export() returns {id, entity, context})
+        context_data = parent_export["context"]
 
-            # Serialize datetime objects to ensure JSON compatibility
-            from jvspatial.utils.serialization import serialize_datetime
+        # Serialize datetime objects to ensure JSON compatibility
+        from jvspatial.utils.serialization import serialize_datetime
 
-            context_data = serialize_datetime(context_data)
+        context_data = serialize_datetime(context_data)
 
-            return {
-                "id": self.id,
-                "name": self.__class__.__name__,
-                "context": context_data,
-                "edges": self.edge_ids,
-            }
-        else:
-            # Standard export - clean flat dictionary for API responses
-            # Exclude internal node fields by default
-            default_exclude = {
-                "type_code",
-                "_graph_context",
-                "_data",
-                "_initializing",
-                "edge_ids",
-                "visitor",
-            }
-            if exclude:
-                exclude_set = (
-                    set(exclude) if isinstance(exclude, (set, dict)) else set()
-                )
-                exclude_set.update(default_exclude)
-            else:
-                exclude_set = default_exclude
-
-            return super().export(
-                exclude_transient=exclude_transient, exclude=exclude_set, **kwargs
-            )
+        return {
+            "id": self.id,
+            "entity": self.entity,
+            "context": context_data,
+            "edges": self.edge_ids,
+        }

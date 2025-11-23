@@ -65,8 +65,7 @@ def attribute(
 ) -> Any:
     """Unified attribute decorator for jvspatial entities.
 
-    This decorator replaces the old decorator system with a single
-    unified interface that supports all attribute behaviors.
+    This decorator provides a unified interface that supports all attribute behaviors.
 
     Args:
         default: Default value for the attribute
@@ -272,7 +271,7 @@ class AttributeMixin:
 
         super().__setattr__(name, value)
 
-    def export(self, exclude_transient: bool = True, **kwargs) -> Dict[str, Any]:
+    async def export(self, exclude_transient: bool = True, **kwargs) -> Dict[str, Any]:  # type: ignore[override]
         """Enhanced export that automatically respects transient annotations.
 
         Args:
@@ -294,7 +293,7 @@ class AttributeMixin:
             result: Dict[str, Any] = self.model_dump(**kwargs)
             return result
         else:
-            # Fallback for non-Pydantic objects
+            # Handle non-Pydantic objects
             return export_with_transient_exclusion(self, exclude_transient)
 
 

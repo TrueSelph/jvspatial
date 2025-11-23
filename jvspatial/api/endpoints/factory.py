@@ -188,19 +188,33 @@ class ParameterModelFactory:
                 "title": name.replace("_", " ").title(),
             }
 
-            # Add examples based on type
-            if param_type == str:
+            # Add examples based on type (handle both built-in types and typing generics)
+            import typing
+
+            type_origin = None
+            if hasattr(typing, "get_origin"):
+                type_origin = typing.get_origin(param_type)
+
+            if param_type == str or type_origin == str:
                 field_config["examples"] = ["example"]
-            elif param_type == int:
+            elif param_type == int or type_origin == int:
                 field_config["examples"] = [1]
-            elif param_type == float:
+            elif param_type == float or type_origin == float:
                 field_config["examples"] = [1.0]
-            elif param_type == bool:
+            elif param_type == bool or type_origin == bool:
                 field_config["examples"] = [True]
-            elif param_type == list:
+            elif (
+                param_type == list or type_origin == list or type_origin == typing.List
+            ):
                 field_config["examples"] = [[]]
-            elif param_type == dict:
-                field_config["examples"] = [{}]
+            elif param_type == dict or type_origin == dict:
+                # For 'properties' parameter, provide a more useful example with action properties
+                if name == "properties":
+                    field_config["examples"] = [
+                        {"var_a": 60, "var_b": 10, "timeout": 45}
+                    ]
+                else:
+                    field_config["examples"] = [{}]
 
             # For required fields, we need to handle them specially to avoid PydanticUndefined
             # We'll use a sentinel value and then validate that it's not None
@@ -233,36 +247,82 @@ class ParameterModelFactory:
     ) -> Type[BaseModel]:
         """Create the final parameter model with examples."""
         # Create example data for the model
+        # Always include all fields with meaningful examples, even if they're optional
         example_data = {}
         for name, field_tuple in fields.items():
             field_type, field_info = field_tuple
-            if hasattr(field_info, "default") and field_info.default is not None:
-                example_data[name] = field_info.default
-            elif hasattr(field_info, "examples") and field_info.examples:
+
+            # Skip start_node as it's a system parameter
+            if name == "start_node":
+                continue
+
+            # Determine the actual type (handle Optional/Union types and generic types like Dict)
+            actual_type = field_type
+            type_origin = None
+            import typing
+
+            if hasattr(typing, "get_origin") and hasattr(typing, "get_args"):
+                origin = typing.get_origin(field_type)
+                args = typing.get_args(field_type)
+
+                # Check if it's a generic type (Dict, List, etc.)
+                if origin is not None:
+                    type_origin = origin
+                    # For Optional types, extract the non-None type
+                    if origin is typing.Union and len(args) == 2 and type(None) in args:
+                        # Optional type - extract the non-None type
+                        inner_type = next(t for t in args if t is not type(None))
+                        actual_type = inner_type
+                        # Check if the inner type is also a generic
+                        inner_origin = typing.get_origin(inner_type)
+                        if inner_origin is not None:
+                            type_origin = inner_origin
+                    else:
+                        # It's a generic type like Dict, List, etc.
+                        actual_type = origin
+
+            # Priority: examples > default (if not None) > type-based defaults
+            # Always include fields in example, even if optional
+            if hasattr(field_info, "examples") and field_info.examples:
                 example_data[name] = field_info.examples[0]
-            elif field_type == str:
+            elif hasattr(field_info, "default") and field_info.default is not None:
+                example_data[name] = field_info.default
+            elif actual_type == str or type_origin == str:
                 example_data[name] = "example"
-            elif field_type == int:
+            elif actual_type == int or type_origin == int:
                 example_data[name] = 1
-            elif field_type == bool:
+            elif actual_type == bool or type_origin == bool:
                 example_data[name] = True
-            elif field_type == list:
+            elif (
+                actual_type == list or type_origin == list or type_origin == typing.List
+            ):
                 example_data[name] = []
-            elif field_type == dict:
-                example_data[name] = {}
+            elif actual_type == dict or type_origin == dict:
+                # For 'properties' parameter, provide a more useful example
+                if name == "properties":
+                    example_data[name] = {"var_a": 60, "var_b": 10, "timeout": 45}
+                else:
+                    example_data[name] = {}
+
+        # Merge example into ConfigDict before creating model
+        model_config = ConfigDict(extra="forbid")
+        if example_data:
+            # Set example in json_schema_extra for OpenAPI documentation
+            model_config["json_schema_extra"] = {"example": example_data}
 
         model = cast(
             Type[BaseModel],
             create_model(
                 model_name,
                 __base__=EndpointParameterModel,
-                __config__=ConfigDict(extra="forbid"),
+                __config__=model_config,
                 **fields,
             ),
         )
 
-        # Add example to the model
-        model.model_config["json_schema_extra"] = {"example": example_data}
+        # Also ensure it's set on the model after creation (in case create_model doesn't preserve it)
+        if example_data:
+            model.model_config["json_schema_extra"] = {"example": example_data}
 
         return model
 

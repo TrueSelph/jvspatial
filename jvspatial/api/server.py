@@ -100,7 +100,7 @@ class Server:
         self.lifecycle_manager = LifecycleManager(self)
         self.discovery_service = EndpointDiscoveryService(self)
 
-        # Initialize legacy components for backward compatibility
+        # Initialize application components
         self.app: Optional[FastAPI] = None
         self.endpoint_router = EndpointRouter()  # Main router for all endpoints
         self._exception_handlers: Dict[Union[int, Type[Exception]], Callable] = {}

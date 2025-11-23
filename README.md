@@ -125,7 +125,7 @@ async def get_user(user_id: str):
     if not user:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="User not found")
-    return {"user": user.export()}
+    return {"user": await user.export()}
 
 if __name__ == "__main__":
     server.run()
@@ -155,7 +155,9 @@ class Product(Node):
 @endpoint("/products", methods=["GET"])
 async def list_products():
     products = await Product.find({})
-    return {"products": [p.export() for p in products]}
+    import asyncio
+    products_list = await asyncio.gather(*[p.export() for p in products])
+    return {"products": products_list}
 
 # Handler is automatically available at module level for Lambda
 # No manual assignment needed! AWS Lambda will call: lambda_example.handler
@@ -200,7 +202,9 @@ async def list_users(page: int = 1, per_page: int = 10):
     from jvspatial.core.pager import ObjectPager
     pager = ObjectPager(User, page_size=per_page)
     users = await pager.get_page(page=page)
-    return {"users": [user.export() for user in users]}
+    import asyncio
+    users_list = await asyncio.gather(*[user.export() for user in users])
+    return {"users": users_list}
 
 # Authenticated endpoint
 @endpoint("/api/admin", methods=["GET"], auth=True, roles=["admin"])

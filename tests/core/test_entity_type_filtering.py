@@ -294,8 +294,8 @@ class TestEntityTypeFiltering:
         with patch(
             "jvspatial.core.context.get_default_context", return_value=json_context
         ):
-            # This query should use $and to combine class name filter with property filter
-            # The class name filter uses $or to check both _class and name fields
+            # This query should use $and to combine entity filter with property filter
+            # The entity filter checks the entity field
             apps = await AppNode.find({"context.name": "App1"})
             assert len(apps) == 1
             assert isinstance(apps[0], AppNode)

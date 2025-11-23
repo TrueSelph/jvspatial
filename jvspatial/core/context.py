@@ -238,7 +238,7 @@ class GraphContext:
             try:
                 self._database = get_current_database()
             except Exception:
-                # Fallback to creating default database
+                # Create default database if current database unavailable
                 self._database = create_database()
         return self._database
 
@@ -391,7 +391,7 @@ class GraphContext:
             return cast(T, cached)
 
         # Import here to avoid circular imports
-        from .utils import find_subclass_by_name  # noqa: F401
+        from .utils import find_subclass_by_name
 
         # Get type_code from model fields
         type_code = self._get_entity_type_code(entity_class)
@@ -402,8 +402,23 @@ class GraphContext:
         if not data:
             return None
 
+        # Check entity class before deserialization - ensure stored entity matches requested class
+        # This ensures class-aware get() - e.g., Agent.get() won't return an Action
+        stored_entity = data.get("entity")
+        if stored_entity:
+
+            # Only proceed if stored entity is the requested class or a subclass of it
+            target_class = find_subclass_by_name(entity_class, stored_entity)
+            if target_class is None:
+                # Stored entity is not the requested class or its subclass - return None
+                return None
+
         # Deserialize the entity
         entity = await self._deserialize_entity(entity_class, data)
+
+        # Additional safety check: verify the deserialized entity is an instance of the requested class
+        if entity is not None and not isinstance(entity, entity_class):
+            return None
 
         # Add to cache
         if entity is not None:
@@ -425,38 +440,50 @@ class GraphContext:
         Returns:
             The saved entity instance
         """
-        # Use for_persistence=True for database storage format (Node, Edge, Walker)
-        # This ensures the nested persistence format is used
+        # Export entity - Node, Edge, and Walker return nested format
         if hasattr(entity, "type_code"):
             type_code = getattr(entity, "type_code", "")
             if type_code in ("n", "e", "w"):  # Node, Edge, or Walker
-                record = entity.export(for_persistence=True)
+                record = await entity.export()
+                # Ensure entity field is set
+                if "entity" not in record:
+                    record["entity"] = entity.entity
             else:
-                # For Objects, export and serialize datetimes for JSON compatibility
-                # Also add "name" field for find() queries to work correctly
-                record = entity.export()
-                from jvspatial.utils.serialization import serialize_datetime
+                # For Objects, export returns nested format (id, entity, context)
+                record = await entity.export()
+                # Ensure ID follows proper format: type_code.ClassName.hex_id
+                # Check entity's ID directly (it's transient so not in export)
+                entity_id = getattr(entity, "id", None)
+                if entity_id:
+                    id_parts = entity_id.split(".")
+                    # Check if ID matches expected format: type_code.ClassName.hex_id
+                    if (
+                        len(id_parts) != 3
+                        or id_parts[0] != entity.type_code
+                        or id_parts[1] != entity.__class__.__name__
+                    ):
+                        # ID doesn't match expected format, regenerate it
+                        from jvspatial.core.utils import generate_id
 
-                record = serialize_datetime(record)
-                # Add class name for type filtering in find() queries
-                # Always add it, even if entity has a "name" field (use "_class" for class name)
-                record["_class"] = entity.__class__.__name__
-                # Also add "name" if not present for backward compatibility
-                if "name" not in record:
-                    record["name"] = entity.__class__.__name__
+                        new_id = generate_id(
+                            entity.type_code, entity.__class__.__name__
+                        )
+                        object.__setattr__(entity, "id", new_id)
+                        record["id"] = new_id
+                    # ID is in record from export()
         else:
-            record = entity.export()
+            record = await entity.export()
             from jvspatial.utils.serialization import serialize_datetime
 
             record = serialize_datetime(record)
-            # Add class name for type filtering in find() queries
-            if "name" not in record:
-                record["name"] = entity.__class__.__name__
+            # Ensure entity field is set
+            if "entity" not in record and hasattr(entity, "entity"):
+                record["entity"] = entity.entity
         # Use entity's get_collection_name method if available, otherwise use type_code
         if hasattr(entity, "get_collection_name"):
             collection = entity.get_collection_name()
         else:
-            # Fallback to type_code-based collection name
+            # Use type_code-based collection name
             type_code = entity.type_code
             if type_code == "n":
                 collection = "node"
@@ -490,9 +517,9 @@ class GraphContext:
 
         if isinstance(entity, Node):
             # Check if this is a recursive call from Node.delete() by checking
-            # if cascade=False and the node has no edges (already cleaned up)
+            # if cascade=False and the node has no edges (cleaned up by Node.delete())
             if not cascade and len(entity.edge_ids) == 0:
-                # Node.delete() has already cleaned up edges, just delete the entity
+                # Node.delete() has cleaned up edges, just delete the entity
                 collection = self._get_collection_name(entity.type_code)
                 db = self.database
                 await db.delete(collection, entity.id)
@@ -678,7 +705,7 @@ class GraphContext:
         collection = self._get_collection_name(self._get_entity_type_code(node_class))
 
         # Add class name filter to query for type safety
-        db_query = {"name": node_class.__name__, **query}
+        db_query = {"entity": node_class.__name__, **query}
 
         db = self.database
         results = await db.find(collection, db_query)
@@ -724,7 +751,7 @@ class GraphContext:
 
         # Filter by edge class if specified
         if edge_class:
-            query["name"] = edge_class.__name__
+            query["entity"] = edge_class.__name__
 
         # Add additional property filters
         for key, value in kwargs.items():
@@ -761,61 +788,46 @@ class GraphContext:
             # Import here to avoid circular imports
             from .utils import find_subclass_by_name
 
-            stored_name = data.get("name", entity_class.__name__)
+            # Use entity field for class identification
+            stored_entity = data.get("entity", entity_class.__name__)
             target_class = (
-                find_subclass_by_name(entity_class, stored_name) or entity_class
+                find_subclass_by_name(entity_class, stored_entity) or entity_class
             )
 
             # Create object with proper subclass
-            # Handle different export structures for different entity types
-            if "context" in data:
-                context_data = data["context"].copy()
-            else:
-                # For Object types, the data is directly in the root
-                context_data = {
-                    k: v for k, v in data.items() if k not in ["id", "type_code"]
-                }
+            # All entities use nested format with context field
+            if "context" not in data:
+                raise ValueError(
+                    f"Entity data missing 'context' field: {data.get('id', 'unknown')}"
+                )
+            context_data = data["context"].copy()
 
             entity_type_code = self._get_entity_type_code(entity_class)
 
             if entity_type_code == "n":
                 # Handle Node-specific logic
-                if "edges" in data:
-                    context_data["edge_ids"] = data["edges"]
-                elif (
-                    "context" in data and "edge_ids" in data["context"]
-                ):  # Handle legacy format
-                    context_data["edge_ids"] = data["context"]["edge_ids"]
+                # Extract edge_ids from data (stored as "edges" at top level)
+                edge_ids = data.get("edges", [])
 
-                # Extract _data if present
-                stored_data = context_data.pop("_data", {})
-                entity = target_class(id=data["id"], **context_data)
-                # Set the _data field
-                entity._data = stored_data
+                # Remove edge_ids, id, and type_code from context_data as they're handled separately
+                context_data.pop("edge_ids", None)
+                context_data.pop("id", None)
+                context_data.pop("type_code", None)
+
+                entity = target_class(id=data["id"], edge_ids=edge_ids, **context_data)
 
             elif entity_type_code == "e":
-                # Handle Edge-specific logic with source/target
-                # Handle both new and legacy data formats
-                if "source" in data and "target" in data:
-                    # New format: source/target at top level
-                    source = data["source"]
-                    target = data["target"]
-                    bidirectional = data.get("bidirectional", True)
-                else:
-                    # Legacy format: source/target in context
-                    source = context_data.get("source", "")
-                    target = context_data.get("target", "")
-                    bidirectional = context_data.get("bidirectional", True)
+                # Handle Edge-specific logic with source/target at top level
+                source = data["source"]
+                target = data["target"]
+                bidirectional = data.get("bidirectional", True)
 
                 # Remove these from context_data to avoid duplication
-                context_data = {
-                    k: v
-                    for k, v in context_data.items()
-                    if k not in ["source", "target", "bidirectional"]
-                }
-
-                # Extract _data if present
-                stored_data = context_data.pop("_data", {})
+                context_data.pop("source", None)
+                context_data.pop("target", None)
+                context_data.pop("bidirectional", None)
+                context_data.pop("id", None)
+                context_data.pop("type_code", None)
 
                 entity = target_class(
                     id=data["id"],
@@ -826,15 +838,16 @@ class GraphContext:
                 )
 
             else:
-                # Handle other entity types
-                stored_data = context_data.pop("_data", {})
+                # Handle Object types
+                # Remove system fields from context_data
+                context_data.pop("id", None)
+                context_data.pop("type_code", None)
+                context_data.pop(
+                    "entity", None
+                )  # entity is at top level, not in context
                 entity = target_class(id=data["id"], **context_data)
 
             entity._graph_context = self
-
-            # Restore _data after object creation
-            if stored_data:
-                entity._data.update(stored_data)
 
             return entity
         except Exception:
@@ -868,7 +881,7 @@ class GraphContext:
             # Export all entities of this type
             records = []
             for entity in type_entities:
-                record = entity.export()
+                record = await entity.export()
                 records.append(record)
 
             # Save all records of this type
@@ -982,14 +995,14 @@ class GraphContext:
         collection = self._get_collection_name(node_class.type_code)
         db = self.database
 
-        # Use database cursor if available, otherwise fallback to find
+        # Use database cursor if available, otherwise use find
         if hasattr(db, "async_find"):
             async for data in db.async_find(collection, query):
                 entity = await self._deserialize_entity(node_class, data)
                 if entity:
                     yield entity
         else:
-            # Fallback to regular find
+            # Use regular find
             results = await db.find(collection, query)
             for data in results:
                 entity = await self._deserialize_entity(node_class, data)
@@ -1014,14 +1027,14 @@ class GraphContext:
         collection = self._get_collection_name(edge_class.type_code)
         db = self.database
 
-        # Use database cursor if available, otherwise fallback to find
+        # Use database cursor if available, otherwise use find
         if hasattr(db, "async_find"):
             async for data in db.async_find(collection, query):
                 entity = await self._deserialize_entity(edge_class, data)
                 if entity:
                     yield entity
         else:
-            # Fallback to regular find
+            # Use regular find
             results = await db.find(collection, query)
             for data in results:
                 entity = await self._deserialize_entity(edge_class, data)
@@ -1029,7 +1042,7 @@ class GraphContext:
                     yield entity
 
 
-# Global context instance for backwards compatibility
+# Global context instance
 _default_context: Optional[GraphContext] = None
 
 

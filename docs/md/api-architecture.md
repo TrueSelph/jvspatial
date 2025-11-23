@@ -368,14 +368,14 @@ async def get_user(user_id: str, endpoint):
     user = await User.get(user_id)
     if not user:
         return endpoint.not_found(message="User not found")
-    return endpoint.success(data={"user": user.export()})
+    return endpoint.success(data={"user": await user.export()})
 
 # ❌ Avoid - Manual status codes
 async def get_user(user_id: str):
     user = await User.get(user_id)
     if not user:
         return JSONResponse(status_code=404, content={"error": "Not found"})
-    return {"user": user.export()}
+    return {"user": await user.export()}
 ```
 
 ### 2. Use EndpointField for Parameter Configuration
@@ -427,7 +427,7 @@ async def get_item(item_id: str, endpoint):
             message="Item not found",
             details={"item_id": item_id}
         )
-    return endpoint.success(data=item.export())
+    return endpoint.success(data=await item.export())
 ```
 
 ### 5. Follow Webhook Best Practices

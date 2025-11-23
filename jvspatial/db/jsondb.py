@@ -49,14 +49,12 @@ class JsonDB(Database):
         return collection_dir / f"{record_id}.json"
 
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Save a record to the database."""
+        """Save a record to the database.
+
+        Note: Entities should always have IDs set by their __init__ methods.
+        This method expects the ID to already be present in the data.
+        """
         async with self._ensure_lock():
-            # Ensure record has an ID
-            if "id" not in data:
-                import uuid
-
-                data["id"] = str(uuid.uuid4())
-
             # Save the record to its own file
             record_path = self._get_record_path(collection, data["id"])
             with open(record_path, "w") as f:

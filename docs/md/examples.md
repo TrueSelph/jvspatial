@@ -35,7 +35,9 @@ server = Server(
 async def list_users(page: int = 1, per_page: int = 10):
     pager = ObjectPager(UserNode, page_size=per_page)
     users = await pager.get_page(page=page)
-    return {"users": [user.export() for user in users], ...}
+    import asyncio
+    users_list = await asyncio.gather(*[user.export() for user in users])
+    return {"users": users_list, ...}
 
 # Entity-centric CRUD operations
 user = await UserNode.create(name="John", email="john@example.com")
@@ -71,7 +73,9 @@ server = Server(
 async def list_articles(page: int = 1, per_page: int = 10, category: Optional[str] = None):
     pager = ObjectPager(ArticleNode, page_size=per_page)
     articles = await pager.get_page(page=page, additional_filters={"category": category} if category else {})
-    return {"articles": [article.export() for article in articles], ...}
+    import asyncio
+    articles_list = await asyncio.gather(*[article.export() for article in articles])
+    return {"articles": articles_list, ...}
 ```
 
 **Use this example when**: You need a public API for reading data, content delivery, or read-only services.
@@ -365,7 +369,7 @@ async def admin_list_users(request: Request):
         "authentication": "JWT token + admin role required",
         "admin_user": current_user.email,
         "total_users": total_users,
-        "users": [user.export() for user in all_users]
+        "users": await asyncio.gather(*[user.export() for user in all_users])
     }
 ```
 

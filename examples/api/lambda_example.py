@@ -25,6 +25,7 @@ Key Features:
 - Automatic Lambda temp directory detection and configuration
 """
 
+import asyncio
 from typing import Any, Dict
 
 from jvspatial.api import endpoint
@@ -95,8 +96,11 @@ async def health_check() -> Dict[str, Any]:
 async def list_products() -> Dict[str, Any]:
     """List all products."""
     products = await ProductNode.find()
+    import asyncio
+
+    products_list = await asyncio.gather(*[product.export() for product in products])
     return {
-        "products": [product.export() for product in products],
+        "products": products_list,
         "count": len(products),
     }
 
@@ -117,7 +121,10 @@ async def create_product(
         category=category,
         in_stock=in_stock,
     )
-    return {"product": product.export(), "message": "Product created successfully"}
+    return {
+        "product": await product.export(),
+        "message": "Product created successfully",
+    }
 
 
 @endpoint("/products/{product_id}", methods=["GET"])
@@ -129,7 +136,7 @@ async def get_product(product_id: str) -> Dict[str, Any]:
 
         raise HTTPException(status_code=404, detail="Product not found")
 
-    return {"product": product.export()}
+    return {"product": await product.export()}
 
 
 # =============================================================================

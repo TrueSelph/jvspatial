@@ -18,6 +18,7 @@ Key Features:
 - Real persistence using the graph database
 """
 
+import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -221,7 +222,9 @@ async def list_users(
         ]
 
     # Convert to dictionaries using export
-    users_list = [u.export(exclude={"updated_at", "last_login"}) for u in users]
+    users_list = await asyncio.gather(
+        *[u.export(exclude={"updated_at", "last_login"}) for u in users]
+    )
 
     # Get pagination info from pager
     pagination_info = pager.to_dict()
@@ -288,7 +291,7 @@ async def create_user(
     )
 
     return {
-        "user": user.export(),
+        "user": await user.export(),
         "message": "User created successfully",
     }
 
@@ -323,7 +326,7 @@ async def get_user(user_id: str) -> Dict[str, Any]:
 
         raise HTTPException(status_code=404, detail="User not found")
 
-    return {"user": user.export()}
+    return {"user": await user.export()}
 
 
 @endpoint(
@@ -391,7 +394,7 @@ async def update_user(
     await user.save()
 
     return {
-        "user": user.export(),
+        "user": await user.export(),
         "message": "User updated successfully",
     }
 
@@ -525,7 +528,9 @@ async def list_products(
         products = [p for p in products if p.stock > 0]
 
     # Convert to dictionaries using export
-    products_list = [p.export(exclude={"updated_at"}) for p in products]
+    products_list = await asyncio.gather(
+        *[p.export(exclude={"updated_at"}) for p in products]
+    )
 
     # Get pagination info from pager
     pagination_info = pager.to_dict()
@@ -589,7 +594,7 @@ async def create_product(
     )
 
     return {
-        "product": product.export(),
+        "product": await product.export(),
         "message": "Product created successfully",
     }
 
@@ -625,7 +630,7 @@ async def get_product(product_id: str) -> Dict[str, Any]:
 
         raise HTTPException(status_code=404, detail="Product not found")
 
-    return {"product": product.export()}
+    return {"product": await product.export()}
 
 
 @endpoint(
@@ -689,7 +694,7 @@ async def update_product(
     await product.save()
 
     return {
-        "product": product.export(),
+        "product": await product.export(),
         "message": "Product updated successfully",
     }
 

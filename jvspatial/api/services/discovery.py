@@ -18,12 +18,43 @@ from jvspatial.core.entities import Walker
 try:
     from cryptography.utils import CryptographyDeprecationWarning
 
+    # Filter all CryptographyDeprecationWarning at module level
     warnings.filterwarnings(
         "ignore",
         category=CryptographyDeprecationWarning,
     )
 except ImportError:
     pass
+
+# Filter Starlette HTTP status code deprecation warnings
+# These warnings are triggered when inspect.getmembers() accesses module attributes
+# that import Starlette's deprecated status constants
+warnings.filterwarnings(
+    "ignore",
+    message=".*HTTP_413.*",
+    category=DeprecationWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=".*HTTP_414.*",
+    category=DeprecationWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=".*HTTP_416.*",
+    category=DeprecationWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=".*HTTP_422.*",
+    category=DeprecationWarning,
+)
+# Also filter all Starlette deprecation warnings
+warnings.filterwarnings(
+    "ignore",
+    category=DeprecationWarning,
+    module="starlette.*",
+)
 
 if TYPE_CHECKING:
     from jvspatial.api.server import Server
@@ -162,7 +193,19 @@ class EndpointDiscoveryService:
         module_name = getattr(module, "__name__", "unknown")
 
         # Discover walkers
-        for name, obj in inspect.getmembers(module):
+        # Suppress deprecation warnings when accessing module attributes
+        # (some modules may import Starlette's deprecated status constants or cryptography deprecated types)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            try:
+                from cryptography.utils import CryptographyDeprecationWarning
+
+                warnings.simplefilter("ignore", CryptographyDeprecationWarning)
+            except ImportError:
+                pass
+            members = inspect.getmembers(module)
+
+        for name, obj in members:
             if not (
                 inspect.isclass(obj) and issubclass(obj, Walker) and obj is not Walker
             ):
@@ -263,7 +306,19 @@ class EndpointDiscoveryService:
                 self._logger.debug(f"{LogIcons.WARNING} Skipped walker {name}: {e}")
 
         # Discover functions
-        for name, obj in module.__dict__.items():
+        # Suppress deprecation warnings when accessing module attributes
+        # (some modules may import Starlette's deprecated status constants or cryptography deprecated types)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            try:
+                from cryptography.utils import CryptographyDeprecationWarning
+
+                warnings.simplefilter("ignore", CryptographyDeprecationWarning)
+            except ImportError:
+                pass
+            module_dict = module.__dict__
+
+        for name, obj in module_dict.items():
             # Skip private attributes
             if name.startswith("_") and name != "_jvspatial_endpoint_config":
                 continue

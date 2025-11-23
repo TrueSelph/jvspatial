@@ -584,7 +584,7 @@ class TestGraphContextPerformance:
             )
 
         # Test query performance
-        # Note: The find_nodes method has a bug where it filters by "name": class_name
+        # Note: The find_nodes method filters by "entity": class_name
         # but the actual data is stored in nested "context" field
         # So we test with an empty query instead
         start_time = asyncio.get_event_loop().time()

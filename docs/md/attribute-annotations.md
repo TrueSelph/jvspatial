@@ -55,7 +55,7 @@ Transient attributes are excluded from export/serialization operations. Use thes
 
 ```python
 entity.cache["temp"] = "value"  # ✓ Works at runtime
-data = entity.export()  # cache not included in export
+data = await entity.export()  # cache not included in export
 ```
 
 ### Compound Decorators
@@ -197,7 +197,7 @@ child = Child(parent_id="p1", child_id="c1")
 child.parent_id = "new"  # ✗ Protected
 child.child_id = "new"   # ✗ Protected
 
-data = child.export()  # Neither cache is exported
+data = await child.export()  # Neither cache is exported
 ```
 
 ## Error Handling

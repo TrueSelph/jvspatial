@@ -13,8 +13,6 @@ from typing import (
     Union,
 )
 
-from pydantic import Field
-
 from jvspatial.exceptions import ValidationError
 
 from ..annotations import attribute
@@ -41,7 +39,6 @@ class Edge(Object):
     """
 
     type_code: str = attribute(transient=True, default="e")
-    id: str = Field(..., description="Unique identifier for the edge")
     source: str
     target: str
     bidirectional: bool = True
@@ -147,71 +144,51 @@ class Edge(Object):
         super().__init__(**kwargs)
         self._initializing = False
 
-    def export(
+    async def export(
         self: "Edge",
         exclude_transient: bool = True,
         exclude: Optional[Union[set, Dict[str, Any]]] = None,
-        for_persistence: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Export edge to a dictionary.
 
-        Uses the standard Object.export() method. By default, returns a clean
-        flat dictionary suitable for API responses.
-        Set for_persistence=True to get the nested database format.
+        Returns a nested persistence format with id, name, context, source, target, bidirectional
+        for database storage. Includes all fields from the class hierarchy (class and parent classes, not child classes).
 
         Args:
             exclude_transient: Whether to automatically exclude transient fields (default: True)
             exclude: Additional fields to exclude (can be a set of field names or a dict)
-            for_persistence: If True, returns nested persistence format with id, name, context, source, target, bidirectional (default: False)
             **kwargs: Additional arguments passed to base export/model_dump()
 
         Returns:
-            Dictionary representation of the edge:
-            - If for_persistence=False: Clean flat dictionary (standard format)
-            - If for_persistence=True: Nested format with id, name, context, source, target, bidirectional for database storage
+            Nested format dictionary with id, name, context, source, target, bidirectional for database storage
         """
-        if for_persistence:
-            # Legacy persistence format - nested structure for database storage
-            context = super().export(
-                exclude={"id", "source", "target", "bidirectional"},
-                exclude_none=False,
-                exclude_transient=exclude_transient,
-                **kwargs,
-            )
+        # Nested persistence format - structure for database storage
+        # Exclude source, target, bidirectional from context (id and type_code are transient and auto-excluded)
+        # Object.export() returns nested format, extract the context
+        parent_export = await super().export(
+            exclude={"source", "target", "bidirectional"},
+            exclude_none=False,
+            exclude_transient=exclude_transient,
+            **kwargs,
+        )
 
-            # Include _data if it exists
-            if hasattr(self, "_data"):
-                context["_data"] = self._data
+        # Extract context from nested format (Object.export() returns {id, entity, context})
+        context = parent_export["context"]
 
-            # Serialize datetime objects to ensure JSON compatibility
-            from jvspatial.utils.serialization import serialize_datetime
+        # Serialize datetime objects to ensure JSON compatibility
+        from jvspatial.utils.serialization import serialize_datetime
 
-            context = serialize_datetime(context)
+        context = serialize_datetime(context)
 
-            return {
-                "id": self.id,
-                "name": self.__class__.__name__,
-                "context": context,
-                "source": self.source,
-                "target": self.target,
-                "bidirectional": self.bidirectional,
-            }
-        else:
-            # Standard export - clean flat dictionary for API responses
-            # Exclude internal edge fields by default
-            default_exclude = {"type_code", "_graph_context", "_data", "_initializing"}
-            if exclude:
-                exclude_set = (
-                    set(exclude) if isinstance(exclude, (set, dict)) else set()
-                )
-                exclude_set.update(default_exclude)
-            else:
-                exclude_set = default_exclude
-
-            return super().export(
-                exclude_transient=exclude_transient, exclude=exclude_set, **kwargs
-            )
+        return {
+            "id": self.id,
+            "entity": self.entity,
+            "context": context,
+            "source": self.source,
+            "target": self.target,
+            "bidirectional": self.bidirectional,
+        }
 
     @classmethod
     async def get(cls: Type["Edge"], id: str) -> Optional["Edge"]:
@@ -309,18 +286,15 @@ class Edge(Object):
                 target = data["context"].get("target", "")
                 bidirectional = data["context"].get("bidirectional", True)
 
-            # Handle subclass instantiation based on stored name
-            stored_name = data.get("name", cls.__name__)
-            target_class = find_subclass_by_name(cls, stored_name) or cls
+            # Handle subclass instantiation based on stored entity
+            stored_entity = data.get("entity", cls.__name__)
+            target_class = find_subclass_by_name(cls, stored_entity) or cls
 
             context_data = {
                 k: v
                 for k, v in data["context"].items()
                 if k not in ["source", "target", "bidirectional"]
             }
-
-            # Extract _data if present
-            stored_data = context_data.pop("_data", {})
 
             edge = target_class(
                 id=data["id"],
@@ -329,10 +303,6 @@ class Edge(Object):
                 bidirectional=bidirectional,
                 **context_data,
             )
-
-            # Restore _data after object creation
-            if stored_data:
-                edge._data.update(stored_data)
 
             edges.append(edge)
         return edges

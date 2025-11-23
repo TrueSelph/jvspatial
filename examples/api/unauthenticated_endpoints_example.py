@@ -17,6 +17,7 @@ Key Features:
 - Real persistence using the graph database
 """
 
+import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -187,7 +188,7 @@ async def list_articles(
     articles: List[Any] = await pager.get_page(page=page, additional_filters=query)
 
     # Export articles to dictionaries
-    articles_list = [article.export() for article in articles]
+    articles_list = await asyncio.gather(*[article.export() for article in articles])
 
     # Get pagination info from pager
     pagination_info = pager.to_dict()
@@ -235,7 +236,7 @@ async def get_article(article_id: str) -> Dict[str, Any]:
 
         raise HTTPException(status_code=404, detail="Article not found")
 
-    return {"article": article.export()}
+    return {"article": await article.export()}
 
 
 # =============================================================================
@@ -320,7 +321,7 @@ async def list_books(
     books: List[Any] = await pager.get_page(page=page, additional_filters=query)
 
     # Export books to dictionaries
-    books_list = [book.export() for book in books]
+    books_list = await asyncio.gather(*[book.export() for book in books])
 
     # Get pagination info from pager
     pagination_info = pager.to_dict()
@@ -369,7 +370,7 @@ async def get_book(book_id: str) -> Dict[str, Any]:
 
         raise HTTPException(status_code=404, detail="Book not found")
 
-    return {"book": book.export()}
+    return {"book": await book.export()}
 
 
 # =============================================================================

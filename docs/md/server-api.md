@@ -551,7 +551,7 @@ async def get_user(user_id: str):
     user = await User.get(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"user": user.export()}
+    return {"user": await user.export()}
 
 # Function endpoints support all FastAPI features
 @endpoint("/upload", methods=["POST"], tags=["files"])
@@ -602,7 +602,7 @@ async def get_user(user_id: str):
     user = await User.get(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"user": user.export()}
+    return {"user": await user.export()}
 ```
 
 ## Middleware
@@ -751,7 +751,9 @@ server = Server(title="My Lambda API")
 @endpoint("/products", methods=["GET"])
 async def list_products():
     products = await ProductNode.find()
-    return {"products": [p.export() for p in products]}
+    import asyncio
+    products_list = await asyncio.gather(*[p.export() for p in products])
+    return {"products": products_list}
 
 # Create handler manually with custom configuration
 handler = server.get_lambda_handler(
@@ -925,7 +927,9 @@ class CreateItem(Walker):
 @endpoint("/items", methods=["GET"])
 async def list_items():
     items = await Item.all()
-    return {"items": [item.export() for item in items]}
+    import asyncio
+    items_list = await asyncio.gather(*[item.export() for item in items])
+    return {"items": items_list}
 
 if __name__ == "__main__":
     server.run()

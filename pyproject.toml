@@ -97,7 +97,6 @@ filterwarnings = [
     "ignore::DeprecationWarning:pydantic.*",
     "ignore::PendingDeprecationWarning",
     "ignore::DeprecationWarning:starlette.*",
-    "ignore::cryptography.utils.CryptographyDeprecationWarning",
     "ignore:'HTTP_413_REQUEST_ENTITY_TOO_LARGE' is deprecated:DeprecationWarning",
     "ignore:'HTTP_414_REQUEST_URI_TOO_LONG' is deprecated:DeprecationWarning",
     "ignore:'HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE' is deprecated:DeprecationWarning",
@@ -123,7 +122,7 @@ disallow_subclassing_any = false
 disallow_untyped_calls = false
 disallow_untyped_decorators = false
 check_untyped_defs = false  # Don't check bodies of untyped functions
-no_implicit_optional = false  # Allow implicit Optional for backward compatibility
+no_implicit_optional = false
 warn_redundant_casts = false
 warn_unused_ignores = false
 warn_no_return = false

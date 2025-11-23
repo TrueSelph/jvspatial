@@ -116,7 +116,7 @@ async def get_user(user_id: str):
     if not user:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="User not found")
-    return {"user": user.export()}
+    return {"user": await user.export()}
 ```
 
 ### **Step 4: Start the Server**
@@ -215,7 +215,9 @@ from jvspatial.api import endpoint
 async def list_all_users():
     """Admin-only endpoint."""
     users = await User.find({})
-    return {"users": [u.export() for u in users]}
+    import asyncio
+    users_list = await asyncio.gather(*[u.export() for u in users])
+    return {"users": users_list}
 ```
 
 ### **Pattern 5: Caching**

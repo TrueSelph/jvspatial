@@ -151,19 +151,12 @@ class TestObjectPagerBasicFunctionality:
             # Mock deserialization
             async def mock_deserialize(cls, data):
                 try:
-                    # Extract _data if present
                     context_data = data["context"].copy()
-                    stored_data = context_data.pop("_data", {})
+                    # Remove id and type_code as they're handled separately
+                    context_data.pop("id", None)
+                    context_data.pop("type_code", None)
 
                     obj = PaginationTestObject(id=data["id"], **context_data)
-
-                    # Restore _data after object creation
-                    if stored_data:
-                        obj._data.update(stored_data)
-                    else:
-                        # Add some data to make the object truthy
-                        obj._data["test"] = "value"
-
                     return obj
                 except Exception as e:
                     return None

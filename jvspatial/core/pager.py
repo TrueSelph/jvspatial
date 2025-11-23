@@ -62,14 +62,14 @@ class ObjectPager:
         self.order_by = order_by
         self.order_direction = order_direction
 
-        # Pagination state (updated after get_page() call)
+        # Pagination state (set after get_page() call)
         self.total_items = 0
         self.total_pages = 1
         self.has_previous = False
         self.has_next = False
         self.is_cached = False
 
-        # Internal cache for results (now includes filter hash in key)
+        # Internal cache for results (includes filter hash in key)
         self._cache: Dict[str, List[T]] = {}
 
     async def get_page(
@@ -96,22 +96,22 @@ class ObjectPager:
 
         self.is_cached = False
 
-        # Build MongoDB-style query with proper class filtering
-        db_filter = {"name": self.object_class.__name__}
-
-        # Merge instance filters
-        if self.filters:
-            db_filter.update(self.filters)
-
-        # Merge any additional filters passed to this method
-        if additional_filters:
-            db_filter.update(additional_filters)
-
+        # Use Object's _build_database_query for class-aware queries
+        # This ensures dynamically loaded subclasses are included
         context = get_default_context()
-        # Get type_code from model fields
-        type_code_field = self.object_class.model_fields.get("type_code")
-        type_code = type_code_field.default if type_code_field else "o"
-        collection = context._get_collection_name(type_code)
+
+        # Merge filters
+        merged_filters = {}
+        if self.filters:
+            merged_filters.update(self.filters)
+        if additional_filters:
+            merged_filters.update(additional_filters)
+
+        # Build query using Object's class-aware query builder
+        # Uses _collect_class_names() which finds all imported subclasses via __subclasses__()
+        collection, db_filter = await self.object_class._build_database_query(
+            context, merged_filters, {}
+        )
 
         # Use enhanced database methods for better performance
         # Get total count using the new count method
@@ -131,8 +131,8 @@ class ObjectPager:
         self.has_previous = self.current_page > 1
         self.has_next = self.current_page < self.total_pages
 
-        # For ordering, we'll need to fetch and sort in Python for now
-        # TODO: Implement database-level sorting with MongoDB operators
+        # For ordering, fetch and sort in Python
+        # Database-level sorting with MongoDB operators can be implemented if needed
         if isinstance(context.database, AsyncMock):
             # Handle AsyncMock case (tests)
             all_items = await context.database.find(collection, db_filter)

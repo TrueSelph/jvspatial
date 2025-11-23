@@ -310,7 +310,7 @@ class Entity(Node):
     temp_count: int = transient(Field(default=0))         # Not persisted
 
 entity.cache["key"] = "value"  # Works at runtime
-data = entity.export()          # cache excluded from export
+data = await entity.export()          # cache excluded from export
 ```
 
 ### Compound Decorators
@@ -335,7 +335,7 @@ class Entity(Node):
     _internal_counter: int = private(default=0)   # Not serialized
 
 entity._cache["key"] = "value"  # Works at runtime
-data = entity.export()          # _cache excluded from export
+data = await entity.export()          # _cache excluded from export
 ```
 
 ### Compound Decorators

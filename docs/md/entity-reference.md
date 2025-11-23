@@ -25,7 +25,7 @@ class Object(BaseModel):
     @classmethod
     async def count(cls, query: Optional[dict] = None, **filters) -> int
     async def delete(cascade: bool = False) -> None  # cascade is ignored for Object entities
-    def export() -> dict
+    async def export() -> dict
 ```
 
 **Convenience Counting**
