@@ -694,72 +694,86 @@ class Server:
         from jvspatial.exceptions import JVSpatialAPIException
 
         starlette_error_logger = logging.getLogger("starlette.error")
+        uvicorn_error_logger = logging.getLogger("uvicorn.error")
+
+        def _is_client_error(exc_type, exc_value) -> bool:
+            """Check if exception is a known client error (4xx)."""
+            # Check for FastAPI HTTPException
+            if exc_type is HTTPException:
+                return exc_value.status_code < 500
+
+            # Check for JVSpatialAPIException
+            if exc_type is JVSpatialAPIException or isinstance(
+                exc_value, JVSpatialAPIException
+            ):
+                return hasattr(exc_value, "status_code") and exc_value.status_code < 500
+
+            # Check for httpx.HTTPStatusError (external API errors)
+            try:
+                import httpx
+
+                if isinstance(exc_value, httpx.HTTPStatusError):
+                    return exc_value.response.status_code < 500
+            except ImportError:
+                pass  # httpx not installed
+
+            return False
+
+        # Create a filter that suppresses client error logs entirely
+        class ClientErrorFilter(logging.Filter):
+            """Filter that suppresses log records for client errors (4xx)."""
+
+            def filter(self, record: logging.LogRecord) -> bool:
+                """Filter out client error log records."""
+                # Check if this record has exception info
+                if record.exc_info:
+                    exc_type, exc_value, _ = record.exc_info
+                    # Suppress entire log record for client errors (4xx)
+                    if _is_client_error(exc_type, exc_value):
+                        return False  # Don't log this record
+                return True  # Log all other records
 
         # Create a custom formatter that suppresses tracebacks for known errors
         class KnownErrorFormatter(logging.Formatter):
-            """Formatter that suppresses stack traces for known errors (HTTPException, JVSpatialAPIException)."""
+            """Formatter that suppresses stack traces for known errors."""
 
             def formatException(self, ei):  # noqa: N802
                 """Override to return empty string for known errors."""
                 if ei:
                     exc_type, exc_value, _ = ei
-                    # Suppress stack traces for known errors (4xx) - they're not real exceptions
-                    is_known_error = (
-                        exc_type is HTTPException
-                        or exc_type is JVSpatialAPIException
-                        or isinstance(exc_value, JVSpatialAPIException)
-                    )
-                    if (
-                        is_known_error
-                        and hasattr(exc_value, "status_code")
-                        and exc_value.status_code < 500
-                    ):
+                    # Suppress stack traces for client errors (4xx) - they're not real exceptions
+                    if _is_client_error(exc_type, exc_value):
                         return ""  # No stack trace for client errors
                 return super().formatException(ei) if ei else ""
 
-            def format(self, record: logging.LogRecord) -> str:
-                """Format the record, suppressing stack traces for known errors."""
-                # Check if this record has exception info for known errors
-                if record.exc_info:
-                    exc_type, exc_value, _ = record.exc_info
-                    # Suppress stack traces for client errors (4xx)
-                    is_known_error = (
-                        exc_type is HTTPException
-                        or exc_type is JVSpatialAPIException
-                        or isinstance(exc_value, JVSpatialAPIException)
-                    )
-                    if (
-                        is_known_error
-                        and hasattr(exc_value, "status_code")
-                        and exc_value.status_code < 500
-                    ):
-                        # Temporarily remove exc_info to prevent traceback formatting
-                        original_exc_info = record.exc_info
-                        record.exc_info = None
-                        try:
-                            result = super().format(record)
-                        finally:
-                            record.exc_info = original_exc_info
-                        return result
-                return super().format(record)
-
-        # Apply the formatter to Starlette's error logger handlers
+        # Apply filter and formatter to Starlette's error logger
+        client_error_filter = ClientErrorFilter()
         known_error_formatter = KnownErrorFormatter(
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         )
 
-        # Apply to existing handlers
+        # Apply filter and formatter to existing handlers
         from logging import Handler
 
-        # mypy infers handlers as Callable, but they're actually Handler instances
         for handler_item in starlette_error_logger.handlers:  # type: ignore[assignment]
             log_handler: Handler = handler_item  # type: ignore[assignment]
+            log_handler.addFilter(client_error_filter)
             log_handler.setFormatter(known_error_formatter)
+
+        # Also configure uvicorn's error logger
+        for handler_item in uvicorn_error_logger.handlers:  # type: ignore[assignment]
+            uvicorn_log_handler: Handler = handler_item  # type: ignore[assignment]
+            uvicorn_log_handler.addFilter(client_error_filter)
+            uvicorn_log_handler.setFormatter(known_error_formatter)
+
+        # Add filter to logger itself (applies to all handlers)
+        starlette_error_logger.addFilter(client_error_filter)
+        uvicorn_error_logger.addFilter(client_error_filter)
 
         # Also configure the logger to use this formatter for any new handlers
         if not starlette_error_logger.handlers:
-            # If no handlers exist yet, create one with our formatter
             new_handler: Handler = logging.StreamHandler()
+            new_handler.addFilter(client_error_filter)
             new_handler.setFormatter(known_error_formatter)
             starlette_error_logger.addHandler(new_handler)
 

@@ -46,7 +46,7 @@ def build_field_config(
     Returns:
         Field configuration dictionary
     """
-    config = {
+    config: Dict[str, Any] = {
         "title": field_info.title,
         "description": field_info.description,
     }

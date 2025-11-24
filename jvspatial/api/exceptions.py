@@ -447,5 +447,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     Args:
         app: The FastAPI application instance
     """
-    app.add_exception_handler(JVSpatialAPIException, jvspatial_exception_handler)
+    app.add_exception_handler(
+        JVSpatialAPIException, jvspatial_exception_handler  # type: ignore[arg-type]
+    )
     logger.info("Registered jvspatial exception handlers")

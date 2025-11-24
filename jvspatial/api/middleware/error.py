@@ -86,7 +86,9 @@ def register_exception_handlers(app: FastAPI, debug: bool = False) -> None:
         debug: Whether to include exception details in responses
     """
     # Register JVSpatialAPIException handler
-    app.add_exception_handler(JVSpatialAPIException, jvspatial_exception_handler)
+    app.add_exception_handler(
+        JVSpatialAPIException, jvspatial_exception_handler  # type: ignore[arg-type]
+    )
 
     # Register generic exception handler (only if not in debug mode)
     if not debug:

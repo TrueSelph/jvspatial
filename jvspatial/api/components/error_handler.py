@@ -37,7 +37,7 @@ class APIErrorHandler:
             JSONResponse with error details
         """
         if isinstance(exc, JVSpatialAPIException):
-            # Log based on status code severity - same logic as HTTPException
+            # Log based on status code severity
             logger = logging.getLogger(__name__)
             if exc.status_code >= 500:
                 logger.error(
@@ -52,10 +52,9 @@ class APIErrorHandler:
                     },
                 )
             else:
-                # Client errors (4xx) - log at INFO level without stack trace
-                logger.info(
+                # Client errors (4xx) - log at DEBUG level to keep logs clean
+                logger.debug(
                     f"API Error [{exc.error_code}]: {exc.message}",
-                    exc_info=False,  # No stack trace for client errors
                     extra={
                         "error_code": exc.error_code,
                         "status_code": exc.status_code,
@@ -75,8 +74,8 @@ class APIErrorHandler:
 
         if isinstance(exc, ValidationError):
             logger = logging.getLogger(__name__)
-            # Validation errors are client errors (422) - log at INFO level without stack trace
-            logger.info(f"Validation error: {exc}", exc_info=False)
+            # Validation errors are client errors (422) - log at DEBUG level
+            logger.debug(f"Validation error: {exc}")
 
             # Extract detailed validation error information
             error_details = []
@@ -108,6 +107,89 @@ class APIErrorHandler:
                     "request_id": getattr(request.state, "request_id", None),
                 },
             )
+
+        # Handle httpx.HTTPStatusError from external API calls
+        try:
+            import httpx
+
+            if isinstance(exc, httpx.HTTPStatusError):
+                logger = logging.getLogger(__name__)
+                status_code = exc.response.status_code
+
+                # Determine error code from status code
+                error_code_map = {
+                    400: "bad_request",
+                    401: "unauthorized",
+                    403: "forbidden",
+                    404: "not_found",
+                    408: "timeout",
+                    409: "conflict",
+                    422: "validation_error",
+                    429: "rate_limit_exceeded",
+                    500: "external_service_error",
+                    502: "bad_gateway",
+                    503: "service_unavailable",
+                    504: "gateway_timeout",
+                }
+                error_code = error_code_map.get(status_code, "external_service_error")
+
+                # Try to extract error message from response
+                try:
+                    response_data = exc.response.json()
+                    if isinstance(response_data, dict):
+                        error_message = (
+                            response_data.get("error", {}).get("message")
+                            or response_data.get("message")
+                            or response_data.get("error")
+                            or exc.response.text
+                        )
+                    else:
+                        error_message = exc.response.text
+                except Exception:
+                    error_message = (
+                        exc.response.text or f"External API returned {status_code}"
+                    )
+
+                # Log based on status code severity
+                # Client errors (4xx) are logged at DEBUG level - they're expected errors
+                # Server errors (5xx) are logged at ERROR level with stack traces
+                if status_code >= 500:
+                    logger.error(
+                        f"External API Error [{status_code}]: {error_message}",
+                        exc_info=True,
+                        extra={
+                            "status_code": status_code,
+                            "error_code": error_code,
+                            "path": request.url.path,
+                            "method": request.method,
+                            "external_url": str(exc.request.url),
+                        },
+                    )
+                else:
+                    # Client errors - log at DEBUG level to keep logs clean
+                    logger.debug(
+                        f"External API Error [{status_code}]: {error_message}",
+                        extra={
+                            "status_code": status_code,
+                            "error_code": error_code,
+                            "path": request.url.path,
+                            "method": request.method,
+                            "external_url": str(exc.request.url),
+                        },
+                    )
+
+                return JSONResponse(
+                    status_code=status_code,
+                    content={
+                        "error_code": error_code,
+                        "message": error_message,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "path": request.url.path,
+                        "request_id": getattr(request.state, "request_id", None),
+                    },
+                )
+        except ImportError:
+            pass  # httpx not installed, continue to next handler
 
         # Handle HTTPException from FastAPI (raised by raise_error)
         from fastapi import HTTPException
@@ -146,7 +228,7 @@ class APIErrorHandler:
 
             # Log based on status code severity
             # For server errors (5xx), log with full context including stack trace
-            # For client errors (4xx), log at INFO level without stack trace for clean output
+            # For client errors (4xx), log at DEBUG level to keep logs clean
             if exc.status_code >= 500:
                 logger.error(
                     f"HTTP Error [{exc.status_code}]: {error_message}",
@@ -159,11 +241,9 @@ class APIErrorHandler:
                     },
                 )
             else:
-                # Client errors (4xx) - log at INFO level without stack trace
-                # This produces clean log output like: "INFO: HTTP Error [404]: Agent not found"
-                logger.info(
+                # Client errors (4xx) - log at DEBUG level to keep logs clean
+                logger.debug(
                     f"HTTP Error [{exc.status_code}]: {error_message}",
-                    exc_info=False,  # No stack trace for client errors
                     extra={
                         "status_code": exc.status_code,
                         "error_code": error_code,
@@ -183,7 +263,59 @@ class APIErrorHandler:
                 },
             )
 
-        # Handle unexpected errors (not HTTPException, not ValidationError, not JVSpatialAPIException)
+        # Handle other httpx exceptions (timeouts, connection errors, etc.)
+        try:
+            import httpx
+
+            if isinstance(
+                exc, (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout)
+            ):
+                logger = logging.getLogger(__name__)
+                logger.error(
+                    f"External API timeout: {exc}",
+                    exc_info=True,
+                    extra={
+                        "error_type": type(exc).__name__,
+                        "path": request.url.path,
+                        "method": request.method,
+                    },
+                )
+                return JSONResponse(
+                    status_code=504,
+                    content={
+                        "error_code": "gateway_timeout",
+                        "message": "External service request timed out. Please try again.",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "path": request.url.path,
+                        "request_id": getattr(request.state, "request_id", None),
+                    },
+                )
+
+            if isinstance(exc, (httpx.ConnectError, httpx.NetworkError)):
+                logger = logging.getLogger(__name__)
+                logger.error(
+                    f"External API connection error: {exc}",
+                    exc_info=True,
+                    extra={
+                        "error_type": type(exc).__name__,
+                        "path": request.url.path,
+                        "method": request.method,
+                    },
+                )
+                return JSONResponse(
+                    status_code=502,
+                    content={
+                        "error_code": "bad_gateway",
+                        "message": "Unable to connect to external service. Please try again.",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "path": request.url.path,
+                        "request_id": getattr(request.state, "request_id", None),
+                    },
+                )
+        except ImportError:
+            pass  # httpx not installed, continue to next handler
+
+        # Handle unexpected errors (not HTTPException, not ValidationError, not JVSpatialAPIException, not httpx)
         # These are truly unexpected and should be logged with full context
         logger = logging.getLogger(__name__)
         logger.error(
