@@ -85,8 +85,6 @@ class LifecycleManager:
         not during startup, to ensure all endpoints are registered before routers
         are included in the FastAPI app.
         """
-        self._logger.info(f"{LogIcons.START} Starting {self.server.config.title}...")
-
         # Set running state
         self.server._is_running = True
         self._is_started = True
@@ -105,27 +103,23 @@ class LifecycleManager:
         try:
             if self.server._graph_context:
                 # Use explicit GraphContext
-                self._logger.info(
-                    f"{LogIcons.DATABASE} Database initialized through GraphContext: "
-                    f"{type(self.server._graph_context.database).__name__}"
-                )
-
+                db_type = type(self.server._graph_context.database).__name__
                 # Ensure root node exists
                 root = await self.server._graph_context.get(Root, "n.Root.root")
                 if not root:
                     root = await self.server._graph_context.create(Root)
-                self._logger.info(f"{LogIcons.TREE} Root node ready: {root.id}")
             else:
                 # Use default GraphContext behavior
-                self._logger.info(
-                    f"{LogIcons.DATABASE} Using default GraphContext for database management"
-                )
-
+                db_type = "default"
                 # Ensure root node exists
                 root = await Root.get("n.Root.root")
                 if not root:
                     root = await Root.create()
-                self._logger.info(f"{LogIcons.TREE} Root node ready: {root.id}")
+
+            # Log concise database initialization
+            self._logger.info(
+                f"{LogIcons.DATABASE} Database: {db_type} | {LogIcons.TREE} Root: {root.id}"
+            )
 
         except Exception as e:
             self._logger.error(f"{LogIcons.ERROR} Database initialization failed: {e}")
@@ -134,13 +128,10 @@ class LifecycleManager:
     async def _verify_file_storage(self) -> None:
         """Verify file storage configuration if enabled."""
         if self.server.config.file_storage_enabled:
-            self._logger.info(
-                f"{LogIcons.STORAGE} File storage: "
-                f"{self.server.config.file_storage_provider} at "
-                f"{self.server.config.file_storage_root}"
-            )
+            storage_info = f"{self.server.config.file_storage_provider}@{self.server.config.file_storage_root}"
             if self.server.config.proxy_enabled:
-                self._logger.info(f"{LogIcons.WEBHOOK} URL proxy enabled")
+                storage_info += " | proxy enabled"
+            self._logger.info(f"{LogIcons.STORAGE} Storage: {storage_info}")
 
     async def _execute_startup_hooks(self) -> None:
         """Execute all registered startup hooks."""

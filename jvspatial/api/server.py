@@ -166,7 +166,7 @@ class Server:
         # Register authentication endpoints
         self._register_auth_endpoints()
 
-        self._logger.info("🔐 Authentication configured and endpoints registered")
+        self._logger.debug("🔐 Authentication configured and endpoints registered")
 
     def _register_auth_endpoints(self: "Server") -> None:
         """Register authentication endpoints if auth is enabled."""
@@ -405,7 +405,7 @@ class Server:
 
             set_default_context(self._graph_context)
 
-            self._logger.info(
+            self._logger.debug(
                 f"🎯 GraphContext initialized with {self.config.db_type} database (prime) and set as default"
             )
 
@@ -580,13 +580,9 @@ class Server:
             try:
                 discovered_count = self.discovery_service.discover_and_register()
                 if discovered_count > 0:
-                    self._logger.info(
-                        f"🔍 Discovered {discovered_count} endpoint(s) from pre-loaded modules"
-                    )
+                    self._logger.info(f"🔍 Endpoints: {discovered_count} discovered")
             except Exception as e:
-                self._logger.warning(
-                    f"⚠️ Endpoint discovery failed before app creation: {e}"
-                )
+                self._logger.warning(f"⚠️ Endpoint discovery failed: {e}")
 
         # Include routers (endpoint router now contains all discovered endpoints)
         self._include_routers(app)
@@ -780,7 +776,7 @@ class Server:
             app.add_middleware(
                 AuthenticationMiddleware, auth_config=self._auth_config, server=self
             )
-            self._logger.info("🔐 Authentication middleware added to server")
+            # Authentication middleware logging handled by middleware manager
         except ImportError as e:
             self._logger.warning(f"Could not add authentication middleware: {e}")
 
@@ -1148,14 +1144,12 @@ class Server:
             # So "/auth/register" is stored as "/auth/register", not "/register"
             if hasattr(route, "path") and route.path == full_path_with_prefix:
                 routes_to_remove.append(route)
-                self._logger.debug(
-                    f"Found route to remove: {route.path} (matches {full_path_with_prefix})"
-                )
+                self._logger.debug(f"Found route to remove: {route.path}")
 
         if routes_to_remove:
             for route in routes_to_remove:
                 self._auth_router.routes.remove(route)
-            self._logger.info(f"🔒 Disabled auth endpoint: {full_path_with_prefix}")
+            self._logger.debug(f"🔒 Disabled auth endpoint: {full_path_with_prefix}")
 
             # If the app has already been created, mark it for rebuilding
             # so the changes take effect
@@ -1288,11 +1282,11 @@ class Server:
         run_port = port or self.config.port
         run_reload = reload if reload is not None else self.config.debug
 
-        self._logger.info(f"🔧 Server starting at http://{run_host}:{run_port}")
+        # Log concise server startup info
+        server_info = f"http://{run_host}:{run_port}"
         if self.config.docs_url:
-            self._logger.info(
-                f"📖 API docs: http://{run_host}:{run_port}{self.config.docs_url}"
-            )
+            server_info += f" | docs: {self.config.docs_url}"
+        self._logger.info(f"🔧 Server: {server_info}")
 
         # Get the app
         app = self.get_app()

@@ -48,7 +48,9 @@ class Node(Object):
     @classmethod
     def _get_top_level_fields(cls: Type["Node"]) -> set:
         """Get top-level fields for Node persistence format."""
-        return {"edges"}  # edge_ids is stored as "edges" in persistence
+        return {
+            "edges"
+        }  # edge_ids is stored as "edges" at top level in database exports
 
     def __init_subclass__(cls: Type["Node"]) -> None:
         """Initialize subclass by registering visit hooks."""
@@ -771,10 +773,15 @@ class Node(Object):
         """Delete this node and cascade deletion of all related edges and dependent nodes.
 
         This method performs a clean cascade deletion for Node entities:
-        1. Deletes all incoming edges (where this node is the target)
-        2. Deletes all outgoing edges (where this node is the source)
-        3. For each connected node, checks if it's solely connected to this node
-        4. If a node is solely connected (only has edges to/from this node), recursively deletes it
+        1. Finds all incoming edges to this node (edges where this node is the target)
+        2. If cascade is enabled, recursively finds all dependent nodes:
+           - A node is dependent if it's reachable FROM this node via outgoing edges
+           - A node is considered dependent if ALL its edges connect to nodes in the deletion set
+           - This ensures only nodes solely reachable through this node are deleted
+           - Ancestors and nodes with other connections are preserved
+        3. Deletes all incoming edges to this node
+        4. Deletes all dependent nodes recursively (each dependent node will also
+           cascade delete its own dependent nodes)
         5. Finally deletes this node itself
 
         Note: Node entities are the only entities that can be connected by edges on the graph.
@@ -783,27 +790,23 @@ class Node(Object):
 
         Args:
             cascade: Whether to cascade deletion to dependent nodes (default: True)
-                    If False, only deletes edges and the node itself
+                    If False, only deletes incoming edges and the node itself
 
         Examples:
             # Full cascade deletion (default)
+            # Deletes the node, its incoming edges, and all nodes solely reachable from it
             await node.delete()
 
-            # Delete node and edges only, don't cascade to dependent nodes
+            # Delete node and incoming edges only, don't cascade to dependent nodes
             await node.delete(cascade=False)
         """
         context = await self.get_context()
 
-        # Get all edges connected to this node (both incoming and outgoing)
-        # We need to find edges where this node is either source or target
-        all_edges = []
+        # Get only incoming edges to this node (edges where this node is the target)
+        # We only delete incoming edges, not outgoing edges
+        incoming_edges = []
 
-        # Get edges where this node is the source (outgoing)
-        outgoing_edges = await context.find_edges_between(source_id=self.id)
-        all_edges.extend(outgoing_edges)
-
-        # Get edges where this node is the target (incoming)
-        # Query database directly for edges where target is this node's ID
+        # Query database for edges where target is this node's ID
         from .edge import Edge as EdgeClass
 
         edge_query = {"target": self.id}
@@ -811,107 +814,224 @@ class Node(Object):
         for edge_data in edge_results:
             try:
                 edge_obj = await context._deserialize_entity(EdgeClass, edge_data)
-                # Check if not already in list (avoid duplicates)
-                if edge_obj and not any(e.id == edge_obj.id for e in all_edges):
-                    all_edges.append(edge_obj)
+                if edge_obj:
+                    incoming_edges.append(edge_obj)
             except Exception:
                 continue
 
-        # Also check edges from edge_ids (in case some are bidirectional or stored differently)
+        # Also check edges from edge_ids where this node is the target
         for edge_id in self.edge_ids:
             try:
                 edge = await Edge.get(edge_id)
-                # Check if this edge is actually connected to this node
-                if (
-                    edge
-                    and edge not in all_edges
-                    and (edge.source == self.id or edge.target == self.id)
-                ):
-                    all_edges.append(edge)
+                # Only include edges where this node is the target (incoming)
+                if edge and edge.target == self.id and edge not in incoming_edges:
+                    incoming_edges.append(edge)
             except Exception:
-                # Edge might already be deleted or invalid, continue
                 continue
 
-        # Remove duplicates while preserving order
+        # Remove duplicates
         seen_edge_ids = set()
-        unique_edges = []
-        for edge in all_edges:
+        unique_incoming_edges = []
+        for edge in incoming_edges:
             if edge.id not in seen_edge_ids:
                 seen_edge_ids.add(edge.id)
-                unique_edges.append(edge)
-        all_edges = unique_edges
+                unique_incoming_edges.append(edge)
+        incoming_edges = unique_incoming_edges
 
-        # Collect all connected nodes before deleting edges
-        connected_node_ids = set()
-        for edge in all_edges:
-            if edge.source == self.id:
-                connected_node_ids.add(edge.target)
-            if edge.target == self.id:
-                connected_node_ids.add(edge.source)
+        # Get outgoing edges to find nodes reachable FROM this node
+        outgoing_edges = await context.find_edges_between(source_id=self.id)
 
-        # If cascade is enabled, check for solely connected nodes BEFORE deleting edges
-        # This is important because we need to check the node's edge_ids before we modify them
-        solely_connected_node_ids = set()
+        # Build complete set of all nodes reachable FROM this node (via outgoing edges, recursively)
+        # This includes nodes reachable through multiple hops
+        reachable_node_ids = set()
+        nodes_to_explore = {self.id}
+        explored = set()
+
+        while nodes_to_explore:
+            current_id = nodes_to_explore.pop()
+            if current_id in explored:
+                continue
+            explored.add(current_id)
+
+            # Get all outgoing edges from current node
+            current_outgoing = await context.find_edges_between(source_id=current_id)
+            for edge in current_outgoing:
+                if edge.source == current_id:
+                    target_id = edge.target
+                    if target_id not in explored:
+                        reachable_node_ids.add(target_id)
+                        nodes_to_explore.add(target_id)
+
+        # If cascade is enabled, recursively find all dependent nodes to delete
+        # Strategy: Only delete nodes that are:
+        # 1. Reachable FROM this node (via outgoing edges)
+        # 2. ONLY connected to nodes in the deletion set (no connections to nodes outside)
+        # This ensures ancestors and nodes with other connections are preserved
+        nodes_to_delete = set()
         if cascade:
-            for connected_node_id in connected_node_ids:
-                try:
-                    connected_node = await Node.get(connected_node_id)
-                    if not connected_node:
+            # Start with nodes directly reachable from this node (via outgoing edges)
+            # Only consider nodes reachable FROM this node, not nodes that can reach TO this node
+            nodes_to_delete.add(self.id)
+
+            changed = True
+            max_iterations = 100  # Safety limit to prevent infinite loops
+            iteration = 0
+
+            while changed and iteration < max_iterations:
+                changed = False
+                iteration += 1
+
+                # Get all nodes reachable FROM nodes in the deletion set (via outgoing edges only)
+                nodes_to_check = set()
+                for node_id in nodes_to_delete:
+                    try:
+                        node = await Node.get(node_id)
+                        if not node:
+                            continue
+                        # Only follow outgoing edges (where this node is the source)
+                        for edge_id in node.edge_ids:  # type: ignore[attr-defined]
+                            try:
+                                edge = await Edge.get(edge_id)
+                                if edge and edge.source == node_id:
+                                    # Only add nodes reachable via outgoing edges
+                                    nodes_to_check.add(edge.target)
+                            except Exception:
+                                continue
+                    except Exception:
                         continue
 
-                    # Get all edges of the connected node (before we delete them)
-                    connected_node_edges = []
-                    for edge_id in connected_node.edge_ids:  # type: ignore[attr-defined]
-                        try:
-                            edge = await Edge.get(edge_id)
-                            if edge:
-                                connected_node_edges.append(edge)
-                        except Exception:
+                # For each candidate node, check if it should be deleted
+                for candidate_id in nodes_to_check:
+                    if candidate_id in nodes_to_delete:
+                        continue  # Already marked for deletion
+
+                    try:
+                        candidate_node = await Node.get(candidate_id)
+                        if not candidate_node:
                             continue
 
-                    # If the node has no edges, skip it (orphaned node, will be cleaned up)
-                    if not connected_node_edges:
+                        # Get all edges of the candidate node
+                        candidate_edges = []
+                        for edge_id in candidate_node.edge_ids:  # type: ignore[attr-defined]
+                            try:
+                                edge = await Edge.get(edge_id)
+                                if edge:
+                                    candidate_edges.append(edge)
+                            except Exception:
+                                continue
+
+                        # If the node has no edges, it's orphaned and should be deleted
+                        if not candidate_edges:
+                            nodes_to_delete.add(candidate_id)
+                            changed = True
+                            continue
+
+                        # Check if ALL edges connect to nodes in the deletion set
+                        # OR to nodes that are themselves only reachable from the deletion set
+                        # We use a recursive check: if all neighbors are in deletion set or will be deleted, delete this node
+                        async def is_node_only_connected_to_deletion_set(
+                            node_id: str,
+                            deletion_set: set,
+                            visited: set,
+                            root_node_id: str,
+                        ) -> bool:
+                            """Check if a node is only connected to nodes in deletion set or nodes that will be deleted.
+
+                            Args:
+                                node_id: Node to check
+                                deletion_set: Set of node IDs marked for deletion
+                                visited: Set of visited nodes (to prevent cycles)
+                                root_node_id: The original node being deleted (to check reachability)
+                            """
+                            if node_id in deletion_set:
+                                return True
+                            if node_id in visited:
+                                # For cycles, check if we can reach the root node
+                                # If we're in a cycle and all nodes in the cycle are candidates, allow deletion
+                                return True
+
+                            visited.add(node_id)
+
+                            try:
+                                node = await Node.get(node_id)
+                                if not node:
+                                    return True
+
+                                node_edges = []
+                                for edge_id in node.edge_ids:  # type: ignore[attr-defined]
+                                    try:
+                                        edge = await Edge.get(edge_id)
+                                        if edge:
+                                            node_edges.append(edge)
+                                    except Exception:
+                                        continue
+
+                                # If no edges, it's orphaned and should be deleted
+                                if not node_edges:
+                                    return True
+
+                                # Check all neighbors
+                                for edge in node_edges:
+                                    other_id = None
+                                    if edge.source == node_id:
+                                        other_id = edge.target
+                                    elif edge.target == node_id:
+                                        other_id = edge.source
+
+                                    if other_id:
+                                        # If neighbor is in deletion set, it's fine
+                                        if other_id in deletion_set:
+                                            continue
+
+                                        # Check if the neighbor is reachable FROM the root node
+                                        # If not, then this node has an external connection and shouldn't be deleted
+                                        if other_id not in reachable_node_ids:
+                                            # This node has a connection to a node not reachable from root
+                                            # This means it has an external connection, so don't delete it
+                                            return False
+
+                                        # If neighbor is reachable from root, recursively check if it should be deleted
+                                        # If the neighbor won't be deleted (has external connections), this node shouldn't be deleted either
+                                        neighbor_will_be_deleted = await is_node_only_connected_to_deletion_set(
+                                            other_id,
+                                            deletion_set,
+                                            visited.copy(),
+                                            root_node_id,
+                                        )
+                                        if not neighbor_will_be_deleted:
+                                            # Neighbor has external connections, so this node shouldn't be deleted
+                                            return False
+
+                                return True
+                            except Exception:
+                                return False
+
+                        # Check if candidate is only connected to deletion set
+                        if await is_node_only_connected_to_deletion_set(
+                            candidate_id, nodes_to_delete, set(), self.id
+                        ):
+                            nodes_to_delete.add(candidate_id)
+                            changed = True
+                    except Exception:
+                        # Continue even if check fails
                         continue
 
-                    # Check if ALL edges connect to the node being destroyed
-                    is_solely_connected = True
-                    for edge in connected_node_edges:
-                        # Check if this edge connects to a node other than self or the connected_node itself
-                        other_node_id = None
-                        if edge.source == connected_node_id:
-                            other_node_id = edge.target
-                        elif edge.target == connected_node_id:
-                            other_node_id = edge.source
+            # Remove self from nodes_to_delete (we'll delete it separately at the end)
+            nodes_to_delete.discard(self.id)
 
-                        # If the edge connects to a node that is NOT the node being destroyed,
-                        # then the connected node is NOT solely connected
-                        if other_node_id and other_node_id != self.id:
-                            is_solely_connected = False
-                            break
-
-                    # If the node is solely connected (all edges go to the node being deleted),
-                    # mark it for deletion
-                    if is_solely_connected:
-                        solely_connected_node_ids.add(connected_node_id)
-                except Exception:
-                    # Continue even if check fails
-                    continue
-
-        # Delete all edges connected to this node
-        for edge in all_edges:
+        # Delete incoming edges to this node
+        for edge in incoming_edges:
             try:
-                # Remove edge from connected nodes' edge_ids lists
+                # Remove edge from source node's edge_ids list
                 if edge.source != self.id:
                     source_node = await Node.get(edge.source)
                     if source_node and edge.id in source_node.edge_ids:  # type: ignore[attr-defined]
                         source_node.edge_ids.remove(edge.id)  # type: ignore[attr-defined]
                         await source_node.save()
 
-                if edge.target != self.id:
-                    target_node = await Node.get(edge.target)
-                    if target_node and edge.id in target_node.edge_ids:  # type: ignore[attr-defined]
-                        target_node.edge_ids.remove(edge.id)  # type: ignore[attr-defined]
-                        await target_node.save()
+                # Remove edge from this node's edge_ids list
+                if edge.id in self.edge_ids:
+                    self.edge_ids.remove(edge.id)
 
                 # Delete the edge
                 await context.delete(edge, cascade=False)
@@ -919,15 +1039,47 @@ class Node(Object):
                 # Continue even if edge deletion fails
                 continue
 
-        # If cascade is enabled, delete solely connected nodes
-        if cascade:
-            for solely_connected_node_id in solely_connected_node_ids:
+        # Clean up outgoing edges from this node
+        # Remove outgoing edges from target nodes' edge_ids and delete the edges
+        for edge in outgoing_edges:
+            try:
+                # Remove edge from target node's edge_ids list
+                if edge.target != self.id:
+                    target_node = await Node.get(edge.target)
+                    if target_node and edge.id in target_node.edge_ids:  # type: ignore[attr-defined]
+                        target_node.edge_ids.remove(edge.id)  # type: ignore[attr-defined]
+                        await target_node.save()
+
+                # Remove edge from this node's edge_ids list (if not already removed)
+                if edge.id in self.edge_ids:
+                    self.edge_ids.remove(edge.id)
+
+                # Delete the edge
+                await context.delete(edge, cascade=False)
+            except Exception:
+                # Continue even if edge deletion fails
+                continue
+
+        # If cascade is enabled, delete all dependent nodes
+        if cascade and nodes_to_delete:
+            # Get all nodes to delete
+            dependent_nodes = []
+            for node_id in nodes_to_delete:
                 try:
-                    solely_connected_node = await Node.get(solely_connected_node_id)
-                    if solely_connected_node:
-                        await solely_connected_node.delete(cascade=True)
+                    node = await Node.get(node_id)
+                    if node:
+                        dependent_nodes.append(node)
                 except Exception:
-                    # Continue even if dependent node destruction fails
+                    continue
+
+            # Delete dependent nodes recursively
+            # Each node will delete its own incoming edges and any further dependent nodes
+            for dependent_node in dependent_nodes:
+                try:
+                    # Recursively delete with cascade=True to handle nested dependencies
+                    await dependent_node.delete(cascade=True)
+                except Exception:
+                    # Continue even if dependent node deletion fails
                     continue
 
         # Clear edge_ids before final deletion to avoid recursion in context.delete()
@@ -964,20 +1116,23 @@ class Node(Object):
         self: "Node",
         exclude_transient: bool = True,
         exclude: Optional[Union[set, Dict[str, Any]]] = None,
+        include_edges: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Export node to a dictionary.
 
-        Returns a nested persistence format with id, name, context, edges for database storage.
+        Returns a nested persistence format with id, entity, context for database storage.
         Includes all fields from the class hierarchy (class and parent classes, not child classes).
+        Edges are excluded by default but can be included for database persistence.
 
         Args:
             exclude_transient: Whether to automatically exclude transient fields (default: True)
             exclude: Additional fields to exclude (can be a set of field names or a dict)
+            include_edges: Whether to include edges in export (default: False, set to True for database persistence)
             **kwargs: Additional arguments passed to base export/model_dump()
 
         Returns:
-            Nested format dictionary with id, name, context, edges for database storage
+            Nested format dictionary with id, entity, context (and optionally edges) for database storage
         """
         # Nested persistence format - structure for database storage
         # Exclude _visitor_ref from context (id, edge_ids, and type_code are transient and auto-excluded)
@@ -997,9 +1152,14 @@ class Node(Object):
 
         context_data = serialize_datetime(context_data)
 
-        return {
+        result = {
             "id": self.id,
             "entity": self.entity,
             "context": context_data,
-            "edges": self.edge_ids,
         }
+
+        # Include edges only when explicitly requested (e.g., for database persistence)
+        if include_edges:
+            result["edges"] = self.edge_ids
+
+        return result

@@ -57,7 +57,7 @@ class AppBuilder:
 
         app = FastAPI(**app_kwargs)
 
-        self._logger.info(
+        self._logger.debug(
             f"{LogIcons.SUCCESS} FastAPI app created: {self.config.title} v{self.config.version}"
         )
 
@@ -80,9 +80,7 @@ class AppBuilder:
             from jvspatial.api.auth.openapi_config import configure_openapi_security
 
             configure_openapi_security(app)
-            self._logger.debug(
-                f"{LogIcons.SUCCESS} OpenAPI security schemes configured"
-            )
+            # OpenAPI security configured (no log needed)
         except ImportError as e:
             self._logger.warning(
                 f"{LogIcons.WARNING} Could not configure OpenAPI security: {e}"
@@ -148,7 +146,7 @@ class AppBuilder:
                 "health": "/health",
             }
 
-        self._logger.debug(f"{LogIcons.SUCCESS} Core routes registered")
+        # Core routes registered (no log needed)
 
 
 __all__ = ["AppBuilder"]

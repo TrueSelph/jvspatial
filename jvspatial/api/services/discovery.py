@@ -106,7 +106,7 @@ class EndpointDiscoveryService:
         if not self.enabled:
             return 0
 
-        self._logger.info(
+        self._logger.debug(
             f"{LogIcons.DISCOVERY} Scanning for endpoints in loaded modules..."
         )
 
@@ -147,16 +147,14 @@ class EndpointDiscoveryService:
 
         # Log discovered endpoints
         if discovered_endpoints:
-            self._logger.info(
-                f"{LogIcons.SUCCESS} Discovered {discovered_count} endpoint(s):"
-            )
+            # Log individual endpoints in debug mode
             for endpoint_type, name, path, methods in discovered_endpoints:
                 methods_str = ", ".join(methods) if methods else "GET"
-                self._logger.info(
+                self._logger.debug(
                     f"  {LogIcons.SUCCESS} {endpoint_type.capitalize()}: {name} -> {path} [{methods_str}]"
                 )
         else:
-            self._logger.info(f"{LogIcons.DISCOVERY} No new endpoints discovered")
+            self._logger.debug(f"{LogIcons.DISCOVERY} No new endpoints discovered")
 
         return discovered_count
 
@@ -297,9 +295,7 @@ class EndpointDiscoveryService:
                     )(obj)
 
                 discovered_walkers.append((name, path, methods))
-                self._logger.debug(
-                    f"{LogIcons.SUCCESS} Registered walker: {module_name}.{name} -> {path}"
-                )
+                # Individual registration logs removed - summary shown in discover_and_register()
 
             except Exception as e:
                 # Already registered or registration failed
@@ -440,9 +436,7 @@ class EndpointDiscoveryService:
                     self.server._has_auth_endpoints = True
 
                 discovered_functions.append((name, path, methods))
-                self._logger.debug(
-                    f"{LogIcons.SUCCESS} Registered function: {module_name}.{name} -> {path}"
-                )
+                # Individual registration logs removed - summary shown in discover_and_register()
 
             except Exception as e:
                 # Already registered or registration failed

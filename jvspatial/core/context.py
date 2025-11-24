@@ -443,7 +443,12 @@ class GraphContext:
         # Export entity - Node, Edge, and Walker return nested format
         if hasattr(entity, "type_code"):
             type_code = getattr(entity, "type_code", "")
-            if type_code in ("n", "e", "w"):  # Node, Edge, or Walker
+            if type_code == "n":  # Node - include edges for database persistence
+                record = await entity.export(include_edges=True)
+                # Ensure entity field is set
+                if "entity" not in record:
+                    record["entity"] = entity.entity
+            elif type_code in ("e", "w"):  # Edge or Walker
                 record = await entity.export()
                 # Ensure entity field is set
                 if "entity" not in record:
@@ -807,6 +812,7 @@ class GraphContext:
             if entity_type_code == "n":
                 # Handle Node-specific logic
                 # Extract edge_ids from data (stored as "edges" at top level)
+                # Edges are included in database exports but excluded from default exports
                 edge_ids = data.get("edges", [])
 
                 # Remove edge_ids, id, and type_code from context_data as they're handled separately

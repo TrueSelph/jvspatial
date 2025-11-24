@@ -88,7 +88,6 @@ def endpoint(
     def decorator(target: Union[Callable, type]) -> Union[Callable, type]:
         # Determine if this is a function or class
         is_func = inspect.isfunction(target)
-        target_name = getattr(target, "__name__", "unknown")
 
         # Store endpoint configuration on the target
         # Use setattr for dynamic attribute assignment (mypy compatibility)
@@ -113,19 +112,6 @@ def endpoint(
 
             current_server = get_current_server()
 
-            # Log decorator execution for debugging
-            import logging
-
-            logger = logging.getLogger(__name__)
-            if current_server:
-                logger.debug(
-                    f"@endpoint decorator: Registering {target_name} at {path} (server exists)"
-                )
-            else:
-                logger.debug(
-                    f"@endpoint decorator: Storing config for {target_name} at {path} (no server yet, is_function={is_func})"
-                )
-
             if current_server:
                 if inspect.isclass(target):
                     # Walker class - set authentication attributes and register immediately
@@ -147,10 +133,7 @@ def endpoint(
                     # Function endpoint - DO NOT register here, let discovery service handle it
                     # This prevents duplicate registration and ensures consistent handling
                     # The config is already stored above, discovery will find and register it
-                    logger.debug(
-                        f"@endpoint decorator: Function {target_name} config stored, "
-                        f"discovery service will register it"
-                    )
+                    pass
         except ImportError:
             # No server context available, configuration will be picked up later
             pass
