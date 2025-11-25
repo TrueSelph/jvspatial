@@ -235,7 +235,9 @@ class Node(Object):
     async def nodes(
         self,
         direction: str = "out",
-        node: Optional[Union[str, List[Union[str, Dict[str, Dict[str, Any]]]]]] = None,
+        node: Optional[
+            Union[str, type, List[Union[str, type, Dict[str, Dict[str, Any]]]]]
+        ] = None,
         edge: Optional[
             Union[
                 str,
@@ -314,7 +316,9 @@ class Node(Object):
     async def node(
         self,
         direction: str = "out",
-        node: Optional[Union[str, List[Union[str, Dict[str, Dict[str, Any]]]]]] = None,
+        node: Optional[
+            Union[str, type, List[Union[str, type, Dict[str, Dict[str, Any]]]]]
+        ] = None,
         edge: Optional[
             Union[
                 str,
@@ -367,7 +371,7 @@ class Node(Object):
         context: "GraphContext",
         direction: str = "out",
         node_filter: Optional[
-            Union[str, List[Union[str, Dict[str, Dict[str, Any]]]]]
+            Union[str, type, List[Union[str, type, Dict[str, Dict[str, Any]]]]]
         ] = None,
         edge_filter: Optional[
             Union[
@@ -470,13 +474,19 @@ class Node(Object):
     def _matches_node_filter(
         self,
         node_obj: "Node",
-        node_filter: Union[str, List[Union[str, Dict[str, Dict[str, Any]]]]],
+        node_filter: Union[
+            str, type, List[Union[str, type, Dict[str, Dict[str, Any]]]]
+        ],
     ) -> bool:
         """Check if a node matches the node filter criteria.
 
         Args:
             node_obj: Node object to test
-            node_filter: Filter criteria (string, list of strings, or list of dicts)
+            node_filter: Filter criteria - can be:
+                - String: entity name (e.g., "Memory")
+                - Type: class type (e.g., Memory)
+                - List of strings/types
+                - List of dicts with entity name as key and criteria as value
 
         Returns:
             True if node matches the filter
@@ -485,11 +495,19 @@ class Node(Object):
             # Simple string filter - match by class name
             return node_obj.__class__.__name__ == node_filter
 
+        elif isinstance(node_filter, type):
+            # Class type filter - match by class or inheritance
+            return isinstance(node_obj, node_filter)
+
         elif isinstance(node_filter, list):
             for filter_item in node_filter:
                 if isinstance(filter_item, str):
                     # String in list - match by class name
                     if node_obj.__class__.__name__ == filter_item:
+                        return True
+                elif isinstance(filter_item, type):
+                    # Class type in list - match by class or inheritance
+                    if isinstance(node_obj, filter_item):
                         return True
                 elif isinstance(filter_item, dict):
                     # Dict filter - match by class name and criteria
@@ -626,7 +644,9 @@ class Node(Object):
 
     async def neighbors(
         self,
-        node: Optional[Union[str, List[Union[str, Dict[str, Dict[str, Any]]]]]] = None,
+        node: Optional[
+            Union[str, type, List[Union[str, type, Dict[str, Dict[str, Any]]]]]
+        ] = None,
         edge: Optional[
             Union[
                 str,
@@ -654,7 +674,9 @@ class Node(Object):
 
     async def outgoing(
         self,
-        node: Optional[Union[str, List[Union[str, Dict[str, Dict[str, Any]]]]]] = None,
+        node: Optional[
+            Union[str, type, List[Union[str, type, Dict[str, Dict[str, Any]]]]]
+        ] = None,
         edge: Optional[
             Union[
                 str,
@@ -682,7 +704,9 @@ class Node(Object):
 
     async def incoming(
         self,
-        node: Optional[Union[str, List[Union[str, Dict[str, Dict[str, Any]]]]]] = None,
+        node: Optional[
+            Union[str, type, List[Union[str, type, Dict[str, Dict[str, Any]]]]]
+        ] = None,
         edge: Optional[
             Union[
                 str,

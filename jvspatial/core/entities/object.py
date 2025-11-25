@@ -541,6 +541,10 @@ class Object(AttributeMixin, BaseModel):
         Uses __subclasses__() to find all imported subclasses, ensuring queries
         include the base class and all its imported subclasses.
 
+        If an explicit 'entity' filter is provided in the query, it takes precedence
+        over the auto-collected class names. This allows querying for specific
+        entity types that may be dynamically loaded.
+
         Args:
             context: Graph context
             query: Query filters
@@ -558,19 +562,26 @@ class Object(AttributeMixin, BaseModel):
         if kwargs:
             combined_filters.update(kwargs)
 
-        # Use standard class name collection (imported subclasses only)
-        # This leverages __subclasses__() to find all imported subclasses
-        # Dynamically loaded classes will be found once they're imported
-        class_names = sorted(cls._collect_class_names())
-        class_name_filter: Dict[str, Any] = {
-            "$or": [{"entity": name} for name in class_names]
-        }
+        # Check if an explicit entity filter was provided
+        explicit_entity = combined_filters.get("entity")
+
+        if explicit_entity:
+            # Use explicit entity filter - useful for finding specific subclass types
+            # that may be dynamically loaded
+            class_name_filter: Dict[str, Any] = {"entity": explicit_entity}
+        else:
+            # Use standard class name collection (imported subclasses only)
+            # This leverages __subclasses__() to find all imported subclasses
+            # Dynamically loaded classes will be found once they're imported
+            class_names = sorted(cls._collect_class_names())
+            class_name_filter = {"$or": [{"entity": name} for name in class_names]}
 
         top_level_fields = cls._get_top_level_fields()
         db_query: Dict[str, Any] = {}
 
         for key, value in combined_filters.items():
             if key == "entity":
+                # Skip entity - already handled in class_name_filter
                 continue
             if (key in top_level_fields) or (key.startswith("context.")):
                 # For all entity types, top-level fields and context.* fields map directly
