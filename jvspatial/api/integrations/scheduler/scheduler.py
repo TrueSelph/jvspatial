@@ -182,45 +182,6 @@ class SchedulerService:
                 f"invalid schedule: {task.schedule.schedule_spec}"
             )
 
-    # Backwards compatibility method
-    async def register_task_legacy(
-        self, task_id: str, func: Callable, schedule_spec: str, **kwargs: Any
-    ) -> None:
-        """Legacy method for registering tasks (backwards compatibility)."""
-        from .models import ScheduleConfig
-
-        # Create ScheduledTask from legacy parameters
-        schedule_config = ScheduleConfig(
-            schedule_spec=schedule_spec,
-            timeout_seconds=kwargs.get("timeout"),
-            max_concurrent=kwargs.get("max_concurrent", 1),
-            retry_count=kwargs.get("max_retries", 0),
-        )
-
-        # Determine task type
-        import inspect
-
-        if inspect.iscoroutinefunction(func):
-            task_type = "async_function"
-        elif inspect.isclass(func) and issubclass(func, Walker):
-            task_type = "walker"
-        else:
-            task_type = "function"
-
-        task = ScheduledTask(
-            task_id=task_id,
-            task_type=task_type,
-            schedule=schedule_config,
-            function_ref=func if task_type.endswith("function") else None,
-            walker_name=(
-                getattr(func, "__name__", None) if task_type == "walker" else None
-            ),
-            enabled=kwargs.get("enabled", True),
-            description=kwargs.get("description"),
-        )
-
-        await self.register_task(task)
-
     def unregister_task(self, task_id: str) -> bool:
         """Unregister a scheduled task.
 

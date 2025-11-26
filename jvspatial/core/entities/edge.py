@@ -108,8 +108,6 @@ class Edge(Object):
                           'both': left->source, right->target, bidirectional=True
             **kwargs: Additional edge attributes
         """
-        self._initializing = True
-
         source: str = ""
         target: str = ""
         bidirectional: bool = direction == "both"
@@ -141,8 +139,9 @@ class Edge(Object):
             {"source": source, "target": target, "bidirectional": bidirectional}
         )
 
+        # Call super().__init__() first to initialize Pydantic model (including __pydantic_private__)
+        # The Object.__init__ will set _initializing = True, then False after initialization
         super().__init__(**kwargs)
-        self._initializing = False
 
     async def export(
         self: "Edge",

@@ -375,25 +375,4 @@ class APIErrorHandler:
         return JSONResponse(status_code=status_code, content=response_data)
 
 
-class ErrorHandler:
-    """Unified error handling system for backward compatibility.
-
-    This class provides the same interface as the original ErrorHandler
-    while using the new APIErrorHandler internally.
-    """
-
-    @staticmethod
-    async def handle_exception(request: Request, exc: Exception) -> JSONResponse:
-        """Centralized error handling with request context.
-
-        Args:
-            request: FastAPI request object
-            exc: Exception that occurred
-
-        Returns:
-            JSONResponse with error details
-        """
-        return await APIErrorHandler.handle_exception(request, exc)
-
-
-__all__ = ["APIErrorHandler", "ErrorHandler"]
+__all__ = ["APIErrorHandler"]

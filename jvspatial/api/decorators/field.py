@@ -142,5 +142,5 @@ def endpoint_field(
     )
 
 
-# Backward compatibility alias
+# Alias for endpoint_field (EndpointField is the preferred name)
 EndpointField = endpoint_field

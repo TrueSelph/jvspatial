@@ -94,11 +94,6 @@ _default_config: Dict[str, Any] = {
     "max_path_length": 255,
 }
 
-# Environment variable constants (for backward compatibility with old file_interface)
-FILE_INTERFACE_TYPE = os.environ.get("JVSPATIAL_FILE_INTERFACE", "local")
-DEFAULT_FILES_ROOT = os.environ.get("JVSPATIAL_FILES_ROOT_PATH", ".files")
-
-
 __version__ = "1.0.0-phase3"
 __all__ = [
     # Main factory function
@@ -126,9 +121,6 @@ __all__ = [
     "InvalidMimeTypeError",
     "StorageProviderError",
     "AccessDeniedError",
-    # Backward compatibility constants
-    "FILE_INTERFACE_TYPE",
-    "DEFAULT_FILES_ROOT",
 ]
 
 

@@ -21,7 +21,8 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
 from jvspatial.api import endpoint
-from jvspatial.api.components import AppBuilder, EndpointManager, ErrorHandler
+from jvspatial.api.components import AppBuilder, EndpointManager
+from jvspatial.api.components.error_handler import APIErrorHandler
 from jvspatial.api.context import set_current_server
 from jvspatial.api.decorators import EndpointField
 from jvspatial.api.endpoints.router import EndpointRouter
@@ -140,7 +141,7 @@ class TestServerInitialization:
         # Test new components
         assert isinstance(server.app_builder, AppBuilder)
         assert isinstance(server.endpoint_manager, EndpointManager)
-        assert isinstance(server.error_handler, ErrorHandler)
+        assert isinstance(server.error_handler, APIErrorHandler)
 
     async def test_server_with_config_dict(self):
         """Test server initialization with config dictionary."""

@@ -22,7 +22,8 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from jvspatial.api.components import AppBuilder, EndpointManager, ErrorHandler
+from jvspatial.api.components import AppBuilder, EndpointManager
+from jvspatial.api.components.error_handler import APIErrorHandler
 from jvspatial.api.config import ServerConfig
 from jvspatial.api.constants import APIRoutes
 from jvspatial.api.endpoints.router import EndpointRouter
@@ -93,7 +94,7 @@ class Server:
         # Initialize focused components
         self.app_builder = AppBuilder(self.config)
         self.endpoint_manager = EndpointManager()
-        self.error_handler = ErrorHandler()
+        self.error_handler = APIErrorHandler()
         self.middleware_manager = MiddlewareManager(self)
         self.lifecycle_manager = LifecycleManager(self)
         self.discovery_service = EndpointDiscoveryService(self)
@@ -635,7 +636,7 @@ class Server:
         self.middleware_manager.configure_all(app)
 
     def _configure_exception_handlers(self: "Server", app: FastAPI) -> None:
-        """Configure all exception handlers using the unified ErrorHandler.
+        """Configure all exception handlers using the unified APIErrorHandler.
 
         Args:
             app: FastAPI application instance to configure
@@ -655,7 +656,7 @@ class Server:
         ) -> JSONResponse:
             # Known errors (4xx) are handled gracefully - no stack trace needed
             # Only 5xx errors will be logged with stack traces for debugging
-            return await ErrorHandler.handle_exception(request, exc)
+            return await APIErrorHandler.handle_exception(request, exc)
 
         # Explicitly register HTTPException handler to ensure consistent formatting
         # This must be registered before the generic Exception handler
@@ -669,7 +670,7 @@ class Server:
         ) -> JSONResponse:
             # Known errors (4xx) are handled gracefully - no stack trace needed
             # Only 5xx errors will be logged with stack traces for debugging
-            return await ErrorHandler.handle_exception(request, exc)
+            return await APIErrorHandler.handle_exception(request, exc)
 
         # Add default exception handler using the unified ErrorHandler
         # This catches unexpected exceptions (not HTTPException, not JVSpatialAPIException)
@@ -680,7 +681,7 @@ class Server:
         ) -> JSONResponse:
             # All unexpected exceptions are treated as 500 errors
             # They will be logged with stack traces for debugging
-            return await ErrorHandler.handle_exception(request, exc)
+            return await APIErrorHandler.handle_exception(request, exc)
 
         # Configure Starlette's error logger to suppress stack traces for known errors
         # Starlette logs exceptions before they reach our handlers, so we need to
