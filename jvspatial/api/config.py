@@ -98,6 +98,11 @@ class ServerConfig(BaseModel):
         default=100 * 1024 * 1024, validation_alias="JVSPATIAL_FILE_STORAGE_MAX_SIZE"
     )  # 100MB default
 
+    # Graph Visualization Endpoint Configuration
+    graph_endpoint_enabled: bool = Field(
+        default=False, description="Enable /graph endpoint for graph visualization"
+    )
+
     # S3 Configuration (only used if provider is "s3")
     s3_bucket_name: Optional[str] = Field(
         default=None, validation_alias="JVSPATIAL_S3_BUCKET_NAME"

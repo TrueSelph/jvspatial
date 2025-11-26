@@ -1,23 +1,16 @@
 """Integration tests for endpoint response injection in walker and function endpoints."""
 
-import asyncio
-from typing import Any, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
-from jvspatial.api.context import (
-    get_current_server,
-    set_current_server,
-)
+from jvspatial.api import endpoint
+from jvspatial.api.context import set_current_server
 from jvspatial.api.decorators import EndpointField
 from jvspatial.api.endpoints.response import ResponseHelper as EndpointResponseHelper
-from jvspatial.api.endpoints.router import EndpointRouter
-from jvspatial.api.server import (
-    Server,
-    endpoint,
-)
-from jvspatial.core.entities import Node, Walker
+from jvspatial.api.server import Server
+from jvspatial.core.entities import Walker
 
 
 class TestWalkerEndpointIntegration:

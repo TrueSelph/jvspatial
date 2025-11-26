@@ -87,13 +87,17 @@ class AppBuilder:
             )
 
     def register_core_routes(
-        self, app: FastAPI, graph_context: Optional[Any] = None
+        self,
+        app: FastAPI,
+        graph_context: Optional[Any] = None,
+        server: Optional[Any] = None,
     ) -> None:
         """Register core routes (health, root).
 
         Args:
             app: FastAPI application instance to configure
             graph_context: Optional GraphContext for health checks
+            server: Optional Server instance for endpoint registration
         """
         from fastapi.responses import JSONResponse
 
@@ -138,15 +142,195 @@ class AppBuilder:
         @app.get("/")
         async def root_info() -> Dict[str, Any]:
             """Root endpoint with API information."""
-            return {
+            info = {
                 "service": self.config.title,
                 "description": self.config.description,
                 "version": self.config.version,
                 "docs": self.config.docs_url,
                 "health": "/health",
             }
+            if self.config.graph_endpoint_enabled:
+                info["graph"] = "/graph"
+            return info
+
+        # Add graph visualization endpoint (optional)
+        if self.config.graph_endpoint_enabled:
+            self._register_graph_endpoint(app, graph_context, server)
 
         # Core routes registered (no log needed)
+
+    def _register_graph_endpoint(
+        self,
+        app: FastAPI,
+        graph_context: Optional[Any] = None,
+        server: Optional[Any] = None,
+    ) -> None:
+        """Register graph visualization endpoint if enabled.
+
+        Uses the @endpoint decorator and registers with the endpoint registry
+        for proper authentication handling.
+
+        Args:
+            app: FastAPI application instance
+            graph_context: Optional GraphContext for graph generation
+            server: Optional Server instance for endpoint registration
+        """
+        from fastapi import HTTPException, Query
+        from fastapi.responses import PlainTextResponse
+
+        from jvspatial.api.decorators.route import endpoint
+        from jvspatial.core.context import get_default_context
+        from jvspatial.core.graph import export_graph
+
+        # Store graph_context for use in the endpoint function
+        # We'll access it via closure
+        _graph_context = graph_context
+
+        @endpoint("/graph", methods=["GET"], auth=True, tags=["App"])
+        async def get_graph(
+            format: str = Query(  # noqa: B008
+                default="dot",
+                description="Graph format: 'dot' (Graphviz) or 'mermaid'",
+                regex="^(dot|mermaid)$",
+            ),
+            include_attributes: bool = Query(  # noqa: B008
+                default=True, description="Include node/edge attributes in labels"
+            ),
+            rankdir: str = Query(  # noqa: B008
+                default="TB",
+                description="Graph direction: TB, LR, BT, RL (for DOT) or TB, TD, BT, RL, LR (for Mermaid)",
+            ),
+            node_shape: str = Query(  # noqa: B008
+                default="box",
+                description="Node shape for DOT format: box, ellipse, circle, diamond, etc.",
+            ),
+        ) -> str:
+            """Get graph visualization in DOT or Mermaid format.
+
+            This endpoint generates a visual representation of the current application graph
+            using the built-in graphing operation. The graph includes all nodes and edges
+            in the database.
+
+            **Requires authentication** - This endpoint exposes graph data and requires
+            a valid authentication token.
+
+            Args:
+                format: Output format - 'dot' for Graphviz or 'mermaid' for Mermaid diagrams
+                include_attributes: Whether to include node/edge attributes in labels
+                rankdir: Graph direction (TB=top-bottom, LR=left-right, etc.)
+                node_shape: Node shape for DOT format
+
+            Returns:
+                Graph representation string in the requested format
+
+            Example:
+                GET /graph?format=dot&rankdir=LR
+                GET /graph?format=mermaid&include_attributes=false
+            """
+            try:
+                # Use provided graph context or fallback to default
+                context = _graph_context
+                if not context:
+                    context = get_default_context()
+
+                # Generate graph based on format
+                if format == "dot":
+                    graph_output = await export_graph(
+                        context,
+                        format="dot",
+                        include_attributes=include_attributes,
+                        rankdir=rankdir,
+                        node_shape=node_shape,
+                    )
+                else:  # mermaid
+                    # Map rankdir to mermaid direction
+                    direction = rankdir
+                    graph_output = await export_graph(
+                        context,
+                        format="mermaid",
+                        include_attributes=include_attributes,
+                        direction=direction,
+                    )
+
+                return graph_output
+
+            except Exception as e:
+                self._logger.error(f"Graph generation error: {e}", exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to generate graph: {str(e)}",
+                )
+
+        # Manually register the function endpoint with the endpoint registry
+        # so the authentication middleware can find it
+        if server and hasattr(server, "_endpoint_registry"):
+            try:
+                from jvspatial.api.endpoints.factory import ParameterModelFactory
+
+                # Create parameter model if function has parameters
+                param_model = ParameterModelFactory.create_model(
+                    get_graph, path="/graph"
+                )
+
+                # Wrap function with parameter handling if needed
+                if param_model is not None:
+                    from jvspatial.api.decorators.route import (
+                        _wrap_function_with_params,
+                    )
+
+                    wrapped_func = _wrap_function_with_params(
+                        get_graph, param_model, ["GET"], path="/graph"
+                    )
+                else:
+                    wrapped_func = get_graph
+
+                # Set auth attributes on the function
+                get_graph._auth_required = True  # type: ignore[attr-defined]
+                wrapped_func._auth_required = True  # type: ignore[attr-defined]
+
+                # Extract tags from endpoint config
+                endpoint_config = getattr(get_graph, "_jvspatial_endpoint_config", {})
+                tags = endpoint_config.get("tags", ["App"])
+
+                # Register with endpoint registry (matches discovery service pattern)
+                server._endpoint_registry.register_function(
+                    get_graph,  # Original function
+                    "/graph",
+                    methods=["GET"],
+                    route_config={
+                        "path": "/graph",
+                        "endpoint": wrapped_func,
+                        "methods": ["GET"],
+                        "auth_required": True,
+                        "response_class": PlainTextResponse,
+                        "tags": tags,
+                    },
+                    auth_required=True,
+                    response_class=PlainTextResponse,
+                    tags=tags,
+                )
+
+                # Also register with endpoint router
+                server.endpoint_router.add_route(
+                    path="/graph",
+                    endpoint=wrapped_func,
+                    methods=["GET"],
+                    source_obj=get_graph,
+                    auth=True,
+                    response_class=PlainTextResponse,
+                    tags=tags,
+                )
+
+                # Mark server as having auth endpoints
+                server._has_auth_endpoints = True
+
+            except Exception as e:
+                self._logger.warning(
+                    f"Could not register graph endpoint with registry: {e}"
+                )
+                # Fallback: register directly with FastAPI and set auth attribute
+                app.get("/graph", response_class=PlainTextResponse)(get_graph)
+                get_graph._auth_required = True  # type: ignore[attr-defined]
 
 
 __all__ = ["AppBuilder"]

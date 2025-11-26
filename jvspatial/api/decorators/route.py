@@ -89,19 +89,53 @@ def endpoint(
         # Determine if this is a function or class
         is_func = inspect.isfunction(target)
 
+        # Extract auth-related parameters from kwargs for config
+        # (but don't remove from kwargs yet, as they may be needed for registration)
+        route_kwargs_for_config = {
+            k: v
+            for k, v in kwargs.items()
+            if k not in ["path", "methods", "is_function", "kwargs"]
+        }
+        config_auth = route_kwargs_for_config.get(
+            "auth_required", route_kwargs_for_config.get("auth", auth)
+        )
+        config_permissions = route_kwargs_for_config.get(
+            "permissions", permissions or []
+        )
+        config_roles = route_kwargs_for_config.get("roles", roles or [])
+
         # Store endpoint configuration on the target
         # Use setattr for dynamic attribute assignment (mypy compatibility)
+        # Separate kwargs from direct config fields for compatibility with tests
+        config_kwargs = {
+            k: v
+            for k, v in kwargs.items()
+            if k
+            not in [
+                "path",
+                "methods",
+                "auth_required",
+                "auth",
+                "permissions",
+                "roles",
+                "webhook",
+                "signature_required",
+                "response",
+                "is_function",
+            ]
+        }
         config = {
             "path": path,
             "methods": methods or ["GET"],
-            "auth_required": auth,
-            "permissions": permissions or [],
-            "roles": roles or [],
+            "auth_required": config_auth,
+            "permissions": config_permissions,
+            "roles": config_roles,
             "webhook": webhook,
             "signature_required": signature_required,
             "response": response,
             "is_function": is_func,
-            **kwargs,
+            "kwargs": config_kwargs,
+            **kwargs,  # Also include at top level for direct access
         }
 
         setattr(target, "_jvspatial_endpoint_config", config)  # noqa: B010
@@ -119,6 +153,34 @@ def endpoint(
                     target._required_permissions = permissions or []
                     target._required_roles = roles or []
 
+                    # Extract auth-related parameters from kwargs
+                    route_kwargs_for_reg = {
+                        k: v
+                        for k, v in kwargs.items()
+                        if k not in ["path", "methods", "is_function", "kwargs"]
+                    }
+                    reg_auth = route_kwargs_for_reg.pop("auth_required", None)
+                    if reg_auth is None:
+                        reg_auth = route_kwargs_for_reg.pop("auth", auth)
+                    else:
+                        route_kwargs_for_reg.pop("auth", None)
+                    reg_permissions = route_kwargs_for_reg.pop(
+                        "permissions", permissions or []
+                    )
+                    reg_roles = route_kwargs_for_reg.pop("roles", roles or [])
+
+                    # Register Walker with endpoint registry
+                    current_server._endpoint_registry.register_walker(
+                        target,
+                        path,
+                        methods or ["POST"],
+                        router=current_server.endpoint_router,
+                        auth=reg_auth,
+                        permissions=reg_permissions,
+                        roles=reg_roles,
+                        **route_kwargs_for_reg,
+                    )
+
                     # Register Walker with main endpoint router
                     current_server.endpoint_router.endpoint(path, methods, **kwargs)(
                         target
@@ -130,10 +192,78 @@ def endpoint(
                             target, path, methods, **kwargs
                         )
                 else:
-                    # Function endpoint - DO NOT register here, let discovery service handle it
-                    # This prevents duplicate registration and ensures consistent handling
-                    # The config is already stored above, discovery will find and register it
-                    pass
+                    # Function endpoint - register immediately if server is available
+                    # This allows tests and dynamic registration to work properly
+                    # Discovery service will skip if already registered
+                    func = target
+
+                    # Create parameter model if function has parameters
+                    from jvspatial.api.endpoints.factory import ParameterModelFactory
+
+                    param_model = ParameterModelFactory.create_model(func, path=path)
+
+                    # Wrap function with parameter handling if needed
+                    if param_model is not None:
+                        wrapped_func = _wrap_function_with_params(
+                            func, param_model, methods or ["GET"], path=path
+                        )
+                    else:
+                        wrapped_func = func
+
+                    # Extract auth-related parameters from kwargs
+                    route_kwargs_for_reg = {
+                        k: v
+                        for k, v in kwargs.items()
+                        if k not in ["path", "methods", "is_function", "kwargs"]
+                    }
+                    reg_auth = route_kwargs_for_reg.pop("auth_required", None)
+                    if reg_auth is None:
+                        reg_auth = route_kwargs_for_reg.pop("auth", auth)
+                    else:
+                        route_kwargs_for_reg.pop("auth", None)
+                    reg_permissions = route_kwargs_for_reg.pop(
+                        "permissions", permissions or []
+                    )
+                    reg_roles = route_kwargs_for_reg.pop("roles", roles or [])
+                    reg_response = route_kwargs_for_reg.pop("response", response)
+
+                    # Set auth attributes on the function
+                    if reg_auth:
+                        func._auth_required = True  # type: ignore[union-attr]
+                        wrapped_func._auth_required = True  # type: ignore[attr-defined]
+
+                    # Register via endpoint router
+                    current_server.endpoint_router.add_route(
+                        path=path,
+                        endpoint=wrapped_func,
+                        methods=methods or ["GET"],
+                        source_obj=func,
+                        auth=reg_auth,
+                        permissions=reg_permissions,
+                        roles=reg_roles,
+                        response=reg_response,
+                        **route_kwargs_for_reg,
+                    )
+
+                    # Register with endpoint registry
+                    current_server._endpoint_registry.register_function(
+                        func,
+                        path,
+                        methods=methods or ["GET"],
+                        route_config={
+                            "path": path,
+                            "endpoint": wrapped_func,
+                            "methods": methods or ["GET"],
+                            "auth_required": reg_auth,
+                            "permissions": reg_permissions,
+                            "roles": reg_roles,
+                            **route_kwargs_for_reg,
+                        },
+                        auth_required=reg_auth,
+                        permissions=reg_permissions,
+                        roles=reg_roles,
+                        **route_kwargs_for_reg,
+                    )
         except ImportError:
             # No server context available, configuration will be picked up later
             pass

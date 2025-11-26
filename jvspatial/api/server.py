@@ -6,7 +6,6 @@ setup, lifecycle management, and endpoint routing.
 
 """
 
-import inspect
 import logging
 from typing import (
     Any,
@@ -26,7 +25,6 @@ from fastapi.responses import JSONResponse
 from jvspatial.api.components import AppBuilder, EndpointManager, ErrorHandler
 from jvspatial.api.config import ServerConfig
 from jvspatial.api.constants import APIRoutes
-from jvspatial.api.endpoints.response import create_endpoint_helper
 from jvspatial.api.endpoints.router import EndpointRouter
 from jvspatial.api.middleware.manager import MiddlewareManager
 from jvspatial.api.services.discovery import EndpointDiscoveryService
@@ -204,7 +202,7 @@ class Server:
             return AuthenticationService(prime_ctx)
 
         # Create auth router
-        auth_router = APIRouter(prefix="/auth", tags=["Authentication"])
+        auth_router = APIRouter(prefix="/auth", tags=["App"])
 
         # Create custom security scheme for BearerAuth compatibility
         security = HTTPBearer(scheme_name="BearerAuth")
@@ -571,7 +569,7 @@ class Server:
         self._configure_exception_handlers(app)
 
         # Register core routes using AppBuilder
-        self.app_builder.register_core_routes(app, self._graph_context)
+        self.app_builder.register_core_routes(app, self._graph_context, server=self)
 
         # Discover and register endpoints from pre-loaded modules BEFORE including routers
         # This ensures all @endpoint decorated functions/classes are registered with the
@@ -839,13 +837,16 @@ class Server:
         @app.get("/")
         async def root_info() -> Dict[str, Any]:
             """Root endpoint with API information."""
-            return {
+            info = {
                 "service": self.config.title,
                 "description": self.config.description,
                 "version": self.config.version,
                 "docs": self.config.docs_url,
                 "health": "/health",
             }
+            if self.config.graph_endpoint_enabled:
+                info["graph"] = "/graph"
+            return info
 
     def _include_routers(self: "Server", app: FastAPI) -> None:
         """Include endpoint routers and dynamic routers.
@@ -1421,123 +1422,6 @@ class Server:
             Decorator function for endpoints
         """
         return self.endpoint_manager.register_endpoint(path, methods, **kwargs)
-
-
-def endpoint(
-    path: str, methods: Optional[List[str]] = None, **kwargs: Any
-) -> Callable[[Union[Type[Walker], Callable]], Union[Type[Walker], Callable]]:
-    """Universal endpoint decorator for both walkers and functions.
-
-    Automatically detects whether decorating a Walker class or function.
-
-    Args:
-        path: URL path for the endpoint
-        methods: HTTP methods (default: ["POST"] for walkers, ["GET"] for functions)
-        **kwargs: Additional route parameters (tags, summary, etc.)
-
-    Returns:
-        Decorator function that works with both Walker classes and functions
-
-    Examples:
-        # Function endpoint (auto-detected)
-        @endpoint("/users/count", methods=["GET"])
-        async def get_user_count(endpoint):
-            return endpoint.success(data={"count": 42})
-
-        # Walker endpoint (auto-detected)
-        @endpoint("/process", methods=["POST"])
-        class ProcessData(Walker):
-            data: str
-    """
-    # Remove server parameter from kwargs if present - FastAPI doesn't need it
-    route_kwargs = {k: v for k, v in kwargs.items() if k != "server"}
-
-    def decorator(
-        target: Union[Type[Walker], Callable],
-    ) -> Union[Type[Walker], Callable]:
-        from jvspatial.api.context import get_current_server
-
-        current_server = get_current_server()
-
-        if current_server is None:
-            # Store configuration for later discovery
-            cast(Any, target)._jvspatial_endpoint_config = {
-                "path": path,
-                "methods": (
-                    methods or (["POST"] if issubclass(target, Walker) else ["GET"])
-                    if inspect.isclass(target)
-                    else ["GET"]
-                ),
-                "kwargs": route_kwargs,
-                "is_function": not inspect.isclass(target)
-                or not issubclass(target, Walker),
-            }
-            return target
-
-        # Handle Walker class
-        if inspect.isclass(target) and issubclass(target, Walker):
-            current_server.register_walker_class(
-                target, path, methods=methods or ["POST"], **route_kwargs
-            )
-            return target
-
-        # Handle function endpoint
-        func = target
-
-        # Create wrapper if endpoint helper is needed
-        if "endpoint" in inspect.signature(func).parameters:
-            import functools
-
-            @functools.wraps(func)
-            async def func_wrapper(*args: Any, **kwargs_inner: Any) -> Any:
-                endpoint_helper = create_endpoint_helper(walker_instance=None)
-                kwargs_inner["endpoint"] = endpoint_helper
-                return (
-                    await func(*args, **kwargs_inner)
-                    if inspect.iscoroutinefunction(func)
-                    else func(*args, **kwargs_inner)
-                )
-
-        else:
-            # If no wrapper is needed, func_wrapper is just the original func
-            func_wrapper = func  # type: ignore[assignment]
-
-        # Register with endpoint registry and router
-        try:
-            current_server._endpoint_registry.register_function(
-                func,
-                path,
-                methods=methods or ["GET"],
-                route_config={
-                    "path": path,
-                    "endpoint": func_wrapper,
-                    "methods": methods or ["GET"],
-                    **route_kwargs,
-                },
-                **route_kwargs,
-            )
-
-            current_server.endpoint_router.router.add_api_route(
-                path=path,
-                endpoint=func_wrapper,
-                methods=methods or ["GET"],
-                **route_kwargs,
-            )
-
-            current_server._logger.info(
-                f"{'🔄' if current_server._is_running else '📝'} "
-                f"{'Dynamically registered' if current_server._is_running else 'Registered'} "
-                f"function endpoint: {func.__name__} at {path}"
-            )
-
-        except Exception as e:
-            current_server._logger.warning(
-                f"Function {func.__name__} already registered: {e}"
-            )
-
-        return func
-
-    return decorator
 
 
 # Convenience function for quick server creation
