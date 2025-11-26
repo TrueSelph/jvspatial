@@ -65,7 +65,7 @@ class Object(AttributeMixin, BaseModel):
 
     def __init__(self: "Object", **kwargs: Any) -> None:
         """Initialize an Object with auto-generated ID and obj if not provided."""
-        self._initializing = True
+        # Prepare kwargs before calling super().__init__() to avoid Pydantic v2 initialization issues
         if "id" not in kwargs:
             # Use class-level type_code or default from Field
             type_code = kwargs.get("type_code")
@@ -80,7 +80,12 @@ class Object(AttributeMixin, BaseModel):
         # Set entity to class name if not provided (protected attribute)
         if "entity" not in kwargs:
             kwargs["entity"] = self.__class__.__name__
+
+        # Call super().__init__() first to initialize Pydantic model (including __pydantic_private__)
+        # The _initializing attribute defaults to True, so it's already set during Pydantic initialization
         super().__init__(**kwargs)
+
+        # Mark initialization as complete
         self._initializing = False
 
     def __setattr__(self: "Object", name: str, value: Any) -> None:

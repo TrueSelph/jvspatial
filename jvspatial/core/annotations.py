@@ -220,13 +220,12 @@ class AttributeMixin:
 
     def __init__(self, *args: Any, **kwargs: Any):
         """Initialize with protection management."""
-        # Set initializing flag before calling parent __init__
-        object.__setattr__(self, "_initializing", True)
-
-        # Call parent __init__
+        # Call parent __init__ first to initialize Pydantic model (including __pydantic_private__)
+        # The _initializing attribute defaults to True, so it's already set during Pydantic initialization
         super().__init__(*args, **kwargs)
 
-        # Clear initializing flag after initialization complete
+        # Mark initialization as complete
+        # Use object.__setattr__ to bypass our own __setattr__ override
         object.__setattr__(self, "_initializing", False)
 
     def __init_subclass__(cls, **kwargs):

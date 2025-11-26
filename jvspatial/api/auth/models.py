@@ -61,11 +61,6 @@ class User(Object):
         default_factory=datetime.utcnow, description="User creation timestamp"
     )
 
-    class Config:
-        """Pydantic configuration."""
-
-        json_encoders = {datetime: lambda v: v.isoformat()}
-
     @classmethod
     async def create(cls, **kwargs: Any) -> "User":
         """Create and save a new user instance with email validation.
@@ -109,8 +104,3 @@ class TokenBlacklist(Node):
     blacklisted_at: datetime = Field(
         default_factory=datetime.utcnow, description="When token was blacklisted"
     )
-
-    class Config:
-        """Pydantic configuration."""
-
-        json_encoders = {datetime: lambda v: v.isoformat()}

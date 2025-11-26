@@ -310,19 +310,19 @@ class ParameterModelFactory:
             # Set example in json_schema_extra for OpenAPI documentation
             model_config["json_schema_extra"] = {"example": example_data}
 
+        # In Pydantic v2, cannot use both __base__ and __config__ together
+        # Create model with base, then set model_config after creation
         model = cast(
             Type[BaseModel],
             create_model(
                 model_name,
                 __base__=EndpointParameterModel,
-                __config__=model_config,
                 **fields,
             ),
         )
 
-        # Also ensure it's set on the model after creation (in case create_model doesn't preserve it)
-        if example_data:
-            model.model_config["json_schema_extra"] = {"example": example_data}
+        # Set model_config after creation (Pydantic v2 compatible)
+        model.model_config = model_config
 
         return model
 
@@ -462,14 +462,16 @@ class ParameterModelFactory:
         """
         fields = dict(group_fields)
         model_name = f"{group_name.title()}Group"
-        return cast(
+        model = cast(
             Type[BaseModel],
             create_model(
                 model_name,
-                __config__=ConfigDict(extra="forbid"),
                 **fields,
             ),
         )
+        # Set model_config after creation (Pydantic v2 compatible)
+        model.model_config = ConfigDict(extra="forbid")
+        return model
 
     @staticmethod
     def _is_optional(field_type: Type) -> bool:
