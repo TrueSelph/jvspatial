@@ -49,6 +49,12 @@ class AppBuilder:
             "docs_url": self.config.docs_url,
             "redoc_url": self.config.redoc_url,
             "debug": self.config.debug,
+            # Configure OpenAPI tags order - ensure "App" appears after "default"
+            # Tags are ordered by their appearance in this list
+            "openapi_tags": [
+                {"name": "default", "description": "Default API endpoints"},
+                {"name": "App", "description": "Application-specific endpoints"},
+            ],
         }
 
         # Add lifespan if provided
@@ -56,6 +62,59 @@ class AppBuilder:
             app_kwargs["lifespan"] = lifespan
 
         app = FastAPI(**app_kwargs)
+
+        # Override the openapi() method to enforce tag ordering
+        # This ensures "App" always appears after "default" in the OpenAPI schema
+        from fastapi.openapi.utils import get_openapi
+
+        def custom_openapi() -> Dict[str, Any]:
+            """Custom OpenAPI schema generator with enforced tag ordering."""
+            if app.openapi_schema:
+                return app.openapi_schema
+
+            # Generate the schema using get_openapi directly
+            schema = get_openapi(
+                title=app.title,
+                version=app.version,
+                description=app.description,
+                routes=app.routes,
+            )
+
+            # Enforce tag ordering - ensure "App" appears after "default"
+            # Collect all unique tags from the schema
+            all_tags = set()
+            for path_item in schema.get("paths", {}).values():
+                for operation in path_item.values():
+                    if isinstance(operation, dict) and "tags" in operation:
+                        all_tags.update(operation["tags"])
+
+            # Define tag order - "default" first, then "App", then others alphabetically
+            tag_order = ["default", "App"]
+            other_tags = sorted([tag for tag in all_tags if tag not in tag_order])
+            ordered_tags = tag_order + other_tags
+
+            # Create tag definitions in the correct order
+            if "tags" not in schema:
+                schema["tags"] = []
+
+            tag_definitions = []
+            for tag in ordered_tags:
+                tag_def = {"name": tag}
+                # Add description if we have it
+                if tag == "default":
+                    tag_def["description"] = "Default API endpoints"
+                elif tag == "App":
+                    tag_def["description"] = "Application-specific endpoints"
+                tag_definitions.append(tag_def)
+
+            schema["tags"] = tag_definitions
+
+            # Cache the schema
+            app.openapi_schema = schema
+            return schema
+
+        # Replace the openapi method
+        app.openapi = custom_openapi
 
         self._logger.debug(
             f"{LogIcons.SUCCESS} FastAPI app created: {self.config.title} v{self.config.version}"
@@ -150,7 +209,7 @@ class AppBuilder:
                 "health": "/health",
             }
             if self.config.graph_endpoint_enabled:
-                info["graph"] = "/graph"
+                info["graph"] = "/api/graph"
             return info
 
         # Add graph visualization endpoint (optional)
@@ -178,7 +237,6 @@ class AppBuilder:
         from fastapi import HTTPException, Query
         from fastapi.responses import PlainTextResponse
 
-        from jvspatial.api.decorators.route import endpoint
         from jvspatial.core.context import get_default_context
         from jvspatial.core.graph import export_graph
 
@@ -186,7 +244,8 @@ class AppBuilder:
         # We'll access it via closure
         _graph_context = graph_context
 
-        @endpoint("/graph", methods=["GET"], auth=True, tags=["App"])
+        # Define the endpoint function without the decorator to avoid auto-registration
+        # We'll register it manually with explicit tags
         async def get_graph(
             format: str = Query(  # noqa: B008
                 default="dot",
@@ -224,8 +283,8 @@ class AppBuilder:
                 Graph representation string in the requested format
 
             Example:
-                GET /graph?format=dot&rankdir=LR
-                GET /graph?format=mermaid&include_attributes=false
+                GET /api/graph?format=dot&rankdir=LR
+                GET /api/graph?format=mermaid&include_attributes=false
             """
             try:
                 # Use provided graph context or fallback to default
@@ -263,13 +322,15 @@ class AppBuilder:
 
         # Manually register the function endpoint with the endpoint registry
         # so the authentication middleware can find it
+        # Use explicit tags=["App"] to ensure it only appears under App tag
         if server and hasattr(server, "_endpoint_registry"):
             try:
                 from jvspatial.api.endpoints.factory import ParameterModelFactory
 
                 # Create parameter model if function has parameters
+                # Use full path for parameter model
                 param_model = ParameterModelFactory.create_model(
-                    get_graph, path="/graph"
+                    get_graph, path="/api/graph"
                 )
 
                 # Wrap function with parameter handling if needed
@@ -279,7 +340,7 @@ class AppBuilder:
                     )
 
                     wrapped_func = _wrap_function_with_params(
-                        get_graph, param_model, ["GET"], path="/graph"
+                        get_graph, param_model, ["GET"], path="/api/graph"
                     )
                 else:
                     wrapped_func = get_graph
@@ -288,37 +349,42 @@ class AppBuilder:
                 get_graph._auth_required = True  # type: ignore[attr-defined]
                 wrapped_func._auth_required = True  # type: ignore[attr-defined]
 
-                # Extract tags from endpoint config
-                endpoint_config = getattr(get_graph, "_jvspatial_endpoint_config", {})
-                tags = endpoint_config.get("tags", ["App"])
+                # Explicitly set tags to only ["App"] - no default tag
+                tags = ["App"]
 
-                # Register with endpoint registry (matches discovery service pattern)
+                # Set endpoint config with explicit tags to prevent default tag addition
+                if not hasattr(wrapped_func, "_jvspatial_endpoint_config"):
+                    wrapped_func._jvspatial_endpoint_config = {}  # type: ignore[attr-defined]
+                wrapped_func._jvspatial_endpoint_config["tags"] = tags  # type: ignore[attr-defined]
+
+                # Register with endpoint registry using full path
                 server._endpoint_registry.register_function(
                     get_graph,  # Original function
-                    "/graph",
+                    "/api/graph",  # Full path for registry
                     methods=["GET"],
                     route_config={
-                        "path": "/graph",
+                        "path": "/api/graph",  # Full path
                         "endpoint": wrapped_func,
                         "methods": ["GET"],
                         "auth_required": True,
                         "response_class": PlainTextResponse,
-                        "tags": tags,
+                        "tags": tags,  # Explicitly ["App"] only
                     },
                     auth_required=True,
                     response_class=PlainTextResponse,
-                    tags=tags,
+                    tags=tags,  # Explicitly ["App"] only
                 )
 
-                # Also register with endpoint router
+                # Register with endpoint router - path is relative to router prefix (/api)
+                # This ensures the endpoint is only registered once with explicit tags
                 server.endpoint_router.add_route(
-                    path="/graph",
+                    path="/graph",  # Relative to /api prefix (becomes /api/graph)
                     endpoint=wrapped_func,
                     methods=["GET"],
                     source_obj=get_graph,
                     auth=True,
                     response_class=PlainTextResponse,
-                    tags=tags,
+                    tags=tags,  # Explicitly set to only ["App"] - prevents default tag
                 )
 
                 # Mark server as having auth endpoints
@@ -329,7 +395,12 @@ class AppBuilder:
                     f"Could not register graph endpoint with registry: {e}"
                 )
                 # Fallback: register directly with FastAPI and set auth attribute
-                app.get("/graph", response_class=PlainTextResponse)(get_graph)
+                # Explicitly set tags to prevent default tag addition
+                app.get(
+                    "/api/graph",
+                    response_class=PlainTextResponse,
+                    tags=["App"],  # Explicitly set to only App tag
+                )(get_graph)
                 get_graph._auth_required = True  # type: ignore[attr-defined]
 
 

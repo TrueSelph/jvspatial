@@ -82,7 +82,11 @@ class BaseRouter:
     """
 
     def __init__(self) -> None:
-        """Initialize the router with an APIRouter."""
+        """Initialize the router with an APIRouter.
+
+        Note: We don't set default tags on the router to avoid
+        endpoints appearing in both default and explicit tag groups.
+        """
         self.router = APIRouter()
 
     def add_route(
@@ -150,6 +154,19 @@ class BaseRouter:
                 "response",
             ]
         }
+
+        # Handle tags explicitly - prioritize kwargs, then endpoint config, then source config
+        # This ensures tags are explicitly set and prevents FastAPI from adding default tags
+        if "tags" in kwargs:
+            # Tags explicitly provided in kwargs - use them
+            fastapi_kwargs["tags"] = kwargs["tags"]
+        elif endpoint_config and endpoint_config.get("tags"):
+            # Use tags from endpoint config
+            fastapi_kwargs["tags"] = endpoint_config.get("tags")
+        elif source_config and source_config.get("tags"):
+            # Use tags from source config
+            fastapi_kwargs["tags"] = source_config.get("tags")
+        # If no tags are provided at all, don't set tags (FastAPI will use empty list, not default)
 
         # Extract summary and description from docstring if not explicitly provided
         # FastAPI uses __doc__ automatically, but we should also extract summary/description

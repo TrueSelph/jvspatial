@@ -100,7 +100,7 @@ class ServerConfig(BaseModel):
 
     # Graph Visualization Endpoint Configuration
     graph_endpoint_enabled: bool = Field(
-        default=False, description="Enable /graph endpoint for graph visualization"
+        default=False, description="Enable /api/graph endpoint for graph visualization"
     )
 
     # S3 Configuration (only used if provider is "s3")

@@ -21,13 +21,18 @@ def configure_openapi_security(app: FastAPI) -> None:
 
     server = get_current_server()
 
-    # Get the current OpenAPI schema
-    openapi_schema = get_openapi(
-        title=app.title,
-        version=app.version,
-        description=app.description,
-        routes=app.routes,
-    )
+    # Get the current OpenAPI schema using the app's openapi method
+    # This ensures we use any custom openapi() override that may exist
+    if hasattr(app, "openapi") and callable(app.openapi):
+        openapi_schema = app.openapi()
+    else:
+        # Fallback to get_openapi if custom method doesn't exist
+        openapi_schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+        )
 
     # Add security schemes based on server configuration
     security_schemes = {
@@ -135,6 +140,37 @@ def configure_openapi_security(app: FastAPI) -> None:
                         operation["security"] = get_endpoint_security_requirements(
                             permissions=permissions, roles=roles
                         )
+
+    # Enforce tag ordering - ensure "App" appears after "default"
+    # Collect all unique tags from the schema
+    all_tags = set()
+    for path_item in openapi_schema.get("paths", {}).values():
+        for operation in path_item.values():
+            if isinstance(operation, dict) and "tags" in operation:
+                all_tags.update(operation["tags"])
+
+    # Define tag order - "default" first, then "App", then others alphabetically
+    tag_order = ["default", "App"]
+    other_tags = sorted([tag for tag in all_tags if tag not in tag_order])
+    ordered_tags = tag_order + other_tags
+
+    # Reorder tags in the schema
+    # Update tag definitions in the schema
+    if "tags" not in openapi_schema:
+        openapi_schema["tags"] = []
+
+    # Create tag definitions in the correct order
+    tag_definitions = []
+    for tag in ordered_tags:
+        tag_def = {"name": tag}
+        # Add description if we have it
+        if tag == "default":
+            tag_def["description"] = "Default API endpoints"
+        elif tag == "App":
+            tag_def["description"] = "Application-specific endpoints"
+        tag_definitions.append(tag_def)
+
+    openapi_schema["tags"] = tag_definitions
 
     # Update the app's OpenAPI schema
     app.openapi_schema = openapi_schema

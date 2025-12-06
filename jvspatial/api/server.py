@@ -846,7 +846,7 @@ class Server:
                 "health": "/health",
             }
             if self.config.graph_endpoint_enabled:
-                info["graph"] = "/graph"
+                info["graph"] = "/api/graph"
             return info
 
     def _include_routers(self: "Server", app: FastAPI) -> None:
