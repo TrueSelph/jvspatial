@@ -49,7 +49,9 @@ class Edge(Object):
         return {"source", "target", "bidirectional"}
 
     # Visit hooks for edges
-    _visit_hooks: ClassVar[Dict[Optional[Type["Walker"]], List[Callable]]] = {}
+    _visit_hooks: ClassVar[
+        Dict[Union[Optional[Type["Walker"]], str], List[Callable]]
+    ] = {}
     _is_visit_hook: ClassVar[Dict[str, bool]] = {}
 
     @property
@@ -78,17 +80,47 @@ class Edge(Object):
                 else:
                     # Register for each specified target type
                     for target in targets:
-                        if not (inspect.isclass(target) and issubclass(target, Walker)):
+                        # Accept both classes and strings for forward references
+                        # Strings will be resolved at runtime when the walker visits
+                        if isinstance(target, str):
+                            # String target - store for later resolution
+                            if target not in cls._visit_hooks:
+                                cls._visit_hooks[target] = []
+                            cls._visit_hooks[target].append(method)
+                        elif inspect.isclass(target):
+                            # Class target - validate it's a Walker subclass
+                            if issubclass(target, Walker):  # type: ignore[arg-type]
+                                if target not in cls._visit_hooks:
+                                    cls._visit_hooks[target] = []
+                                cls._visit_hooks[target].append(method)
+                            else:
+                                target_name = (
+                                    target.__name__
+                                    if hasattr(target, "__name__")
+                                    else target
+                                )
+                                raise ValidationError(
+                                    f"Edge @on_visit must target Walker types "
+                                    f"(or string names), got {target_name}",
+                                    details={
+                                        "target_type": str(target),
+                                        "expected_type": "Walker or string",
+                                    },
+                                )
+                        else:
+                            target_name = (
+                                target.__name__
+                                if hasattr(target, "__name__")
+                                else target
+                            )
                             raise ValidationError(
-                                f"Edge @on_visit must target Walker types, got {target.__name__ if hasattr(target, '__name__') else target}",
+                                f"Edge @on_visit must target Walker types "
+                                f"(or string names), got {target_name}",
                                 details={
                                     "target_type": str(target),
-                                    "expected_type": "Walker",
+                                    "expected_type": "Walker or string",
                                 },
                             )
-                        if target not in cls._visit_hooks:
-                            cls._visit_hooks[target] = []
-                        cls._visit_hooks[target].append(method)
 
     def __init__(
         self: "Edge",

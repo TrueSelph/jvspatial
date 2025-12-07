@@ -43,7 +43,9 @@ class Node(Object):
     edge_ids: List[str] = attribute(
         transient=True, default_factory=list, description="List of connected edge IDs"
     )
-    _visit_hooks: ClassVar[Dict[Optional[Type["Walker"]], List[Callable]]] = {}
+    _visit_hooks: ClassVar[
+        Dict[Union[Optional[Type["Walker"]], str], List[Callable]]
+    ] = {}
 
     @classmethod
     def _get_top_level_fields(cls: Type["Node"]) -> set:
@@ -68,17 +70,47 @@ class Node(Object):
                 else:
                     # Register for each specified target type
                     for target in targets:
-                        if not (inspect.isclass(target) and issubclass(target, Walker)):
+                        # Accept both classes and strings for forward references
+                        # Strings will be resolved at runtime when the walker visits
+                        if isinstance(target, str):
+                            # String target - store for later resolution
+                            if target not in cls._visit_hooks:
+                                cls._visit_hooks[target] = []
+                            cls._visit_hooks[target].append(method)
+                        elif inspect.isclass(target):
+                            # Class target - validate it's a Walker subclass
+                            if issubclass(target, Walker):  # type: ignore[arg-type]
+                                if target not in cls._visit_hooks:
+                                    cls._visit_hooks[target] = []
+                                cls._visit_hooks[target].append(method)
+                            else:
+                                target_name = (
+                                    target.__name__
+                                    if hasattr(target, "__name__")
+                                    else target
+                                )
+                                raise ValidationError(
+                                    f"Node @on_visit must target Walker types "
+                                    f"(or string names), got {target_name}",
+                                    details={
+                                        "target_type": str(target),
+                                        "expected_type": "Walker or string",
+                                    },
+                                )
+                        else:
+                            target_name = (
+                                target.__name__
+                                if hasattr(target, "__name__")
+                                else target
+                            )
                             raise ValidationError(
-                                f"Node @on_visit must target Walker types, got {target.__name__ if hasattr(target, '__name__') else target}",
+                                f"Node @on_visit must target Walker types "
+                                f"(or string names), got {target_name}",
                                 details={
                                     "target_type": str(target),
-                                    "expected_type": "Walker",
+                                    "expected_type": "Walker or string",
                                 },
                             )
-                        if target not in cls._visit_hooks:
-                            cls._visit_hooks[target] = []
-                        cls._visit_hooks[target].append(method)
 
     @property
     def visitor(self: "Node") -> Optional["Walker"]:
