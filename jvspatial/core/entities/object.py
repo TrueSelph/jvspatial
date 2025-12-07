@@ -486,6 +486,43 @@ class Object(AttributeMixin, BaseModel):
         return objects
 
     @classmethod
+    async def find_one(
+        cls: Type["Object"], query: Optional[Dict[str, Any]] = None, **kwargs: Any
+    ) -> Optional["Object"]:
+        """Find the first object matching the given filters.
+
+        Args:
+            query: Optional query dictionary (e.g., {"context.active": True})
+            **kwargs: Additional filters as keyword arguments (e.g., active=True)
+
+        Returns:
+            First matching Object instance, or None if not found
+
+        Examples:
+            # Find first matching object
+            user = await User.find_one({"context.email": "user@example.com"})
+
+            # Find using keyword arguments
+            user = await User.find_one(email="user@example.com")
+        """
+        from ..context import get_default_context
+
+        context = get_default_context()
+        collection, final_query = await cls._build_database_query(
+            context, query, kwargs
+        )
+
+        result = await context.database.find_one(collection, final_query)
+        if not result:
+            return None
+
+        try:
+            obj = await context._deserialize_entity(cls, result)
+            return obj
+        except Exception:
+            return None
+
+    @classmethod
     async def count(
         cls: Type["Object"], query: Optional[Dict[str, Any]] = None, **kwargs: Any
     ) -> int:
