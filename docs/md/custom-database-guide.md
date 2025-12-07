@@ -35,7 +35,7 @@ The `Database` abstract base class defines the following interface:
 
 ```python
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 class Database(ABC):
     @abstractmethod
@@ -103,6 +103,31 @@ class Database(ABC):
         """Find the first record matching a query."""
         results = await self.find(collection, query)
         return results[0] if results else None
+
+    async def create_index(
+        self,
+        collection: str,
+        field_or_fields: Union[str, List[Tuple[str, int]]],
+        unique: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Create an index on the specified field(s).
+
+        This method is called automatically by jvspatial when entities with
+        indexed fields are first saved. Implementations should create appropriate
+        indexes for their database system.
+
+        Args:
+            collection: Collection name
+            field_or_fields: Single field name (str) or list of (field_name, direction) tuples
+            unique: Whether the index should enforce uniqueness
+            **kwargs: Additional options (e.g., "name" for compound indexes)
+
+        Note:
+            For databases that don't support indexing (e.g., JSON file-based),
+            this can be a no-op that logs a debug message.
+        """
+        pass
 ```
 
 ### Key Requirements
@@ -112,6 +137,7 @@ class Database(ABC):
 3. **ID-based operations** - Records must have an `id` field (string)
 4. **Dictionary-based data** - All data is passed as dictionaries
 5. **Query matching** - The `find()` method should support simple dictionary-based queries
+6. **Index support** - Implement `create_index()` for query optimization (can be no-op for databases without indexing)
 
 ---
 
@@ -161,6 +187,21 @@ class MyCustomDatabase(Database):
         """Find records matching a query."""
         # return await self._client.find(collection, query)
         return []
+
+    async def create_index(
+        self,
+        collection: str,
+        field_or_fields: Union[str, List[Tuple[str, int]]],
+        unique: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Create an index on the specified field(s).
+
+        For databases that don't support indexing, this can be a no-op.
+        """
+        # For this example, indexing is not implemented
+        # In production, implement database-specific index creation
+        pass
 ```
 
 ### Step 2: Implement Query Matching
@@ -569,7 +610,45 @@ async def find(self, collection: str, query: Dict[str, Any]) -> List[Dict[str, A
     return [r for r in all_records if self._matches_query(r, query)]
 ```
 
-### 5. **Thread Safety**
+### 5. **Index Implementation**
+
+Implement `create_index()` to support query optimization. For databases without native indexing support, this can be a no-op:
+
+```python
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+class MyDatabase(Database):
+    async def create_index(
+        self,
+        collection: str,
+        field_or_fields: Union[str, List[Tuple[str, int]]],
+        unique: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Create an index on the specified field(s)."""
+        # For databases with native indexing
+        if isinstance(field_or_fields, str):
+            # Single-field index
+            await self._client.create_index(collection, field_or_fields, unique=unique)
+        else:
+            # Compound index
+            await self._client.create_index(collection, field_or_fields, unique=unique)
+
+        # For databases without indexing (e.g., JSON file-based)
+        # This can be a no-op:
+        # import logging
+        # logger = logging.getLogger(__name__)
+        # logger.debug(f"Index creation requested for {collection} (not supported)")
+```
+
+**Index Creation Examples:**
+
+- **MongoDB**: Use `collection.create_index()` with proper options
+- **SQLite**: Create indexes using `CREATE INDEX` with `json_extract()` for nested fields
+- **DynamoDB**: Create Global Secondary Indexes (GSI) using `update_table()`
+- **JSON**: No-op (indexing not applicable)
+
+### 6. **Thread Safety**
 
 Ensure your implementation is thread-safe if used in multi-threaded environments:
 

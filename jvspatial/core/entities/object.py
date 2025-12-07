@@ -6,7 +6,12 @@ from pydantic import BaseModel, ConfigDict
 
 from jvspatial.core.context import GraphContext
 
-from ..annotations import AttributeMixin, attribute
+from ..annotations import (
+    AttributeMixin,
+    attribute,
+    get_compound_indexes,
+    get_indexed_fields,
+)
 from ..utils import generate_id
 
 
@@ -413,6 +418,8 @@ class Object(AttributeMixin, BaseModel):
             The saved object instance
         """
         context = await self.get_context()
+        # Ensure indexes are created on first save
+        await context.ensure_indexes(self.__class__)
         await context.save(self)
         return self
 
@@ -470,6 +477,8 @@ class Object(AttributeMixin, BaseModel):
         from ..context import get_default_context
 
         context = get_default_context()
+        # Ensure indexes are created on first find
+        await context.ensure_indexes(cls)
         collection, final_query = await cls._build_database_query(
             context, query, kwargs
         )
@@ -636,6 +645,52 @@ class Object(AttributeMixin, BaseModel):
             {"$and": [class_name_filter, db_query]} if db_query else class_name_filter
         )
         return collection, final_query
+
+    @classmethod
+    def get_indexes(cls: Type["Object"]) -> List[Dict[str, Any]]:
+        """Get all index definitions for this class.
+
+        Collects both single-field indexes (from field annotations) and compound indexes
+        (from class decorators). Field names are automatically mapped to context.field_name
+        for database queries.
+
+        Returns:
+            List of index definitions, each containing:
+            - For single-field: {"field": "context.field_name", "unique": bool, "direction": int}
+            - For compound: {"fields": [("context.field_name", direction), ...], "unique": bool, "name": str}
+        """
+        indexes: List[Dict[str, Any]] = []
+
+        # Get single-field indexes from field annotations
+        indexed_fields = get_indexed_fields(cls)
+        for field_name, index_config in indexed_fields.items():
+            # Map field name to context.field_name for database
+            db_field = f"context.{field_name}"
+            indexes.append(
+                {
+                    "field": db_field,
+                    "unique": index_config.get("unique", False),
+                    "direction": index_config.get("direction", 1),
+                }
+            )
+
+        # Get compound indexes from class decorators
+        compound_indexes = get_compound_indexes(cls)
+        for comp_index in compound_indexes:
+            # Map field names to context.field_name
+            mapped_fields = [
+                (f"context.{field_name}", direction)
+                for field_name, direction in comp_index["fields"]
+            ]
+            indexes.append(
+                {
+                    "fields": mapped_fields,
+                    "unique": comp_index.get("unique", False),
+                    "name": comp_index.get("name"),
+                }
+            )
+
+        return indexes
 
     @classmethod
     async def all(cls: Type["Object"]) -> List["Object"]:

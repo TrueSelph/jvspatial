@@ -23,16 +23,20 @@ class Object(BaseModel):
     @classmethod
     async def find(cls, query: Optional[dict] = None, **filters) -> List["Object"]
     @classmethod
+    async def find_one(cls, query: Optional[dict] = None, **filters) -> Optional["Object"]
+    @classmethod
     async def count(cls, query: Optional[dict] = None, **filters) -> int
     async def delete(cascade: bool = False) -> None  # cascade is ignored for Object entities
     async def export() -> dict
 ```
 
-**Convenience Counting**
+**Convenience Methods**
 
 - `await Object.count()` → count all objects of that type
 - `await Object.count({"context.active": True})` → count filtered objects using query dict
 - `await Object.count(active=True)` → count filtered objects using keyword arguments
+- `await Object.find_one({"context.email": "alice@example.com"})` → find single object matching query (returns None if not found)
+- `await Object.find_one(email="alice@example.com")` → find single object using keyword arguments
 
 #### `Node(Object)`
 Represents graph nodes with connection capabilities.

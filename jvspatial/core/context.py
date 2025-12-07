@@ -1,5 +1,6 @@
 """GraphContext for managing database dependencies."""
 
+import logging
 import time
 from contextlib import asynccontextmanager, contextmanager
 from typing import (
@@ -9,6 +10,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Set,
     Type,
     TypeVar,
     cast,
@@ -22,6 +24,11 @@ if TYPE_CHECKING:
     from .entities import Object
 
 T = TypeVar("T", bound="Object")
+
+logger = logging.getLogger(__name__)
+
+# Global registry to track which collections have had indexes ensured
+_ensured_indexes: Set[str] = set()
 
 
 # Simple performance monitor for tracking operations
@@ -728,6 +735,65 @@ class GraphContext:
                 continue  # Skip invalid nodes
 
         return nodes
+
+    async def ensure_indexes(self, entity_class: Type[T]) -> None:
+        """Ensure indexes are created for the given entity class.
+
+        This method retrieves index definitions from the entity class and creates
+        them in the database if they don't already exist. Index creation is idempotent.
+
+        Args:
+            entity_class: Entity class to ensure indexes for
+        """
+        if not hasattr(entity_class, "get_indexes"):
+            return  # Class doesn't support indexes
+
+        # Get collection name
+        type_code = self._get_entity_type_code(entity_class)
+        collection = self._get_collection_name(type_code)
+
+        # Check if we've already ensured indexes for this collection
+        collection_key = f"{collection}:{entity_class.__name__}"
+        if collection_key in _ensured_indexes:
+            return  # Already ensured
+
+        # Get index definitions from the class
+        indexes = entity_class.get_indexes()
+        if not indexes:
+            _ensured_indexes.add(collection_key)
+            return  # No indexes defined
+
+        # Check if database supports indexing
+        if not hasattr(self.database, "create_index"):
+            _ensured_indexes.add(collection_key)
+            return  # Database doesn't support indexing
+
+        # Create each index
+        for index_def in indexes:
+            try:
+                if "field" in index_def:
+                    # Single-field index
+                    await self.database.create_index(
+                        collection,
+                        index_def["field"],
+                        unique=index_def.get("unique", False),
+                    )
+                elif "fields" in index_def:
+                    # Compound index
+                    await self.database.create_index(
+                        collection,
+                        index_def["fields"],
+                        unique=index_def.get("unique", False),
+                    )
+            except Exception as e:
+                # Log error but continue with other indexes
+                logger.warning(
+                    f"Failed to create index for {entity_class.__name__} "
+                    f"on collection '{collection}': {e}"
+                )
+
+        # Mark as ensured
+        _ensured_indexes.add(collection_key)
 
     async def find_edges_between(
         self, source_id: str, target_id: Optional[str] = None, edge_class=None, **kwargs

@@ -1,12 +1,15 @@
 """Simplified MongoDB database implementation."""
 
-from typing import Any, Dict, List, Optional
+import logging
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import PyMongoError
 
 from jvspatial.db.database import Database
 from jvspatial.exceptions import DatabaseError
+
+logger = logging.getLogger(__name__)
 
 
 class MongoDB(Database):
@@ -25,6 +28,9 @@ class MongoDB(Database):
         self.db_name = db_name
         self._client: Optional[AsyncIOMotorClient] = None
         self._db: Optional[AsyncIOMotorDatabase] = None
+        self._created_indexes: Dict[str, Set[str]] = (
+            {}
+        )  # collection -> set of index names
 
     async def _ensure_connected(self) -> None:
         """Ensure database connection is established."""
@@ -86,9 +92,80 @@ class MongoDB(Database):
         except PyMongoError as e:
             raise DatabaseError(f"MongoDB find error: {e}") from e
 
+    async def create_index(
+        self,
+        collection: str,
+        field_or_fields: Union[str, List[Tuple[str, int]]],
+        unique: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Create an index on the specified field(s).
+
+        Args:
+            collection: Collection name
+            field_or_fields: Single field name (str) or list of (field_name, direction) tuples for compound indexes
+            unique: Whether the index should enforce uniqueness
+            **kwargs: Additional MongoDB-specific options (e.g., expireAfterSeconds for TTL indexes)
+
+        Raises:
+            DatabaseError: If index creation fails
+        """
+        await self._ensure_connected()
+
+        try:
+            collection_obj = self._db[collection]
+
+            # Initialize index tracking for this collection if needed
+            if collection not in self._created_indexes:
+                self._created_indexes[collection] = set()
+
+            # Build index specification
+            if isinstance(field_or_fields, str):
+                # Single field index
+                index_spec = [(field_or_fields, 1)]
+                index_name = f"{field_or_fields}_1"
+            else:
+                # Compound index
+                index_spec = field_or_fields
+                index_name = "_".join(
+                    f"{field}_{direction}" for field, direction in index_spec
+                )
+
+            # Check if index already exists
+            if index_name in self._created_indexes[collection]:
+                return  # Index already created
+
+            # Build index options
+            index_options: Dict[str, Any] = {}
+            if unique:
+                index_options["unique"] = True
+            if "expireAfterSeconds" in kwargs:
+                index_options["expireAfterSeconds"] = kwargs["expireAfterSeconds"]
+            # Add any other MongoDB-specific options
+            for key, value in kwargs.items():
+                if key not in ("expireAfterSeconds",):  # Already handled
+                    index_options[key] = value
+
+            # Create the index
+            await collection_obj.create_index(
+                index_spec, name=index_name, **index_options
+            )
+
+            # Track that we created this index
+            self._created_indexes[collection].add(index_name)
+
+            logger.debug(
+                f"Created index '{index_name}' on collection '{collection}' "
+                f"(unique={unique}, options={index_options})"
+            )
+
+        except PyMongoError as e:
+            raise DatabaseError(f"MongoDB index creation error: {e}") from e
+
     async def close(self) -> None:
         """Close the database connection."""
         if self._client:
             self._client.close()
             self._client = None
             self._db = None
+            self._created_indexes.clear()

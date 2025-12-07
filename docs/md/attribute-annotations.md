@@ -7,6 +7,9 @@ The jvspatial framework provides an elegant annotation system for marking entity
 - **`@attribute(protected=True)`**: Prevents modification after initial assignment during object construction
 - **`@attribute(transient=True)`**: Excludes fields from serialization/export operations
 - **`@attribute(private=True)`**: Marks fields as private/internal use only
+- **`@attribute(indexed=True)`**: Creates a database index on the field for query optimization
+- **`@attribute(index_unique=True)`**: Creates a unique database index on the field
+- **`@compound_index([...])`**: Creates a compound index on multiple fields
 - **Compound decorators**: Combine both annotations for fields that are both immutable and non-persistent
 
 ## Quick Example
@@ -30,6 +33,53 @@ class MyEntity(AttributeMixin, BaseModel):
 ```
 
 ## Core Concepts
+
+### Indexed Attributes
+
+Indexed attributes automatically create database indexes for query optimization. Indexes are created transparently on first use:
+
+```python
+from jvspatial.core.annotations import attribute
+
+class User(Object):
+    # Single-field index
+    user_id: str = attribute(indexed=True, description="User identifier")
+
+    # Unique index
+    email: str = attribute(indexed=True, index_unique=True, description="Email address")
+
+    # Indexed nested field (stored in context)
+    status: str = attribute(indexed=True, default="active")
+```
+
+**Benefits:**
+- **Automatic Creation**: Indexes are created when entities are first saved
+- **Database-Specific**: Each backend implements indexing optimally (MongoDB, SQLite, DynamoDB)
+- **Query Optimization**: Queries on indexed fields automatically use indexes
+- **Transparent**: No code changes needed beyond annotations
+
+**Usage:**
+```python
+# These queries will use indexes automatically
+users = await User.find({"context.user_id": "123"})  # Uses user_id index
+user = await User.find_one({"context.email": "alice@example.com"})  # Uses email index
+```
+
+### Compound Indexes
+
+For multi-field indexes, use the `@compound_index` decorator:
+
+```python
+from jvspatial.core.annotations import attribute, compound_index
+
+@compound_index([("user_id", 1), ("status", 1)])
+class User(Object):
+    user_id: str = attribute(indexed=True)
+    status: str = attribute(indexed=True)
+    email: str = ""
+```
+
+The decorator takes a list of tuples: `(field_name, direction)` where direction is `1` for ascending or `-1` for descending.
 
 ### Protected Attributes
 
@@ -259,6 +309,13 @@ items: list = protected(default_factory=list)
 
 ### Decorators
 
+#### `attribute(protected=True, transient=True, indexed=False, index_unique=False, **kwargs)`
+The main attribute decorator supporting all annotation types:
+- `protected=True`: Field cannot be modified after initialization
+- `transient=True`: Field excluded from exports
+- `indexed=True`: Creates database index on the field
+- `index_unique=True`: Creates unique database index (requires `indexed=True`)
+
 #### `protected(field_def, **kwargs)`
 Marks a field as protected - cannot be modified after initialization.
 
@@ -267,6 +324,18 @@ Marks a field as transient - excluded from exports.
 
 #### `private_attr(default, **kwargs)`
 Convenience for protected + transient fields.
+
+#### `@compound_index(fields: List[Tuple[str, int]])`
+Class decorator for creating compound indexes on multiple fields:
+- `fields`: List of `(field_name, direction)` tuples
+- `direction`: `1` for ascending, `-1` for descending
+
+Example:
+```python
+@compound_index([("user_id", 1), ("status", 1)])
+class User(Object):
+    ...
+```
 
 ### Classes
 
