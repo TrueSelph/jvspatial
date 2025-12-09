@@ -619,6 +619,301 @@ class TestWalkerDecorators:
         assert "test" in walker.hook2_calls
 
 
+class TestNodeHookAutomaticExecution:
+    """Test automatic execution of @on_visit hooks on nodes/edges."""
+
+    @pytest.mark.asyncio
+    async def test_node_hook_automatic_execution(self):
+        """Test that node hooks decorated with @on_visit are automatically executed."""
+
+        class NodeWithHook(WalkerTestNode):
+            execution_order: List[str] = Field(default_factory=list)
+            executed: bool = Field(default=False)
+
+            @on_visit(Walker)
+            async def execute(self, visitor: Walker):
+                """Node hook that should be automatically called."""
+                self.execution_order.append("node_hook")
+                self.executed = True
+
+        class TestWalker(Walker):
+            execution_order: List[str] = Field(default_factory=list)
+
+            @on_visit(NodeWithHook)
+            async def visit_node(self, here: NodeWithHook):
+                """Walker hook that should be called first."""
+                self.execution_order.append("walker_hook")
+                # Share execution_order list with node
+                here.execution_order = self.execution_order
+
+        walker = TestWalker()
+        node = NodeWithHook(name="test")
+
+        await walker.spawn(node)
+
+        # Both hooks should execute
+        assert "walker_hook" in walker.execution_order
+        assert "node_hook" in walker.execution_order
+        assert node.executed is True
+
+        # Walker hook should execute before node hook
+        assert walker.execution_order.index(
+            "walker_hook"
+        ) < walker.execution_order.index("node_hook")
+
+    @pytest.mark.asyncio
+    async def test_node_hook_receives_walker_parameter(self):
+        """Test that node hooks receive the walker as a parameter."""
+
+        class NodeWithHook(WalkerTestNode):
+            received_walker: Optional[Walker] = Field(default=None)
+
+            @on_visit(Walker)
+            async def execute(self, visitor: Walker):
+                """Node hook that captures the walker."""
+                self.received_walker = visitor
+
+        class TestWalker(Walker):
+            pass
+
+        walker = TestWalker()
+        node = NodeWithHook(name="test")
+
+        await walker.spawn(node)
+
+        # Node hook should receive the walker
+        assert node.received_walker is not None
+        assert node.received_walker is walker
+
+    @pytest.mark.asyncio
+    async def test_node_hook_specific_walker_type(self):
+        """Test that node hooks can target specific walker types."""
+
+        class SpecificWalker(Walker):
+            pass
+
+        class GenericWalker(Walker):
+            pass
+
+        class NodeWithSpecificHook(WalkerTestNode):
+            specific_called: bool = Field(default=False)
+            generic_called: bool = Field(default=False)
+
+            @on_visit(SpecificWalker)
+            async def execute_for_specific(self, visitor: Walker):
+                """Hook that should only be called by SpecificWalker."""
+                self.specific_called = True
+
+            @on_visit(Walker)
+            async def execute_for_any(self, visitor: Walker):
+                """Hook that should be called by any walker."""
+                self.generic_called = True
+
+        specific_walker = SpecificWalker()
+        generic_walker = GenericWalker()
+
+        node1 = NodeWithSpecificHook(name="test1")
+        node2 = NodeWithSpecificHook(name="test2")
+
+        await specific_walker.spawn(node1)
+        await generic_walker.spawn(node2)
+
+        # Specific walker should trigger both hooks
+        assert node1.specific_called is True
+        assert node1.generic_called is True
+
+        # Generic walker should only trigger the generic hook
+        assert node2.specific_called is False
+        assert node2.generic_called is True
+
+    @pytest.mark.asyncio
+    async def test_node_hook_base_class_matching(self):
+        """Test that node hooks match base walker classes."""
+
+        class BaseWalker(Walker):
+            pass
+
+        class DerivedWalker(BaseWalker):
+            pass
+
+        class NodeWithBaseHook(WalkerTestNode):
+            base_called: bool = Field(default=False)
+
+            @on_visit(BaseWalker)
+            async def execute(self, visitor: Walker):
+                """Hook targeting base class should match derived classes."""
+                self.base_called = True
+
+        walker = DerivedWalker()
+        node = NodeWithBaseHook(name="test")
+
+        await walker.spawn(node)
+
+        # Base class hook should be called for derived walker
+        assert node.base_called is True
+
+    @pytest.mark.asyncio
+    async def test_edge_hook_automatic_execution(self):
+        """Test that edge hooks decorated with @on_visit are automatically executed."""
+
+        class EdgeWithHook(WalkerTestEdge):
+            execution_order: List[str] = Field(default_factory=list)
+            executed: bool = Field(default=False)
+
+            @on_visit(Walker)
+            async def execute(self, visitor: Walker):
+                """Edge hook that should be automatically called."""
+                self.execution_order.append("edge_hook")
+                self.executed = True
+
+        class TestWalker(Walker):
+            execution_order: List[str] = Field(default_factory=list)
+
+            @on_visit(EdgeWithHook)
+            async def visit_edge(self, here: EdgeWithHook):
+                """Walker hook that should be called first."""
+                self.execution_order.append("walker_hook")
+                # Share execution_order list with edge
+                here.execution_order = self.execution_order
+
+        walker = TestWalker()
+        edge = EdgeWithHook()
+
+        await walker.spawn(edge)
+
+        # Both hooks should execute
+        assert "walker_hook" in walker.execution_order
+        assert "edge_hook" in walker.execution_order
+        assert edge.executed is True
+
+    @pytest.mark.asyncio
+    async def test_multiple_node_hooks_same_type(self):
+        """Test multiple node hooks for the same walker type."""
+
+        class NodeWithMultipleHooks(WalkerTestNode):
+            hook1_called: bool = Field(default=False)
+            hook2_called: bool = Field(default=False)
+
+            @on_visit(Walker)
+            async def hook1(self, visitor: Walker):
+                """First node hook."""
+                self.hook1_called = True
+
+            @on_visit(Walker)
+            async def hook2(self, visitor: Walker):
+                """Second node hook."""
+                self.hook2_called = True
+
+        class TestWalker(Walker):
+            pass
+
+        walker = TestWalker()
+        node = NodeWithMultipleHooks(name="test")
+
+        await walker.spawn(node)
+
+        # Both hooks should execute
+        assert node.hook1_called is True
+        assert node.hook2_called is True
+
+    @pytest.mark.asyncio
+    async def test_node_hook_with_walker_hook_interaction(self):
+        """Test interaction between walker hooks and node hooks."""
+
+        class NodeWithHook(WalkerTestNode):
+            node_hook_called: bool = Field(default=False)
+            walker_hook_called: bool = Field(default=False)
+
+            @on_visit(Walker)
+            async def execute(self, visitor: Walker):
+                """Node hook."""
+                self.node_hook_called = True
+                # Verify walker hook was called first
+                assert self.walker_hook_called is True
+
+        class TestWalker(Walker):
+            @on_visit(NodeWithHook)
+            async def visit_node(self, here: NodeWithHook):
+                """Walker hook."""
+                here.walker_hook_called = True
+                # Verify node hook hasn't been called yet
+                assert here.node_hook_called is False
+
+        walker = TestWalker()
+        node = NodeWithHook(name="test")
+
+        await walker.spawn(node)
+
+        # Both hooks should execute in correct order
+        assert node.walker_hook_called is True
+        assert node.node_hook_called is True
+
+    @pytest.mark.asyncio
+    async def test_node_hook_error_handling(self):
+        """Test error handling in node hooks."""
+
+        class NodeWithErrorHook(WalkerTestNode):
+            @on_visit(Walker)
+            async def execute(self, visitor: Walker):
+                """Node hook that raises an error."""
+                raise ValueError("Node hook error")
+
+        class TestWalker(Walker):
+            walker_hook_executed: bool = Field(default=False)
+
+            @on_visit(NodeWithErrorHook)
+            async def visit_node(self, here: NodeWithErrorHook):
+                """Walker hook that should still execute."""
+                self.walker_hook_executed = True
+
+        walker = TestWalker()
+        node = NodeWithErrorHook(name="test")
+
+        await walker.spawn(node)
+
+        # Walker hook should execute
+        assert walker.walker_hook_executed is True
+
+        # Error should be logged in report
+        report = await walker.get_report()
+        assert any(
+            "hook_error" in str(item) for item in report if isinstance(item, dict)
+        )
+
+    @pytest.mark.asyncio
+    async def test_node_hook_skip_behavior(self):
+        """Test that node hooks respect skip() behavior."""
+
+        class NodeWithHook(WalkerTestNode):
+            node_hook_called: bool = Field(default=False)
+
+            @on_visit(Walker)
+            async def execute(self, visitor: Walker):
+                """Node hook."""
+                self.node_hook_called = True
+
+        class TestWalker(Walker):
+            @on_visit(NodeWithHook)
+            async def visit_node(self, here: NodeWithHook):
+                """Walker hook that skips."""
+                if here.name == "skip_me":
+                    await self.skip()
+
+        walker = TestWalker()
+        node1 = NodeWithHook(name="normal")
+        node2 = NodeWithHook(name="skip_me")
+
+        await walker.spawn(node1)
+        await walker.spawn(node2)
+
+        # Normal node should have hook called
+        assert node1.node_hook_called is True
+
+        # Skipped node should not have hook called (skip happens in walker hook before node hook)
+        # Note: skip() prevents further processing, so node hook won't execute
+        assert node2.node_hook_called is False
+
+
 class TestWalkerErrorHandling:
     """Test Walker error handling and edge cases."""
 
