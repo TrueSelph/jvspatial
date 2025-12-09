@@ -167,8 +167,24 @@ class ParameterModelFactory:
             # Check if parameter has a default value
             has_default = param.default != inspect.Parameter.empty
 
-            # Get default value (only if parameter has one)
-            if has_default:
+            # Check if default is a FieldInfo (from EndpointField)
+            field_info: Optional[FieldInfo] = None
+            endpoint_config: Dict[str, Any] = {}
+            if has_default and isinstance(param.default, FieldInfo):
+                # Extract metadata from FieldInfo
+                field_info = param.default
+                endpoint_config = extract_field_metadata(field_info)
+                # Determine actual default value from FieldInfo
+                if (
+                    field_info.default is not PydanticUndefined
+                    and field_info.default is not ...
+                ):
+                    default = field_info.default
+                elif field_info.default is ...:
+                    default = ...
+                else:
+                    default = None
+            elif has_default:
                 default = param.default
                 # If type is Optional or Union with None, ensure param_type reflects that
                 if default is None and param_type != Any:
@@ -183,38 +199,70 @@ class ParameterModelFactory:
                 default = ...
 
             # Create field configuration
-            field_config: Dict[str, Any] = {
-                "description": f"{name.replace('_', ' ').title()} parameter",
-                "title": name.replace("_", " ").title(),
-            }
+            if field_info:
+                # Use configuration from FieldInfo
+                field_config = build_field_config(field_info, endpoint_config)
+            else:
+                # Create default field configuration
+                field_config = {
+                    "description": f"{name.replace('_', ' ').title()} parameter",
+                    "title": name.replace("_", " ").title(),
+                }
 
-            # Add examples based on type (handle both built-in types and typing generics)
-            import typing
+            # Add examples based on type only if not already provided from FieldInfo
+            if "examples" not in field_config or not field_config.get("examples"):
+                import typing
 
-            type_origin = None
-            if hasattr(typing, "get_origin"):
-                type_origin = typing.get_origin(param_type)
+                type_origin = None
+                if hasattr(typing, "get_origin"):
+                    type_origin = typing.get_origin(param_type)
 
-            if param_type == str or type_origin == str:
-                field_config["examples"] = ["example"]
-            elif param_type == int or type_origin == int:
-                field_config["examples"] = [1]
-            elif param_type == float or type_origin == float:
-                field_config["examples"] = [1.0]
-            elif param_type == bool or type_origin == bool:
-                field_config["examples"] = [True]
-            elif (
-                param_type == list or type_origin == list or type_origin == typing.List
-            ):
-                field_config["examples"] = [[]]
-            elif param_type == dict or type_origin == dict:
-                # For 'properties' parameter, provide a more useful example with action properties
-                if name == "properties":
-                    field_config["examples"] = [
-                        {"var_a": 60, "var_b": 10, "timeout": 45}
-                    ]
+                if param_type == str or type_origin == str:
+                    field_config["examples"] = ["example"]
+                elif param_type == int or type_origin == int:
+                    field_config["examples"] = [1]
+                elif param_type == float or type_origin == float:
+                    field_config["examples"] = [1.0]
+                elif param_type == bool or type_origin == bool:
+                    field_config["examples"] = [True]
+                elif (
+                    param_type == list
+                    or type_origin == list
+                    or type_origin == typing.List
+                ):
+                    field_config["examples"] = [[]]
+                elif param_type == dict or type_origin == dict:
+                    # For 'properties' parameter, provide a more useful example with action properties
+                    if name == "properties":
+                        field_config["examples"] = [
+                            {"var_a": 60, "var_b": 10, "timeout": 45}
+                        ]
+                    else:
+                        field_config["examples"] = [{}]
+
+            # Handle endpoint_required override from endpoint_config
+            if endpoint_config.get("endpoint_required") is not None:
+                if endpoint_config["endpoint_required"]:
+                    # Make required - use Ellipsis
+                    if not cls._is_optional(param_type):
+                        default = ...
+                    else:
+                        # Remove Optional wrapper
+                        origin = getattr(param_type, "__origin__", None)
+                        if origin is Union:
+                            args = getattr(param_type, "__args__", ())
+                            # Get non-None type
+                            param_type = next(
+                                (arg for arg in args if arg is not type(None)),
+                                param_type,
+                            )
+                        default = ...
                 else:
-                    field_config["examples"] = [{}]
+                    # Make optional
+                    if not cls._is_optional(param_type):
+                        param_type = Optional[param_type]
+                    if default is ... or default is PydanticUndefined:
+                        default = None
 
             # For required fields, we need to handle them specially to avoid PydanticUndefined
             # We'll use a sentinel value and then validate that it's not None
