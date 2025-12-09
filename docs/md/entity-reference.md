@@ -255,20 +255,34 @@ async def paginate_by_field(
 ### Decorators
 
 #### `@on_visit(target_type=None)`
-Register methods to execute when visiting nodes.
+Register methods to execute when visiting nodes. Can be used on both Walker classes and Node/Edge classes.
+
+**Execution Order**: When a walker visits a node/edge:
+1. Walker hooks (methods on the walker class) execute first
+2. Node/Edge hooks (methods on the node/edge class) execute automatically after
 
 ```python
-# Walker visiting specific node types
-@on_visit(City)
-async def visit_city(self, here: City): ...
+# Walker visiting specific node types (walker hook)
+class MyWalker(Walker):
+    @on_visit(City)
+    async def visit_city(self, here: City): ...
 
-# Walker visiting any node
-@on_visit()
-async def visit_any(self, here: Node): ...
+    # Walker visiting any node
+    @on_visit()
+    async def visit_any(self, here: Node): ...
 
-# Node being visited by specific walker
-@on_visit(Tourist)  # On Node class
-async def handle_tourist(self, visitor: Tourist): ...
+# Node being visited by specific walker (node hook - automatically executed)
+class City(Node):
+    @on_visit(Tourist)  # On Node class
+    async def handle_tourist(self, visitor: Tourist):
+        """Automatically called when Tourist walker visits this node."""
+        ...
+
+    # Node hook for any walker
+    @on_visit(Walker)
+    async def execute(self, visitor: Walker):
+        """Automatically called when any walker visits this node."""
+        ...
 ```
 
 #### `@on_exit`

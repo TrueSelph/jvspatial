@@ -32,6 +32,18 @@ class City(Node):
     population: int = Field(default=0)
     visited_count: int = Field(default=0)
 
+    @on_visit(Walker)
+    async def execute(self, visitor: Walker):
+        """Node hook - automatically called when any walker visits this city.
+
+        This method is automatically executed by the walker after walker hooks.
+        No explicit call is needed - the walker handles this automatically.
+        """
+        print(
+            f"   🏙️  City {self.name} executing its own logic (visited by {visitor.__class__.__name__})"
+        )
+        # Node-specific logic can be implemented here
+
 
 class Highway(Edge):
     """Highway edge connecting cities."""
@@ -250,6 +262,10 @@ async def demonstrate_walker_traversal():
     )
     print("   • Walkers traverse nodes along edges")
     print("   • Nodes are designed to be visited by walkers")
+    print("   • Walker hooks (@on_visit on walker class) execute first")
+    print(
+        "   • Node hooks (@on_visit on node class) are automatically executed after walker hooks"
+    )
     print("   • Walkers can carry state and make decisions")
     print("   • Multiple walker types can traverse the same graph")
 

@@ -38,19 +38,40 @@ await walker.walk(start_node)
 ### Filtered Traversal
 
 ```python
-from jvspatial.core import Walker
-from jvspatial.core.entities import on_visit
+from jvspatial.core import Walker, Node, on_visit
+
+class User(Node):
+    name: str = ""
+
+    # Node hook - automatically executed when visited
+    @on_visit(Walker)
+    async def execute(self, visitor: Walker):
+        """Automatically called when any walker visits this node."""
+        print(f"User {self.name} is being processed")
+
+class Product(Node):
+    name: str = ""
+
+    # Node hook for specific walker type
+    @on_visit(UserWalker)
+    async def execute(self, visitor: UserWalker):
+        """Automatically called when UserWalker visits this node."""
+        print(f"Product {self.name} is being processed by UserWalker")
 
 class UserWalker(Walker):
+    # Walker hook - executed first when visiting User nodes
     @on_visit(User)
-    async def handle_user(self, user: User):
-        # Only processes User nodes
-        print(f"Found user: {user.name}")
+    async def handle_user(self, here: User):
+        """Called when visiting a User node."""
+        print(f"Found user: {here.name}")
+        # Node's execute() hook will be automatically called after this
 
+    # Walker hook - executed first when visiting Product nodes
     @on_visit(Product)
-    async def handle_product(self, product: Product):
-        # Only processes Product nodes
-        print(f"Found product: {product.name}")
+    async def handle_product(self, here: Product):
+        """Called when visiting a Product node."""
+        print(f"Found product: {here.name}")
+        # Node's execute() hook will be automatically called after this
 ```
 
 ## Walker Types
