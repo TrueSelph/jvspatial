@@ -270,21 +270,47 @@ class AppBuilder:
             using the built-in graphing operation. The graph includes all nodes and edges
             in the database.
 
+
             **Requires authentication** - This endpoint exposes graph data and requires
             a valid authentication token.
 
-            Args:
-                format: Output format - 'dot' for Graphviz or 'mermaid' for Mermaid diagrams
-                include_attributes: Whether to include node/edge attributes in labels
-                rankdir: Graph direction (TB=top-bottom, LR=left-right, etc.)
-                node_shape: Node shape for DOT format
 
-            Returns:
-                Graph representation string in the requested format
+            **Args:**
 
-            Example:
-                GET /api/graph?format=dot&rankdir=LR
-                GET /api/graph?format=mermaid&include_attributes=false
+            - **format**: Output format - `'dot'` for Graphviz or `'mermaid'` for Mermaid diagrams
+            - **include_attributes**: Whether to include node/edge attributes in labels
+            - **rankdir**: Graph direction:
+
+                - For DOT: `TB` (top-bottom), `LR` (left-right), `BT` (bottom-top), `RL` (right-left)
+                - For Mermaid: `TB`, `TD`, `BT`, `RL`, `LR`
+
+            - **node_shape**: Node shape for DOT format (e.g., `box`, `ellipse`, `circle`, `diamond`)
+
+
+            **Returns:**
+
+            Graph representation string in the requested format
+
+
+            **Examples:**
+
+            Get Graphviz DOT format:
+
+            ```
+            GET /api/graph?format=dot&rankdir=LR
+            ```
+
+            Get Mermaid format without attributes:
+
+            ```
+            GET /api/graph?format=mermaid&include_attributes=false
+            ```
+
+            Get DOT format with custom node shape:
+
+            ```
+            GET /api/graph?format=dot&node_shape=ellipse&rankdir=TB
+            ```
             """
             try:
                 # Use provided graph context or fallback to default
