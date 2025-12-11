@@ -319,6 +319,57 @@ def configure_logging(enable_json: bool = True, enable_colors: bool = True) -> N
     config.configure()
 
 
+# --------------------------------------------------------------------------- #
+# Standard console logging (shared across jvspatial and consumers like jvagent)
+# --------------------------------------------------------------------------- #
+def configure_standard_logging(level: str = "INFO", enable_colors: bool = True) -> None:
+    """Configure a consistent console logger with optional colored level names.
+
+    This sets a root handler with a stable format and optionally colors only the
+    level name (message/body remains plain for readability).
+
+    Args:
+        level: Logging level name (e.g., "INFO", "DEBUG").
+        enable_colors: Whether to colorize the level name.
+    """
+
+    class _LevelColorFormatter(logging.Formatter):
+        _LEVEL_COLORS = {
+            "DEBUG": "\033[36m",  # Cyan
+            "INFO": "\033[32m",  # Green
+            "WARNING": "\033[33m",  # Yellow
+            "ERROR": "\033[31m",  # Red
+            "CRITICAL": "\033[41m\033[97m",  # White on red background
+        }
+        _RESET = "\033[0m"
+
+        def format(self, record: logging.LogRecord) -> str:  # type: ignore[override]
+            color = (
+                self._LEVEL_COLORS.get(record.levelname, "") if enable_colors else ""
+            )
+            original_levelname = record.levelname
+            if color:
+                record.levelname = f"{color}{record.levelname}{self._RESET}"
+            try:
+                return super().format(record)
+            finally:
+                record.levelname = original_levelname
+
+    root = logging.getLogger()
+    root.handlers.clear()
+
+    handler = logging.StreamHandler(stream=sys.stdout)
+    handler.setFormatter(
+        _LevelColorFormatter(
+            fmt="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    )
+
+    root.addHandler(handler)
+    root.setLevel(getattr(logging, level.upper(), logging.INFO))
+
+
 # Global loggers
 performance_logger = PerformanceLogger()
 security_logger = SecurityLogger()
@@ -331,6 +382,7 @@ __all__ = [
     "SecurityLogger",
     "get_logger",
     "configure_logging",
+    "configure_standard_logging",
     "performance_logger",
     "security_logger",
 ]

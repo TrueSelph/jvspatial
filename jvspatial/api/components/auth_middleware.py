@@ -12,6 +12,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from jvspatial.api.constants import APIRoutes
 from jvspatial.config import Config
 
 
@@ -28,8 +29,46 @@ class PathMatcher:
         Args:
             exempt_paths: List of path patterns to exempt from authentication
         """
-        self.exempt_paths = exempt_paths
+        self.exempt_paths = self._expand_api_variants(exempt_paths)
         self._compiled_patterns = self._compile_exempt_patterns()
+
+    def _expand_api_variants(self, exempt_paths: List[str]) -> List[str]:
+        """Add API-prefixed and un-prefixed variants, honoring configurable prefix.
+
+        Handles dynamically set APIRoutes.PREFIX (default "/api") so auth
+        exemptions remain correct even when the API is mounted under a custom
+        prefix or at root.
+        """
+        prefix = APIRoutes.PREFIX or ""
+        # Normalize prefix to start with "/" and have no trailing "/"
+        if prefix and not prefix.startswith("/"):
+            prefix = f"/{prefix}"
+        if prefix.endswith("/") and prefix != "/":
+            prefix = prefix.rstrip("/")
+
+        expanded: List[str] = []
+        for path in exempt_paths:
+            # normalize path to start with "/"
+            normalized = path if path.startswith("/") else f"/{path}"
+            expanded.append(normalized)
+
+            # Add prefixed version when prefix is non-empty and not already present
+            if prefix and prefix != "/" and not normalized.startswith(prefix):
+                expanded.append(f"{prefix}{normalized}")
+
+            # If config already provided prefixed path, add unprefixed twin
+            if prefix and prefix != "/" and normalized.startswith(prefix):
+                without_prefix = normalized[len(prefix) :] or "/"
+                expanded.append(without_prefix)
+
+        # Preserve order but drop duplicates
+        seen = set()
+        deduped: List[str] = []
+        for p in expanded:
+            if p not in seen:
+                deduped.append(p)
+                seen.add(p)
+        return deduped
 
     def _compile_exempt_patterns(self) -> List[Pattern]:
         """Pre-compile patterns for optimal performance.
@@ -91,6 +130,14 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         Returns:
             Response from next handler or authentication error response
         """
+        # Always allow OPTIONS requests (CORS preflight) to pass through
+        # CORS middleware will handle these requests
+        if request.method == "OPTIONS":
+            self._logger.debug(
+                f"Auth middleware: Allowing OPTIONS preflight for {request.url.path}"
+            )
+            return await call_next(request)
+
         # Check if path is exempt from authentication
         if self.path_matcher.is_exempt(request.url.path):
             return await call_next(request)

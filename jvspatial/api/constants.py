@@ -163,18 +163,27 @@ class Defaults:
         "1",
         "yes",
     )
+    _DEFAULT_DEV_CORS_ORIGINS = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ]
+
     CORS_ORIGINS = (
-        os.getenv("JVSPATIAL_CORS_ORIGINS", "*").split(",")
+        os.getenv("JVSPATIAL_CORS_ORIGINS", "").split(",")
         if os.getenv("JVSPATIAL_CORS_ORIGINS")
-        else ["*"]
+        else _DEFAULT_DEV_CORS_ORIGINS
     )
     CORS_METHODS = (
-        os.getenv("JVSPATIAL_CORS_METHODS", "*").split(",")
+        os.getenv("JVSPATIAL_CORS_METHODS", "").split(",")
         if os.getenv("JVSPATIAL_CORS_METHODS")
         else ["*"]
     )
     CORS_HEADERS = (
-        os.getenv("JVSPATIAL_CORS_HEADERS", "*").split(",")
+        os.getenv("JVSPATIAL_CORS_HEADERS", "").split(",")
         if os.getenv("JVSPATIAL_CORS_HEADERS")
         else ["*"]
     )

@@ -33,6 +33,30 @@ from jvspatial.api.services.lifecycle import LifecycleManager
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node, Root, Walker
 from jvspatial.db.factory import create_database
+from jvspatial.logging import configure_standard_logging
+
+
+class _LevelColorFormatter(logging.Formatter):
+    """Colorize only the level name to match jvspatial console format."""
+
+    _LEVEL_COLORS = {
+        "DEBUG": "\033[36m",  # Cyan
+        "INFO": "\033[32m",  # Green
+        "WARNING": "\033[33m",  # Yellow
+        "ERROR": "\033[31m",  # Red
+        "CRITICAL": "\033[41m\033[97m",  # White on red background
+    }
+    _RESET = "\033[0m"
+
+    def format(self, record: logging.LogRecord) -> str:  # type: ignore[override]
+        color = self._LEVEL_COLORS.get(record.levelname, "")
+        original_levelname = record.levelname
+        if color:
+            record.levelname = f"{color}{record.levelname}{self._RESET}"
+        try:
+            return super().format(record)
+        finally:
+            record.levelname = original_levelname
 
 
 class Server:
@@ -1287,11 +1311,8 @@ class Server:
             reload: Enable auto-reload for development
             **uvicorn_kwargs: Additional uvicorn parameters
         """
-        # Set up logging
-        logging.basicConfig(
-            level=getattr(logging, self.config.log_level.upper()),
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        )
+        # Set up standard logging (colorized level names, consistent format)
+        configure_standard_logging(level=self.config.log_level, enable_colors=True)
 
         # Use provided values or fall back to config
         run_host = host or self.config.host
@@ -1307,12 +1328,52 @@ class Server:
         # Get the app
         app = self.get_app()
 
-        # Configure uvicorn parameters
+        # Configure uvicorn parameters with aligned logging format
+        formatter = _LevelColorFormatter(
+            fmt="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+            datefmt="%H:%M:%S",
+        )
+
         uvicorn_config = {
             "host": run_host,
             "port": run_port,
             "reload": run_reload,
             "log_level": self.config.log_level,
+            "log_config": {
+                "version": 1,
+                "disable_existing_loggers": False,
+                "formatters": {
+                    "default": {
+                        "()": _LevelColorFormatter,
+                        "fmt": formatter._fmt,
+                        "datefmt": formatter.datefmt,
+                    }
+                },
+                "handlers": {
+                    "default": {
+                        "class": "logging.StreamHandler",
+                        "formatter": "default",
+                        "stream": "ext://sys.stdout",
+                    }
+                },
+                "loggers": {
+                    "uvicorn": {
+                        "handlers": ["default"],
+                        "level": self.config.log_level.upper(),
+                        "propagate": False,
+                    },
+                    "uvicorn.error": {
+                        "handlers": ["default"],
+                        "level": self.config.log_level.upper(),
+                        "propagate": False,
+                    },
+                    "uvicorn.access": {
+                        "handlers": ["default"],
+                        "level": self.config.log_level.upper(),
+                        "propagate": False,
+                    },
+                },
+            },
             **uvicorn_kwargs,
         }
 
@@ -1337,11 +1398,51 @@ class Server:
 
         app = self.get_app()
 
+        formatter = _LevelColorFormatter(
+            fmt="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+            datefmt="%H:%M:%S",
+        )
+
         config = uvicorn.Config(
             app,
             host=run_host,
             port=run_port,
             log_level=self.config.log_level,
+            log_config={
+                "version": 1,
+                "disable_existing_loggers": False,
+                "formatters": {
+                    "default": {
+                        "()": _LevelColorFormatter,
+                        "fmt": formatter._fmt,
+                        "datefmt": formatter.datefmt,
+                    }
+                },
+                "handlers": {
+                    "default": {
+                        "class": "logging.StreamHandler",
+                        "formatter": "default",
+                        "stream": "ext://sys.stdout",
+                    }
+                },
+                "loggers": {
+                    "uvicorn": {
+                        "handlers": ["default"],
+                        "level": self.config.log_level.upper(),
+                        "propagate": False,
+                    },
+                    "uvicorn.error": {
+                        "handlers": ["default"],
+                        "level": self.config.log_level.upper(),
+                        "propagate": False,
+                    },
+                    "uvicorn.access": {
+                        "handlers": ["default"],
+                        "level": self.config.log_level.upper(),
+                        "propagate": False,
+                    },
+                },
+            },
             **uvicorn_kwargs,
         )
         server = uvicorn.Server(config)
