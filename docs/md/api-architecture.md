@@ -209,12 +209,12 @@ async def cleanup_old_data():
 - [`StorageError`](../../jvspatial/api/exceptions.py:214) - File storage errors
 - [`WebhookError`](../../jvspatial/api/exceptions.py:259) - Webhook processing
 
-**[`error_handlers.py`](../../jvspatial/api/error_handlers.py:1)** - FastAPI exception handlers:
-- [`jvspatial_exception_handler()`](../../jvspatial/api/error_handlers.py:17) - Handles JVSpatialAPIException
-- [`generic_exception_handler()`](../../jvspatial/api/error_handlers.py:56) - Handles unexpected errors
-- [`register_exception_handlers()`](../../jvspatial/api/error_handlers.py:81) - Registers all handlers
+**[`error_handler.py`](../../jvspatial/api/components/error_handler.py:1)** - Centralized error handling:
+- [`APIErrorHandler`](../../jvspatial/api/components/error_handler.py:125) - Unified error handling class
+- [`handle_exception()`](../../jvspatial/api/components/error_handler.py:137) - Centralized exception handler
+- Handles all exception types: `JVSpatialAPIException`, `HTTPException`, `ValidationError`, `httpx` exceptions, and unexpected errors
 
-All exceptions provide consistent JSON responses with error codes, messages, and optional details.
+All exceptions provide consistent JSON responses with error codes, messages, timestamps, paths, and optional details. Error logging is centralized to prevent duplicates, with stack traces for 5xx errors and clean logs for 4xx errors.
 
 ### 8. Constants and Protocols
 

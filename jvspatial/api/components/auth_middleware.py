@@ -162,6 +162,31 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         request.state.user = user
         return await call_next(request)
 
+    def _path_matches(self, pattern: str, path: str) -> bool:
+        """Check if a request path matches a route pattern with path parameters.
+
+        Args:
+            pattern: Route pattern (e.g., "/agents/{agent_id}/interact")
+            path: Actual request path (e.g., "/agents/abc123/interact")
+
+        Returns:
+            True if path matches pattern, False otherwise
+        """
+        import re
+
+        # Convert pattern to regex by replacing {param} with [^/]+
+        # Escape other special regex characters first
+        escaped_pattern = re.escape(pattern)
+        # Replace escaped {param} patterns with regex
+        regex_pattern = re.sub(r"\\\{(\w+)\\\}", r"[^/]+", escaped_pattern)
+        # Also handle unescaped patterns (in case pattern wasn't escaped)
+        regex_pattern = re.sub(r"\{(\w+)\}", r"[^/]+", regex_pattern)
+
+        # Match the entire path
+        regex_pattern = f"^{regex_pattern}$"
+
+        return bool(re.match(regex_pattern, path))
+
     def _endpoint_requires_auth(self, request: Request) -> bool:
         """Check if the current endpoint requires authentication.
 
@@ -182,6 +207,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
             # Check if any endpoints in the registry require auth for this path
             registry = server._endpoint_registry
+            request_path = request.url.path
 
             # Check function endpoints
             for func_info in registry.list_functions():
@@ -193,10 +219,14 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                     # If func_info is not a dict, skip or handle differently
                     continue
 
-                if func_path == request.url.path:
+                # Match exact path or check if request path matches the route pattern
+                if func_path == request_path or self._path_matches(
+                    func_path, request_path
+                ):
                     endpoint_config = getattr(func, "_jvspatial_endpoint_config", None)
-                    if endpoint_config and endpoint_config.get("auth_required"):
-                        return True
+                    if endpoint_config is not None:
+                        # Found the endpoint - return its auth_required setting
+                        return endpoint_config.get("auth_required", False)
 
             # Check walker endpoints
             for walker_info in registry.list_walkers():
@@ -208,34 +238,41 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                     # If walker_info is not a dict, skip or handle differently
                     continue
 
-                if walker_path == request.url.path:
+                # Match exact path or check if request path matches the route pattern
+                if walker_path == request_path or self._path_matches(
+                    walker_path, request_path
+                ):
                     endpoint_config = getattr(
                         walker_class, "_jvspatial_endpoint_config", None
                     )
-                    if endpoint_config and endpoint_config.get("auth_required"):
-                        return True
+                    if endpoint_config is not None:
+                        # Found the endpoint - return its auth_required setting
+                        return endpoint_config.get("auth_required", False)
 
             # Check manually registered endpoints by inspecting the FastAPI app routes
             # This is needed because manually registered endpoints bypass the registry
             try:
                 app = server.get_app()
                 for route in app.routes:
-                    if (
-                        hasattr(route, "path")
-                        and route.path == request.url.path
-                        and hasattr(route, "endpoint")
-                    ):
-                        endpoint_config = getattr(
-                            route.endpoint, "_jvspatial_endpoint_config", None
-                        )
-                        if endpoint_config and endpoint_config.get("auth_required"):
-                            return True
+                    if hasattr(route, "path") and hasattr(route, "endpoint"):
+                        route_path = route.path
+                        # Match exact path or check if request path matches the route pattern
+                        if route_path == request_path or self._path_matches(
+                            route_path, request_path
+                        ):
+                            endpoint_config = getattr(
+                                route.endpoint, "_jvspatial_endpoint_config", None
+                            )
+                            if endpoint_config is not None:
+                                # Found the endpoint - return its auth_required setting
+                                return endpoint_config.get("auth_required", False)
             except Exception as e:
                 self._logger.debug(f"Could not check FastAPI routes: {e}")
 
             # Fallback: Apply auth to all /api/* endpoints except exempt ones
             # This ensures manually registered endpoints are protected
-            if request.url.path.startswith("/api/"):
+            # Only use fallback if we didn't find the endpoint above
+            if request_path.startswith("/api/"):
                 return True
 
             return False

@@ -4,14 +4,209 @@ This module provides centralized error handling with enhanced context and consis
 following the new standard implementation approach.
 """
 
+import contextvars
 import logging
+import traceback
+from contextlib import suppress
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from jvspatial.exceptions import JVSpatialAPIException
+
+# Context variable to track exceptions that have been logged by our handler
+# This prevents duplicate logging even if exceptions propagate through multiple layers
+# Use a factory function to avoid mutable default (B039)
+_logged_exceptions: contextvars.ContextVar[Set[int]] = contextvars.ContextVar(
+    "_logged_exceptions"
+)
+
+# Context variable to track error responses that have been logged by our handler
+# This prevents duplicate access logs for error responses (4xx/5xx)
+# Stores tuples of (request_id, status_code) for logged error responses
+_logged_error_responses: contextvars.ContextVar[Set[tuple]] = contextvars.ContextVar(
+    "_logged_error_responses"
+)
+
+
+def _format_clean_traceback(exc: Exception) -> str:
+    """Format traceback as string, excluding framework frames.
+
+    Extracts the root exception and formats a traceback string that only includes
+    application code frames, filtering out uvicorn/starlette/fastapi framework frames.
+
+    Args:
+        exc: Exception to format
+
+    Returns:
+        Formatted traceback string with only application frames
+    """
+    # Extract root exception
+    root_exc = _extract_root_exception(exc)
+
+    # Format the exception with traceback
+    exc_lines = traceback.format_exception(
+        type(root_exc), root_exc, root_exc.__traceback__
+    )
+
+    # Filter out lines from framework packages
+    framework_paths = [
+        "uvicorn",
+        "starlette",
+        "fastapi",
+        "anyio",
+        "site-packages/starlette",
+        "site-packages/uvicorn",
+        "site-packages/fastapi",
+        "site-packages/anyio",
+    ]
+
+    filtered_lines = [
+        line
+        for line in exc_lines
+        if not any(framework in line for framework in framework_paths)
+    ]
+
+    # If we filtered everything, return at least the exception message
+    if not filtered_lines:
+        return f"{type(root_exc).__name__}: {root_exc}\n"
+
+    return "".join(filtered_lines)
+
+
+def _extract_root_exception(
+    exc: Exception, visited: Optional[Set[int]] = None
+) -> Exception:
+    """Extract root exception from ExceptionGroup or chained exceptions.
+
+    This function handles:
+    - ExceptionGroup (Python 3.11+) - extracts the first nested exception
+    - Exception chaining - follows __cause__ and __context__ to find root cause
+    - Prevents infinite recursion by tracking visited exceptions
+
+    Args:
+        exc: Exception to extract root from
+        visited: Set of exception IDs already visited (for cycle detection)
+
+    Returns:
+        Root cause exception
+    """
+    # Initialize visited set on first call
+    if visited is None:
+        visited = set()
+
+    # Prevent infinite recursion by tracking visited exceptions
+    exc_id = id(exc)
+    if exc_id in visited:
+        # Circular reference detected - return current exception
+        return exc
+    visited.add(exc_id)
+
+    # Handle ExceptionGroup (Python 3.11+)
+    # ExceptionGroup has an 'exceptions' attribute containing nested exceptions
+    if hasattr(exc, "exceptions") and hasattr(exc, "__cause__"):
+        with suppress(AttributeError, IndexError, TypeError):
+            # Get the first nested exception from the group
+            if hasattr(exc, "exceptions") and exc.exceptions:
+                nested = exc.exceptions[0]
+                # Recursively extract root from nested exception
+                return _extract_root_exception(nested, visited)
+
+    # Handle exception chaining - follow __cause__ first (explicit chaining)
+    if hasattr(exc, "__cause__") and exc.__cause__ is not None:
+        cause = exc.__cause__
+        if isinstance(cause, Exception):
+            return _extract_root_exception(cause, visited)
+
+    # Handle exception context (implicit chaining)
+    # Only follow context if it's not the same as cause (avoid loops)
+    if (
+        hasattr(exc, "__context__")
+        and exc.__context__ is not None
+        and exc.__context__ is not exc.__cause__
+    ):
+        context = exc.__context__
+        if isinstance(context, Exception):
+            return _extract_root_exception(context, visited)
+
+    # This is the root exception
+    return exc
+
+
+def _get_request_identifier(request: Request) -> str:
+    """Generate a unique identifier for a request.
+
+    Uses request object id for uniqueness, which is stable for the request lifetime.
+    Falls back to path + method + client if id is not available.
+
+    Args:
+        request: FastAPI request object
+
+    Returns:
+        Unique string identifier for the request
+    """
+    # Use request object id as primary identifier (most reliable)
+    request_id = id(request)
+
+    # Fallback: create identifier from request attributes
+    # This ensures we have a unique identifier even if id() is not stable
+    fallback_id = f"{request.method}:{request.url.path}:{request.client.host if request.client else 'unknown'}"
+
+    # Prefer request.state.request_id if available (set by middleware)
+    if hasattr(request.state, "request_id") and request.state.request_id:
+        return str(request.state.request_id)
+
+    # Use object id as primary, with fallback for safety
+    return f"{request_id}:{hash(fallback_id)}"
+
+
+def _mark_error_logged(request: Request, status_code: int) -> None:
+    """Mark a request as having been logged as an error.
+
+    This allows the access log filter to suppress duplicate access logs
+    for error responses that were already logged by the error handler.
+
+    Args:
+        request: FastAPI request object
+        status_code: HTTP status code of the error response
+    """
+    try:
+        request_id = _get_request_identifier(request)
+        try:
+            logged = _logged_error_responses.get()
+        except LookupError:
+            logged = set()
+
+        # Store tuple of (request_id, status_code) for correlation
+        logged.add((request_id, status_code))
+        _logged_error_responses.set(logged)
+    except Exception:
+        # If marking fails, continue - better to have duplicate logs than no logs
+        pass
+
+
+def _is_error_logged(request: Request, status_code: int) -> bool:
+    """Check if a request with the given status code has been logged as an error.
+
+    Args:
+        request: FastAPI request object
+        status_code: HTTP status code to check
+
+    Returns:
+        True if this error response was already logged, False otherwise
+    """
+    try:
+        request_id = _get_request_identifier(request)
+        try:
+            logged = _logged_error_responses.get()
+        except LookupError:
+            return False
+
+        return (request_id, status_code) in logged
+    except Exception:
+        return False
 
 
 class APIErrorHandler:
@@ -36,32 +231,61 @@ class APIErrorHandler:
         Returns:
             JSONResponse with error details
         """
+        # Get logger - use explicit name to ensure it's not filtered
+        logger = logging.getLogger("jvspatial.api.components.error_handler")
+
+        try:
+            # Extract root exception to handle ExceptionGroup and chaining (for tracking)
+            root_exc = _extract_root_exception(exc)
+            exc_id = id(root_exc)
+
+            # Check if this exception has already been logged
+            try:
+                logged = _logged_exceptions.get()
+            except LookupError:
+                logged = set()
+            already_logged = exc_id in logged
+
+            if not already_logged:
+                # Mark exception as logged
+                logged.add(exc_id)
+                _logged_exceptions.set(logged)
+        except Exception as e:
+            # If exception tracking fails, log it but continue
+            logger.warning(f"Error in exception tracking: {e}", exc_info=True)
+            already_logged = False
+
         if isinstance(exc, JVSpatialAPIException):
             # Log based on status code severity
-            logger = logging.getLogger(__name__)
-            if exc.status_code >= 500:
-                logger.error(
-                    f"API Error [{exc.error_code}]: {exc.message}",
-                    exc_info=True,  # Include stack trace for server errors
-                    extra={
-                        "error_code": exc.error_code,
-                        "status_code": exc.status_code,
-                        "path": request.url.path,
-                        "method": request.method,
-                        "details": exc.details,
-                    },
-                )
-            else:
-                # Client errors (4xx) - log at DEBUG level to keep logs clean
-                logger.debug(
-                    f"API Error [{exc.error_code}]: {exc.message}",
-                    extra={
-                        "error_code": exc.error_code,
-                        "status_code": exc.status_code,
-                        "path": request.url.path,
-                        "method": request.method,
-                    },
-                )
+            # Only log if not already logged
+            if not already_logged:
+                if exc.status_code >= 500:
+                    # Server errors (5xx): ERROR level with full stack trace for debugging
+                    logger.error(
+                        f"API Error [{exc.error_code}]: {exc.message}",
+                        exc_info=True,  # Include full stack trace for debugging
+                        extra={
+                            "error_code": exc.error_code,
+                            "status_code": exc.status_code,
+                            "path": request.url.path,
+                            "method": request.method,
+                            "details": exc.details,
+                        },
+                    )
+                else:
+                    # Client errors (4xx): ERROR level without stack trace
+                    logger.error(
+                        f"API Error [{exc.error_code}]: {exc.message}",
+                        exc_info=False,  # No stack trace for client errors
+                        extra={
+                            "error_code": exc.error_code,
+                            "status_code": exc.status_code,
+                            "path": request.url.path,
+                            "method": request.method,
+                        },
+                    )
+                # Mark this error response as logged to prevent duplicate access logs
+                _mark_error_logged(request, exc.status_code)
 
             response_data = await exc.to_dict()
             response_data["request_id"] = getattr(request.state, "request_id", None)
@@ -73,9 +297,19 @@ class APIErrorHandler:
         from pydantic import ValidationError
 
         if isinstance(exc, ValidationError):
-            logger = logging.getLogger(__name__)
-            # Validation errors are client errors (422) - log at DEBUG level
-            logger.debug(f"Validation error: {exc}")
+            # Validation errors (422): ERROR level without stack trace (client error)
+            # Only log if not already logged
+            if not already_logged:
+                logger.error(
+                    f"Validation error: {exc}",
+                    exc_info=False,  # No stack trace for validation errors (client error)
+                    extra={
+                        "path": request.url.path,
+                        "method": request.method,
+                    },
+                )
+                # Mark this error response as logged to prevent duplicate access logs
+                _mark_error_logged(request, 422)
 
             # Extract detailed validation error information
             error_details = []
@@ -113,7 +347,6 @@ class APIErrorHandler:
             import httpx
 
             if isinstance(exc, httpx.HTTPStatusError):
-                logger = logging.getLogger(__name__)
                 status_code = exc.response.status_code
 
                 # Determine error code from status code
@@ -151,32 +384,36 @@ class APIErrorHandler:
                     )
 
                 # Log based on status code severity
-                # Client errors (4xx) are logged at DEBUG level - they're expected errors
-                # Server errors (5xx) are logged at ERROR level with stack traces
-                if status_code >= 500:
-                    logger.error(
-                        f"External API Error [{status_code}]: {error_message}",
-                        exc_info=True,
-                        extra={
-                            "status_code": status_code,
-                            "error_code": error_code,
-                            "path": request.url.path,
-                            "method": request.method,
-                            "external_url": str(exc.request.url),
-                        },
-                    )
-                else:
-                    # Client errors - log at DEBUG level to keep logs clean
-                    logger.debug(
-                        f"External API Error [{status_code}]: {error_message}",
-                        extra={
-                            "status_code": status_code,
-                            "error_code": error_code,
-                            "path": request.url.path,
-                            "method": request.method,
-                            "external_url": str(exc.request.url),
-                        },
-                    )
+                # Only log if not already logged
+                if not already_logged:
+                    if status_code >= 500:
+                        # Server errors (5xx): ERROR level with stack trace
+                        logger.error(
+                            f"External API Error [{status_code}]: {error_message}",
+                            exc_info=True,  # Include full stack trace for debugging
+                            extra={
+                                "status_code": status_code,
+                                "error_code": error_code,
+                                "path": request.url.path,
+                                "method": request.method,
+                                "external_url": str(exc.request.url),
+                            },
+                        )
+                    else:
+                        # Client errors (4xx): ERROR level without stack trace
+                        logger.error(
+                            f"External API Error [{status_code}]: {error_message}",
+                            exc_info=False,  # No stack trace for client errors
+                            extra={
+                                "status_code": status_code,
+                                "error_code": error_code,
+                                "path": request.url.path,
+                                "method": request.method,
+                                "external_url": str(exc.request.url),
+                            },
+                        )
+                    # Mark this error response as logged to prevent duplicate access logs
+                    _mark_error_logged(request, status_code)
 
                 return JSONResponse(
                     status_code=status_code,
@@ -195,7 +432,6 @@ class APIErrorHandler:
         from fastapi import HTTPException
 
         if isinstance(exc, HTTPException):
-            logger = logging.getLogger(__name__)
             # Determine error code from status code
             error_code_map = {
                 400: "bad_request",
@@ -227,30 +463,34 @@ class APIErrorHandler:
                 error_message = str(error_detail)
 
             # Log based on status code severity
-            # For server errors (5xx), log with full context including stack trace
-            # For client errors (4xx), log at DEBUG level to keep logs clean
-            if exc.status_code >= 500:
-                logger.error(
-                    f"HTTP Error [{exc.status_code}]: {error_message}",
-                    exc_info=True,  # Include stack trace for server errors
-                    extra={
-                        "status_code": exc.status_code,
-                        "error_code": error_code,
-                        "path": request.url.path,
-                        "method": request.method,
-                    },
-                )
-            else:
-                # Client errors (4xx) - log at DEBUG level to keep logs clean
-                logger.debug(
-                    f"HTTP Error [{exc.status_code}]: {error_message}",
-                    extra={
-                        "status_code": exc.status_code,
-                        "error_code": error_code,
-                        "path": request.url.path,
-                        "method": request.method,
-                    },
-                )
+            # Only log if not already logged
+            if not already_logged:
+                if exc.status_code >= 500:
+                    # Server errors (5xx): ERROR level with stack trace
+                    logger.error(
+                        f"HTTP Error [{exc.status_code}]: {error_message}",
+                        exc_info=True,  # Include full stack trace for debugging
+                        extra={
+                            "status_code": exc.status_code,
+                            "error_code": error_code,
+                            "path": request.url.path,
+                            "method": request.method,
+                        },
+                    )
+                else:
+                    # Client errors (4xx): ERROR level without stack trace
+                    logger.error(
+                        f"HTTP Error [{exc.status_code}]: {error_message}",
+                        exc_info=False,  # No stack trace for client errors
+                        extra={
+                            "status_code": exc.status_code,
+                            "error_code": error_code,
+                            "path": request.url.path,
+                            "method": request.method,
+                        },
+                    )
+                # Mark this error response as logged to prevent duplicate access logs
+                _mark_error_logged(request, exc.status_code)
 
             return JSONResponse(
                 status_code=exc.status_code,
@@ -270,16 +510,19 @@ class APIErrorHandler:
             if isinstance(
                 exc, (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout)
             ):
-                logger = logging.getLogger(__name__)
-                logger.error(
-                    f"External API timeout: {exc}",
-                    exc_info=True,
-                    extra={
-                        "error_type": type(exc).__name__,
-                        "path": request.url.path,
-                        "method": request.method,
-                    },
-                )
+                # Only log if not already logged
+                if not already_logged:
+                    logger.error(
+                        f"External API timeout: {exc}",
+                        exc_info=True,  # Include full stack trace for debugging
+                        extra={
+                            "error_type": type(exc).__name__,
+                            "path": request.url.path,
+                            "method": request.method,
+                        },
+                    )
+                    # Mark this error response as logged to prevent duplicate access logs
+                    _mark_error_logged(request, 504)
                 return JSONResponse(
                     status_code=504,
                     content={
@@ -292,16 +535,19 @@ class APIErrorHandler:
                 )
 
             if isinstance(exc, (httpx.ConnectError, httpx.NetworkError)):
-                logger = logging.getLogger(__name__)
-                logger.error(
-                    f"External API connection error: {exc}",
-                    exc_info=True,
-                    extra={
-                        "error_type": type(exc).__name__,
-                        "path": request.url.path,
-                        "method": request.method,
-                    },
-                )
+                # Only log if not already logged
+                if not already_logged:
+                    logger.error(
+                        f"External API connection error: {exc}",
+                        exc_info=True,  # Include full stack trace for debugging
+                        extra={
+                            "error_type": type(exc).__name__,
+                            "path": request.url.path,
+                            "method": request.method,
+                        },
+                    )
+                    # Mark this error response as logged to prevent duplicate access logs
+                    _mark_error_logged(request, 502)
                 return JSONResponse(
                     status_code=502,
                     content={
@@ -317,26 +563,52 @@ class APIErrorHandler:
 
         # Handle unexpected errors (not HTTPException, not ValidationError, not JVSpatialAPIException, not httpx)
         # These are truly unexpected and should be logged with full context
-        logger = logging.getLogger(__name__)
-        logger.error(
-            f"Unexpected error: {type(exc).__name__}: {exc}",
-            exc_info=True,  # Always include stack trace for unexpected errors
-            extra={
-                "error_type": type(exc).__name__,
-                "path": request.url.path,
-                "method": request.method,
-            },
-        )
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error_code": "internal_error",
-                "message": "An unexpected error occurred. Please contact support if this persists.",
-                "timestamp": datetime.utcnow().isoformat(),
-                "path": request.url.path,
-                "request_id": getattr(request.state, "request_id", None),
-            },
-        )
+        # Only log if not already logged
+        if not already_logged:
+            # Extract root exception and format clean traceback (excluding uvicorn/starlette frames)
+            root_exc = _extract_root_exception(exc)
+            clean_traceback = _format_clean_traceback(root_exc)
+
+            # Log with the clean traceback included in the message
+            # Use exc_info=False to avoid double-formatting, include traceback in message
+            logger.error(
+                f"Unexpected error: {type(root_exc).__name__}: {root_exc}\n{clean_traceback}",
+                exc_info=False,  # Don't use exc_info since we're formatting traceback manually
+                extra={
+                    "error_type": type(root_exc).__name__,
+                    "path": request.url.path,
+                    "method": request.method,
+                },
+            )
+            # Mark this error response as logged to prevent duplicate access logs
+            _mark_error_logged(request, 500)
+
+        # Always return proper error response structure
+        try:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error_code": "internal_error",
+                    "message": f"An unexpected error occurred: {str(exc)}",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "path": request.url.path,
+                    "request_id": getattr(request.state, "request_id", None),
+                },
+            )
+        except Exception as response_error:
+            # If creating response fails, log and return minimal response
+            logger.error(
+                f"Failed to create error response: {response_error}", exc_info=True
+            )
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error_code": "internal_error",
+                    "message": "An unexpected error occurred. Please contact support if this persists.",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "path": getattr(request, "url", None) and request.url.path or "/",
+                },
+            )
 
     @staticmethod
     def create_error_response(
@@ -375,4 +647,12 @@ class APIErrorHandler:
         return JSONResponse(status_code=status_code, content=response_data)
 
 
-__all__ = ["APIErrorHandler"]
+__all__ = [
+    "APIErrorHandler",
+    "_extract_root_exception",
+    "_logged_exceptions",
+    "_logged_error_responses",
+    "_get_request_identifier",
+    "_mark_error_logged",
+    "_is_error_logged",
+]

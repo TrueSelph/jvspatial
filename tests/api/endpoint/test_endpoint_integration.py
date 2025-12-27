@@ -10,7 +10,7 @@ from jvspatial.api.context import set_current_server
 from jvspatial.api.decorators import EndpointField
 from jvspatial.api.endpoints.response import ResponseHelper as EndpointResponseHelper
 from jvspatial.api.server import Server
-from jvspatial.core.entities import Walker
+from jvspatial.core.entities import Node, Walker
 
 
 class TestWalkerEndpointIntegration:
@@ -29,14 +29,14 @@ class TestWalkerEndpointIntegration:
         # Cleanup - reset current server
         set_current_server(None)
 
-    async def test_walker_endpoint_injection(self):
+    async def test_walker_endpoint_injection(self) -> None:
         """Test that @endpoint injects endpoint helper into walker."""
 
         @endpoint("/test/walker")
         class TestWalker(Walker):
             test_param: str = EndpointField(description="Test parameter")
 
-            async def visit_node(self, node):
+            async def visit_node(self, node: Node) -> Any:
                 # Check that endpoint helper is injected
                 assert hasattr(self, "endpoint")
                 assert isinstance(self.endpoint, EndpointResponseHelper)
@@ -50,7 +50,7 @@ class TestWalkerEndpointIntegration:
         # (it should be injected during endpoint execution)
         assert not hasattr(walker, "endpoint")
 
-    async def test_walker_endpoint_response_methods(self):
+    async def test_walker_endpoint_response_methods(self) -> None:
         """Test that endpoint response methods work correctly."""
 
         @endpoint("/test/responses")
@@ -60,7 +60,7 @@ class TestWalkerEndpointIntegration:
                 examples=["success", "error", "not_found"],
             )
 
-            async def visit_node(self, node):
+            async def visit_node(self, node: Node) -> Any:
                 # Simulate endpoint injection (normally done by router)
                 from jvspatial.api.endpoints.response import create_endpoint_helper
 
@@ -144,7 +144,7 @@ class TestWalkerEndpointIntegration:
         assert response_data["message"] == "Resource created"
         assert response_data["headers"]["Location"] == "/resources/123"
 
-    async def test_walker_endpoint_custom_response(self):
+    async def test_walker_endpoint_custom_response(self) -> None:
         """Test endpoint with custom response formatting."""
 
         @endpoint("/test/custom")
@@ -153,7 +153,7 @@ class TestWalkerEndpointIntegration:
                 description="Custom status code", examples=[202, 206, 418]
             )
 
-            async def visit_node(self, node):
+            async def visit_node(self, node: Node) -> Any:
                 # Simulate endpoint injection
                 from jvspatial.api.endpoints.response import create_endpoint_helper
 
@@ -347,14 +347,14 @@ class TestEndpointInjectionMechanism:
         yield
         set_current_server(None)
 
-    async def test_walker_endpoint_registration(self):
+    async def test_walker_endpoint_registration(self) -> None:
         """Test that endpoints are properly registered with server."""
 
         @endpoint("/test/registration")
         class RegistrationTestWalker(Walker):
             param: str = EndpointField(description="Test parameter")
 
-            async def visit_node(self, node):
+            async def visit_node(self, node: Node) -> Any:
                 return {"test": "registration"}
 
         # Check that walker is registered with server using endpoint registry
@@ -408,7 +408,7 @@ class TestEndpointInjectionMechanism:
         assert isinstance(helper_with_walker, EndpointResponseHelper)
         assert helper_with_walker.walker_instance is mock_walker
 
-    async def test_server_discovery_and_registration(self):
+    async def test_server_discovery_and_registration(self) -> None:
         """Test that server properly discovers and registers endpoints."""
 
         # Test discovery count using endpoint registry
@@ -439,7 +439,7 @@ class TestEndpointInjectionMechanism:
         assert self.test_server._endpoint_registry.has_walker(DiscoveryWalker)
         assert self.test_server._endpoint_registry.has_function(discovery_function)
 
-    async def test_no_server_available(self):
+    async def test_no_server_available(self) -> None:
         """Test endpoint decoration when no current server is available."""
         # Clear the current server to test no-server scenario
         set_current_server(None)
@@ -463,7 +463,7 @@ class TestEndpointInjectionMechanism:
         assert function_config["path"] == "/test/no_server_function"
         assert function_config["is_function"] is True
 
-    async def test_endpoint_configuration_preservation(self):
+    async def test_endpoint_configuration_preservation(self) -> None:
         """Test that endpoint configuration is properly preserved on classes/functions."""
 
         @endpoint("/test/config", methods=["POST", "PUT"], tags=["test"])

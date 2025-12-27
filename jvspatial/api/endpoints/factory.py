@@ -156,6 +156,35 @@ class ParameterModelFactory:
             name: param for name, param in params.items() if name not in path_params
         }
 
+        # Exclude Request type parameters - FastAPI will inject them directly
+        # Check if parameter type is Request (from fastapi or starlette)
+        try:
+            from fastapi import Request as FastAPIRequest
+            from starlette.requests import Request as StarletteRequest
+
+            request_types: tuple[type, ...] = (FastAPIRequest, StarletteRequest)
+        except ImportError:
+            # If imports fail, try to check by name
+            request_types = ()
+
+        def is_request_type(param_type: Any) -> bool:
+            """Check if parameter type is Request."""
+            if param_type in request_types:
+                return True
+            # Also check by name in case of import aliases
+            if hasattr(param_type, "__name__") and param_type.__name__ == "Request":
+                # Check if it's from fastapi or starlette
+                module = getattr(param_type, "__module__", "")
+                if "fastapi" in module or "starlette" in module:
+                    return True
+            return False
+
+        params = {
+            name: param
+            for name, param in params.items()
+            if not is_request_type(type_hints.get(name, Any))
+        }
+
         # If no parameters remain (or none to begin with), return None
         if not params:
             return None
