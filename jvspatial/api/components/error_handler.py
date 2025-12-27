@@ -9,7 +9,7 @@ import logging
 import traceback
 from contextlib import suppress
 from datetime import datetime
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Union
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -209,6 +209,98 @@ def _is_error_logged(request: Request, status_code: int) -> bool:
         return False
 
 
+def _extract_agent_id_from_path(path: str) -> Optional[str]:
+    """Extract agent_id from request path.
+
+    Looks for patterns like /agents/{agent_id}/... in the path.
+
+    Args:
+        path: Request path string
+
+    Returns:
+        Agent ID if found, None otherwise
+    """
+    try:
+        import re
+
+        # Match patterns like /agents/{agent_id}/... or /logs/agents/{agent_id}/...
+        match = re.search(r"/agents/([^/]+)", path)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+    return None
+
+
+async def _log_error_to_service(
+    request: Request,
+    status_code: int,
+    error_code: str,
+    message: str,
+    details: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
+    traceback_str: Optional[str] = None,
+) -> None:
+    """Log error to error logging service asynchronously (fire-and-forget).
+
+    Args:
+        request: FastAPI request object
+        status_code: HTTP status code
+        error_code: Error code
+        message: Error message
+        details: Optional error details
+        traceback_str: Optional traceback string (for 5xx errors)
+    """
+    try:
+        # Import here to avoid circular dependencies
+        from jvagent.logging.service import get_logging_service
+
+        # Extract agent_id from path
+        agent_id = _extract_agent_id_from_path(request.url.path)
+
+        # Extract user_id, session_id, interaction_id from request state if available
+        user_id = getattr(request.state, "user_id", None) or ""
+        session_id = getattr(request.state, "session_id", None) or ""
+        interaction_id = getattr(request.state, "interaction_id", None) or ""
+
+        # Build streamlined error data payload
+        # Only include error-specific details, not fields already in context
+        error_data: Dict[str, Any] = {
+            "message": message,
+        }
+
+        if details:
+            error_data["details"] = details
+
+        # Include traceback for 5xx errors only
+        if traceback_str and status_code >= 500:
+            error_data["traceback"] = traceback_str
+
+        # Log error asynchronously (fire-and-forget)
+        logging_service = get_logging_service()
+        # Use asyncio.create_task to run in background without blocking
+        import asyncio
+
+        asyncio.create_task(
+            logging_service.log_error(
+                error_data=error_data,
+                agent_id=agent_id,
+                status_code=status_code,
+                error_code=error_code,
+                path=request.url.path,
+                method=request.method,
+                user_id=user_id,
+                session_id=session_id,
+                interaction_id=interaction_id,
+            )
+        )
+    except Exception as e:
+        # Don't let error logging failures affect the error response
+        logger = logging.getLogger("jvspatial.api.components.error_handler")
+        logger.warning(
+            f"Failed to log error to error logging service: {e}", exc_info=True
+        )
+
+
 class APIErrorHandler:
     """Unified error handling system with enhanced context.
 
@@ -287,8 +379,20 @@ class APIErrorHandler:
                 # Mark this error response as logged to prevent duplicate access logs
                 _mark_error_logged(request, exc.status_code)
 
+                # Log to error logging service
+                traceback_str = None
+                if exc.status_code >= 500:
+                    traceback_str = _format_clean_traceback(exc)
+                await _log_error_to_service(
+                    request=request,
+                    status_code=exc.status_code,
+                    error_code=exc.error_code,
+                    message=exc.message,
+                    details=exc.details if exc.details else None,
+                    traceback_str=traceback_str,
+                )
+
             response_data = await exc.to_dict()
-            response_data["request_id"] = getattr(request.state, "request_id", None)
             response_data["timestamp"] = datetime.utcnow().isoformat()
             response_data["path"] = request.url.path
             return JSONResponse(status_code=exc.status_code, content=response_data)
@@ -330,6 +434,16 @@ class APIErrorHandler:
             elif str(exc):
                 error_message = f"Validation failed: {str(exc)}"
 
+            # Log to error logging service with detailed message
+            await _log_error_to_service(
+                request=request,
+                status_code=422,
+                error_code="validation_error",
+                message=error_message,
+                details=error_details if error_details else None,
+                traceback_str=None,
+            )
+
             return JSONResponse(
                 status_code=422,
                 content={
@@ -338,7 +452,6 @@ class APIErrorHandler:
                     "details": error_details if error_details else None,
                     "timestamp": datetime.utcnow().isoformat(),
                     "path": request.url.path,
-                    "request_id": getattr(request.state, "request_id", None),
                 },
             )
 
@@ -415,6 +528,23 @@ class APIErrorHandler:
                     # Mark this error response as logged to prevent duplicate access logs
                     _mark_error_logged(request, status_code)
 
+                    # Log to error logging service
+                    traceback_str = None
+                    if status_code >= 500:
+                        traceback_str = _format_clean_traceback(exc)
+                    await _log_error_to_service(
+                        request=request,
+                        status_code=status_code,
+                        error_code=error_code,
+                        message=error_message,
+                        details=(
+                            {"external_url": str(exc.request.url)}
+                            if hasattr(exc, "request")
+                            else None
+                        ),
+                        traceback_str=traceback_str,
+                    )
+
                 return JSONResponse(
                     status_code=status_code,
                     content={
@@ -422,7 +552,6 @@ class APIErrorHandler:
                         "message": error_message,
                         "timestamp": datetime.utcnow().isoformat(),
                         "path": request.url.path,
-                        "request_id": getattr(request.state, "request_id", None),
                     },
                 )
         except ImportError:
@@ -492,6 +621,19 @@ class APIErrorHandler:
                 # Mark this error response as logged to prevent duplicate access logs
                 _mark_error_logged(request, exc.status_code)
 
+                # Log to error logging service
+                traceback_str = None
+                if exc.status_code >= 500:
+                    traceback_str = _format_clean_traceback(exc)
+                await _log_error_to_service(
+                    request=request,
+                    status_code=exc.status_code,
+                    error_code=error_code,
+                    message=error_message,
+                    details=None,
+                    traceback_str=traceback_str,
+                )
+
             return JSONResponse(
                 status_code=exc.status_code,
                 content={
@@ -499,7 +641,6 @@ class APIErrorHandler:
                     "message": error_message,
                     "timestamp": datetime.utcnow().isoformat(),
                     "path": request.url.path,
-                    "request_id": getattr(request.state, "request_id", None),
                 },
             )
 
@@ -523,6 +664,16 @@ class APIErrorHandler:
                     )
                     # Mark this error response as logged to prevent duplicate access logs
                     _mark_error_logged(request, 504)
+
+                    # Log to error logging service
+                    await _log_error_to_service(
+                        request=request,
+                        status_code=504,
+                        error_code="gateway_timeout",
+                        message="External service request timed out. Please try again.",
+                        details={"error_type": type(exc).__name__},
+                        traceback_str=_format_clean_traceback(exc),
+                    )
                 return JSONResponse(
                     status_code=504,
                     content={
@@ -530,7 +681,6 @@ class APIErrorHandler:
                         "message": "External service request timed out. Please try again.",
                         "timestamp": datetime.utcnow().isoformat(),
                         "path": request.url.path,
-                        "request_id": getattr(request.state, "request_id", None),
                     },
                 )
 
@@ -548,6 +698,16 @@ class APIErrorHandler:
                     )
                     # Mark this error response as logged to prevent duplicate access logs
                     _mark_error_logged(request, 502)
+
+                    # Log to error logging service
+                    await _log_error_to_service(
+                        request=request,
+                        status_code=502,
+                        error_code="bad_gateway",
+                        message="Unable to connect to external service. Please try again.",
+                        details={"error_type": type(exc).__name__},
+                        traceback_str=_format_clean_traceback(exc),
+                    )
                 return JSONResponse(
                     status_code=502,
                     content={
@@ -555,7 +715,6 @@ class APIErrorHandler:
                         "message": "Unable to connect to external service. Please try again.",
                         "timestamp": datetime.utcnow().isoformat(),
                         "path": request.url.path,
-                        "request_id": getattr(request.state, "request_id", None),
                     },
                 )
         except ImportError:
@@ -583,6 +742,18 @@ class APIErrorHandler:
             # Mark this error response as logged to prevent duplicate access logs
             _mark_error_logged(request, 500)
 
+            # Log to error logging service
+            root_exc = _extract_root_exception(exc)
+            clean_traceback = _format_clean_traceback(root_exc)
+            await _log_error_to_service(
+                request=request,
+                status_code=500,
+                error_code="internal_error",
+                message=f"An unexpected error occurred: {str(exc)}",
+                details={"error_type": type(root_exc).__name__},
+                traceback_str=clean_traceback,
+            )
+
         # Always return proper error response structure
         try:
             return JSONResponse(
@@ -592,7 +763,6 @@ class APIErrorHandler:
                     "message": f"An unexpected error occurred: {str(exc)}",
                     "timestamp": datetime.utcnow().isoformat(),
                     "path": request.url.path,
-                    "request_id": getattr(request.state, "request_id", None),
                 },
             )
         except Exception as response_error:
@@ -642,7 +812,6 @@ class APIErrorHandler:
 
         if request:
             response_data["path"] = request.url.path
-            response_data["request_id"] = getattr(request.state, "request_id", None)
 
         return JSONResponse(status_code=status_code, content=response_data)
 
@@ -655,4 +824,6 @@ __all__ = [
     "_get_request_identifier",
     "_mark_error_logged",
     "_is_error_logged",
+    "_extract_agent_id_from_path",
+    "_log_error_to_service",
 ]
