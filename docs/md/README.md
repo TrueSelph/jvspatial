@@ -62,6 +62,7 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 | [MongoDB Query Interface](mongodb-query-interface.md) | Database queries | Intermediate |
 | [Custom Database Guide](custom-database-guide.md) | Implementing custom database backends | Advanced |
 | [Caching](caching.md) | Cache strategies | Intermediate |
+| [Text Normalization](text-normalization.md) | Unicode to ASCII text normalization | All levels |
 
 ### **Advanced Topics**
 
@@ -226,6 +227,7 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 - MongoDB Query Interface
 - Caching
 - Pagination
+- Text Normalization
 
 **Architecture**:
 - Module Responsibility Matrix

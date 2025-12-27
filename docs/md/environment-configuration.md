@@ -63,6 +63,28 @@ jvspatial uses environment variables to configure database connections, file pat
 
 See the [Caching Documentation](caching.md) for detailed information about cache backends and configuration.
 
+### Text Normalization Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `JVSPATIAL_TEXT_NORMALIZATION_ENABLED` | boolean | `true` | Enable automatic Unicode to ASCII text normalization when persisting data to the database. Converts smart quotes, dashes, and other Unicode characters to ASCII equivalents to prevent encoding issues. |
+
+**Text Normalization** automatically converts Unicode characters to ASCII equivalents when saving entities to the database. This prevents encoding issues with characters like smart quotes (`\u2019` → `'`), em dashes (`\u2014` → `-`), and other Unicode punctuation.
+
+**Examples of normalized characters:**
+- Smart quotes: `"Here's"` → `"Here's"`
+- Em/en dashes: `"text—dash"` → `"text-dash"`
+- Ellipsis: `"text…"` → `"text..."`
+- Various Unicode spaces → regular space
+- Diacritics: `"café"` → `"cafe"`
+
+Normalization is applied recursively to all string values in nested dictionaries and lists, while preserving non-string types (numbers, booleans, etc.).
+
+To disable text normalization:
+```bash
+export JVSPATIAL_TEXT_NORMALIZATION_ENABLED=false
+```
+
 ## Configuration Methods
 
 ### 1. Environment Variables

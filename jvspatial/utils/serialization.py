@@ -1,7 +1,8 @@
-"""Serialization utilities for datetime objects.
+"""Serialization utilities for datetime objects and text normalization.
 
 This module provides functions for serializing and deserializing datetime
-objects to/from ISO format strings, with support for nested data structures.
+objects to/from ISO format strings, and normalizing Unicode text to ASCII,
+with support for nested data structures.
 """
 
 from __future__ import annotations
@@ -23,6 +24,32 @@ def serialize_datetime(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {k: serialize_datetime(v) for k, v in obj.items()}
     return obj
+
+
+def serialize_for_persistence(obj: Any, normalize_text: bool = True) -> Any:
+    """Serialize data for database persistence.
+
+    Combines datetime serialization and optional text normalization.
+    This function should be used when preparing data for database storage.
+
+    Args:
+        obj: Data structure to serialize
+        normalize_text: Whether to normalize Unicode text to ASCII (default: True)
+
+    Returns:
+        Serialized data structure with datetimes converted to ISO strings
+        and optionally Unicode text normalized to ASCII
+    """
+    # First serialize datetimes
+    result = serialize_datetime(obj)
+
+    # Then normalize text if requested
+    if normalize_text:
+        from jvspatial.utils.normalization import normalize_data
+
+        result = normalize_data(result)
+
+    return result
 
 
 def deserialize_datetime(obj: Any) -> Any:

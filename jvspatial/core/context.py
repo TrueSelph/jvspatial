@@ -491,6 +491,18 @@ class GraphContext:
             # Ensure entity field is set
             if "entity" not in record and hasattr(entity, "entity"):
                 record["entity"] = entity.entity
+
+        # Apply text normalization if enabled
+        # Note: For nodes/edges/walkers, datetimes are already serialized in export()
+        # normalize_data only processes strings, so it's safe to apply to all records
+        from jvspatial.utils.normalization import (
+            is_text_normalization_enabled,
+            normalize_data,
+        )
+
+        if is_text_normalization_enabled():
+            record = normalize_data(record)
+
         # Use entity's get_collection_name method if available, otherwise use type_code
         if hasattr(entity, "get_collection_name"):
             collection = entity.get_collection_name()

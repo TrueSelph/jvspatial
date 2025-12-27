@@ -31,6 +31,23 @@ _logged_error_responses: contextvars.ContextVar[Set[tuple]] = contextvars.Contex
 )
 
 
+def _add_request_id_to_content(
+    request: Request, content: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Add request_id to response content if available.
+
+    Args:
+        request: FastAPI request object
+        content: Response content dictionary
+
+    Returns:
+        Content dictionary with request_id added if available
+    """
+    if hasattr(request.state, "request_id") and request.state.request_id:
+        content["request_id"] = request.state.request_id
+    return content
+
+
 def _format_clean_traceback(exc: Exception) -> str:
     """Format traceback as string, excluding framework frames.
 
@@ -395,6 +412,7 @@ class APIErrorHandler:
             response_data = await exc.to_dict()
             response_data["timestamp"] = datetime.utcnow().isoformat()
             response_data["path"] = request.url.path
+            response_data = _add_request_id_to_content(request, response_data)
             return JSONResponse(status_code=exc.status_code, content=response_data)
 
         # Handle ValidationError with detailed messages
@@ -444,16 +462,15 @@ class APIErrorHandler:
                 traceback_str=None,
             )
 
-            return JSONResponse(
-                status_code=422,
-                content={
-                    "error_code": "validation_error",
-                    "message": error_message,
-                    "details": error_details if error_details else None,
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "path": request.url.path,
-                },
-            )
+            content = {
+                "error_code": "validation_error",
+                "message": error_message,
+                "details": error_details if error_details else None,
+                "timestamp": datetime.utcnow().isoformat(),
+                "path": request.url.path,
+            }
+            content = _add_request_id_to_content(request, content)
+            return JSONResponse(status_code=422, content=content)
 
         # Handle httpx.HTTPStatusError from external API calls
         try:
@@ -545,15 +562,14 @@ class APIErrorHandler:
                         traceback_str=traceback_str,
                     )
 
-                return JSONResponse(
-                    status_code=status_code,
-                    content={
-                        "error_code": error_code,
-                        "message": error_message,
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "path": request.url.path,
-                    },
-                )
+                content = {
+                    "error_code": error_code,
+                    "message": error_message,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "path": request.url.path,
+                }
+                content = _add_request_id_to_content(request, content)
+                return JSONResponse(status_code=status_code, content=content)
         except ImportError:
             pass  # httpx not installed, continue to next handler
 
@@ -634,15 +650,14 @@ class APIErrorHandler:
                     traceback_str=traceback_str,
                 )
 
-            return JSONResponse(
-                status_code=exc.status_code,
-                content={
-                    "error_code": error_code,
-                    "message": error_message,
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "path": request.url.path,
-                },
-            )
+            content = {
+                "error_code": error_code,
+                "message": error_message,
+                "timestamp": datetime.utcnow().isoformat(),
+                "path": request.url.path,
+            }
+            content = _add_request_id_to_content(request, content)
+            return JSONResponse(status_code=exc.status_code, content=content)
 
         # Handle other httpx exceptions (timeouts, connection errors, etc.)
         try:
@@ -674,15 +689,14 @@ class APIErrorHandler:
                         details={"error_type": type(exc).__name__},
                         traceback_str=_format_clean_traceback(exc),
                     )
-                return JSONResponse(
-                    status_code=504,
-                    content={
-                        "error_code": "gateway_timeout",
-                        "message": "External service request timed out. Please try again.",
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "path": request.url.path,
-                    },
-                )
+                content = {
+                    "error_code": "gateway_timeout",
+                    "message": "External service request timed out. Please try again.",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "path": request.url.path,
+                }
+                content = _add_request_id_to_content(request, content)
+                return JSONResponse(status_code=504, content=content)
 
             if isinstance(exc, (httpx.ConnectError, httpx.NetworkError)):
                 # Only log if not already logged
@@ -708,15 +722,14 @@ class APIErrorHandler:
                         details={"error_type": type(exc).__name__},
                         traceback_str=_format_clean_traceback(exc),
                     )
-                return JSONResponse(
-                    status_code=502,
-                    content={
-                        "error_code": "bad_gateway",
-                        "message": "Unable to connect to external service. Please try again.",
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "path": request.url.path,
-                    },
-                )
+                content = {
+                    "error_code": "bad_gateway",
+                    "message": "Unable to connect to external service. Please try again.",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "path": request.url.path,
+                }
+                content = _add_request_id_to_content(request, content)
+                return JSONResponse(status_code=502, content=content)
         except ImportError:
             pass  # httpx not installed, continue to next handler
 
@@ -756,29 +769,27 @@ class APIErrorHandler:
 
         # Always return proper error response structure
         try:
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "error_code": "internal_error",
-                    "message": f"An unexpected error occurred: {str(exc)}",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "path": request.url.path,
-                },
-            )
+            content = {
+                "error_code": "internal_error",
+                "message": f"An unexpected error occurred: {str(exc)}",
+                "timestamp": datetime.utcnow().isoformat(),
+                "path": request.url.path,
+            }
+            content = _add_request_id_to_content(request, content)
+            return JSONResponse(status_code=500, content=content)
         except Exception as response_error:
             # If creating response fails, log and return minimal response
             logger.error(
                 f"Failed to create error response: {response_error}", exc_info=True
             )
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "error_code": "internal_error",
-                    "message": "An unexpected error occurred. Please contact support if this persists.",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "path": getattr(request, "url", None) and request.url.path or "/",
-                },
-            )
+            content = {
+                "error_code": "internal_error",
+                "message": "An unexpected error occurred. Please contact support if this persists.",
+                "timestamp": datetime.utcnow().isoformat(),
+                "path": getattr(request, "url", None) and request.url.path or "/",
+            }
+            content = _add_request_id_to_content(request, content)
+            return JSONResponse(status_code=500, content=content)
 
     @staticmethod
     def create_error_response(
@@ -812,6 +823,7 @@ class APIErrorHandler:
 
         if request:
             response_data["path"] = request.url.path
+            response_data = _add_request_id_to_content(request, response_data)
 
         return JSONResponse(status_code=status_code, content=response_data)
 
