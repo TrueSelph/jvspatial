@@ -6,7 +6,7 @@ following the new standard implementation.
 
 import logging
 import sys
-from typing import Any
+from typing import Any, List, Optional
 
 try:
     import structlog
@@ -322,7 +322,11 @@ def configure_logging(enable_json: bool = True, enable_colors: bool = True) -> N
 # --------------------------------------------------------------------------- #
 # Standard console logging (shared across jvspatial and consumers like jvagent)
 # --------------------------------------------------------------------------- #
-def configure_standard_logging(level: str = "INFO", enable_colors: bool = True) -> None:
+def configure_standard_logging(
+    level: str = "INFO",
+    enable_colors: bool = True,
+    preserve_handler_class_names: Optional[List[str]] = None,
+) -> None:
     """Configure a consistent console logger with optional colored level names.
 
     This sets a root handler with a stable format and optionally colors only the
@@ -331,6 +335,9 @@ def configure_standard_logging(level: str = "INFO", enable_colors: bool = True) 
     Args:
         level: Logging level name (e.g., "INFO", "DEBUG").
         enable_colors: Whether to colorize the level name.
+        preserve_handler_class_names: Optional list of handler class names to preserve
+            when clearing and reconfiguring logging. This allows consumers to preserve
+            custom handlers (e.g., database logging handlers) across reconfigurations.
     """
 
     class _LevelColorFormatter(logging.Formatter):
@@ -356,7 +363,20 @@ def configure_standard_logging(level: str = "INFO", enable_colors: bool = True) 
                 record.levelname = original_levelname
 
     root = logging.getLogger()
+
+    # Preserve specified handlers before clearing
+    preserved_handlers = []
+    if preserve_handler_class_names:
+        for handler in root.handlers:
+            handler_class_name = type(handler).__name__
+            if handler_class_name in preserve_handler_class_names:
+                preserved_handlers.append(handler)
+
     root.handlers.clear()
+
+    # Re-add preserved handlers
+    for handler in preserved_handlers:
+        root.addHandler(handler)
 
     handler = logging.StreamHandler(stream=sys.stdout)
     handler.setFormatter(
