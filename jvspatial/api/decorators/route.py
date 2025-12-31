@@ -86,24 +86,59 @@ def endpoint(
     """
 
     def decorator(target: Union[Callable, type]) -> Union[Callable, type]:
+        # Determine if this is a function or class
+        is_func = inspect.isfunction(target)
+
+        # Extract auth-related parameters from kwargs for config
+        # (but don't remove from kwargs yet, as they may be needed for registration)
+        route_kwargs_for_config = {
+            k: v
+            for k, v in kwargs.items()
+            if k not in ["path", "methods", "is_function", "kwargs"]
+        }
+        config_auth = route_kwargs_for_config.get(
+            "auth_required", route_kwargs_for_config.get("auth", auth)
+        )
+        config_permissions = route_kwargs_for_config.get(
+            "permissions", permissions or []
+        )
+        config_roles = route_kwargs_for_config.get("roles", roles or [])
+
         # Store endpoint configuration on the target
         # Use setattr for dynamic attribute assignment (mypy compatibility)
-        setattr(  # noqa: B010
-            target,
-            "_jvspatial_endpoint_config",
-            {  # type: ignore[union-attr]  # noqa: B010
-                "path": path,
-                "methods": methods or ["GET"],
-                "auth_required": auth,
-                "permissions": permissions or [],
-                "roles": roles or [],
-                "webhook": webhook,
-                "signature_required": signature_required,
-                "response": response,
-                "is_function": inspect.isfunction(target),
-                **kwargs,
-            },
-        )
+        # Separate kwargs from direct config fields for compatibility with tests
+        config_kwargs = {
+            k: v
+            for k, v in kwargs.items()
+            if k
+            not in [
+                "path",
+                "methods",
+                "auth_required",
+                "auth",
+                "permissions",
+                "roles",
+                "webhook",
+                "signature_required",
+                "response",
+                "is_function",
+            ]
+        }
+        config = {
+            "path": path,
+            "methods": methods or ["GET"],
+            "auth_required": config_auth,
+            "permissions": config_permissions,
+            "roles": config_roles,
+            "webhook": webhook,
+            "signature_required": signature_required,
+            "response": response,
+            "is_function": is_func,
+            "kwargs": config_kwargs,
+            **kwargs,  # Also include at top level for direct access
+        }
+
+        setattr(target, "_jvspatial_endpoint_config", config)  # noqa: B010
 
         # Register with current server if available
         try:
@@ -113,10 +148,38 @@ def endpoint(
 
             if current_server:
                 if inspect.isclass(target):
-                    # Walker class - set authentication attributes
+                    # Walker class - set authentication attributes and register immediately
                     target._auth_required = auth
                     target._required_permissions = permissions or []
                     target._required_roles = roles or []
+
+                    # Extract auth-related parameters from kwargs
+                    route_kwargs_for_reg = {
+                        k: v
+                        for k, v in kwargs.items()
+                        if k not in ["path", "methods", "is_function", "kwargs"]
+                    }
+                    reg_auth = route_kwargs_for_reg.pop("auth_required", None)
+                    if reg_auth is None:
+                        reg_auth = route_kwargs_for_reg.pop("auth", auth)
+                    else:
+                        route_kwargs_for_reg.pop("auth", None)
+                    reg_permissions = route_kwargs_for_reg.pop(
+                        "permissions", permissions or []
+                    )
+                    reg_roles = route_kwargs_for_reg.pop("roles", roles or [])
+
+                    # Register Walker with endpoint registry
+                    current_server._endpoint_registry.register_walker(
+                        target,
+                        path,
+                        methods or ["POST"],
+                        router=current_server.endpoint_router,
+                        auth=reg_auth,
+                        permissions=reg_permissions,
+                        roles=reg_roles,
+                        **route_kwargs_for_reg,
+                    )
 
                     # Register Walker with main endpoint router
                     current_server.endpoint_router.endpoint(path, methods, **kwargs)(
@@ -129,49 +192,78 @@ def endpoint(
                             target, path, methods, **kwargs
                         )
                 else:
-                    # Function - create parameter model and wrap with authentication
+                    # Function endpoint - register immediately if server is available
+                    # This allows tests and dynamic registration to work properly
+                    # Discovery service will skip if already registered
+                    func = target
+
+                    # Create parameter model if function has parameters
                     from jvspatial.api.endpoints.factory import ParameterModelFactory
 
-                    # Create parameter model for function
-                    # Pass the path to detect path parameters that should be excluded
-                    param_model = ParameterModelFactory.create_model(target, path=path)
+                    param_model = ParameterModelFactory.create_model(func, path=path)
 
+                    # Wrap function with parameter handling if needed
                     if param_model is not None:
-                        # Function has parameters - wrap with parameter handling
-                        # Pass methods so GET requests use query params instead of body
                         wrapped_func = _wrap_function_with_params(
-                            target, param_model, methods or ["GET"], path=path
+                            func, param_model, methods or ["GET"], path=path
                         )
                     else:
-                        # Function has no parameters - use as-is
-                        wrapped_func = target
+                        wrapped_func = func
 
-                    if auth:
-                        wrapped_func = _wrap_function_with_auth(
-                            wrapped_func, auth, permissions, roles
-                        )
+                    # Extract auth-related parameters from kwargs
+                    route_kwargs_for_reg = {
+                        k: v
+                        for k, v in kwargs.items()
+                        if k not in ["path", "methods", "is_function", "kwargs"]
+                    }
+                    reg_auth = route_kwargs_for_reg.pop("auth_required", None)
+                    if reg_auth is None:
+                        reg_auth = route_kwargs_for_reg.pop("auth", auth)
+                    else:
+                        route_kwargs_for_reg.pop("auth", None)
+                    reg_permissions = route_kwargs_for_reg.pop(
+                        "permissions", permissions or []
+                    )
+                    reg_roles = route_kwargs_for_reg.pop("roles", roles or [])
+                    reg_response = route_kwargs_for_reg.pop("response", response)
 
-                    # Propagate endpoint config (including response) onto the wrapped function
-                    config = getattr(target, "_jvspatial_endpoint_config", {})
-                    config = dict(config)
-                    config["is_function"] = True
-                    wrapped_func._jvspatial_endpoint_config = config  # type: ignore[attr-defined]  # noqa: B010
+                    # Set auth attributes on the function
+                    if reg_auth:
+                        func._auth_required = True  # type: ignore[union-attr]
+                        wrapped_func._auth_required = True  # type: ignore[attr-defined]
 
-                    # Register function via EndpointRouter to ensure response_model and security are applied
+                    # Register via endpoint router
                     current_server.endpoint_router.add_route(
                         path=path,
                         endpoint=wrapped_func,
                         methods=methods or ["GET"],
-                        source_obj=wrapped_func,
-                        auth=auth,
-                        permissions=permissions or [],
-                        roles=roles or [],
-                        response=response,
-                        **kwargs,
+                        source_obj=func,
+                        auth=reg_auth,
+                        permissions=reg_permissions,
+                        roles=reg_roles,
+                        response=reg_response,
+                        **route_kwargs_for_reg,
                     )
 
-                    # Mark server as having auth endpoints
-                    current_server._has_auth_endpoints = True
+                    # Register with endpoint registry
+                    current_server._endpoint_registry.register_function(
+                        func,
+                        path,
+                        methods=methods or ["GET"],
+                        route_config={
+                            "path": path,
+                            "endpoint": wrapped_func,
+                            "methods": methods or ["GET"],
+                            "auth_required": reg_auth,
+                            "permissions": reg_permissions,
+                            "roles": reg_roles,
+                            **route_kwargs_for_reg,
+                        },
+                        auth_required=reg_auth,
+                        permissions=reg_permissions,
+                        roles=reg_roles,
+                        **route_kwargs_for_reg,
+                    )
         except ImportError:
             # No server context available, configuration will be picked up later
             pass
@@ -217,6 +309,26 @@ def _wrap_function_with_params(
     # Get function signature to check which params are path params
     func_sig = inspect.signature(func)
 
+    # Check if function has Request parameter (needs to be preserved for FastAPI injection)
+    from fastapi import Request as FastAPIRequest
+    from starlette.requests import Request as StarletteRequest
+
+    has_request_param = False
+    request_param_name = None
+    for param_name, param in func_sig.parameters.items():
+        param_type = param.annotation
+        if param_type in (FastAPIRequest, StarletteRequest) or (
+            hasattr(param_type, "__name__")
+            and param_type.__name__ == "Request"
+            and (
+                "fastapi" in str(getattr(param_type, "__module__", ""))
+                or "starlette" in str(getattr(param_type, "__module__", ""))
+            )
+        ):
+            has_request_param = True
+            request_param_name = param_name
+            break
+
     # If function has path parameters and body parameters, we need special handling
     # If only path parameters, FastAPI handles it directly - no wrapper needed
     # If path + body params, we need to handle both
@@ -226,24 +338,86 @@ def _wrap_function_with_params(
     has_body_params = param_model is not None
 
     if has_path_params and has_body_params:
-        # Function has both path and body parameters - create wrapper that accepts both
+        # Function has both path and body parameters - create wrapper with proper signature
+        # Create a proper function signature that FastAPI can introspect
+        # Body is already imported above
+
+        # Build parameters for the new signature
+        new_params = []
+
+        # Add Request parameter first if present (FastAPI will inject it)
+        if has_request_param and request_param_name:
+            orig_param = func_sig.parameters[request_param_name]
+            new_params.append(
+                inspect.Parameter(
+                    request_param_name,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    default=orig_param.default,
+                    annotation=orig_param.annotation,
+                )
+            )
+
+        # Add path parameters (preserve their original annotations)
+        for param_name in func_sig.parameters:
+            if param_name in path_params:
+                orig_param = func_sig.parameters[param_name]
+                new_params.append(
+                    inspect.Parameter(
+                        param_name,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        default=orig_param.default,
+                        annotation=orig_param.annotation,
+                    )
+                )
+
+        # Add body parameter with the param_model type
+        new_params.append(
+            inspect.Parameter(
+                "body",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=Body(),
+                annotation=param_model,
+            )
+        )
+
+        # Create new signature
+        new_sig = inspect.Signature(
+            new_params, return_annotation=func_sig.return_annotation
+        )
+
         async def wrapped_func(*args: Any, **kwargs: Any) -> Any:
             """Wrapped function with parameter validation for both path and body."""
+            # Extract Request parameter if present (FastAPI injects it)
+            request_obj = None
+            if has_request_param and request_param_name:
+                request_obj = kwargs.pop(request_param_name, None)
+                # Also check args in case it was passed positionally
+                if request_obj is None and args:
+                    for arg in args:
+                        if hasattr(arg, "state") and hasattr(arg, "headers"):
+                            request_obj = arg
+                            break
+
             # Separate path params from body params
             body_data = {}
-            if "params" in kwargs and isinstance(kwargs["params"], param_model):
-                # Extract body parameters from the model
-                params_obj = kwargs.pop("params")
-                if hasattr(params_obj, "model_dump"):
-                    body_data = params_obj.model_dump(
-                        exclude_none=False, exclude_unset=False
-                    )
-                else:
-                    body_data = {
-                        k: getattr(params_obj, k)
-                        for k in dir(params_obj)
-                        if not k.startswith("_")
-                    }
+            body_obj = kwargs.pop("body", None)
+
+            if body_obj is not None:
+                if isinstance(body_obj, param_model):
+                    # Extract body parameters from the model
+                    if hasattr(body_obj, "model_dump"):
+                        body_data = body_obj.model_dump(
+                            exclude_none=False, exclude_unset=False
+                        )
+                    else:
+                        body_data = {
+                            k: getattr(body_obj, k)
+                            for k in dir(body_obj)
+                            if not k.startswith("_")
+                        }
+                elif isinstance(body_obj, dict):
+                    # Already a dict (from FastAPI)
+                    body_data = body_obj
 
             # Remove start_node if it exists (it's added by the base model)
             body_data.pop("start_node", None)
@@ -251,10 +425,15 @@ def _wrap_function_with_params(
             # Merge path params (from kwargs) with body params
             combined = {**kwargs, **body_data}
 
+            # Add Request parameter back if it was present
+            if has_request_param and request_param_name and request_obj is not None:
+                combined[request_param_name] = request_obj
+
             # Filter out None values for required non-path fields
             for param_name, param in func_sig.parameters.items():
                 if (
                     param_name not in path_params
+                    and param_name != request_param_name
                     and param_name in combined
                     and combined[param_name] is None
                     and param.default == inspect.Parameter.empty
@@ -270,30 +449,111 @@ def _wrap_function_with_params(
             # Call original function with all parameters
             return await func(**combined)
 
+        # Set the proper signature so FastAPI can introspect it
+        # Type ignore: We're dynamically setting __signature__ on a callable for FastAPI introspection
+        wrapped_func.__signature__ = new_sig  # type: ignore[attr-defined]
+
+        # Set annotations to match the signature
+        wrapped_func.__annotations__ = {
+            param.name: param.annotation for param in new_sig.parameters.values()
+        }
+        wrapped_func.__annotations__["return"] = new_sig.return_annotation
+
+        # Copy function metadata
+        wrapped_func.__name__ = func.__name__
+        wrapped_func.__doc__ = func.__doc__
+        wrapped_func.__module__ = func.__module__
+
+        return wrapped_func
+
     elif has_path_params and not has_body_params:
-        # Only path parameters - FastAPI handles these directly, no wrapper needed
+        # Only path parameters (and possibly Request) - FastAPI handles these directly
+        # No wrapper needed - FastAPI will inject Request automatically
         return func
     else:
         # No path parameters - simple body parameter model
+        # This branch handles: not has_path_params (with or without body params)
         # Note: Body() in default is required by FastAPI for body params
-        async def wrapped_func(params: Any = Body()) -> Any:  # type: ignore[assignment,misc]  # noqa: B008
+        # wrapped_func is defined here and used only within this else block
+
+        # Build parameters for the new signature
+        new_params = []
+
+        # Add Request parameter first if present (FastAPI will inject it)
+        if has_request_param and request_param_name:
+            orig_param = func_sig.parameters[request_param_name]
+            new_params.append(
+                inspect.Parameter(
+                    request_param_name,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    default=orig_param.default,
+                    annotation=orig_param.annotation,
+                )
+            )
+
+        # Add body parameter with the param_model type
+        new_params.append(
+            inspect.Parameter(
+                "params",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                default=Body(),
+                annotation=param_model,
+            )
+        )
+
+        # Create new signature
+        new_sig = inspect.Signature(
+            new_params, return_annotation=func_sig.return_annotation
+        )
+
+        async def wrapped_func(*args: Any, **kwargs: Any) -> Any:  # type: ignore[assignment,misc]  # noqa: B008
             """Wrapped function with parameter validation."""
+            # Extract Request parameter if present (FastAPI injects it)
+            request_obj = None
+            if has_request_param and request_param_name:
+                request_obj = kwargs.pop(request_param_name, None)
+                # Also check args in case it was passed positionally
+                if request_obj is None and args:
+                    for arg in args:
+                        if hasattr(arg, "state") and hasattr(arg, "headers"):
+                            request_obj = arg
+                            break
+
             # Extract parameters from the model
-            if hasattr(params, "model_dump"):
-                data = params.model_dump(exclude_none=False, exclude_unset=False)
-            else:
-                data = {
-                    k: getattr(params, k) for k in dir(params) if not k.startswith("_")
-                }
+            params_obj = kwargs.pop("params", None)
+            if params_obj is None:
+                # Try to get from args
+                for arg in args:
+                    if not (hasattr(arg, "state") and hasattr(arg, "headers")):
+                        params_obj = arg
+                        break
+
+            data = {}
+            if params_obj is not None:
+                if hasattr(params_obj, "model_dump"):
+                    data = params_obj.model_dump(
+                        exclude_none=False, exclude_unset=False
+                    )
+                else:
+                    data = {
+                        k: getattr(params_obj, k)
+                        for k in dir(params_obj)
+                        if not k.startswith("_")
+                    }
 
             # Remove start_node if it exists (it's added by the base model)
             data.pop("start_node", None)
+
+            # Add Request parameter back if it was present
+            if has_request_param and request_param_name and request_obj is not None:
+                data[request_param_name] = request_obj
 
             # Filter out None values for required fields - they should have been validated by Pydantic
             # But ensure we don't pass None for required fields
             for param_name, param in func_sig.parameters.items():
                 if (
-                    param_name in data
+                    param_name != request_param_name
+                    and param_name in data
                     and data[param_name] is None
                     and param.default == inspect.Parameter.empty
                 ):
@@ -309,21 +569,27 @@ def _wrap_function_with_params(
             # Call original function with parameters
             return await func(**data)
 
-    # Copy function metadata
-    wrapped_func.__name__ = func.__name__
-    wrapped_func.__doc__ = func.__doc__
-    wrapped_func.__module__ = func.__module__
+        # Set the proper signature so FastAPI can introspect it
+        wrapped_func.__signature__ = new_sig  # type: ignore[attr-defined]
 
-    # Copy function signature annotations, preserving path parameters
-    # Add params annotation if we have body params (with or without path params)
-    if (has_path_params and has_body_params) or (not has_path_params):
-        # For functions with both path and body params, or only body params
-        # preserve original signature and add body params annotation
-        wrapped_func.__annotations__ = dict(func.__annotations__)
-        wrapped_func.__annotations__["params"] = param_model
-    # else: only path params, already returned func above
+        # Set annotations to match the signature
+        wrapped_func.__annotations__ = {
+            param.name: param.annotation for param in new_sig.parameters.values()
+        }
+        wrapped_func.__annotations__["return"] = new_sig.return_annotation
 
-    return wrapped_func
+        # Copy function metadata
+        wrapped_func.__name__ = func.__name__
+        wrapped_func.__doc__ = func.__doc__
+        wrapped_func.__module__ = func.__module__
+
+        # Set annotations for the case without path params
+        wrapped_func.__annotations__ = {
+            "params": param_model,
+            "return": func_sig.return_annotation,
+        }
+
+        return wrapped_func
 
 
 def _wrap_function_with_auth(

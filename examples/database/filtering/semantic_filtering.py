@@ -143,7 +143,7 @@ async def demonstrate_semantic_filtering():
     )
 
     print(
-        f"Created {len(await City.find({}))} cities and {len(await Highway.find({})) + len(await Railroad.find({}))} connections"
+        f"Created {await City.count()} cities and {await Highway.count() + await Railroad.count()} connections"
     )
 
     # DEMONSTRATE SEMANTIC FILTERING

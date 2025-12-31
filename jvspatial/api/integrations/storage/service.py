@@ -71,7 +71,7 @@ class FileStorageService:
         """
         try:
             # Read file content
-            content = file.read()
+            content = await file.read()
 
             # Determine file path
             file_path = f"{path}/{file.filename}" if path else file.filename

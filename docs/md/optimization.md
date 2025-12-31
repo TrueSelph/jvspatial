@@ -18,6 +18,47 @@ This guide covers performance optimization techniques for jvspatial applications
 
 ### Query Optimization
 
+#### Use `count()` Instead of `len(find())`
+
+For counting records, always use the `count()` method which performs database-level counting without loading records into memory:
+
+```python
+# Bad: Loads all records into memory just to count them
+active_users = await User.find({"context.active": True})
+count = len(active_users)  # Inefficient - loads all data
+
+# Good: Database-level counting
+count = await User.count({"context.active": True})  # Efficient - no data loading
+```
+
+#### Use `find_one()` Instead of `find(...)[0]`
+
+When you only need a single record, use `find_one()` which is optimized for single-record retrieval:
+
+```python
+# Bad: Fetches all matching records, then takes first
+users = await User.find({"context.email": "alice@example.com"})
+user = users[0] if users else None  # Inefficient
+
+# Good: Database-optimized single record retrieval
+user = await User.find_one({"context.email": "alice@example.com"})  # Efficient
+```
+
+#### Use `node()` Instead of `nodes()[0]`
+
+For graph traversal when you expect a single connected node, use `node()` which directly returns a single node:
+
+```python
+# Bad: Fetches all connected nodes, then takes first
+connected_nodes = await current_node.nodes(node=User, direction="out")
+user = connected_nodes[0] if connected_nodes else None  # Inefficient
+
+# Good: Direct single-node retrieval
+user = await current_node.node(node=User, direction="out")  # Efficient
+```
+
+#### Bulk Query Optimization
+
 ```python
 # Bad: Multiple separate queries
 for user_id in user_ids:
@@ -130,18 +171,67 @@ class MemoryEfficientWalker(Walker):
 
 ## Advanced Optimizations
 
-### Custom Database Indexes
+### Declarative Database Indexing
+
+jvspatial supports declarative indexing using field annotations. Indexes are automatically created on first use:
+
+#### Single-Field Indexes
 
 ```python
-from jvspatial.db import create_index
+from jvspatial.core.annotations import attribute
+from jvspatial.core.entities import Object
 
-# Create compound index
-await create_index(
-    User,
-    keys=[("email", 1), ("active", 1)],
-    unique=True
-)
+class User(Object):
+    # Indexed field - automatically creates database index
+    user_id: str = attribute(indexed=True, description="User identifier")
+
+    # Unique indexed field
+    email: str = attribute(indexed=True, index_unique=True, description="Email address")
+
+    # Indexed nested field (stored in context)
+    status: str = attribute(indexed=True, default="active")
 ```
+
+#### Compound Indexes
+
+```python
+from jvspatial.core.annotations import attribute, compound_index
+
+@compound_index([("user_id", 1), ("status", 1)])
+class User(Object):
+    user_id: str = attribute(indexed=True)
+    status: str = attribute(indexed=True)
+    email: str = ""
+```
+
+#### How It Works
+
+1. **Automatic Creation**: Indexes are created automatically when entities are first saved
+2. **Database-Specific**: Each database backend implements indexing optimally:
+   - **MongoDB**: Uses native `create_index()` with proper options
+   - **SQLite**: Creates JSON path indexes using `json_extract()`
+   - **DynamoDB**: Creates Global Secondary Indexes (GSI) transparently
+   - **JSON**: No-op (indexing not applicable for file-based storage)
+3. **Query Optimization**: Queries on indexed fields automatically use indexes for better performance
+
+#### Index Usage Examples
+
+```python
+# These queries will use indexes automatically
+active_users = await User.find({"context.user_id": "123"})  # Uses user_id index
+user = await User.find_one({"context.email": "alice@example.com"})  # Uses email index
+filtered = await User.find({"context.user_id": "123", "context.status": "active"})  # Uses compound index
+```
+
+### Transparent DynamoDB Indexing
+
+DynamoDB implementation automatically:
+- Extracts indexed fields from JSON data
+- Stores them as top-level attributes for GSI support
+- Creates Global Secondary Indexes (GSI) when `create_index()` is called
+- Optimizes queries to use GSIs instead of table scans
+
+This is completely transparent - no code changes needed, just use `indexed=True` annotations.
 
 ### Selective Field Loading
 
@@ -151,6 +241,9 @@ users = await User.find(
     {"active": True},
     projection=["id", "name", "email"]
 )
+
+# Efficient counting without loading records
+active_count = await User.count({"active": True})  # Much faster than len(await User.find(...))
 ```
 
 ### Connection Pooling
@@ -168,16 +261,19 @@ configure_pool(
 
 ## Best Practices
 
-1. Use appropriate batch sizes for your data
-2. Implement caching for frequently accessed data
-3. Choose the right database implementation
-4. Monitor and optimize database queries
-5. Use parallel processing when appropriate
-6. Manage memory usage in large operations
-7. Create proper database indexes
-8. Use connection pooling
-9. Profile your application regularly
-10. Implement monitoring and alerting
+1. **Use `count()` instead of `len(find())`** - Database-level counting is much more efficient
+2. **Use `find_one()` instead of `find(...)[0]`** - Optimized for single-record retrieval
+3. **Use `node()` instead of `nodes()[0]`** - Direct single-node graph traversal
+4. Use appropriate batch sizes for your data
+5. Implement caching for frequently accessed data
+6. Choose the right database implementation
+7. **Index frequently queried fields** - Use `indexed=True` on fields used in queries
+8. Monitor and optimize database queries
+9. Use parallel processing when appropriate
+10. Manage memory usage in large operations
+11. Use connection pooling
+12. Profile your application regularly
+13. Implement monitoring and alerting
 
 ## See Also
 

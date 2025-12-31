@@ -25,7 +25,7 @@ class EndpointParameterModel(BaseModel):
     start_node: Optional[str] = Field(
         default=None,
         description="Starting node ID for graph traversal",
-        examples=["n:Root:root"],
+        examples=["n.Root.root"],
     )
 
 
@@ -156,6 +156,35 @@ class ParameterModelFactory:
             name: param for name, param in params.items() if name not in path_params
         }
 
+        # Exclude Request type parameters - FastAPI will inject them directly
+        # Check if parameter type is Request (from fastapi or starlette)
+        try:
+            from fastapi import Request as FastAPIRequest
+            from starlette.requests import Request as StarletteRequest
+
+            request_types: tuple[type, ...] = (FastAPIRequest, StarletteRequest)
+        except ImportError:
+            # If imports fail, try to check by name
+            request_types = ()
+
+        def is_request_type(param_type: Any) -> bool:
+            """Check if parameter type is Request."""
+            if param_type in request_types:
+                return True
+            # Also check by name in case of import aliases
+            if hasattr(param_type, "__name__") and param_type.__name__ == "Request":
+                # Check if it's from fastapi or starlette
+                module = getattr(param_type, "__module__", "")
+                if "fastapi" in module or "starlette" in module:
+                    return True
+            return False
+
+        params = {
+            name: param
+            for name, param in params.items()
+            if not is_request_type(type_hints.get(name, Any))
+        }
+
         # If no parameters remain (or none to begin with), return None
         if not params:
             return None
@@ -167,8 +196,24 @@ class ParameterModelFactory:
             # Check if parameter has a default value
             has_default = param.default != inspect.Parameter.empty
 
-            # Get default value (only if parameter has one)
-            if has_default:
+            # Check if default is a FieldInfo (from EndpointField)
+            field_info: Optional[FieldInfo] = None
+            endpoint_config: Dict[str, Any] = {}
+            if has_default and isinstance(param.default, FieldInfo):
+                # Extract metadata from FieldInfo
+                field_info = param.default
+                endpoint_config = extract_field_metadata(field_info)
+                # Determine actual default value from FieldInfo
+                if (
+                    field_info.default is not PydanticUndefined
+                    and field_info.default is not ...
+                ):
+                    default = field_info.default
+                elif field_info.default is ...:
+                    default = ...
+                else:
+                    default = None
+            elif has_default:
                 default = param.default
                 # If type is Optional or Union with None, ensure param_type reflects that
                 if default is None and param_type != Any:
@@ -183,24 +228,70 @@ class ParameterModelFactory:
                 default = ...
 
             # Create field configuration
-            field_config: Dict[str, Any] = {
-                "description": f"{name.replace('_', ' ').title()} parameter",
-                "title": name.replace("_", " ").title(),
-            }
+            if field_info:
+                # Use configuration from FieldInfo
+                field_config = build_field_config(field_info, endpoint_config)
+            else:
+                # Create default field configuration
+                field_config = {
+                    "description": f"{name.replace('_', ' ').title()} parameter",
+                    "title": name.replace("_", " ").title(),
+                }
 
-            # Add examples based on type
-            if param_type == str:
-                field_config["examples"] = ["example"]
-            elif param_type == int:
-                field_config["examples"] = [1]
-            elif param_type == float:
-                field_config["examples"] = [1.0]
-            elif param_type == bool:
-                field_config["examples"] = [True]
-            elif param_type == list:
-                field_config["examples"] = [[]]
-            elif param_type == dict:
-                field_config["examples"] = [{}]
+            # Add examples based on type only if not already provided from FieldInfo
+            if "examples" not in field_config or not field_config.get("examples"):
+                import typing
+
+                type_origin = None
+                if hasattr(typing, "get_origin"):
+                    type_origin = typing.get_origin(param_type)
+
+                if param_type == str or type_origin == str:
+                    field_config["examples"] = ["example"]
+                elif param_type == int or type_origin == int:
+                    field_config["examples"] = [1]
+                elif param_type == float or type_origin == float:
+                    field_config["examples"] = [1.0]
+                elif param_type == bool or type_origin == bool:
+                    field_config["examples"] = [True]
+                elif (
+                    param_type == list
+                    or type_origin == list
+                    or type_origin == typing.List
+                ):
+                    field_config["examples"] = [[]]
+                elif param_type == dict or type_origin == dict:
+                    # For 'properties' parameter, provide a more useful example with action properties
+                    if name == "properties":
+                        field_config["examples"] = [
+                            {"var_a": 60, "var_b": 10, "timeout": 45}
+                        ]
+                    else:
+                        field_config["examples"] = [{}]
+
+            # Handle endpoint_required override from endpoint_config
+            if endpoint_config.get("endpoint_required") is not None:
+                if endpoint_config["endpoint_required"]:
+                    # Make required - use Ellipsis
+                    if not cls._is_optional(param_type):
+                        default = ...
+                    else:
+                        # Remove Optional wrapper
+                        origin = getattr(param_type, "__origin__", None)
+                        if origin is Union:
+                            args = getattr(param_type, "__args__", ())
+                            # Get non-None type
+                            param_type = next(
+                                (arg for arg in args if arg is not type(None)),
+                                param_type,
+                            )
+                        default = ...
+                else:
+                    # Make optional
+                    if not cls._is_optional(param_type):
+                        param_type = Optional[param_type]
+                    if default is ... or default is PydanticUndefined:
+                        default = None
 
             # For required fields, we need to handle them specially to avoid PydanticUndefined
             # We'll use a sentinel value and then validate that it's not None
@@ -233,36 +324,82 @@ class ParameterModelFactory:
     ) -> Type[BaseModel]:
         """Create the final parameter model with examples."""
         # Create example data for the model
+        # Always include all fields with meaningful examples, even if they're optional
         example_data = {}
         for name, field_tuple in fields.items():
             field_type, field_info = field_tuple
-            if hasattr(field_info, "default") and field_info.default is not None:
-                example_data[name] = field_info.default
-            elif hasattr(field_info, "examples") and field_info.examples:
-                example_data[name] = field_info.examples[0]
-            elif field_type == str:
-                example_data[name] = "example"
-            elif field_type == int:
-                example_data[name] = 1
-            elif field_type == bool:
-                example_data[name] = True
-            elif field_type == list:
-                example_data[name] = []
-            elif field_type == dict:
-                example_data[name] = {}
 
+            # Skip start_node as it's a system parameter
+            if name == "start_node":
+                continue
+
+            # Determine the actual type (handle Optional/Union types and generic types like Dict)
+            actual_type = field_type
+            type_origin = None
+            import typing
+
+            if hasattr(typing, "get_origin") and hasattr(typing, "get_args"):
+                origin = typing.get_origin(field_type)
+                args = typing.get_args(field_type)
+
+                # Check if it's a generic type (Dict, List, etc.)
+                if origin is not None:
+                    type_origin = origin
+                    # For Optional types, extract the non-None type
+                    if origin is typing.Union and len(args) == 2 and type(None) in args:
+                        # Optional type - extract the non-None type
+                        inner_type = next(t for t in args if t is not type(None))
+                        actual_type = inner_type
+                        # Check if the inner type is also a generic
+                        inner_origin = typing.get_origin(inner_type)
+                        if inner_origin is not None:
+                            type_origin = inner_origin
+                    else:
+                        # It's a generic type like Dict, List, etc.
+                        actual_type = origin
+
+            # Priority: examples > default (if not None) > type-based defaults
+            # Always include fields in example, even if optional
+            if hasattr(field_info, "examples") and field_info.examples:
+                example_data[name] = field_info.examples[0]
+            elif hasattr(field_info, "default") and field_info.default is not None:
+                example_data[name] = field_info.default
+            elif actual_type == str or type_origin == str:
+                example_data[name] = "example"
+            elif actual_type == int or type_origin == int:
+                example_data[name] = 1
+            elif actual_type == bool or type_origin == bool:
+                example_data[name] = True
+            elif (
+                actual_type == list or type_origin == list or type_origin == typing.List
+            ):
+                example_data[name] = []
+            elif actual_type == dict or type_origin == dict:
+                # For 'properties' parameter, provide a more useful example
+                if name == "properties":
+                    example_data[name] = {"var_a": 60, "var_b": 10, "timeout": 45}
+                else:
+                    example_data[name] = {}
+
+        # Merge example into ConfigDict before creating model
+        model_config = ConfigDict(extra="forbid")
+        if example_data:
+            # Set example in json_schema_extra for OpenAPI documentation
+            model_config["json_schema_extra"] = {"example": example_data}
+
+        # In Pydantic v2, cannot use both __base__ and __config__ together
+        # Create model with base, then set model_config after creation
         model = cast(
             Type[BaseModel],
             create_model(
                 model_name,
                 __base__=EndpointParameterModel,
-                __config__=ConfigDict(extra="forbid"),
                 **fields,
             ),
         )
 
-        # Add example to the model
-        model.model_config["json_schema_extra"] = {"example": example_data}
+        # Set model_config after creation (Pydantic v2 compatible)
+        model.model_config = model_config
 
         return model
 
@@ -402,14 +539,16 @@ class ParameterModelFactory:
         """
         fields = dict(group_fields)
         model_name = f"{group_name.title()}Group"
-        return cast(
+        model = cast(
             Type[BaseModel],
             create_model(
                 model_name,
-                __config__=ConfigDict(extra="forbid"),
                 **fields,
             ),
         )
+        # Set model_config after creation (Pydantic v2 compatible)
+        model.model_config = ConfigDict(extra="forbid")
+        return model
 
     @staticmethod
     def _is_optional(field_type: Type) -> bool:

@@ -10,36 +10,27 @@ This module provides:
 
 from .config import ServerConfig
 from .context import ServerContext, get_current_server, set_current_server
+from .decorators.field import EndpointField, EndpointFieldInfo, endpoint_field
 from .decorators.route import endpoint
-
-# Note: EndpointField, EndpointFieldInfo, endpoint_field moved to endpoints module
-# from .endpoints import EndpointField, EndpointFieldInfo, endpoint_field
-# from .endpoints import ResponseHelper, format_response
-# Note: Routing moved to endpoints module
-# from .routing import (
-#     BaseRouter,
-#     EndpointRouter,
-# )
-from .server import Server, create_lambda_handler, create_server
+from .endpoints.response import ResponseHelper, format_response
+from .endpoints.router import BaseRouter, EndpointRouter
+from .lambda_server import LambdaServer
+from .server import Server, create_server
 
 __all__ = [
-    # Main exports
     "Server",
+    "LambdaServer",
     "ServerConfig",
     "create_server",
-    "create_lambda_handler",
     "get_current_server",
     "set_current_server",
     "ServerContext",
     "endpoint",
-    # Core routers (for advanced usage)
     "BaseRouter",
     "EndpointRouter",
-    # Field configuration
     "endpoint_field",
     "EndpointField",
     "EndpointFieldInfo",
-    # Response handling
     "format_response",
     "ResponseHelper",
 ]

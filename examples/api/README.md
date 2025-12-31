@@ -82,7 +82,7 @@ from jvspatial.api import Server, endpoint
 # Enable serverless mode - handler is automatically created
 server = Server(
     title="Lambda API",
-    serverless_mode=True,  # Automatic handler setup
+    # Use LambdaServer for Lambda deployments
     serverless_lifespan="auto",
 )
 

@@ -24,41 +24,67 @@ This document provides a comprehensive reference for all decorators available in
 
 ### `@on_visit(*target_types)`
 
-**Purpose**: Register a visit hook for specific node/edge types during graph traversal.
+**Purpose**: Register a visit hook for specific node/edge types during graph traversal. Can be used on both Walker classes and Node/Edge classes.
 
 **Parameters**:
 - `*target_types`: One or more target types (Node, Edge, Walker subclasses, or string names)
 
+**Execution Behavior**:
+- When a walker visits a node/edge, it automatically executes hooks in this order:
+  1. **Walker hooks** (methods decorated with `@on_visit` on the walker class)
+  2. **Node/Edge hooks** (methods decorated with `@on_visit` on the node/edge class)
+
 **Examples**:
+
+**Walker Hooks** (hooks on the walker class):
 ```python
-from jvspatial.core import on_visit, Node, Edge
+from jvspatial.core import on_visit, Node, Edge, Walker
 
-# Visit specific node types
-@on_visit(UserNode, AdminNode)
-def handle_user_nodes(walker, node):
-    print(f"Visiting user node: {node}")
+class MyWalker(Walker):
+    # Visit specific node types
+    @on_visit(UserNode, AdminNode)
+    async def handle_user_nodes(self, here: UserNode):
+        print(f"Visiting user node: {here}")
 
-# Visit any edge type
-@on_visit(Edge)
-def handle_all_edges(walker, edge):
-    print(f"Traversing edge: {edge}")
+    # Visit any edge type
+    @on_visit(Edge)
+    async def handle_all_edges(self, here: Edge):
+        print(f"Traversing edge: {here}")
 
-# Visit with string names (forward references)
-@on_visit("WebhookEvent", "Notification")
-def handle_events(walker, node):
-    print(f"Processing event: {node}")
+    # Visit with string names (forward references)
+    @on_visit("WebhookEvent", "Notification")
+    async def handle_events(self, here: Node):
+        print(f"Processing event: {here}")
 
-# Visit any valid type (no parameters)
-@on_visit
-def handle_any_node(walker, node):
-    print(f"Visiting: {node}")
+    # Visit any valid type (no parameters)
+    @on_visit
+    async def handle_any_node(self, here: Node):
+        print(f"Visiting: {here}")
+```
+
+**Node/Edge Hooks** (hooks on the node/edge class - automatically executed):
+```python
+from jvspatial.core import on_visit, Node, Walker
+
+class MyNode(Node):
+    name: str = ""
+
+    # Hook that executes when visited by any walker
+    @on_visit(Walker)
+    async def execute(self, visitor: Walker):
+        """Automatically called when any walker visits this node."""
+        print(f"Node {self.name} was visited by {visitor.__class__.__name__}")
+
+    # Hook that executes only for specific walker types
+    @on_visit(MyWalker)
+    async def execute_for_my_walker(self, visitor: MyWalker):
+        """Automatically called only when MyWalker visits this node."""
+        print(f"Node {self.name} was visited by MyWalker")
 ```
 
 **Use Cases**:
-- Logging specific node types
-- Data transformation during traversal
-- Conditional logic based on node types
-- Metrics collection
+- **Walker hooks**: Logging specific node types, data transformation during traversal, conditional logic based on node types, metrics collection
+- **Node/Edge hooks**: Automatic execution of node logic when visited, walker-specific behavior, self-contained node operations
 
 ---
 
@@ -284,18 +310,29 @@ class UserModel(BaseModel):
 
 #### 1. **Graph Traversal with Hooks**
 ```python
-from jvspatial.core import Walker, on_visit, on_exit
+from jvspatial.core import Walker, on_visit, on_exit, Node
+
+class UserNode(Node):
+    name: str = ""
+
+    # Node hook - automatically executed when visited
+    @on_visit(Walker)
+    async def execute(self, visitor: Walker):
+        """Automatically called when any walker visits this node."""
+        print(f"Processing user: {self.name}")
 
 class DataProcessor(Walker):
+    # Walker hook - executed first when visiting UserNode
     @on_visit(UserNode)
-    def process_user(self, walker, node):
-        # Process user data
-        pass
+    async def process_user(self, here: UserNode):
+        """Called when visiting a UserNode."""
+        print(f"Walker processing user: {here.name}")
+        # Node's execute() hook will be automatically called after this
 
     @on_exit
-    def finalize_processing(self, walker):
-        # Clean up and finalize
-        pass
+    async def finalize_processing(self):
+        """Clean up and finalize."""
+        print("Processing complete")
 ```
 
 #### 2. **API Endpoint with Authentication**

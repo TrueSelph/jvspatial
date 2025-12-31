@@ -665,9 +665,12 @@ class ResponseSchema:
             Pydantic model class
         """
         # Create a proper namespace with annotations
+        # Use extra="ignore" to allow walkers to include additional fields in their reports
+        # without causing validation errors. This is more flexible than "forbid" and
+        # allows for additional metadata to be included in responses.
         namespace = {
             "__annotations__": {},
-            "model_config": ConfigDict(extra="forbid"),
+            "model_config": ConfigDict(extra="ignore"),
         }
         example: Dict[str, Any] = {}
 

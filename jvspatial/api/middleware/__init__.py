@@ -19,6 +19,3 @@ try:
     __all__.append("MiddlewareManager")
 except ImportError:
     pass
-
-# error.py contains error_handlers functions, not a class
-# Skip for now

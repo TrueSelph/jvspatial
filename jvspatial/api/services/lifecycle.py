@@ -79,11 +79,12 @@ class LifecycleManager:
         2. Initializes database through GraphContext
         3. Ensures root node exists
         4. Verifies file storage if enabled
-        5. Discovers and registers packages
-        6. Runs user-defined startup hooks
-        """
-        self._logger.info(f"{LogIcons.START} Starting {self.server.config.title}...")
+        5. Runs user-defined startup hooks
 
+        Note: Endpoint discovery runs before app creation in _create_app_instance(),
+        not during startup, to ensure all endpoints are registered before routers
+        are included in the FastAPI app.
+        """
         # Set running state
         self.server._is_running = True
         self._is_started = True
@@ -94,9 +95,6 @@ class LifecycleManager:
         # Verify file storage if enabled
         await self._verify_file_storage()
 
-        # Discover and register packages
-        await self._discover_packages()
-
         # Run user-defined startup hooks
         await self._execute_startup_hooks()
 
@@ -105,27 +103,23 @@ class LifecycleManager:
         try:
             if self.server._graph_context:
                 # Use explicit GraphContext
-                self._logger.info(
-                    f"{LogIcons.DATABASE} Database initialized through GraphContext: "
-                    f"{type(self.server._graph_context.database).__name__}"
-                )
-
+                db_type = type(self.server._graph_context.database).__name__
                 # Ensure root node exists
-                root = await self.server._graph_context.get(Root, "n:Root:root")
+                root = await self.server._graph_context.get(Root, "n.Root.root")
                 if not root:
                     root = await self.server._graph_context.create(Root)
-                self._logger.info(f"{LogIcons.TREE} Root node ready: {root.id}")
             else:
                 # Use default GraphContext behavior
-                self._logger.info(
-                    f"{LogIcons.DATABASE} Using default GraphContext for database management"
-                )
-
+                db_type = "default"
                 # Ensure root node exists
-                root = await Root.get("n:Root:root")
+                root = await Root.get("n.Root.root")
                 if not root:
                     root = await Root.create()
-                self._logger.info(f"{LogIcons.TREE} Root node ready: {root.id}")
+
+            # Log concise database initialization
+            self._logger.info(
+                f"{LogIcons.DATABASE} Database: {db_type} | {LogIcons.TREE} Root: {root.id}"
+            )
 
         except Exception as e:
             self._logger.error(f"{LogIcons.ERROR} Database initialization failed: {e}")
@@ -134,28 +128,10 @@ class LifecycleManager:
     async def _verify_file_storage(self) -> None:
         """Verify file storage configuration if enabled."""
         if self.server.config.file_storage_enabled:
-            self._logger.info(
-                f"{LogIcons.STORAGE} File storage: "
-                f"{self.server.config.file_storage_provider} at "
-                f"{self.server.config.file_storage_root}"
-            )
+            storage_info = f"{self.server.config.file_storage_provider}@{self.server.config.file_storage_root}"
             if self.server.config.proxy_enabled:
-                self._logger.info(f"{LogIcons.WEBHOOK} URL proxy enabled")
-
-    async def _discover_packages(self) -> None:
-        """Discover and register packages if enabled."""
-        if self.server.discovery_service.enabled:
-            try:
-                discovered_count = self.server.discovery_service.discover_and_register()
-                if discovered_count > 0:
-                    self._logger.info(
-                        f"{LogIcons.DISCOVERY} Package discovery complete: "
-                        f"{discovered_count} endpoints"
-                    )
-            except Exception as e:
-                self._logger.warning(
-                    f"{LogIcons.WARNING} Package discovery failed: {e}"
-                )
+                storage_info += " | proxy enabled"
+            self._logger.info(f"{LogIcons.STORAGE} Storage: {storage_info}")
 
     async def _execute_startup_hooks(self) -> None:
         """Execute all registered startup hooks."""

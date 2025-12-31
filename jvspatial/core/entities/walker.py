@@ -117,7 +117,9 @@ class Walker(AttributeMixin, BaseModel):
 
     model_config = ConfigDict(extra="allow")
     type_code: str = attribute(transient=True, default="w")
-    id: str = attribute(protected=True, description="Unique identifier for the walker")
+    id: str = attribute(
+        protected=True, transient=True, description="Unique identifier for the walker"
+    )
 
     # Reporting system
     _report: List[Any] = attribute(private=True, default_factory=list)
@@ -190,7 +192,7 @@ class Walker(AttributeMixin, BaseModel):
 
         Examples:
             # Check by node ID
-            if walker.is_visited("n:City:abc123"):
+            if walker.is_visited("n.City.abc123"):
                 print("Already visited before")
 
             # Check by node instance
@@ -265,8 +267,8 @@ class Walker(AttributeMixin, BaseModel):
             "has_cycles": has_cycles,
             "cycles_detected": cycles_detected,
             "cycle_ranges": [("0", str(len(trail) - 1))] if has_cycles else [],
-            "most_visited": None,  # Simple implementation for now
-            "recent_nodes": [],  # Simple implementation for now
+            "most_visited": None,
+            "recent_nodes": [],
         }
 
     def clear_trail(self) -> None:
@@ -305,6 +307,9 @@ class Walker(AttributeMixin, BaseModel):
             # Use class-level type_code or default from Field
             type_code = kwargs.get("type_code", "w")
             kwargs["id"] = generate_id(type_code, self.__class__.__name__)
+        # Set entity to class name if not provided (protected attribute)
+        if "entity" not in kwargs:
+            kwargs["entity"] = self.__class__.__name__
 
         # Extract component configuration from kwargs (before super().__init__)
         max_steps = kwargs.pop(
@@ -679,29 +684,38 @@ class Walker(AttributeMixin, BaseModel):
     async def _execute_visit_hooks(self, target: Union["Node", "Edge"]) -> None:
         """Execute visit hooks for the target.
 
+        Executes hooks in the following order:
+        1. Walker hooks (methods decorated with @on_visit on the walker class)
+        2. Node/Edge hooks (methods decorated with @on_visit on the node/edge class)
+
         Args:
             target: Node or Edge being visited
         """
         target_type = type(target)
         target_name = target_type.__name__
+        walker_type = type(self)
+        walker_name = walker_type.__name__
 
-        # Get hooks for this specific type
-        hooks = list(self._visit_hooks.get(target_type, []))
+        # =====================================================================
+        # Step 1: Execute walker hooks (hooks registered on the walker)
+        # =====================================================================
+        walker_hooks = list(self._visit_hooks.get(target_type, []))
 
         # Include hooks registered for base classes (support subclass matching)
         for base in target_type.mro()[1:]:  # skip the exact class (already added)
             if base in self._visit_hooks:
-                hooks.extend(self._visit_hooks.get(base, []))
+                walker_hooks.extend(self._visit_hooks.get(base, []))
 
         # Get hooks for string name (forward references)
-        hooks.extend(self._visit_hooks.get(target_name, []))
+        walker_hooks.extend(self._visit_hooks.get(target_name, []))
 
         # Get general hooks (None key)
-        hooks.extend(self._visit_hooks.get(None, []))
+        walker_hooks.extend(self._visit_hooks.get(None, []))
 
-        # Execute hooks (ensure stable order and no duplicates)
+        # Execute walker hooks (ensure stable order and no duplicates)
         seen = set()
-        for hook in hooks:
+        walker_hook_skipped = False
+        for hook in walker_hooks:
             if hook in seen:
                 continue
             seen.add(hook)
@@ -710,6 +724,69 @@ class Walker(AttributeMixin, BaseModel):
                     await hook(self, target)
                 else:
                     hook(self, target)
+            except Exception as e:
+                # Check if this is a skip exception
+                if "Node skipped" in str(e):
+                    # Skip this node and continue
+                    walker_hook_skipped = True
+                    return
+                else:
+                    # Report error as structured data
+                    await self.report(
+                        {
+                            "hook_error": str(e),
+                            "hook_name": hook.__name__,
+                            "node_id": getattr(target, "id", str(target)),
+                        }
+                    )
+
+        # If walker hook skipped the node, don't execute node hooks
+        if walker_hook_skipped:
+            return
+
+        # =====================================================================
+        # Step 2: Execute node/edge hooks (hooks registered on the target)
+        # =====================================================================
+        # Visit hooks are stored on the class, not the instance
+        target_class = type(target)
+        if not hasattr(target_class, "_visit_hooks"):
+            return
+
+        target_hooks = []
+        target_visit_hooks = getattr(target_class, "_visit_hooks", {})
+
+        # Get hooks for this specific walker type
+        if walker_type in target_visit_hooks:
+            target_hooks.extend(target_visit_hooks[walker_type])
+
+        # Include hooks registered for base walker classes (support subclass matching)
+        for base in walker_type.mro()[1:]:  # skip the exact class (already added)
+            if base in target_visit_hooks:
+                target_hooks.extend(target_visit_hooks[base])
+
+        # Get hooks for walker string name (forward references)
+        if walker_name in target_visit_hooks:
+            target_hooks.extend(target_visit_hooks[walker_name])
+
+        # Get general hooks (None key - for any walker)
+        if None in target_visit_hooks:
+            target_hooks.extend(target_visit_hooks[None])
+
+        # Execute target hooks (ensure stable order and no duplicates)
+        for hook in target_hooks:
+            if hook in seen:
+                continue
+            seen.add(hook)
+            try:
+                # Node/edge hooks are called with the node/edge as 'self' and walker as parameter
+                # The hook signature is: async def execute(self, visitor: Walker) -> None
+                # where 'self' is the node/edge and 'visitor' is the walker
+                # Bind the unbound method to the target instance, then call with walker
+                bound_hook = hook.__get__(target, target_class)
+                if asyncio.iscoroutinefunction(bound_hook):
+                    await bound_hook(self)
+                else:
+                    bound_hook(self)
             except Exception as e:
                 # Check if this is a skip exception
                 if "Node skipped" in str(e):
@@ -818,79 +895,56 @@ class Walker(AttributeMixin, BaseModel):
         await self.queue.clear()
         return self
 
-    def export(
+    async def export(
         self: "Walker",
         exclude_transient: bool = True,
         exclude: Optional[Union[set, Dict[str, Any]]] = None,
-        for_persistence: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Export walker to a dictionary.
 
-        Uses the standard Object.export() method. By default, returns a clean
-        flat dictionary suitable for API responses.
-        Set for_persistence=True to get the nested database format.
+        Returns a nested persistence format with id, name, context for database storage.
+        Includes all fields from the class hierarchy (class and parent classes, not child classes).
 
         Args:
             exclude_transient: Whether to automatically exclude transient fields (default: True)
             exclude: Additional fields to exclude (can be a set of field names or a dict)
-            for_persistence: If True, returns nested persistence format with id, name, context (default: False)
             **kwargs: Additional arguments passed to base export/model_dump()
 
         Returns:
-            Dictionary representation of the walker:
-            - If for_persistence=False: Clean flat dictionary (standard format)
-            - If for_persistence=True: Nested format with id, name, context for database storage
+            Nested format dictionary with id, name, context for database storage
         """
-        if for_persistence:
-            # Legacy persistence format - nested structure for database storage
-            context_data = super().export(
-                exclude={
-                    "id",
-                    "_report",
-                    "_event_handlers",
-                    "_current_node",
-                    "_paused",
-                    "_queue",
-                    "queue",
-                },
-                exclude_none=False,
-                exclude_transient=exclude_transient,
-                **kwargs,
-            )
+        # Nested persistence format - structure for database storage
+        # Exclude transient fields from context (id, entity, and type_code are transient)
+        exclude_set = {
+            "_report",
+            "_event_handlers",
+            "_current_node",
+            "_paused",
+            "_queue",
+            "queue",
+            "id",
+            "entity",
+            "type_code",
+        }
 
-            # Include _data if it exists
-            if hasattr(self, "_data"):
-                context_data["_data"] = self._data
+        # Merge with any provided exclusions
+        if exclude:
+            if isinstance(exclude, set):
+                exclude_set.update(exclude)
+            elif isinstance(exclude, dict):
+                exclude_set.update(exclude.keys())
 
-            return {
-                "id": self.id,
-                "name": self.__class__.__name__,
-                "context": context_data,
-            }
-        else:
-            # Standard export - clean flat dictionary for API responses
-            # Exclude internal walker fields by default
-            default_exclude = {
-                "type_code",
-                "_graph_context",
-                "_data",
-                "_initializing",
-                "_report",
-                "_event_handlers",
-                "_current_node",
-                "_paused",
-                "_queue",
-                "queue",
-            }
-            if exclude:
-                exclude_set = (
-                    set(exclude) if isinstance(exclude, (set, dict)) else set()
-                )
-                exclude_set.update(default_exclude)
-            else:
-                exclude_set = default_exclude
+        # Use model_dump with exclusions
+        context_data = self.model_dump(exclude=exclude_set, **kwargs)
 
-            return super().export(
-                exclude_transient=exclude_transient, exclude=exclude_set, **kwargs
-            )
+        # Serialize datetime objects to ensure JSON compatibility
+        from jvspatial.utils.serialization import serialize_datetime
+
+        context_data = serialize_datetime(context_data)
+
+        return {
+            "id": self.id,
+            "entity": self.entity,  # type: ignore[attr-defined]
+            "context": context_data,
+        }

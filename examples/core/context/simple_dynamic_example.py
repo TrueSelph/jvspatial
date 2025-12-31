@@ -15,7 +15,7 @@ Run with: python simple_dynamic_example.py
 
 import asyncio
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from jvspatial.api import create_server, endpoint
 from jvspatial.api.endpoint.decorators import EndpointField
@@ -231,7 +231,7 @@ def register_additional_endpoints():
         )
 
         @on_visit(Root)
-        async def get_stats(self, here):
+        async def get_stats(self, here: Root) -> Any:
             try:
                 # RECOMMENDED: Use entity-centric find and count operations
                 if self.group_by == "role":

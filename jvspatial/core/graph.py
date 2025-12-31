@@ -98,7 +98,14 @@ async def generate_graph_dot(
     # Process nodes
     for node_data in nodes_data:
         node_id = node_data.get("id", "")
-        node_name = node_data.get("name", "Unknown")
+        # Extract entity type from node data - prefer entity field, fallback to parsing ID
+        entity_type = node_data.get("entity", "")
+        if not entity_type and node_id:
+            # Parse entity type from ID format: n.EntityType.id
+            parts = node_id.split(".")
+            if len(parts) >= 2:
+                entity_type = parts[1]  # Get EntityType from n.EntityType.id
+        node_name = entity_type or "Unknown"
         context_data = node_data.get("context", {})
 
         # Skip if node is not referenced and filter is strict
@@ -116,8 +123,8 @@ async def generate_graph_dot(
         node_attrs = [f'label="{_escape_dot_string(node_label)}"']
         node_attrs.append(f"shape={node_shape}")
 
-        # Add custom styling based on node properties
-        if node_data.get("is_root"):
+        # Add custom styling for root node (identified by fixed ID)
+        if node_id == "n.Root.root":
             node_attrs.append('style="bold,filled"')
             node_attrs.append('fillcolor="lightblue"')
 
@@ -242,7 +249,14 @@ async def generate_graph_mermaid(
     node_id_map: Dict[str, str] = {}
     for node_data in nodes_data:
         node_id = node_data.get("id", "")
-        node_name = node_data.get("name", "Unknown")
+        # Extract entity type from node data - prefer entity field, fallback to parsing ID
+        entity_type = node_data.get("entity", "")
+        if not entity_type and node_id:
+            # Parse entity type from ID format: n.EntityType.id
+            parts = node_id.split(".")
+            if len(parts) >= 2:
+                entity_type = parts[1]  # Get EntityType from n.EntityType.id
+        node_name = entity_type or "Unknown"
         context_data = node_data.get("context", {})
 
         # Skip if node is not referenced
@@ -265,9 +279,9 @@ async def generate_graph_mermaid(
         node_identifier = _sanitize_mermaid_id(node_id)
         node_id_map[node_id] = node_identifier
 
-        # Add styling for root node
+        # Add styling for root node (identified by fixed ID)
         style = ""
-        if node_data.get("is_root"):
+        if node_id == "n.Root.root":
             style = ":::root"
 
         lines.append(
@@ -305,8 +319,8 @@ async def generate_graph_mermaid(
         else:
             lines.append(f"    {source_id} {connector} {target_id}")
 
-    # Add styling for root nodes if any
-    if any(n.get("is_root") for n in nodes_data):
+    # Add styling for root nodes if any (identified by fixed ID)
+    if any(n.get("id") == "n.Root.root" for n in nodes_data):
         lines.append("    classDef root fill:#e1f5ff,stroke:#01579b,stroke-width:2px")
 
     result = "\n".join(lines)
@@ -328,22 +342,44 @@ def _build_node_label(
     node_attributes: Optional[List[str]],
     format: str = "dot",
 ) -> str:
-    """Build a label for a node."""
+    """Build a label for a node.
+
+    Args:
+        node_name: Entity type name (e.g., "Agent", "PersonaAction")
+        node_id: Full node ID
+        context_data: Context dictionary with node attributes
+        include_attributes: Whether to include attributes in label
+        node_attributes: Optional list of specific attributes to include
+        format: Output format ("dot" or "mermaid")
+    """
+    # Try to get a more descriptive name from context
+    display_name = node_name
+    if context_data:
+        # Prefer "name", "label", or "alias" if available
+        for key in ["name", "label", "alias", "title"]:
+            if key in context_data:
+                display_name = f"{node_name}: {context_data[key]}"
+                break
+
     if format == "mermaid":
         # For Mermaid, use a simpler format
-        label_parts = [node_name]
+        label_parts = [display_name]
         if include_attributes and context_data:
             attrs_to_show = (
                 node_attributes or list(context_data.keys())[:3]
             )  # Limit to 3 for readability
             for attr in attrs_to_show:
-                if attr in context_data and not attr.startswith("_"):
+                if (
+                    attr in context_data
+                    and not attr.startswith("_")
+                    and attr not in ["name", "label", "alias", "title"]
+                ):
                     value = str(context_data[attr])[:30]  # Truncate long values
                     label_parts.append(f"{attr}: {value}")
         return "\\n".join(label_parts)
     else:
         # DOT format - more detailed
-        label_parts = [f"{node_name}\\n({_shorten_id(node_id)})"]
+        label_parts = [f"{display_name}\\n({_shorten_id(node_id)})"]
         if include_attributes and context_data:
             attrs_to_show = node_attributes or list(context_data.keys())
             for attr in attrs_to_show:
@@ -403,9 +439,9 @@ def _shorten_id(node_id: str, max_length: int = 20) -> str:
     if len(node_id) <= max_length:
         return node_id
     # Try to extract meaningful parts
-    parts = node_id.split(":")
+    parts = node_id.split(".")
     if len(parts) > 1:
-        return ":".join(parts[-2:])  # Keep last two parts
+        return ".".join(parts[-2:])  # Keep last two parts
     return node_id[: max_length - 3] + "..."
 
 

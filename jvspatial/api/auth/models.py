@@ -1,10 +1,12 @@
 """Authentication models for user management and JWT tokens."""
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, EmailStr, Field
 
 from jvspatial.core.entities.node import Node
+from jvspatial.core.entities.object import Object
 
 
 class UserCreate(BaseModel):
@@ -42,8 +44,14 @@ class TokenResponse(BaseModel):
     user: UserResponse = Field(..., description="User information")
 
 
-class User(Node):
-    """User entity model for authentication."""
+class User(Object):
+    """User entity model for authentication.
+
+    User is an Object entity (not a Node) as authentication entities are
+    fundamental data objects that are not connected to the graph by edges.
+    Users are stored in the database and managed through standard Object
+    CRUD operations (create, find, get, save, delete).
+    """
 
     email: str = Field(..., description="User email address")
     password_hash: str = Field(..., description="Hashed password")
@@ -53,10 +61,38 @@ class User(Node):
         default_factory=datetime.utcnow, description="User creation timestamp"
     )
 
-    class Config:
-        """Pydantic configuration."""
+    @classmethod
+    async def create(cls, **kwargs: Any) -> "User":
+        """Create and save a new user instance with email validation.
 
-        json_encoders = {datetime: lambda v: v.isoformat()}
+        Args:
+            **kwargs: User attributes including 'email' which must be a valid email format
+
+        Returns:
+            Created and saved user instance
+
+        Raises:
+            ValueError: If email format is invalid
+        """
+        from pydantic import ValidationError
+
+        # Validate email if provided
+        if "email" in kwargs:
+            email = kwargs["email"]
+            try:
+                # Use Pydantic's email validator to validate email format
+                # Create a temporary model to leverage Pydantic's EmailStr validation
+                class EmailValidator(BaseModel):
+                    email: EmailStr
+
+                # This will raise ValidationError if email is invalid
+                validator = EmailValidator(email=email)
+                kwargs["email"] = validator.email
+            except ValidationError as e:
+                raise ValueError(f"Invalid email format: {email}") from e
+
+        # Call parent create method
+        return await super().create(**kwargs)
 
 
 class TokenBlacklist(Node):
@@ -68,8 +104,3 @@ class TokenBlacklist(Node):
     blacklisted_at: datetime = Field(
         default_factory=datetime.utcnow, description="When token was blacklisted"
     )
-
-    class Config:
-        """Pydantic configuration."""
-
-        json_encoders = {datetime: lambda v: v.isoformat()}

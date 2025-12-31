@@ -140,8 +140,8 @@ class AuthenticationService:
             if not token_id:
                 return True  # Token without JTI cannot be blacklisted
 
-            blacklisted_tokens = await self.context.find_nodes(
-                TokenBlacklist, {"context.token_id": token_id}
+            blacklisted_tokens = await TokenBlacklist.find(
+                {"context.token_id": token_id}
             )
 
             return len(blacklisted_tokens) > 0
@@ -170,11 +170,9 @@ class AuthenticationService:
                 return False
 
             # Create blacklist entry
-            blacklist_entry = TokenBlacklist(
+            await TokenBlacklist.create(
                 token_id=token_id, user_id=user_id, expires_at=expires_at
             )
-
-            await self.context.save_node(blacklist_entry)
             return True
         except Exception:
             return False
@@ -192,24 +190,19 @@ class AuthenticationService:
             ValueError: If user already exists or validation fails
         """
         # Check if user already exists
-        existing_users = await self.context.find_nodes(
-            User, {"context.email": user_data.email}
-        )
+        existing_users = await User.find({"context.email": user_data.email})
 
         if existing_users:
             raise ValueError("User with this email already exists")
 
         # Create new user
-        user = User(
+        user = await User.create(
             email=user_data.email,
             password_hash=self._hash_password(user_data.password),
             name="",  # No name required
             is_active=True,
             created_at=datetime.utcnow(),
         )
-
-        # Save user to database
-        await self.context.save_node(user)
 
         return UserResponse(
             id=user.id,
@@ -232,7 +225,7 @@ class AuthenticationService:
             ValueError: If authentication fails
         """
         # Find user by email
-        users = await self.context.find_nodes(User, {"context.email": login_data.email})
+        users = await User.find({"context.email": login_data.email})
 
         if not users:
             raise ValueError("Invalid email or password")

@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
 
 from .database import Database
 from .query import QueryEngine
+
+logger = logging.getLogger(__name__)
 
 try:
     import aiosqlite
@@ -80,6 +83,9 @@ class SQLiteDB(Database):
         self._connection: Optional["Connection"] = None
         self._lock = asyncio.Lock()
         self._initialized = False
+        self._created_indexes: Dict[str, Set[str]] = (
+            {}
+        )  # collection -> set of index names
 
     async def _get_connection(self) -> "Connection":
         """Get or create the SQLite connection."""
@@ -128,12 +134,101 @@ class SQLiteDB(Database):
 
         return self._connection
 
+    def _json_path(self, field_path: str) -> str:
+        """Convert a field path (e.g., 'context.user_id') to SQLite JSON path expression.
+
+        Args:
+            field_path: Field path using dot notation
+
+        Returns:
+            SQLite JSON path expression
+        """
+        # Convert "context.user_id" to "$.context.user_id" for JSON extraction
+        return f"$.{field_path}"
+
+    async def create_index(
+        self,
+        collection: str,
+        field_or_fields: Union[str, List[Tuple[str, int]]],
+        unique: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Create an index on the specified field(s) using JSON path extraction.
+
+        Args:
+            collection: Collection name
+            field_or_fields: Single field name (str) or list of (field_name, direction) tuples for compound indexes
+            unique: Whether the index should enforce uniqueness
+            **kwargs: Additional options (ignored for SQLite)
+
+        Note:
+            SQLite indexes on nested JSON fields use json_extract() function.
+            Direction parameter is ignored for SQLite (always ascending).
+        """
+        connection = await self._get_connection()
+
+        # Initialize index tracking for this collection if needed
+        if collection not in self._created_indexes:
+            self._created_indexes[collection] = set()
+
+        # Build index specification
+        if isinstance(field_or_fields, str):
+            # Single field index
+            fields = [(field_or_fields, 1)]
+            index_name = f"idx_{collection}_{field_or_fields.replace('.', '_')}"
+        else:
+            # Compound index
+            fields = field_or_fields
+            field_names = "_".join(field.replace(".", "_") for field, _ in fields)
+            index_name = f"idx_{collection}_{field_names}"
+
+        # Check if index already exists
+        if index_name in self._created_indexes[collection]:
+            return  # Index already created
+
+        # Build SQLite index creation statement
+        # For nested fields, use json_extract() to extract values from JSON
+        index_expressions = []
+        for field_path, _direction in fields:
+            json_path = self._json_path(field_path)
+            index_expressions.append(f"json_extract(data, '{json_path}')")
+
+        index_columns = ", ".join(index_expressions)
+        unique_clause = "UNIQUE" if unique else ""
+
+        try:
+            # Create index on the records table
+            # Include collection in the index to support efficient filtering
+            # SQLite doesn't support parameterized WHERE clauses in CREATE INDEX,
+            # so we include collection as the first column
+            sql = f"""
+            CREATE {unique_clause} INDEX IF NOT EXISTS {index_name}
+            ON records (collection, {index_columns})
+            """
+
+            await connection.execute(sql)
+            await connection.commit()
+
+            # Track that we created this index
+            self._created_indexes[collection].add(index_name)
+
+            logger.debug(
+                f"Created index '{index_name}' on collection '{collection}' "
+                f"(unique={unique}, fields={[f[0] for f in fields]})"
+            )
+
+        except Exception as e:
+            logger.warning(
+                f"Failed to create index '{index_name}' on collection '{collection}': {e}"
+            )
+
     async def close(self) -> None:
         """Close the underlying SQLite connection."""
         if self._connection is not None:
             await self._connection.close()
             self._connection = None
             self._initialized = False
+            self._created_indexes.clear()
 
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Save a record to the database.

@@ -96,7 +96,7 @@ class MiddlewareManager:
             allow_headers=self.server.config.cors_headers,
             allow_credentials=True,
         )
-        self._logger.info(
+        self._logger.debug(
             f"{LogIcons.SUCCESS} CORS middleware configured with "
             f"origins: {self.server.config.cors_origins}"
         )
@@ -122,7 +122,7 @@ class MiddlewareManager:
             # Authentication middleware is now handled by components
             # from jvspatial.api.auth.middleware import AuthenticationMiddleware
             # app.add_middleware(AuthenticationMiddleware)
-            self._logger.info(
+            self._logger.debug(
                 f"{LogIcons.SUCCESS} Authentication middleware added to server"
             )
         except ImportError as e:
@@ -138,7 +138,7 @@ class MiddlewareManager:
         """
         # First check the flag set by auth decorators (most reliable)
         if getattr(self.server, "_has_auth_endpoints", False):
-            self._logger.debug("Auth endpoints flag is set")
+            # Auth endpoints detected - middleware will be added
             return True
 
         # Fallback: Check walker endpoints from registry
@@ -178,9 +178,7 @@ class MiddlewareManager:
         has_webhook_endpoints = self._detect_webhook_endpoints()
 
         if not has_webhook_endpoints:
-            self._logger.debug(
-                "No webhook endpoints found, skipping webhook middleware"
-            )
+            # No webhook endpoints - webhook middleware skipped
             return
 
         try:

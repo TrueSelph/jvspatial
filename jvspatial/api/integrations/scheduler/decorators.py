@@ -183,8 +183,7 @@ def clear_scheduled_registry() -> None:
     This is mainly useful for testing or when you want to reset
     the decorator state.
     """
-    global _scheduled_registry
-    _scheduled_registry.clear()
+    _scheduled_registry.clear()  # noqa: F823
 
 
 def is_scheduled(func: Callable) -> bool:

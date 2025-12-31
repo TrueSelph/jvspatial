@@ -46,7 +46,16 @@ class ServerConfig(BaseModel):
 
     # CORS Configuration
     cors_enabled: bool = True
-    cors_origins: List[str] = Field(default_factory=lambda: ["*"])
+    cors_origins: List[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+        ]
+    )
     cors_methods: List[str] = Field(default_factory=lambda: ["*"])
     cors_headers: List[str] = Field(default_factory=lambda: ["*"])
 
@@ -97,6 +106,11 @@ class ServerConfig(BaseModel):
     file_storage_max_size: int = Field(
         default=100 * 1024 * 1024, validation_alias="JVSPATIAL_FILE_STORAGE_MAX_SIZE"
     )  # 100MB default
+
+    # Graph Visualization Endpoint Configuration
+    graph_endpoint_enabled: bool = Field(
+        default=False, description="Enable /api/graph endpoint for graph visualization"
+    )
 
     # S3 Configuration (only used if provider is "s3")
     s3_bucket_name: Optional[str] = Field(
@@ -169,23 +183,11 @@ class ServerConfig(BaseModel):
             "/redoc",
             "/openapi.json",
             "/favicon.ico",
+            "/api/auth/login",
+            "/api/auth/logout",
+            "/api/auth/register",
             "/auth/login",
             "/auth/logout",
             "/auth/register",
         ]
-    )
-
-    # Serverless Configuration
-    serverless_mode: bool = Field(
-        default=False,
-        description="Enable serverless mode (AWS Lambda) with automatic handler setup",
-        validation_alias="JVSPATIAL_SERVERLESS_MODE",
-    )
-    serverless_lifespan: str = Field(
-        default="auto",
-        description="Mangum lifespan mode: 'auto', 'on', or 'off'",
-    )
-    serverless_api_gateway_base_path: Optional[str] = Field(
-        default=None,
-        description="API Gateway base path (e.g., '/prod', '/v1')",
     )

@@ -203,8 +203,8 @@ async def demonstrate_modern_queries():
     print("\n📊 COUNTING & AGGREGATION")
     print("-" * 40)
 
-    total_users = len(await User.find())
-    active_count = len(await User.find({"context.active": True}))
+    total_users = await User.count()
+    active_count = await User.count({"context.active": True})
     print(f"Users: {total_users} total, {active_count} active")
 
     expensive_products = await Product.find({"context.price": {"$gte": 1000}})
@@ -313,8 +313,8 @@ async def demonstrate_modern_queries():
     print("\n✅ FINAL STATUS")
     print("-" * 40)
 
-    remaining_users = len(await User.find())
-    remaining_products = len(await Product.find())
+    remaining_users = await User.count()
+    remaining_products = await Product.count()
     print(f"Final count - Users: {remaining_users}, Products: {remaining_products}")
 
     print("\n🎯 KEY BENEFITS")

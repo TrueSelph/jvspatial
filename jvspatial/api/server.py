@@ -3,11 +3,12 @@
 This module provides a high-level, object-oriented interface for creating
 FastAPI servers with jvspatial integration, including automatic database
 setup, lifecycle management, and endpoint routing.
+
 """
 
-import inspect
+import contextlib
 import logging
-import sys
+import re
 from typing import (
     Any,
     Callable,
@@ -23,34 +24,68 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from jvspatial.api.components import AppBuilder, EndpointManager, ErrorHandler
+from jvspatial.api.components import AppBuilder, EndpointManager
+from jvspatial.api.components.error_handler import APIErrorHandler
 from jvspatial.api.config import ServerConfig
 from jvspatial.api.constants import APIRoutes
-from jvspatial.api.endpoints.response import create_endpoint_helper
 from jvspatial.api.endpoints.router import EndpointRouter
 from jvspatial.api.middleware.manager import MiddlewareManager
-from jvspatial.api.services.discovery import PackageDiscoveryService
+from jvspatial.api.services.discovery import EndpointDiscoveryService
 from jvspatial.api.services.lifecycle import LifecycleManager
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node, Root, Walker
 from jvspatial.db.factory import create_database
+from jvspatial.logging import configure_standard_logging
+
+
+class _LevelColorFormatter(logging.Formatter):
+    """Colorize only the level name to match jvspatial console format."""
+
+    _LEVEL_COLORS = {
+        "DEBUG": "\033[36m",  # Cyan
+        "INFO": "\033[32m",  # Green
+        "WARNING": "\033[33m",  # Yellow
+        "ERROR": "\033[31m",  # Red
+        "CRITICAL": "\033[41m\033[97m",  # White on red background
+    }
+    _RESET = "\033[0m"
+
+    def format(self, record: logging.LogRecord) -> str:  # type: ignore[override]
+        color = self._LEVEL_COLORS.get(record.levelname, "")
+        original_levelname = record.levelname
+        if color:
+            record.levelname = f"{color}{record.levelname}{self._RESET}"
+        try:
+            return super().format(record)
+        finally:
+            record.levelname = original_levelname
 
 
 class Server:
-    """High-level FastAPI server wrapper for jvspatial applications.
+    """Base server class for FastAPI applications using jvspatial.
 
-    This class provides a simplified interface for creating FastAPI servers
-    with automatic jvspatial integration, database setup, and lifecycle management.
+    This class provides core server functionality including:
+    - FastAPI application creation and configuration
+    - Database and file storage initialization
+    - Endpoint registration and routing
+    - Middleware and exception handling
+    - Authentication setup
+    - Lifecycle management
+
+    For Lambda/serverless deployments, use LambdaServer which extends this class
+    with Lambda-specific functionality.
 
     Example:
         ```python
         from jvspatial.api.server import Server, endpoint
         from jvspatial.core.entities import Walker, Node, on_visit
 
-        # Simple server with default GraphContext
+        # Standard server
         server = Server(
             title="My Spatial API",
-            description="A spatial data management API"
+            description="A spatial data management API",
+            db_type="json",
+            db_path="./data"
         )
 
         @endpoint("/process")
@@ -63,18 +98,6 @@ class Server:
 
         if __name__ == "__main__":
             server.run()
-        ```
-
-        Advanced GraphContext configuration:
-        ```python
-        server = Server(
-            title="My API",
-            db_type="json",
-            db_path="./my_data"
-        )
-
-        # Access GraphContext if needed
-        ctx = server.get_graph_context()
         ```
     """
 
@@ -90,21 +113,24 @@ class Server:
             **kwargs: Additional configuration parameters
         """
         # Initialize configuration using clean merging
-        self.config = ServerConfig(**self._merge_config(config, kwargs))
+        merged_config = self._merge_config(config, kwargs)
+
+        self.config = ServerConfig(**merged_config)
 
         # Initialize focused components
         self.app_builder = AppBuilder(self.config)
         self.endpoint_manager = EndpointManager()
-        self.error_handler = ErrorHandler()
+        self.error_handler = APIErrorHandler()
         self.middleware_manager = MiddlewareManager(self)
         self.lifecycle_manager = LifecycleManager(self)
-        self.discovery_service = PackageDiscoveryService(self)
+        self.discovery_service = EndpointDiscoveryService(self)
 
-        # Initialize legacy components for backward compatibility
+        # Initialize application components
         self.app: Optional[FastAPI] = None
         self.endpoint_router = EndpointRouter()  # Main router for all endpoints
         self._exception_handlers: Dict[Union[int, Type[Exception]], Callable] = {}
         self._logger = logging.getLogger(__name__)
+
         self._graph_context: Optional[GraphContext] = None
 
         # File storage components
@@ -126,9 +152,6 @@ class Server:
         self._auth_config: Optional[Any] = None
         self._auth_endpoints_registered = False
 
-        # Serverless/Lambda handler
-        self._lambda_handler: Optional[Any] = None
-
         # Automatically set this server as the current server in context
         # The most recently instantiated Server becomes the current one
         from jvspatial.api.context import set_current_server
@@ -145,10 +168,6 @@ class Server:
         # Initialize file storage if enabled
         if self.config.file_storage_enabled:
             self._initialize_file_storage()
-
-        # Initialize serverless handler if enabled
-        if self.config.serverless_mode:
-            self._initialize_serverless_handler()
 
     def _configure_authentication(self: "Server") -> None:
         """Configure authentication middleware and register auth endpoints if enabled."""
@@ -172,7 +191,7 @@ class Server:
         # Register authentication endpoints
         self._register_auth_endpoints()
 
-        self._logger.info("🔐 Authentication configured and endpoints registered")
+        self._logger.debug("🔐 Authentication configured and endpoints registered")
 
     def _register_auth_endpoints(self: "Server") -> None:
         """Register authentication endpoints if auth is enabled."""
@@ -210,7 +229,7 @@ class Server:
             return AuthenticationService(prime_ctx)
 
         # Create auth router
-        auth_router = APIRouter(prefix="/auth", tags=["Authentication"])
+        auth_router = APIRouter(prefix="/auth", tags=["App"])
 
         # Create custom security scheme for BearerAuth compatibility
         security = HTTPBearer(scheme_name="BearerAuth")
@@ -251,7 +270,11 @@ class Server:
         # Register endpoint
         @auth_router.post("/register", response_model=UserResponse)
         async def register(user_data: UserCreate):
-            """Register a new user."""
+            """Register a new user.
+
+            The email field is validated by Pydantic's EmailStr type,
+            which ensures proper email format before this function is called.
+            """
             try:
                 # Initialize authentication service with current context
                 auth_service = get_auth_service()
@@ -330,16 +353,30 @@ class Server:
         that uses the current database from DatabaseManager.
         """
         try:
-            from jvspatial.db.manager import get_database_manager
+            from jvspatial.db.manager import (
+                DatabaseManager,
+                get_database_manager,
+                set_database_manager,
+            )
 
-            # Get or create database manager
-            manager = get_database_manager()
+            # Create prime database based on configuration FIRST
+            # This ensures we use the server's configuration, not default environment variables
+            prime_db = None
 
-            # Create prime database based on configuration
             if self.config.db_type == "json":
+                # Check if db_path is an S3 path (not supported for file-based databases)
+                db_path = self.config.db_path or "./jvdb"
+                if db_path.startswith("s3://"):
+                    raise ValueError(
+                        f"JSON database does not support S3 paths. "
+                        f"Received: {db_path}. "
+                        f"Use a local path or DynamoDB (db_type='dynamodb') for cloud storage."
+                    )
+
+                # Create database with the (potentially overridden) db_path
                 prime_db = create_database(
                     db_type="json",
-                    base_path=self.config.db_path or "./jvdb",
+                    base_path=db_path,
                 )
             elif self.config.db_type == "mongodb":
                 prime_db = create_database(
@@ -348,9 +385,17 @@ class Server:
                     db_name=self.config.db_database_name or "jvdb",
                 )
             elif self.config.db_type == "sqlite":
+                # Check if db_path is an S3 path (not supported for file-based databases)
+                db_path = self.config.db_path or "jvdb/sqlite/jvspatial.db"
+                if db_path.startswith("s3://"):
+                    raise ValueError(
+                        f"SQLite database does not support S3 paths. "
+                        f"Received: {db_path}. "
+                        f"Use a local path or DynamoDB (db_type='dynamodb') for cloud storage."
+                    )
                 prime_db = create_database(
                     db_type="sqlite",
-                    db_path=self.config.db_path or "jvdb/sqlite/jvspatial.db",
+                    db_path=db_path,
                 )
             elif self.config.db_type == "dynamodb":
                 prime_db = create_database(
@@ -364,17 +409,18 @@ class Server:
             else:
                 raise ValueError(f"Unsupported database type: {self.config.db_type}")
 
-            # Initialize manager with prime database if not already initialized
+            # Get or create database manager and set the prime database
+            # This ensures the manager uses our configured database, not defaults
+
             try:
-                manager.get_prime_database()
-                # Update prime database if it was already initialized
+                manager = get_database_manager()
+                # Update prime database if manager already exists
                 manager._prime_database = prime_db
                 manager._databases["prime"] = prime_db
             except (RuntimeError, AttributeError):
-                # Manager not initialized yet, set it up
-                manager._prime_database = prime_db
-                manager._databases["prime"] = prime_db
-                manager._current_database_name = "prime"
+                # Manager doesn't exist yet, create it with our prime database
+                manager = DatabaseManager(prime_database=prime_db)
+                set_database_manager(manager)
 
             # Create GraphContext using current database (which defaults to prime)
             self._graph_context = GraphContext(database=manager.get_current_database())
@@ -384,7 +430,7 @@ class Server:
 
             set_default_context(self._graph_context)
 
-            self._logger.info(
+            self._logger.debug(
                 f"🎯 GraphContext initialized with {self.config.db_type} database (prime) and set as default"
             )
 
@@ -400,9 +446,10 @@ class Server:
 
             # Initialize file interface
             if self.config.file_storage_provider == "local":
+                storage_root = self.config.file_storage_root or ".files"
                 self._file_interface = create_storage(
                     provider="local",
-                    root_dir=self.config.file_storage_root,
+                    root_dir=storage_root,
                     base_url=self.config.file_storage_base_url,
                     max_file_size=self.config.file_storage_max_size,
                 )
@@ -438,88 +485,6 @@ class Server:
         except Exception as e:
             self._logger.error(f"❌ Failed to initialize file storage: {e}")
             raise
-
-    def _initialize_serverless_handler(self: "Server") -> None:
-        """Initialize serverless Lambda handler if serverless mode is enabled.
-
-        This method automatically creates a Mangum adapter for the FastAPI app
-        when serverless_mode is True in the configuration.
-        """
-        try:
-            from mangum import Mangum
-        except ImportError:
-            self._logger.warning(
-                "Mangum is required for serverless deployment but not installed. "
-                "Install it with: pip install mangum>=0.17.0 "
-                "or pip install jvspatial[serverless]"
-            )
-            return
-
-        # Get the app (this will create it if it doesn't exist)
-        app = self.get_app()
-
-        # Configure Mangum with serverless settings
-        mangum_config: Dict[str, Any] = {
-            "lifespan": self.config.serverless_lifespan,
-        }
-
-        if self.config.serverless_api_gateway_base_path:
-            mangum_config["api_gateway_base_path"] = (
-                self.config.serverless_api_gateway_base_path
-            )
-
-        # Create Mangum adapter
-        self._lambda_handler = Mangum(app, **mangum_config)
-
-        # Automatically expose handler at module level for Lambda deployment
-        self._expose_handler_to_caller_module()
-
-        self._logger.info(
-            "🚀 Serverless Lambda handler initialized and ready for deployment"
-        )
-
-    def _expose_handler_to_caller_module(self: "Server") -> None:
-        """Expose the Lambda handler as a module-level variable in the caller's module.
-
-        This allows AWS Lambda to access the handler without requiring
-        manual assignment (e.g., `handler = server.lambda_handler`).
-        """
-        try:
-            # Get the caller's frame (skip this method and _initialize_serverless_handler)
-            frame = inspect.currentframe()
-            if frame is None:
-                return
-
-            # Go up 2 frames: _expose_handler_to_caller_module -> _initialize_serverless_handler -> caller
-            caller_frame = frame.f_back
-            if caller_frame is None:
-                return
-            caller_frame = caller_frame.f_back
-            if caller_frame is None:
-                return
-
-            # Get the caller's module
-            caller_module = sys.modules.get(caller_frame.f_globals.get("__name__"))
-            if caller_module is None:
-                return
-
-            # Only expose if 'handler' doesn't already exist in the module
-            # This prevents overwriting user-defined handlers
-            handler_attr = "handler"  # Use variable to avoid B010 flake8 warning
-            if not hasattr(caller_module, handler_attr):
-                # Dynamically set handler attribute on module for Lambda deployment
-                # Using setattr with variable to satisfy flake8 B010, with type ignore for mypy
-                setattr(caller_module, handler_attr, self._lambda_handler)  # type: ignore[attr-defined]
-                self._logger.debug(
-                    f"✅ Lambda handler automatically exposed as 'handler' in {caller_module.__name__}"
-                )
-            else:
-                self._logger.debug(
-                    f"⚠️  'handler' already exists in {caller_module.__name__}, skipping auto-exposure"
-                )
-        except Exception as e:
-            # Don't fail if we can't expose the handler - user can still access it manually
-            self._logger.debug(f"Could not auto-expose handler: {e}")
 
     def middleware(self: "Server", middleware_type: str = "http") -> Callable:
         """Add middleware to the application.
@@ -624,6 +589,9 @@ class Server:
         # Configure middleware using MiddlewareManager
         self.middleware_manager.configure_all(app)
 
+        # Add error logging context middleware for cleanup
+        self._configure_error_logging_context_middleware(app)
+
         # Configure authentication middleware if enabled
         self._configure_auth_middleware(app)
 
@@ -631,9 +599,20 @@ class Server:
         self._configure_exception_handlers(app)
 
         # Register core routes using AppBuilder
-        self.app_builder.register_core_routes(app, self._graph_context)
+        self.app_builder.register_core_routes(app, self._graph_context, server=self)
 
-        # Include routers
+        # Discover and register endpoints from pre-loaded modules BEFORE including routers
+        # This ensures all @endpoint decorated functions/classes are registered with the
+        # endpoint router before it's included in the FastAPI app
+        if self.discovery_service.enabled and not self._is_running:
+            try:
+                discovered_count = self.discovery_service.discover_and_register()
+                if discovered_count > 0:
+                    self._logger.info(f"🔍 Endpoints: {discovered_count} discovered")
+            except Exception as e:
+                self._logger.warning(f"⚠️ Endpoint discovery failed: {e}")
+
+        # Include routers (endpoint router now contains all discovered endpoints)
         self._include_routers(app)
 
         # Include authentication router if configured
@@ -686,7 +665,7 @@ class Server:
         self.middleware_manager.configure_all(app)
 
     def _configure_exception_handlers(self: "Server", app: FastAPI) -> None:
-        """Configure all exception handlers using the unified ErrorHandler.
+        """Configure all exception handlers using the unified APIErrorHandler.
 
         Args:
             app: FastAPI application instance to configure
@@ -695,12 +674,337 @@ class Server:
         for exc_class, handler in self._exception_handlers.items():
             app.add_exception_handler(exc_class, handler)
 
+        # Explicitly register JVSpatialAPIException handler BEFORE HTTPException
+        # This ensures function endpoints that raise ResourceNotFoundError, etc.
+        # are handled gracefully without triggering Starlette's error logging
+        from jvspatial.exceptions import JVSpatialAPIException
+
+        @app.exception_handler(JVSpatialAPIException)
+        async def jvspatial_exception_handler(
+            request: Request, exc: JVSpatialAPIException
+        ) -> JSONResponse:
+            # Known errors (4xx) are handled gracefully - no stack trace needed
+            # Only 5xx errors will be logged with stack traces for debugging
+            return await APIErrorHandler.handle_exception(request, exc)
+
+        # Explicitly register HTTPException handler to ensure consistent formatting
+        # This must be registered before the generic Exception handler
+        # FastAPI's default HTTPException handler returns {"detail": "..."} format
+        # We override it to use our consistent error structure
+        from fastapi import HTTPException
+
+        @app.exception_handler(HTTPException)
+        async def http_exception_handler(
+            request: Request, exc: HTTPException
+        ) -> JSONResponse:
+            # Known errors (4xx) are handled gracefully - no stack trace needed
+            # Only 5xx errors will be logged with stack traces for debugging
+            return await APIErrorHandler.handle_exception(request, exc)
+
         # Add default exception handler using the unified ErrorHandler
+        # This catches unexpected exceptions (not HTTPException, not JVSpatialAPIException)
+        # These are treated as 500 errors and logged with full stack traces
         @app.exception_handler(Exception)
         async def global_exception_handler(
             request: Request, exc: Exception
         ) -> JSONResponse:
-            return await ErrorHandler.handle_exception(request, exc)
+            # All unexpected exceptions are treated as 500 errors
+            # They will be logged with stack traces for debugging
+            return await APIErrorHandler.handle_exception(request, exc)
+
+        # Configure Starlette's error logger to suppress stack traces for known errors
+        # Starlette logs exceptions before they reach our handlers, so we need to
+        # configure the logger to not print stack traces for HTTPException and JVSpatialAPIException
+        import logging
+
+        from fastapi import HTTPException
+
+        from jvspatial.exceptions import JVSpatialAPIException
+
+        starlette_error_logger = logging.getLogger("starlette.error")
+        uvicorn_error_logger = logging.getLogger("uvicorn.error")
+        uvicorn_access_logger = logging.getLogger("uvicorn.access")
+
+        # Set log level to CRITICAL to prevent these loggers from emitting ERROR logs
+        # This adds defense in depth alongside the filter
+        starlette_error_logger.setLevel(logging.CRITICAL)
+        uvicorn_error_logger.setLevel(logging.CRITICAL)
+
+        def _is_client_error(exc_type, exc_value) -> bool:
+            """Check if exception is a known client error (4xx)."""
+            # Check for FastAPI HTTPException
+            if exc_type is HTTPException:
+                return exc_value.status_code < 500
+
+            # Check for JVSpatialAPIException
+            if exc_type is JVSpatialAPIException or isinstance(
+                exc_value, JVSpatialAPIException
+            ):
+                return hasattr(exc_value, "status_code") and exc_value.status_code < 500
+
+            # Check for httpx.HTTPStatusError (external API errors)
+            try:
+                import httpx
+
+                if isinstance(exc_value, httpx.HTTPStatusError):
+                    return exc_value.response.status_code < 500
+            except ImportError:
+                pass  # httpx not installed
+
+            return False
+
+        # Create a filter that suppresses framework-level error logs
+        # Our APIErrorHandler is the authoritative source for error logging
+        class CentralizedErrorFilter(logging.Filter):
+            """Filter that suppresses framework-level error logs.
+
+            Our APIErrorHandler is the authoritative source for error logging.
+            This filter suppresses uvicorn/starlette error logs to prevent duplicates,
+            ensuring each exception is logged exactly once with proper context.
+            """
+
+            def filter(self, record: logging.LogRecord) -> bool:
+                """Filter out framework-level exception log records."""
+                # Only filter exception logs from uvicorn/starlette
+                logger_name = record.name
+
+                # NEVER filter our own error handler logs - it's the authoritative source
+                if logger_name == "jvspatial.api.components.error_handler":
+                    return True  # Always allow our error handler logs
+
+                # Check for exact logger name match
+                # Suppress ALL ERROR/CRITICAL level logs from uvicorn/starlette
+                # Our custom exception handlers log all exceptions with proper context
+                # This prevents duplicate logging - we suppress unconditionally since uvicorn
+                # logs BEFORE our handler runs, so timing-based checks won't work
+                if (
+                    logger_name == "uvicorn.error" or logger_name == "starlette.error"
+                ) and record.levelno >= logging.ERROR:
+                    # Suppress ALL ERROR/CRITICAL logs from these loggers
+                    # Our handler will log all exceptions properly
+                    return False
+
+                # Also check root logger handlers for propagated uvicorn/starlette errors
+                # Sometimes errors propagate to root logger, but only suppress if NOT from our handler
+                if (
+                    record.levelno >= logging.ERROR
+                    and logger_name != "jvspatial.api.components.error_handler"
+                ):
+                    try:
+                        message = str(record.getMessage())
+                        # Check if this looks like a uvicorn/starlette error message
+                        # But be careful - our error handler also includes tracebacks
+                        # Only suppress if it's clearly a uvicorn/starlette message
+                        if any(
+                            pattern in message
+                            for pattern in [
+                                "Exception in ASGI application",
+                                "During handling of the above exception",
+                            ]
+                        ):
+                            # This is likely a propagated uvicorn/starlette error
+                            # Suppress it since our handler will log it
+                            return False
+                    except Exception:
+                        pass
+
+                # Allow all other logs
+                return True
+
+        # Create a filter that suppresses uvicorn access logs for error responses
+        # that were already logged by our error handler
+        class ErrorAwareAccessFilter(logging.Filter):
+            """Filter that suppresses access logs for error responses already logged by error handler.
+
+            This filter intelligently correlates access logs with error logs to prevent
+            duplicate reporting. If an error response (4xx/5xx) was already logged by
+            the internal error handler, the corresponding access log is suppressed.
+            Successful responses (2xx/3xx) are always logged.
+            """
+
+            def filter(self, record: logging.LogRecord) -> bool:
+                """Filter out access logs for error responses that were already logged."""
+                # Only filter uvicorn.access logs
+                if record.name != "uvicorn.access":
+                    return True  # Allow all non-access logs
+
+                # Parse status code and request details from access log message
+                # Format: "127.0.0.1:57637 - "POST /auth/login HTTP/1.1" 401"
+                try:
+                    message = record.getMessage()
+
+                    # Extract status code from end of message (last 3-digit number)
+                    status_match = re.search(r"\s(\d{3})\s*$", message)
+                    if not status_match:
+                        # Can't parse status code, allow the log (fail open)
+                        return True
+
+                    status_code = int(status_match.group(1))
+
+                    # Only suppress error responses (4xx, 5xx)
+                    # Successful responses (2xx, 3xx) should always be logged
+                    if status_code < 400:
+                        return True  # Always log successful responses
+
+                    # Check if this error response was already logged by error handler
+                    from jvspatial.api.components.error_handler import (
+                        _logged_error_responses,
+                    )
+
+                    try:
+                        logged_responses = _logged_error_responses.get()
+                        # Check if any error response with matching status code was logged
+                        # Since access logs come after error logs in the request lifecycle,
+                        # any error logged by our handler should be in the context
+                        # We check for matching status code - if multiple errors with same
+                        # status occur, we suppress all (conservative approach)
+                        if any(status == status_code for _, status in logged_responses):
+                            # An error with this status code was logged by our handler
+                            # Suppress the access log to avoid duplication
+                            return False
+                    except LookupError:
+                        # No logged errors in context, allow the log
+                        # This can happen if error handler didn't run or context wasn't initialized
+                        pass
+
+                    # If we can't determine correlation, allow the log (fail open)
+                    return True
+
+                except Exception:
+                    # If parsing fails, allow the log (fail open for safety)
+                    # Better to have duplicate logs than missing logs
+                    return True
+
+        # Create a custom formatter that suppresses tracebacks for known errors
+        class KnownErrorFormatter(logging.Formatter):
+            """Formatter that suppresses stack traces for known errors."""
+
+            def formatException(self, ei):  # noqa: N802
+                """Override to return empty string for known errors."""
+                if ei:
+                    exc_type, exc_value, _ = ei
+                    # Suppress stack traces for client errors (4xx) - they're not real exceptions
+                    if _is_client_error(exc_type, exc_value):
+                        return ""  # No stack trace for client errors
+                return super().formatException(ei) if ei else ""
+
+        # Apply filter and formatter to Starlette's error logger
+        # Apply filter at logger level FIRST to catch all logs before handlers process them
+        centralized_error_filter = CentralizedErrorFilter()
+        error_aware_access_filter = ErrorAwareAccessFilter()
+        known_error_formatter = KnownErrorFormatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
+
+        # Add filter to logger itself FIRST (applies to all handlers, including future ones)
+        # This ensures the filter runs before any handlers process the log records
+        starlette_error_logger.addFilter(centralized_error_filter)
+        uvicorn_error_logger.addFilter(centralized_error_filter)
+        uvicorn_access_logger.addFilter(error_aware_access_filter)
+
+        # Apply filter and formatter to existing handlers
+        from logging import Handler
+
+        # Get a fresh copy of handlers list to avoid modification during iteration
+        starlette_handlers = list(starlette_error_logger.handlers)
+        uvicorn_handlers = list(uvicorn_error_logger.handlers)
+        uvicorn_access_handlers = list(uvicorn_access_logger.handlers)
+
+        for log_handler in starlette_handlers:
+            # Remove any existing CentralizedErrorFilter to avoid duplicates
+            log_handler.filters = [
+                f
+                for f in log_handler.filters
+                if not isinstance(f, CentralizedErrorFilter)
+            ]
+            log_handler.addFilter(centralized_error_filter)
+            log_handler.setFormatter(known_error_formatter)
+
+        # Also configure uvicorn's error logger
+        for uvicorn_log_handler in uvicorn_handlers:
+            # Remove any existing CentralizedErrorFilter to avoid duplicates
+            uvicorn_log_handler.filters = [
+                f
+                for f in uvicorn_log_handler.filters
+                if not isinstance(f, CentralizedErrorFilter)
+            ]
+            uvicorn_log_handler.addFilter(centralized_error_filter)
+            uvicorn_log_handler.setFormatter(known_error_formatter)
+
+        # Configure uvicorn's access logger with error-aware filter
+        for uvicorn_access_handler in uvicorn_access_handlers:
+            # Remove any existing ErrorAwareAccessFilter to avoid duplicates
+            uvicorn_access_handler.filters = [
+                f
+                for f in uvicorn_access_handler.filters
+                if not isinstance(f, ErrorAwareAccessFilter)
+            ]
+            uvicorn_access_handler.addFilter(error_aware_access_filter)
+
+        # Also add filter to root logger handlers to catch any propagated logs
+        root_logger = logging.getLogger()
+        for root_handler in root_logger.handlers:
+            # Only add filter if it's not already there
+            if not any(
+                isinstance(f, CentralizedErrorFilter) for f in root_handler.filters
+            ):
+                root_handler.addFilter(centralized_error_filter)
+            # Also add access filter if not present
+            if not any(
+                isinstance(f, ErrorAwareAccessFilter) for f in root_handler.filters
+            ):
+                root_handler.addFilter(error_aware_access_filter)
+
+        # Also configure the logger to use this formatter for any new handlers
+        if not starlette_error_logger.handlers:
+            new_handler: Handler = logging.StreamHandler()
+            new_handler.addFilter(centralized_error_filter)
+            new_handler.setFormatter(known_error_formatter)
+            starlette_error_logger.addHandler(new_handler)
+
+    def _configure_error_logging_context_middleware(
+        self: "Server", app: FastAPI
+    ) -> None:
+        """Configure middleware to clean up error logging context after each request.
+
+        This middleware ensures that context variables used for tracking logged
+        error responses are properly cleaned up after each request to prevent
+        memory leaks and context pollution between requests.
+
+        Args:
+            app: FastAPI application instance
+        """
+        from starlette.middleware.base import BaseHTTPMiddleware
+
+        class ErrorLoggingContextMiddleware(BaseHTTPMiddleware):
+            """Middleware to manage error logging context lifecycle."""
+
+            async def dispatch(self, request: Request, call_next):
+                """Process request and clean up context after response."""
+                from jvspatial.api.components.error_handler import (
+                    _logged_error_responses,
+                )
+
+                # Initialize context for this request
+                with contextlib.suppress(Exception):
+                    # If context initialization fails, continue without it
+                    _logged_error_responses.set(set())
+
+                try:
+                    # Process request
+                    response = await call_next(request)
+                    return response
+                finally:
+                    # Clean up context after request completes
+                    with contextlib.suppress(Exception):
+                        # If cleanup fails, continue - context will be reset on next request
+                        # Clear the context variable for this request
+                        # This prevents memory leaks and ensures clean state
+                        _logged_error_responses.set(set())
+
+        # Add middleware early in the stack to ensure context is available
+        # for the entire request lifecycle
+        app.add_middleware(ErrorLoggingContextMiddleware)
 
     def _configure_auth_middleware(self: "Server", app: FastAPI) -> None:
         """Configure authentication middleware if authentication is enabled."""
@@ -715,7 +1019,7 @@ class Server:
             app.add_middleware(
                 AuthenticationMiddleware, auth_config=self._auth_config, server=self
             )
-            self._logger.info("🔐 Authentication middleware added to server")
+            # Authentication middleware logging handled by middleware manager
         except ImportError as e:
             self._logger.warning(f"Could not add authentication middleware: {e}")
 
@@ -734,12 +1038,12 @@ class Server:
                 # Test database connectivity through GraphContext
                 if self._graph_context:
                     # Use explicit GraphContext
-                    root = await self._graph_context.get(Root, "n:Root:root")
+                    root = await self._graph_context.get(Root, "n.Root.root")
                     if not root:
                         root = await self._graph_context.create(Root)
                 else:
                     # Use default GraphContext behavior
-                    root = await Root.get("n:Root:root")
+                    root = await Root.get("n.Root.root")
                     if not root:
                         root = await Root.create()
                 return {
@@ -764,13 +1068,16 @@ class Server:
         @app.get("/")
         async def root_info() -> Dict[str, Any]:
             """Root endpoint with API information."""
-            return {
+            info = {
                 "service": self.config.title,
                 "description": self.config.description,
                 "version": self.config.version,
                 "docs": self.config.docs_url,
                 "health": "/health",
             }
+            if self.config.graph_endpoint_enabled:
+                info["graph"] = "/api/graph"
+            return info
 
     def _include_routers(self: "Server", app: FastAPI) -> None:
         """Include endpoint routers and dynamic routers.
@@ -1047,6 +1354,69 @@ class Server:
 
         return removed_count
 
+    def disable_auth_endpoint(self: "Server", path: str) -> bool:
+        """Disable a specific authentication endpoint by removing it from the auth router.
+
+        This method removes routes from the auth router before the app is created.
+        It only works with auth endpoints registered through the auth router.
+
+        Args:
+            path: The path of the auth endpoint to disable (e.g., "/register", "/login")
+                  Can be relative to router prefix or full path including prefix.
+
+        Returns:
+            True if the endpoint was found and disabled, False otherwise
+        """
+        if not hasattr(self, "_auth_router") or self._auth_router is None:
+            self._logger.debug("Auth router not found - cannot disable endpoint")
+            return False
+
+        # Normalize path (ensure it starts with "/")
+        normalized_path = path if path.startswith("/") else f"/{path}"
+
+        # Get router prefix (default is "/auth")
+        router_prefix = getattr(self._auth_router, "prefix", "/auth")
+        if not router_prefix:
+            router_prefix = ""
+
+        # Build full path with prefix for matching
+        # FastAPI routes store the full path including the router prefix
+        full_path_with_prefix = f"{router_prefix}{normalized_path}"
+
+        # Find and remove routes matching the path
+        routes_to_remove = []
+        for route in self._auth_router.routes:
+            # FastAPI routes include the router prefix in the path
+            # So "/auth/register" is stored as "/auth/register", not "/register"
+            if hasattr(route, "path") and route.path == full_path_with_prefix:
+                routes_to_remove.append(route)
+                self._logger.debug(f"Found route to remove: {route.path}")
+
+        if routes_to_remove:
+            for route in routes_to_remove:
+                self._auth_router.routes.remove(route)
+            self._logger.debug(f"🔒 Disabled auth endpoint: {full_path_with_prefix}")
+
+            # If the app has already been created, mark it for rebuilding
+            # so the changes take effect
+            if hasattr(self, "app") and self.app is not None:
+                self._app_needs_rebuild = True
+                self._logger.debug("App already exists - marked for rebuild")
+
+            return True
+        else:
+            # Log available routes for debugging
+            available_paths = [
+                route.path
+                for route in self._auth_router.routes
+                if hasattr(route, "path")
+            ]
+            self._logger.debug(
+                f"Could not find endpoint {full_path_with_prefix} to disable. "
+                f"Available routes: {available_paths}"
+            )
+            return False
+
     async def list_function_endpoints(self: "Server") -> Dict[str, Dict[str, Any]]:
         """Get information about all registered function endpoints.
 
@@ -1132,91 +1502,6 @@ class Server:
             self.app = self._create_app()
         return self.app
 
-    @property
-    def lambda_handler(self: "Server") -> Optional[Any]:
-        """Get the Lambda handler if serverless mode is enabled.
-
-        Returns:
-            Lambda handler function if serverless is enabled, None otherwise
-
-        Example:
-            ```python
-            server = Server(serverless_mode=True, title="My Lambda API")
-
-            # Access handler directly
-            handler = server.lambda_handler
-            ```
-        """
-        return self._lambda_handler
-
-    def get_lambda_handler(self: "Server", **mangum_kwargs: Any) -> Any:
-        """Get an AWS Lambda handler for serverless deployment.
-
-        This method wraps the FastAPI application with Mangum, an ASGI adapter
-        for AWS Lambda. If serverless mode is enabled, returns the pre-configured
-        handler. Otherwise, creates a new handler with the provided options.
-
-        Args:
-            **mangum_kwargs: Additional Mangum configuration options (only used
-                if serverless mode is not enabled). Common options include:
-                - lifespan: "off" to disable lifespan events (default: "auto")
-                - api_gateway_base_path: Base path for API Gateway
-                - text_mime_types: List of text MIME types
-
-        Returns:
-            Lambda handler function compatible with AWS Lambda
-
-        Example:
-            ```python
-            # Option 1: Enable serverless mode (handler created automatically)
-            server = Server(serverless_mode=True, title="My API")
-            handler = server.get_lambda_handler()  # Returns pre-configured handler
-
-            # Option 2: Manual handler creation
-            server = Server(title="My API")
-            handler = server.get_lambda_handler(lifespan="auto")
-            ```
-
-        Note:
-            Requires the 'mangum' package to be installed:
-            pip install mangum>=0.17.0
-            Or install optional dependencies:
-            pip install jvspatial[serverless]
-        """
-        # If serverless mode is enabled, return the pre-configured handler
-        if self.config.serverless_mode and self._lambda_handler is not None:
-            if mangum_kwargs:
-                self._logger.warning(
-                    "Serverless mode is enabled. Additional mangum_kwargs are ignored. "
-                    "Configure serverless options via ServerConfig instead."
-                )
-            return self._lambda_handler
-
-        # Otherwise, create handler on-demand
-        try:
-            from mangum import Mangum
-        except ImportError:
-            raise ImportError(
-                "Mangum is required for serverless deployment. "
-                "Install it with: pip install mangum>=0.17.0 "
-                "or pip install jvspatial[serverless]"
-            )
-
-        app = self.get_app()
-
-        # Configure Mangum with sensible defaults for Lambda
-        mangum_config = {
-            "lifespan": "auto",  # Enable lifespan events (startup/shutdown)
-            **mangum_kwargs,
-        }
-
-        # Create Mangum adapter
-        handler = Mangum(app, **mangum_config)
-
-        self._logger.info("🚀 Lambda handler created for serverless deployment")
-
-        return handler
-
     def run(
         self: "Server",
         host: Optional[str] = None,
@@ -1232,32 +1517,69 @@ class Server:
             reload: Enable auto-reload for development
             **uvicorn_kwargs: Additional uvicorn parameters
         """
-        # Set up logging
-        logging.basicConfig(
-            level=getattr(logging, self.config.log_level.upper()),
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        )
+        # Set up standard logging (colorized level names, consistent format)
+        configure_standard_logging(level=self.config.log_level, enable_colors=True)
 
         # Use provided values or fall back to config
         run_host = host or self.config.host
         run_port = port or self.config.port
         run_reload = reload if reload is not None else self.config.debug
 
-        self._logger.info(f"🔧 Server starting at http://{run_host}:{run_port}")
+        # Log concise server startup info
+        server_info = f"http://{run_host}:{run_port}"
         if self.config.docs_url:
-            self._logger.info(
-                f"📖 API docs: http://{run_host}:{run_port}{self.config.docs_url}"
-            )
+            server_info += f" | docs: {self.config.docs_url}"
+        self._logger.info(f"🔧 Server: {server_info}")
 
         # Get the app
         app = self.get_app()
 
-        # Configure uvicorn parameters
+        # Configure uvicorn parameters with aligned logging format
+        formatter = _LevelColorFormatter(
+            fmt="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+            datefmt="%H:%M:%S",
+        )
+
         uvicorn_config = {
             "host": run_host,
             "port": run_port,
             "reload": run_reload,
             "log_level": self.config.log_level,
+            "log_config": {
+                "version": 1,
+                "disable_existing_loggers": False,
+                "formatters": {
+                    "default": {
+                        "()": _LevelColorFormatter,
+                        "fmt": formatter._fmt,
+                        "datefmt": formatter.datefmt,
+                    }
+                },
+                "handlers": {
+                    "default": {
+                        "class": "logging.StreamHandler",
+                        "formatter": "default",
+                        "stream": "ext://sys.stdout",
+                    }
+                },
+                "loggers": {
+                    "uvicorn": {
+                        "handlers": ["default"],
+                        "level": self.config.log_level.upper(),
+                        "propagate": False,
+                    },
+                    "uvicorn.error": {
+                        "handlers": ["default"],
+                        "level": self.config.log_level.upper(),
+                        "propagate": False,
+                    },
+                    "uvicorn.access": {
+                        "handlers": ["default"],
+                        "level": self.config.log_level.upper(),
+                        "propagate": False,
+                    },
+                },
+            },
             **uvicorn_kwargs,
         }
 
@@ -1282,11 +1604,51 @@ class Server:
 
         app = self.get_app()
 
+        formatter = _LevelColorFormatter(
+            fmt="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+            datefmt="%H:%M:%S",
+        )
+
         config = uvicorn.Config(
             app,
             host=run_host,
             port=run_port,
             log_level=self.config.log_level,
+            log_config={
+                "version": 1,
+                "disable_existing_loggers": False,
+                "formatters": {
+                    "default": {
+                        "()": _LevelColorFormatter,
+                        "fmt": formatter._fmt,
+                        "datefmt": formatter.datefmt,
+                    }
+                },
+                "handlers": {
+                    "default": {
+                        "class": "logging.StreamHandler",
+                        "formatter": "default",
+                        "stream": "ext://sys.stdout",
+                    }
+                },
+                "loggers": {
+                    "uvicorn": {
+                        "handlers": ["default"],
+                        "level": self.config.log_level.upper(),
+                        "propagate": False,
+                    },
+                    "uvicorn.error": {
+                        "handlers": ["default"],
+                        "level": self.config.log_level.upper(),
+                        "propagate": False,
+                    },
+                    "uvicorn.access": {
+                        "handlers": ["default"],
+                        "level": self.config.log_level.upper(),
+                        "propagate": False,
+                    },
+                },
+            },
             **uvicorn_kwargs,
         )
         server = uvicorn.Server(config)
@@ -1370,123 +1732,6 @@ class Server:
         return self.endpoint_manager.register_endpoint(path, methods, **kwargs)
 
 
-def endpoint(
-    path: str, methods: Optional[List[str]] = None, **kwargs: Any
-) -> Callable[[Union[Type[Walker], Callable]], Union[Type[Walker], Callable]]:
-    """Universal endpoint decorator for both walkers and functions.
-
-    Automatically detects whether decorating a Walker class or function.
-
-    Args:
-        path: URL path for the endpoint
-        methods: HTTP methods (default: ["POST"] for walkers, ["GET"] for functions)
-        **kwargs: Additional route parameters (tags, summary, etc.)
-
-    Returns:
-        Decorator function that works with both Walker classes and functions
-
-    Examples:
-        # Function endpoint (auto-detected)
-        @endpoint("/users/count", methods=["GET"])
-        async def get_user_count(endpoint):
-            return endpoint.success(data={"count": 42})
-
-        # Walker endpoint (auto-detected)
-        @endpoint("/process", methods=["POST"])
-        class ProcessData(Walker):
-            data: str
-    """
-    # Remove server parameter from kwargs if present - FastAPI doesn't need it
-    route_kwargs = {k: v for k, v in kwargs.items() if k != "server"}
-
-    def decorator(
-        target: Union[Type[Walker], Callable]
-    ) -> Union[Type[Walker], Callable]:
-        from jvspatial.api.context import get_current_server
-
-        current_server = get_current_server()
-
-        if current_server is None:
-            # Store configuration for later discovery
-            cast(Any, target)._jvspatial_endpoint_config = {
-                "path": path,
-                "methods": (
-                    methods or (["POST"] if issubclass(target, Walker) else ["GET"])
-                    if inspect.isclass(target)
-                    else ["GET"]
-                ),
-                "kwargs": route_kwargs,
-                "is_function": not inspect.isclass(target)
-                or not issubclass(target, Walker),
-            }
-            return target
-
-        # Handle Walker class
-        if inspect.isclass(target) and issubclass(target, Walker):
-            current_server.register_walker_class(
-                target, path, methods=methods or ["POST"], **route_kwargs
-            )
-            return target
-
-        # Handle function endpoint
-        func = target
-
-        # Create wrapper if endpoint helper is needed
-        if "endpoint" in inspect.signature(func).parameters:
-            import functools
-
-            @functools.wraps(func)
-            async def func_wrapper(*args: Any, **kwargs_inner: Any) -> Any:
-                endpoint_helper = create_endpoint_helper(walker_instance=None)
-                kwargs_inner["endpoint"] = endpoint_helper
-                return (
-                    await func(*args, **kwargs_inner)
-                    if inspect.iscoroutinefunction(func)
-                    else func(*args, **kwargs_inner)
-                )
-
-        else:
-            # If no wrapper is needed, func_wrapper is just the original func
-            func_wrapper = func  # type: ignore[assignment]
-
-        # Register with endpoint registry and router
-        try:
-            current_server._endpoint_registry.register_function(
-                func,
-                path,
-                methods=methods or ["GET"],
-                route_config={
-                    "path": path,
-                    "endpoint": func_wrapper,
-                    "methods": methods or ["GET"],
-                    **route_kwargs,
-                },
-                **route_kwargs,
-            )
-
-            current_server.endpoint_router.router.add_api_route(
-                path=path,
-                endpoint=func_wrapper,
-                methods=methods or ["GET"],
-                **route_kwargs,
-            )
-
-            current_server._logger.info(
-                f"{'🔄' if current_server._is_running else '📝'} "
-                f"{'Dynamically registered' if current_server._is_running else 'Registered'} "
-                f"function endpoint: {func.__name__} at {path}"
-            )
-
-        except Exception as e:
-            current_server._logger.warning(
-                f"Function {func.__name__} already registered: {e}"
-            )
-
-        return func
-
-    return decorator
-
-
 # Convenience function for quick server creation
 def create_server(
     title: str = "jvspatial API",
@@ -1508,66 +1753,3 @@ def create_server(
     return Server(
         title=title, description=description, version=version, **config_kwargs
     )
-
-
-def create_lambda_handler(
-    server: Optional[Server] = None,
-    **server_kwargs: Any,
-) -> Any:
-    """Create a Lambda handler from a Server instance or create a new one.
-
-    This is a convenience function for creating Lambda handlers. If a server
-    instance is provided, it will use that. Otherwise, it creates a new server
-    with the provided configuration.
-
-    Args:
-        server: Optional Server instance. If None, a new server will be created.
-        **server_kwargs: Configuration for creating a new server if server is None.
-            Also accepts **mangum_kwargs for Mangum configuration.
-
-    Returns:
-        Lambda handler function compatible with AWS Lambda
-
-    Example:
-        ```python
-        from jvspatial.api import endpoint, create_lambda_handler
-
-        @endpoint("/hello")
-        async def hello():
-            return {"message": "Hello from Lambda!"}
-
-        # Create handler - server will be auto-created
-        handler = create_lambda_handler(title="My Lambda API")
-        ```
-
-    Note:
-        Requires the 'mangum' package to be installed:
-        pip install mangum>=0.17.0
-        Or install optional dependencies:
-        pip install jvspatial[serverless]
-    """
-    # Separate mangum kwargs from server kwargs
-    mangum_kwargs = {}
-    server_config = {}
-
-    # Known Mangum configuration keys
-    mangum_keys = {
-        "lifespan",
-        "api_gateway_base_path",
-        "text_mime_types",
-        "exclude_headers",
-        "exclude_query_strings",
-    }
-
-    for key, value in server_kwargs.items():
-        if key in mangum_keys:
-            mangum_kwargs[key] = value
-        else:
-            server_config[key] = value
-
-    # Use provided server or create a new one
-    if server is None:
-        server = Server(**server_config)
-
-    # Get Lambda handler from server
-    return server.get_lambda_handler(**mangum_kwargs)

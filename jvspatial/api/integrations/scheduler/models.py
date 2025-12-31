@@ -113,5 +113,5 @@ class ScheduledTask(BaseModel):
             self.last_execution = execution_time
 
 
-# Type alias for backwards compatibility
+# Type alias for ExecutionRecord
 TaskExecutionRecord = ExecutionRecord

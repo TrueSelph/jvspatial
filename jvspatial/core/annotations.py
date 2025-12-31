@@ -21,7 +21,7 @@ Examples:
         name: str = attribute(min_length=1, max_length=100)
 """
 
-from typing import Any, Dict, Optional, Set, Type
+from typing import Any, Dict, List, Optional, Set, Tuple, Type
 
 from pydantic import Field
 from pydantic.fields import PrivateAttr
@@ -41,6 +41,8 @@ class AttributeProtectionError(AttributeError):
 # Global registry for protected and transient attributes per class
 _PROTECTED_ATTRS: Dict[Type, Set[str]] = {}
 _TRANSIENT_ATTRS: Dict[Type, Set[str]] = {}
+# Global registry for compound indexes per class: {class: [{"fields": [(field, direction)], "unique": bool, "name": str}]}
+_COMPOUND_INDEXES: Dict[Type, List[Dict[str, Any]]] = {}
 
 
 def attribute(
@@ -50,6 +52,10 @@ def attribute(
     protected: bool = False,
     transient: bool = False,
     private: bool = False,
+    # Index flags
+    indexed: bool = False,
+    index_unique: bool = False,
+    index_direction: int = 1,
     # Standard Pydantic Field parameters
     description: Optional[str] = None,
     title: Optional[str] = None,
@@ -65,14 +71,16 @@ def attribute(
 ) -> Any:
     """Unified attribute decorator for jvspatial entities.
 
-    This decorator replaces the old decorator system with a single
-    unified interface that supports all attribute behaviors.
+    This decorator provides a unified interface that supports all attribute behaviors.
 
     Args:
         default: Default value for the attribute
         protected: If True, attribute cannot be modified after initialization
         transient: If True, attribute is excluded from export/serialization
         private: If True, creates a Pydantic private attribute (underscore field)
+        indexed: If True, create a single-field index on this field (maps to context.field_name)
+        index_unique: If True, create a unique index (requires indexed=True)
+        index_direction: Index direction for sorting (1=ascending, -1=descending, default=1)
         description: Description for the attribute
         title: Title for the attribute
         examples: Example values for documentation
@@ -90,6 +98,9 @@ def attribute(
 
         # Transient attribute
         cache: dict = attribute(transient=True, default_factory=dict)
+
+        # Indexed attribute
+        user_id: str = attribute(indexed=True, index_unique=True)
 
         # Both protected and transient
         internal: dict = attribute(protected=True, transient=True, default_factory=dict)
@@ -129,13 +140,19 @@ def attribute(
     if default is not ...:
         field_kwargs["default"] = default
 
-    # Add protection/transient metadata to json_schema_extra
-    if protected or transient:
+    # Add protection/transient/index metadata to json_schema_extra
+    if protected or transient or indexed:
         json_extra = field_kwargs.get("json_schema_extra", {})
         if protected:
             json_extra["protected"] = True
         if transient:
             json_extra["transient"] = True
+        if indexed:
+            json_extra["indexed"] = True
+            if index_unique:
+                json_extra["index_unique"] = True
+            if index_direction != 1:
+                json_extra["index_direction"] = index_direction
         field_kwargs["json_schema_extra"] = json_extra
 
     return Field(**field_kwargs)
@@ -211,6 +228,104 @@ def is_transient(cls: Type, attr_name: str) -> bool:
     return attr_name in get_transient_attrs(cls)
 
 
+def get_indexed_fields(cls: Type) -> Dict[str, Dict[str, Any]]:
+    """Get all indexed fields for a class and their index configuration.
+
+    Args:
+        cls: Class to inspect
+
+    Returns:
+        Dictionary mapping field names to their index configuration:
+        {
+            "field_name": {
+                "indexed": True,
+                "unique": bool,
+                "direction": int
+            }
+        }
+    """
+    indexed_fields: Dict[str, Dict[str, Any]] = {}
+
+    # Collect from class hierarchy
+    for klass in cls.__mro__:
+        if hasattr(klass, "model_fields"):
+            for field_name, field_info in klass.model_fields.items():
+                json_extra = getattr(field_info, "json_schema_extra", None)
+                if callable(json_extra):
+                    schema: Dict[str, Any] = {}
+                    json_extra(schema, klass)
+                    json_extra = schema
+                if json_extra and json_extra.get("indexed", False):
+                    indexed_fields[field_name] = {
+                        "indexed": True,
+                        "unique": json_extra.get("index_unique", False),
+                        "direction": json_extra.get("index_direction", 1),
+                    }
+
+    return indexed_fields
+
+
+def compound_index(
+    fields: List[Tuple[str, int]], name: Optional[str] = None, unique: bool = False
+):
+    """Class decorator for declaring compound indexes.
+
+    Args:
+        fields: List of (field_name, direction) tuples. Field names are automatically
+                mapped to context.field_name in the database.
+        name: Optional name for the index (auto-generated if not provided)
+        unique: Whether the compound index should enforce uniqueness
+
+    Returns:
+        Class decorator function
+
+    Example:
+        @compound_index([("agent_id", 1), ("enabled", 1)], name="agent_enabled")
+        class MyEntity(Node):
+            agent_id: str = attribute(indexed=True)
+            enabled: bool = attribute(indexed=True)
+    """
+
+    def decorator(cls: Type) -> Type:
+        """Apply compound index metadata to class."""
+        if cls not in _COMPOUND_INDEXES:
+            _COMPOUND_INDEXES[cls] = []
+
+        index_def = {
+            "fields": fields,
+            "unique": unique,
+            "name": name or f"idx_{'_'.join(f[0] for f in fields)}",
+        }
+        _COMPOUND_INDEXES[cls].append(index_def)
+        return cls
+
+    return decorator
+
+
+def get_compound_indexes(cls: Type) -> List[Dict[str, Any]]:
+    """Get all compound indexes declared for a class.
+
+    Args:
+        cls: Class to inspect
+
+    Returns:
+        List of compound index definitions, each containing:
+        {
+            "fields": [(field_name, direction), ...],
+            "unique": bool,
+            "name": str
+        }
+    """
+    indexes: List[Dict[str, Any]] = []
+
+    # Collect from class hierarchy
+    for klass in cls.__mro__:
+        if klass in _COMPOUND_INDEXES:
+            indexes.extend(_COMPOUND_INDEXES[klass])
+
+    return indexes
+
+
 class AttributeMixin:
     """Mixin class that provides attribute protection and transient functionality.
 
@@ -221,13 +336,12 @@ class AttributeMixin:
 
     def __init__(self, *args: Any, **kwargs: Any):
         """Initialize with protection management."""
-        # Set initializing flag before calling parent __init__
-        object.__setattr__(self, "_initializing", True)
-
-        # Call parent __init__
+        # Call parent __init__ first to initialize Pydantic model (including __pydantic_private__)
+        # The _initializing attribute defaults to True, so it's already set during Pydantic initialization
         super().__init__(*args, **kwargs)
 
-        # Clear initializing flag after initialization complete
+        # Mark initialization as complete
+        # Use object.__setattr__ to bypass our own __setattr__ override
         object.__setattr__(self, "_initializing", False)
 
     def __init_subclass__(cls, **kwargs):
@@ -272,7 +386,7 @@ class AttributeMixin:
 
         super().__setattr__(name, value)
 
-    def export(self, exclude_transient: bool = True, **kwargs) -> Dict[str, Any]:
+    async def export(self, exclude_transient: bool = True, **kwargs) -> Dict[str, Any]:  # type: ignore[override]
         """Enhanced export that automatically respects transient annotations.
 
         Args:
@@ -294,7 +408,7 @@ class AttributeMixin:
             result: Dict[str, Any] = self.model_dump(**kwargs)
             return result
         else:
-            # Fallback for non-Pydantic objects
+            # Handle non-Pydantic objects
             return export_with_transient_exclusion(self, exclude_transient)
 
 
@@ -337,4 +451,7 @@ def export_with_transient_exclusion(
 __all__ = [
     "AttributeMixin",
     "attribute",
+    "compound_index",
+    "get_indexed_fields",
+    "get_compound_indexes",
 ]

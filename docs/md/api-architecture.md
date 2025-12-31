@@ -209,12 +209,12 @@ async def cleanup_old_data():
 - [`StorageError`](../../jvspatial/api/exceptions.py:214) - File storage errors
 - [`WebhookError`](../../jvspatial/api/exceptions.py:259) - Webhook processing
 
-**[`error_handlers.py`](../../jvspatial/api/error_handlers.py:1)** - FastAPI exception handlers:
-- [`jvspatial_exception_handler()`](../../jvspatial/api/error_handlers.py:17) - Handles JVSpatialAPIException
-- [`generic_exception_handler()`](../../jvspatial/api/error_handlers.py:56) - Handles unexpected errors
-- [`register_exception_handlers()`](../../jvspatial/api/error_handlers.py:81) - Registers all handlers
+**[`error_handler.py`](../../jvspatial/api/components/error_handler.py:1)** - Centralized error handling:
+- [`APIErrorHandler`](../../jvspatial/api/components/error_handler.py:125) - Unified error handling class
+- [`handle_exception()`](../../jvspatial/api/components/error_handler.py:137) - Centralized exception handler
+- Handles all exception types: `JVSpatialAPIException`, `HTTPException`, `ValidationError`, `httpx` exceptions, and unexpected errors
 
-All exceptions provide consistent JSON responses with error codes, messages, and optional details.
+All exceptions provide consistent JSON responses with error codes, messages, timestamps, paths, and optional details. Error logging is centralized to prevent duplicates, with stack traces for 5xx errors and clean logs for 4xx errors.
 
 ### 8. Constants and Protocols
 
@@ -368,14 +368,14 @@ async def get_user(user_id: str, endpoint):
     user = await User.get(user_id)
     if not user:
         return endpoint.not_found(message="User not found")
-    return endpoint.success(data={"user": user.export()})
+    return endpoint.success(data={"user": await user.export()})
 
 # ❌ Avoid - Manual status codes
 async def get_user(user_id: str):
     user = await User.get(user_id)
     if not user:
         return JSONResponse(status_code=404, content={"error": "Not found"})
-    return {"user": user.export()}
+    return {"user": await user.export()}
 ```
 
 ### 2. Use EndpointField for Parameter Configuration
@@ -427,7 +427,7 @@ async def get_item(item_id: str, endpoint):
             message="Item not found",
             details={"item_id": item_id}
         )
-    return endpoint.success(data=item.export())
+    return endpoint.success(data=await item.export())
 ```
 
 ### 5. Follow Webhook Best Practices

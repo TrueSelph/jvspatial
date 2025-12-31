@@ -191,6 +191,23 @@ server = Server(config=config)
 | `db_path` | str | None | Database path |
 | `log_level` | str | "info" | Logging level |
 
+### Logging (Colorized, Consistent Console Output)
+
+jvspatial ships with a shared console logger that apps (including jvagent) can inherit:
+
+```python
+from jvspatial.logging import configure_standard_logging
+
+# Enable colorized level names and consistent formatting
+configure_standard_logging(level="INFO", enable_colors=True)
+```
+
+- Format: `HH:MM:SS | LEVEL | logger | message`
+- Colors: only the level name is colorized for readability; set `enable_colors=False` to disable.
+- The `Server.run()` path applies this format and passes a matching `log_config` to uvicorn so startup/access logs stay aligned. Consumers like `jvagent/cli.py` also call `configure_standard_logging` to inherit the same format.
+
+**Tip:** set `log_level` in `ServerConfig` or `JVAGENT_LOG_LEVEL` to control verbosity.
+
 ## Walker Endpoints
 
 Walker endpoints are the primary way to define business logic in jvspatial APIs. They combine the power of jvspatial's graph traversal with FastAPI's parameter validation.
@@ -551,7 +568,7 @@ async def get_user(user_id: str):
     user = await User.get(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"user": user.export()}
+    return {"user": await user.export()}
 
 # Function endpoints support all FastAPI features
 @endpoint("/upload", methods=["POST"], tags=["files"])
@@ -602,7 +619,7 @@ async def get_user(user_id: str):
     user = await User.get(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"user": user.export()}
+    return {"user": await user.export()}
 ```
 
 ## Middleware
@@ -645,7 +662,9 @@ async def initialize_database():
 @server.on_startup
 def setup_logging():
     """Configure logging (synchronous function)."""
-    logging.basicConfig(level=logging.INFO)
+    # Use jvspatial's standard formatter (colors level name only, consistent format)
+    from jvspatial.logging import configure_standard_logging
+    configure_standard_logging(level="INFO", enable_colors=True)
     print("Logging configured")
 ```
 
@@ -718,15 +737,16 @@ Enable serverless mode when creating the Server instance. The Lambda handler wil
 ```python
 from jvspatial.api import Server, endpoint
 
-# Create server with serverless mode enabled
-server = Server(
+# Create LambdaServer for Lambda deployments
+from jvspatial.api.lambda_server import LambdaServer
+
+server = LambdaServer(
     title="Lambda API",
     description="jvspatial API on AWS Lambda",
-    serverless_mode=True,  # Enable automatic handler setup
     serverless_lifespan="auto",  # Enable startup/shutdown events
     # serverless_api_gateway_base_path="/prod",  # Optional: API Gateway base path
-    db_type="json",
-    db_path="/tmp/jvdb",  # Lambda /tmp directory (ephemeral)
+    # DynamoDB is default, but can override with file-based databases
+    # db_type="json",  # Will use /tmp/jvdb (ephemeral)
 )
 
 @endpoint("/hello", methods=["GET"])
@@ -750,7 +770,9 @@ server = Server(title="My Lambda API")
 @endpoint("/products", methods=["GET"])
 async def list_products():
     products = await ProductNode.find()
-    return {"products": [p.export() for p in products]}
+    import asyncio
+    products_list = await asyncio.gather(*[p.export() for p in products])
+    return {"products": products_list}
 
 # Create handler manually with custom configuration
 handler = server.get_lambda_handler(
@@ -761,11 +783,11 @@ handler = server.get_lambda_handler(
 
 ### Serverless Configuration Options
 
-When using `serverless_mode=True`, you can configure the handler via ServerConfig:
+When using `LambdaServer`, you can configure the handler via ServerConfig:
 
-- `serverless_mode`: Enable automatic Lambda handler creation (default: `False`)
 - `serverless_lifespan`: Mangum lifespan mode - `"auto"`, `"on"`, or `"off"` (default: `"auto"`)
 - `serverless_api_gateway_base_path`: Optional API Gateway base path (e.g., `"/prod"`, `"/v1"`)
+- `lambda_temp_dir`: Lambda temp directory path (auto-detected in Lambda environment)
 
 ### Lambda Deployment Steps
 
@@ -796,11 +818,11 @@ When using `serverless_mode=True`, you can configure the handler via ServerConfi
 ### Lambda-Specific Considerations
 
 **Database Configuration**:
-- **DynamoDB (Recommended)**: Native AWS service, perfect for Lambda deployments
+- **DynamoDB (Default)**: Native AWS service, perfect for Lambda deployments
   ```python
-  server = Server(
-      serverless_mode=True,
-      db_type="dynamodb",
+  from jvspatial.api.lambda_server import LambdaServer
+
+  server = LambdaServer(
       dynamodb_table_name="myapp",
       dynamodb_region="us-east-1",
   )
@@ -816,14 +838,14 @@ When using `serverless_mode=True`, you can configure the handler via ServerConfi
 **Example Lambda Configuration**:
 ```python
 import os
-from jvspatial.api import Server, endpoint
+from jvspatial.api import endpoint
+from jvspatial.api.lambda_server import LambdaServer
 
-# Configure from environment variables with serverless mode enabled
-server = Server(
+# Configure from environment variables using LambdaServer
+server = LambdaServer(
     title="Lambda API",
-    serverless_mode=True,  # Automatic handler setup
     serverless_lifespan="auto",
-    # Use DynamoDB for persistent storage (recommended)
+    # DynamoDB is default, but can override
     db_type=os.getenv("JVSPATIAL_DB_TYPE", "dynamodb"),
     dynamodb_table_name=os.getenv("JVSPATIAL_DYNAMODB_TABLE_NAME", "jvspatial"),
     dynamodb_region=os.getenv("JVSPATIAL_DYNAMODB_REGION", "us-east-1"),
@@ -924,7 +946,9 @@ class CreateItem(Walker):
 @endpoint("/items", methods=["GET"])
 async def list_items():
     items = await Item.all()
-    return {"items": [item.export() for item in items]}
+    import asyncio
+    items_list = await asyncio.gather(*[item.export() for item in items])
+    return {"items": items_list}
 
 if __name__ == "__main__":
     server.run()

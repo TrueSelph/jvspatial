@@ -7,6 +7,10 @@
 #### `Object`
 Base class for all persistent objects.
 
+**Important**: Object is a fundamental entity type that is NOT connected by edges on the graph.
+Object.delete() simply removes the entity from the database. The cascade parameter is ignored
+for Object entities as they have no graph connections.
+
 ```python
 class Object(BaseModel):
     id: str = Field(default="")
@@ -16,12 +20,30 @@ class Object(BaseModel):
     async def get(cls, id: str) -> Optional["Object"]
     @classmethod
     async def create(cls, **kwargs) -> "Object"
-    async def destroy(cascade: bool = True) -> None
-    def export() -> dict
+    @classmethod
+    async def find(cls, query: Optional[dict] = None, **filters) -> List["Object"]
+    @classmethod
+    async def find_one(cls, query: Optional[dict] = None, **filters) -> Optional["Object"]
+    @classmethod
+    async def count(cls, query: Optional[dict] = None, **filters) -> int
+    async def delete(cascade: bool = False) -> None  # cascade is ignored for Object entities
+    async def export() -> dict
 ```
+
+**Convenience Methods**
+
+- `await Object.count()` → count all objects of that type
+- `await Object.count({"context.active": True})` → count filtered objects using query dict
+- `await Object.count(active=True)` → count filtered objects using keyword arguments
+- `await Object.find_one({"context.email": "alice@example.com"})` → find single object matching query (returns None if not found)
+- `await Object.find_one(email="alice@example.com")` → find single object using keyword arguments
 
 #### `Node(Object)`
 Represents graph nodes with connection capabilities.
+
+**Important**: Node is the only entity type that can be connected by edges on the graph.
+Node.delete() performs cascade deletion by default, removing all connected edges and
+dependent nodes (nodes that are solely connected to the node being deleted).
 
 ```python
 class Node(Object):
@@ -34,23 +56,35 @@ class Node(Object):
                    edge: Optional[...] = None, **kwargs) -> List["Node"]
     async def node(direction: str = "out", node: Optional[...] = None,
                   edge: Optional[...] = None, **kwargs) -> Optional["Node"]
+    async def delete(cascade: bool = True) -> None  # Cascades by default
     @classmethod
     async def all() -> List["Node"]
+    @classmethod
+    async def count(cls, query: Optional[dict] = None, **kwargs) -> int  # Inherited from Object
 ```
 
 **Key Methods:**
 
 - **`nodes()`**: Returns a list of connected nodes with filtering options
 - **`node()`**: Returns a single connected node (first match) or None - convenience method when you expect only one result
+- **`delete(cascade=True)`**: Deletes the node and cascades deletion of all connected edges and dependent nodes
 
 #### `Edge(Object)`
 Represents connections between nodes.
+
+**Important**: Edge entities are not connected by edges themselves. Edge.delete() simply
+removes the edge from the database. Edge entities connect Node entities but are not
+part of the graph structure themselves.
 
 ```python
 class Edge(Object):
     source: str  # Source node ID
     target: str  # Target node ID
     direction: str = "both"  # "in", "out", or "both"
+
+    async def delete() -> None  # Simple deletion, no cascading
+    @classmethod
+    async def count(cls, query: Optional[dict] = None, **kwargs) -> int  # Inherited from Object
 ```
 
 #### `Walker`
@@ -221,20 +255,34 @@ async def paginate_by_field(
 ### Decorators
 
 #### `@on_visit(target_type=None)`
-Register methods to execute when visiting nodes.
+Register methods to execute when visiting nodes. Can be used on both Walker classes and Node/Edge classes.
+
+**Execution Order**: When a walker visits a node/edge:
+1. Walker hooks (methods on the walker class) execute first
+2. Node/Edge hooks (methods on the node/edge class) execute automatically after
 
 ```python
-# Walker visiting specific node types
-@on_visit(City)
-async def visit_city(self, here: City): ...
+# Walker visiting specific node types (walker hook)
+class MyWalker(Walker):
+    @on_visit(City)
+    async def visit_city(self, here: City): ...
 
-# Walker visiting any node
-@on_visit()
-async def visit_any(self, here: Node): ...
+    # Walker visiting any node
+    @on_visit()
+    async def visit_any(self, here: Node): ...
 
-# Node being visited by specific walker
-@on_visit(Tourist)  # On Node class
-async def handle_tourist(self, visitor: Tourist): ...
+# Node being visited by specific walker (node hook - automatically executed)
+class City(Node):
+    @on_visit(Tourist)  # On Node class
+    async def handle_tourist(self, visitor: Tourist):
+        """Automatically called when Tourist walker visits this node."""
+        ...
+
+    # Node hook for any walker
+    @on_visit(Walker)
+    async def execute(self, visitor: Walker):
+        """Automatically called when any walker visits this node."""
+        ...
 ```
 
 #### `@on_exit`

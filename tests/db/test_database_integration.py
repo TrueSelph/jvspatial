@@ -255,31 +255,68 @@ def mock_context(mock_database):
 
     # Mock the _deserialize_entity method to properly create objects from data
     async def mock_deserialize_entity(cls, data):
-        if "context" not in data:
+        try:
+            # Import here to avoid circular imports
+            from jvspatial.core.utils import find_subclass_by_name
+
+            stored_entity = data.get("entity", cls.__name__)
+            target_class = find_subclass_by_name(cls, stored_entity) or cls
+
+            # Create object with proper subclass
+            # Handle different export structures for different entity types
+            if "context" in data:
+                context_data = data["context"].copy()
+            else:
+                # For Object types, the data is directly in the root
+                context_data = {
+                    k: v for k, v in data.items() if k not in ["id", "type_code"]
+                }
+
+            entity_type_code = context._get_entity_type_code(cls)
+
+            if entity_type_code == "n":
+                # Handle Node-specific logic
+                # Extract edge_ids from data (stored as "edges" at top level)
+                edge_ids = data.get("edges", [])
+
+                # Remove edge_ids, id, and type_code from context_data as they're handled separately
+                context_data.pop("edge_ids", None)
+                context_data.pop("id", None)
+                context_data.pop("type_code", None)
+
+                obj = target_class(id=data["id"], edge_ids=edge_ids, **context_data)
+
+            elif entity_type_code == "e":
+                # Handle Edge-specific logic with source/target at top level
+                source = data["source"]
+                target = data["target"]
+                bidirectional = data.get("bidirectional", True)
+
+                # Remove these from context_data to avoid duplication
+                context_data.pop("source", None)
+                context_data.pop("target", None)
+                context_data.pop("bidirectional", None)
+                context_data.pop("id", None)
+                context_data.pop("type_code", None)
+
+                obj = target_class(
+                    id=data["id"],
+                    source=source,
+                    target=target,
+                    bidirectional=bidirectional,
+                    **context_data,
+                )
+
+            else:
+                # Handle other entity types
+                context_data.pop("id", None)
+                context_data.pop("type_code", None)
+                obj = target_class(id=data["id"], **context_data)
+
+            obj._graph_context = context
+            return obj
+        except Exception:
             return None
-        context_data = data["context"].copy()
-        # Extract _data if present
-        stored_data = context_data.pop("_data", {})
-
-        # Handle Edge objects which have source, target, direction fields at top level
-        if "source" in data and "target" in data:
-            # This is an Edge object
-            obj = cls(
-                id=data["id"],
-                source=data["source"],
-                target=data["target"],
-                direction=data.get("direction", "both"),
-                **context_data,
-            )
-        else:
-            # This is a Node or other object
-            obj = cls(id=data["id"], **context_data)
-
-        # Restore _data after object creation
-        if stored_data:
-            obj._data.update(stored_data)
-
-        return obj
 
     context._deserialize_entity = mock_deserialize_entity
 
@@ -449,20 +486,16 @@ class TestNodeDatabaseIntegration:
         with patch(
             "jvspatial.core.context.get_default_context", return_value=mock_context
         ):
-            # Find by class method
-            all_nodes = await DbTestNode.find({"name": "DbTestNode"})
+            # Find by class method (entity filter is automatic, no need to specify)
+            all_nodes = await DbTestNode.find()
             assert len(all_nodes) >= 3
 
-            # Find by category
-            people = await DbTestNode.find(
-                {"name": "DbTestNode", "context.category": "person"}
-            )
+            # Find by category (entity filter is automatic)
+            people = await DbTestNode.find({"context.category": "person"})
             assert len(people) == 2
 
-            # Find active nodes
-            active_nodes = await DbTestNode.find(
-                {"name": "DbTestNode", "context.active": True}
-            )
+            # Find active nodes (entity filter is automatic)
+            active_nodes = await DbTestNode.find({"context.active": True})
             assert len(active_nodes) == 2
 
     @pytest.mark.asyncio
@@ -603,9 +636,7 @@ class TestWalkerDatabaseIntegration:
         ):
             # Create walker and collect data
             walker = DbTestWalker()
-            category_a_nodes = await DbTestNode.find(
-                {"name": "DbTestNode", "context.category": "A"}
-            )
+            category_a_nodes = await DbTestNode.find({"context.category": "A"})
             result = await walker.collect_data(category_a_nodes)
 
             assert len(walker.visited_nodes) == 2
@@ -631,9 +662,7 @@ class TestWalkerDatabaseIntegration:
         ):
             # Walker processes only active nodes
             walker = DbTestWalker()
-            active_nodes = await DbTestNode.find(
-                {"name": "DbTestNode", "context.active": True}
-            )
+            active_nodes = await DbTestNode.find({"context.active": True})
             result = await walker.collect_data(active_nodes)
 
             assert len(walker.visited_nodes) == 2

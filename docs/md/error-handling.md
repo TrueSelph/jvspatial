@@ -152,6 +152,101 @@ def setup_database_with_fallback():
     return db
 ```
 
+## Streamlined Error Reporting System
+
+jvspatial implements a centralized error reporting system that ensures each exception is logged exactly once with proper context, preventing duplicate logs from framework components.
+
+### Core Principle
+
+**Single Source of Truth**: The `APIErrorHandler` is the authoritative logger for all exceptions. Framework-level error logs (from uvicorn/starlette) are suppressed to prevent duplicates.
+
+### Error Handling Flow
+
+When an exception occurs in the API:
+
+1. The exception is caught by FastAPI's exception handling system
+2. `APIErrorHandler.handle_exception()` processes the exception
+3. The root exception is extracted (handling ExceptionGroup and chaining)
+4. The exception is checked against a tracking system to prevent duplicate logging
+5. If not already logged, the exception is logged with appropriate context
+6. Framework-level logs are suppressed by `CentralizedErrorFilter`
+
+```mermaid
+flowchart TD
+    A[Exception Occurs] --> B{Exception Type?}
+    B -->|JVSpatialAPIException| C[APIErrorHandler.handle_exception]
+    B -->|HTTPException| C
+    B -->|ValidationError| C
+    B -->|Unexpected Exception| C
+
+    C --> D{Already Logged?}
+    D -->|Yes| E[Skip Logging]
+    D -->|No| F[Mark as Logged]
+    F --> G{Error Severity?}
+    G -->|5xx Server Error| H[Log with exc_info=True]
+    G -->|4xx Client Error| I[Log at DEBUG level]
+    G -->|Unexpected| H
+
+    H --> J[Return JSONResponse]
+    I --> J
+    E --> J
+
+    K[Uvicorn/Starlette] --> L[CentralizedErrorFilter]
+    L --> M{Has Exception Info?}
+    M -->|Yes| N{Already Logged by Handler?}
+    M -->|No| O[Allow Log]
+    N -->|Yes| P[Suppress]
+    N -->|No| P
+    P --> Q[Suppressed - Handler Will Log]
+```
+
+### Stack Trace Policy
+
+Stack traces are included in logs based on error severity:
+
+- **Server Errors (5xx)**: Full stack traces with `exc_info=True` for debugging
+- **Unexpected Errors**: Full stack traces to help diagnose issues
+- **Client Errors (4xx)**: No stack traces - logged at DEBUG level to keep logs clean
+
+This approach ensures:
+- Production logs remain clean and focused
+- Debugging information is available when needed
+- No duplicate stack traces clutter the logs
+
+### Exception Tracking
+
+The system uses a context variable to track exceptions that have been logged:
+
+- Each exception is identified by its object ID
+- Root exceptions are extracted from ExceptionGroup (Python 3.11+) and chained exceptions
+- Once logged, the exception ID is marked to prevent duplicate logging
+- This prevents duplicates even if exceptions propagate through multiple layers
+
+### ExceptionGroup Handling
+
+Python 3.11+ wraps exceptions in `ExceptionGroup` for task groups. The system:
+
+- Extracts the first nested exception from ExceptionGroup
+- Recursively follows exception chains (`__cause__` and `__context__`)
+- Logs the root cause exception with full context
+
+### Exception Chaining
+
+The system handles exception chaining properly:
+
+- Follows `__cause__` (explicit chaining) first
+- Then follows `__context__` (implicit chaining) if different
+- Extracts the root cause for logging
+- Suppresses "During handling of the above exception" messages from framework logs
+
+### Benefits
+
+- **No Duplicates**: Each exception logged exactly once
+- **Proper Context**: All exceptions logged with request context (path, method, request_id)
+- **Clean Logs**: Client errors don't clutter logs with stack traces
+- **Debugging**: Server errors have full stack traces for debugging
+- **Robust**: Handles ExceptionGroup, chaining, and edge cases
+
 ## Best Practices
 
 1. **Use Specific Exceptions**: Catch specific exceptions before general ones
@@ -159,6 +254,7 @@ def setup_database_with_fallback():
 3. **Error Reporting**: Include relevant context in error messages
 4. **Transaction Safety**: Use `try`/`except` in database operations
 5. **Walker Safety**: Handle walker-specific errors appropriately
+6. **Trust the System**: The centralized error handler will log all exceptions - don't add manual logging
 
 ## See Also
 

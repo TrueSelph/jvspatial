@@ -110,7 +110,7 @@ all_entities = await Entity.find({})
 departments = set(e.department for e in all_entities if hasattr(e, 'department'))
 ```
 
-**Note**: Caching is automatic and transparent. Individual entity retrievals by ID (`Entity.get(id)`) are cached. Queries (`find()`, `all()`) always hit the database as they can change frequently. For counting, use `len(await Entity.find(...))` instead of a non-existent `count()` method.
+**Note**: Caching is automatic and transparent. Individual entity retrievals by ID (`Entity.get(id)`) are cached. Queries (`find()`, `all()`) always hit the database as they can change frequently. For counting, use `Entity.count(query)` for efficient counting without loading all records.
 
 ### save() Operation Rules
 **✅ save() is ONLY required when:**
@@ -310,7 +310,7 @@ class Entity(Node):
     temp_count: int = transient(Field(default=0))         # Not persisted
 
 entity.cache["key"] = "value"  # Works at runtime
-data = entity.export()          # cache excluded from export
+data = await entity.export()          # cache excluded from export
 ```
 
 ### Compound Decorators
@@ -335,7 +335,7 @@ class Entity(Node):
     _internal_counter: int = private(default=0)   # Not serialized
 
 entity._cache["key"] = "value"  # Works at runtime
-data = entity.export()          # _cache excluded from export
+data = await entity.export()          # _cache excluded from export
 ```
 
 ### Compound Decorators
@@ -2820,7 +2820,13 @@ async def get_data():
 
 Once a graph is established (nodes and edges are connected in a meaningful way), a walker may be spawned on the root node or anywhere on the graph. The visit method enacts the walker's traversal using a starting point or a list of nodes on the walker's visit queue.
 
-As the walker traverses, it may conditionally trigger methods depending on its position on the graph. This is accomplished by the @on_visit annotation. Similarly, as the walker traverses over nodes and edges, these entities may conditionally trigger their methods based on the walker's visitation; also accomplished through the @on_visit annotation.
+As the walker traverses, it may conditionally trigger methods depending on its position on the graph. This is accomplished by the @on_visit annotation on the walker class. Similarly, as the walker traverses over nodes and edges, these entities may conditionally trigger their methods based on the walker's visitation; also accomplished through the @on_visit annotation on the node/edge class.
+
+**Execution Order**: When a walker visits a node/edge:
+1. **Walker hooks** (methods decorated with `@on_visit` on the walker class) execute first
+2. **Node/Edge hooks** (methods decorated with `@on_visit` on the node/edge class) are automatically executed after
+
+Node/Edge hooks are automatically invoked by the walker - no explicit call is needed. The walker binds the hook to the node/edge instance and calls it with the walker as a parameter.
 
 ### Walker Traversal Pattern
 

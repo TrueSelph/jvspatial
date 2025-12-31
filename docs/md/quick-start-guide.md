@@ -116,7 +116,7 @@ async def get_user(user_id: str):
     if not user:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="User not found")
-    return {"user": user.export()}
+    return {"user": await user.export()}
 ```
 
 ### **Step 4: Start the Server**
@@ -184,6 +184,11 @@ users = await User.find({
     "context.age": {"$gt": 18},
     "context.name": {"$regex": "^A", "$options": "i"}
 })
+
+# Efficient counting
+total_users = await User.count()  # Count all users
+adult_users = await User.count({"context.age": {"$gt": 18}})  # Count filtered using query dict
+adult_users = await User.count(age={"$gt": 18})  # Alternative: keyword arguments
 ```
 
 ### **Pattern 3: Creating Relationships**
@@ -210,7 +215,9 @@ from jvspatial.api import endpoint
 async def list_all_users():
     """Admin-only endpoint."""
     users = await User.find({})
-    return {"users": [u.export() for u in users]}
+    import asyncio
+    users_list = await asyncio.gather(*[u.export() for u in users])
+    return {"users": users_list}
 ```
 
 ### **Pattern 5: Caching**

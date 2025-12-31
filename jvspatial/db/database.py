@@ -4,8 +4,11 @@ This module provides a streamlined database interface that removes
 unnecessary complexity while maintaining core functionality.
 """
 
+import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+logger = logging.getLogger(__name__)
 
 
 class Database(ABC):
@@ -102,6 +105,32 @@ class Database(ABC):
         """
         results = await self.find(collection, query)
         return results[0] if results else None
+
+    async def create_index(
+        self,
+        collection: str,
+        field_or_fields: Union[str, List[Tuple[str, int]]],
+        unique: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Create an index on the specified field(s).
+
+        This is an optional method that databases can implement for performance optimization.
+        Databases that don't support indexing should override this with a no-op implementation.
+
+        Args:
+            collection: Collection name
+            field_or_fields: Single field name (str) or list of (field_name, direction) tuples for compound indexes
+            unique: Whether the index should enforce uniqueness
+            **kwargs: Additional database-specific index options (e.g., expireAfterSeconds for TTL indexes)
+
+        Note:
+            Default implementation logs a warning. Database implementations should override this method.
+        """
+        logger.warning(
+            f"create_index() called on {self.__class__.__name__} but indexing is not implemented. "
+            f"Index creation for collection '{collection}' on field(s) '{field_or_fields}' was ignored."
+        )
 
 
 class DatabaseError(Exception):

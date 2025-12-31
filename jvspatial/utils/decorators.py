@@ -73,39 +73,6 @@ def async_safe(func: T) -> T:
     return wrapper  # type: ignore[return-value]
 
 
-def deprecated(reason: str, version: str = "0.2.0") -> Callable[[T], T]:
-    """Mark a function as deprecated.
-
-    Args:
-        reason: Reason for deprecation
-        version: Version when function was deprecated
-
-    Returns:
-        Decorator that marks function as deprecated
-
-    Example:
-        @deprecated("Use new_function() instead", "0.2.0")
-        def old_function():
-            pass
-    """
-
-    def decorator(func: T) -> T:
-        @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            import warnings
-
-            warnings.warn(
-                f"{func.__name__} is deprecated since {version}: {reason}",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            return func(*args, **kwargs)
-
-        return wrapper  # type: ignore[return-value]
-
-    return decorator
-
-
 def memoize(maxsize: Optional[int] = None) -> Callable[[T], T]:
     """Memoize function results.
 
@@ -331,7 +298,6 @@ def log_calls(logger_name: Optional[str] = None) -> Callable[[T], T]:
 __all__ = [
     "preserve_signature",
     "async_safe",
-    "deprecated",
     "memoize",
     "retry",
     "timeout",

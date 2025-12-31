@@ -359,6 +359,10 @@ large_cities = await paginate_objects(
 
 # Bad: Python-level filtering (loads all data)
 all_cities = await City.all()
+
+# Efficient counting
+total_cities = await City.count()  # Count all cities
+large_cities_count = await City.count({"population": {"$gt": 1000000}})  # Count filtered
 large_cities = [c for c in all_cities if c.population > 1000000]
 ```
 
@@ -519,6 +523,7 @@ async def get_products(
     page_size: int = Query(20, ge=1, le=100),
     category: str = None
 ):
+    import asyncio
     filters = {}
     if category:
         filters["category"] = category
@@ -530,10 +535,11 @@ async def get_products(
         filters=filters
     )
 
+    products_list = await asyncio.gather(*[p.export() for p in products])
     return {
         "page": page,
         "page_size": page_size,
-        "products": [p.export() for p in products]
+        "products": products_list
     }
 ```
 

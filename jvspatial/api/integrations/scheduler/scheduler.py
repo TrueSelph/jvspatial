@@ -182,45 +182,6 @@ class SchedulerService:
                 f"invalid schedule: {task.schedule.schedule_spec}"
             )
 
-    # Backwards compatibility method
-    async def register_task_legacy(
-        self, task_id: str, func: Callable, schedule_spec: str, **kwargs: Any
-    ) -> None:
-        """Legacy method for registering tasks (backwards compatibility)."""
-        from .models import ScheduleConfig
-
-        # Create ScheduledTask from legacy parameters
-        schedule_config = ScheduleConfig(
-            schedule_spec=schedule_spec,
-            timeout_seconds=kwargs.get("timeout"),
-            max_concurrent=kwargs.get("max_concurrent", 1),
-            retry_count=kwargs.get("max_retries", 0),
-        )
-
-        # Determine task type
-        import inspect
-
-        if inspect.iscoroutinefunction(func):
-            task_type = "async_function"
-        elif inspect.isclass(func) and issubclass(func, Walker):
-            task_type = "walker"
-        else:
-            task_type = "function"
-
-        task = ScheduledTask(
-            task_id=task_id,
-            task_type=task_type,
-            schedule=schedule_config,
-            function_ref=func if task_type.endswith("function") else None,
-            walker_name=(
-                getattr(func, "__name__", None) if task_type == "walker" else None
-            ),
-            enabled=kwargs.get("enabled", True),
-            description=kwargs.get("description"),
-        )
-
-        await self.register_task(task)
-
     def unregister_task(self, task_id: str) -> bool:
         """Unregister a scheduled task.
 
@@ -545,22 +506,20 @@ class SchedulerService:
             self._update_execution_stats(execution_record)
 
     def _execute_task(self, task_id: str, func: Callable, **kwargs: Any) -> None:
-        """Execute a scheduled task (legacy method).
+        """Execute a scheduled task.
 
         Args:
             task_id: Task identifier
             func: Function to execute
             **kwargs: Task configuration
         """
-        # Try to find task in new system first
+        # Try to find task in registered tasks first
         task = self._tasks.get(task_id)
         if task:
             self._execute_task_from_object(task)
             return
 
-        # Fallback to legacy execution (shouldn't happen with new system)
-        self.logger.warning(f"Using legacy execution for task {task_id}")
-
+        # Direct execution for tasks not in the registered system
         # Check if task is already running
         if task_id in self._running_tasks:
             self.logger.warning(
@@ -842,8 +801,7 @@ def get_scheduled_tasks() -> Dict[str, Dict[str, Any]]:
 
 def clear_scheduled_registry() -> None:
     """Clear the scheduled tasks registry."""
-    global _scheduled_tasks
-    _scheduled_tasks.clear()
+    _scheduled_tasks.clear()  # noqa: F823
 
 
 def register_scheduled_tasks(scheduler_service: SchedulerService) -> None:

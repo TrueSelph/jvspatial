@@ -28,7 +28,7 @@ jvspatial is an async-first Python library for building graph-based spatial appl
 
 Inspired by [Jaseci's](https://jaseci.org) object-spatial paradigm and leveraging Python's async capabilities, jvspatial empowers developers to model complex relationships, traverse object graphs, and implement agent-based architectures that scale with modern cloud-native concurrency requirements.
 
-**🚀 Serverless Ready**: Deploy to AWS Lambda with zero configuration changes. Enable `serverless_mode=True` and your FastAPI app is automatically wrapped with Mangum for Lambda compatibility. Includes native DynamoDB support for persistent storage in serverless environments.
+**🚀 Serverless Ready**: Deploy to AWS Lambda with zero configuration changes. Use `LambdaServer` and your FastAPI app is automatically wrapped with Mangum for Lambda compatibility. Includes native DynamoDB support for persistent storage in serverless environments.
 
 **Key Design Principles:**
 - **Hierarchy**: Object → Node → Edge/Walker inheritance
@@ -62,7 +62,7 @@ Inspired by [Jaseci's](https://jaseci.org) object-spatial paradigm and leveragin
 - Pagination with `ObjectPager`
 
 ### ☁️ Serverless Deployment (AWS Lambda)
-- **Zero-configuration Lambda deployment** with `serverless_mode=True`
+- **Zero-configuration Lambda deployment** with `LambdaServer`
 - Automatic Mangum integration for FastAPI → Lambda compatibility
 - **Native DynamoDB support** for persistent storage in serverless environments
 - Handler automatically exposed at module level for Lambda
@@ -125,7 +125,7 @@ async def get_user(user_id: str):
     if not user:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="User not found")
-    return {"user": user.export()}
+    return {"user": await user.export()}
 
 if __name__ == "__main__":
     server.run()
@@ -136,14 +136,14 @@ if __name__ == "__main__":
 Deploy to AWS Lambda with zero configuration changes:
 
 ```python
-from jvspatial.api import Server, endpoint
+from jvspatial.api import endpoint
+from jvspatial.api.lambda_server import LambdaServer
 from jvspatial.core import Node
 
-# Enable serverless mode - handler is automatically created and exposed
-server = Server(
+# Use LambdaServer for Lambda deployments - handler is automatically created and exposed
+# DynamoDB is the default database (can be overridden)
+server = LambdaServer(
     title="Lambda API",
-    serverless_mode=True,  # Automatic Lambda handler setup
-    db_type="dynamodb",    # Use DynamoDB for persistent storage
     dynamodb_table_name="myapp",
     dynamodb_region="us-east-1",
 )
@@ -155,7 +155,9 @@ class Product(Node):
 @endpoint("/products", methods=["GET"])
 async def list_products():
     products = await Product.find({})
-    return {"products": [p.export() for p in products]}
+    import asyncio
+    products_list = await asyncio.gather(*[p.export() for p in products])
+    return {"products": products_list}
 
 # Handler is automatically available at module level for Lambda
 # No manual assignment needed! AWS Lambda will call: lambda_example.handler
@@ -200,7 +202,9 @@ async def list_users(page: int = 1, per_page: int = 10):
     from jvspatial.core.pager import ObjectPager
     pager = ObjectPager(User, page_size=per_page)
     users = await pager.get_page(page=page)
-    return {"users": [user.export() for user in users]}
+    import asyncio
+    users_list = await asyncio.gather(*[user.export() for user in users])
+    return {"users": users_list}
 
 # Authenticated endpoint
 @endpoint("/api/admin", methods=["GET"], auth=True, roles=["admin"])
@@ -241,8 +245,10 @@ if user:
     await user.save()
     await user.delete()
 
-# Counting: use len() with find() - Object.count() doesn't exist
-count = len(await User.find({"context.active": True}))
+# Efficient counting
+total_users = await User.count()  # Count all users
+active_users = await User.count({"context.active": True})  # Count filtered users using query dict
+active_users = await User.count(active=True)  # Count filtered users using keyword arguments
 ```
 
 ## Configuration

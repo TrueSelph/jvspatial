@@ -1,21 +1,21 @@
-"""Test suite for PackageDiscoveryService."""
+"""Test suite for EndpointDiscoveryService."""
 
 from unittest.mock import MagicMock
 
 import pytest
 
-from jvspatial.api.services.discovery import PackageDiscoveryService
+from jvspatial.api.services.discovery import EndpointDiscoveryService
 
 
-class TestPackageDiscoveryService:
-    """Test PackageDiscoveryService functionality."""
+class TestEndpointDiscoveryService:
+    """Test EndpointDiscoveryService functionality."""
 
     def setup_method(self):
         """Set up test environment."""
         from jvspatial.api.server import Server
 
         server = Server()
-        self.service = PackageDiscoveryService(server)
+        self.service = EndpointDiscoveryService(server)
 
     async def test_discovery_service_initialization(self):
         """Test discovery service initialization."""

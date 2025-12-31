@@ -370,7 +370,10 @@ class TestBoundaryConditions:
 
         # Mock database responses
         mock_context.database.count.return_value = 20
-        mock_context.database.find.return_value = [node.export() for node in nodes]
+        # Note: export() is async, but for mock data we can use sync export for test data
+        # In real usage, this would be: [await node.export() for node in nodes]
+        mock_context.database.find.return_value = []
+        # We'll handle the async export in the mock_find function below
 
         pager = ObjectPager(EdgeCaseTestNode, page_size=20)
 
@@ -384,7 +387,7 @@ class TestBoundaryConditions:
             async def mock_find(collection, query):
                 # Simulate pagination behavior - only return results for first page
                 if query.get("_limit") == 20 and query.get("_skip", 0) == 0:
-                    return [await node.export() for node in nodes]
+                    return await asyncio.gather(*[node.export() for node in nodes])
                 else:
                     return []  # Second page and beyond are empty
 
@@ -580,15 +583,15 @@ class TestValidationAndSanitization:
             name="public", value=42, sensitive_data="secret", private_field="private"
         )
 
-        # Export should not include sensitive data in API context (flat dictionary by default)
-        exported = node.export()
+        # Export should not include sensitive data
+        exported = await node.export()
 
-        # Verify structure - export() returns flat dictionary for API by default
-        assert "name" in exported
-        assert exported["name"] == "public"
-        assert "value" in exported
-        assert exported["value"] == 42
-        # By default, export() returns flat dictionary (not nested with "context")
+        # Verify structure - export() returns nested format with context
+        assert "context" in exported
+        assert "name" in exported["context"]
+        assert exported["context"]["name"] == "public"
+        assert "value" in exported["context"]
+        assert exported["context"]["value"] == 42
 
 
 class TestPerformanceEdgeCases:

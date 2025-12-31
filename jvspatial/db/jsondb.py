@@ -2,10 +2,14 @@
 
 import asyncio
 import json
+import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from jvspatial.db.database import Database
+from jvspatial.db.query import QueryEngine
+
+logger = logging.getLogger(__name__)
 
 
 class JsonDB(Database):
@@ -39,19 +43,21 @@ class JsonDB(Database):
         return collection_dir
 
     def _get_record_path(self, collection: str, record_id: str) -> Path:
-        """Get the file path for a specific record."""
+        """Get the file path for a specific record.
+
+        IDs use dot separators (format: "type.ClassName.id") which are
+        filesystem-compatible on all platforms including Windows.
+        """
         collection_dir = self._get_collection_dir(collection)
-        return collection_dir / f"{record_id.replace(':', '.')}.json"
+        return collection_dir / f"{record_id}.json"
 
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Save a record to the database."""
+        """Save a record to the database.
+
+        Note: Entities should always have IDs set by their __init__ methods.
+        This method expects the ID to already be present in the data.
+        """
         async with self._ensure_lock():
-            # Ensure record has an ID
-            if "id" not in data:
-                import uuid
-
-                data["id"] = str(uuid.uuid4())
-
             # Save the record to its own file
             record_path = self._get_record_path(collection, data["id"])
             with open(record_path, "w") as f:
@@ -97,27 +103,14 @@ class JsonDB(Database):
                 with open(json_file, "r") as f:
                     record = json.load(f)
 
-                # Check if record matches query
-                if not query or self._matches_query(record, query):
+                # Check if record matches query using QueryEngine for proper operator support
+                if not query or QueryEngine.match(record, query):
                     results.append(record)
 
             except (json.JSONDecodeError, IOError):
                 continue  # Skip invalid files
 
         return results
-
-    def _matches_query(self, record: Dict[str, Any], query: Dict[str, Any]) -> bool:
-        """Check if a record matches a query."""
-        for key, expected_value in query.items():
-            if key.startswith("$"):
-                continue  # Skip MongoDB operators for now
-
-            actual_value = self._get_nested_value(record, key)
-
-            if actual_value != expected_value:
-                return False
-
-        return True
 
     def _get_nested_value(self, data: Dict[str, Any], key: str) -> Any:
         """Get a nested value using dot notation."""
@@ -131,3 +124,29 @@ class JsonDB(Database):
                 return None
 
         return current
+
+    async def create_index(
+        self,
+        collection: str,
+        field_or_fields: Union[str, List[Tuple[str, int]]],
+        unique: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Create an index on the specified field(s).
+
+        Note:
+            JSON file-based storage does not support native indexing.
+            This is a no-op implementation that maintains API consistency.
+            All queries will perform full scans regardless of index declarations.
+
+        Args:
+            collection: Collection name
+            field_or_fields: Single field name (str) or list of (field_name, direction) tuples
+            unique: Whether the index should enforce uniqueness (ignored)
+            **kwargs: Additional options (ignored)
+        """
+        logger.debug(
+            f"Index creation requested for JSON database (collection='{collection}', "
+            f"field(s)='{field_or_fields}', unique={unique}). "
+            f"JSON file storage does not support native indexing - this is a no-op."
+        )

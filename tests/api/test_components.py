@@ -3,7 +3,6 @@
 Tests the new focused components:
 - AppBuilder
 - EndpointManager
-- ErrorHandler
 - AuthenticationMiddleware
 """
 
@@ -18,8 +17,8 @@ from jvspatial.api.components import (
     AppBuilder,
     AuthenticationMiddleware,
     EndpointManager,
-    ErrorHandler,
 )
+from jvspatial.api.components.error_handler import APIErrorHandler
 from jvspatial.api.config import ServerConfig
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Walker
@@ -199,11 +198,11 @@ class TestEndpointManager:
 
 
 class TestErrorHandler:
-    """Test ErrorHandler component."""
+    """Test APIErrorHandler component."""
 
     async def test_error_handler_initialization(self):
-        """Test ErrorHandler initialization."""
-        handler = ErrorHandler()
+        """Test APIErrorHandler initialization."""
+        handler = APIErrorHandler()
         assert handler is not None
 
     async def test_handle_exception_with_jvspatial_error(self):
@@ -220,7 +219,7 @@ class TestErrorHandler:
         exc.status_code = 400
 
         # Handle exception
-        response = await ErrorHandler.handle_exception(request, exc)
+        response = await APIErrorHandler.handle_exception(request, exc)
 
         # Verify response
         assert response.status_code == 400
@@ -240,7 +239,7 @@ class TestErrorHandler:
         exc = ValueError("Generic error")
 
         # Handle exception
-        response = await ErrorHandler.handle_exception(request, exc)
+        response = await APIErrorHandler.handle_exception(request, exc)
 
         # Verify response
         assert response.status_code == 500
@@ -259,7 +258,7 @@ class TestErrorHandler:
         exc = ValueError("Test error")
 
         # Handle exception
-        response = await ErrorHandler.handle_exception(request, exc)
+        response = await APIErrorHandler.handle_exception(request, exc)
 
         # Verify response
         assert response.status_code == 500
@@ -285,7 +284,7 @@ class TestComponentsIntegration:
         # Create components
         app_builder = AppBuilder(server_config)
         endpoint_manager = EndpointManager()
-        error_handler = ErrorHandler()
+        error_handler = APIErrorHandler()
 
         # Create app
         app = app_builder.create_app()
@@ -325,7 +324,7 @@ class TestComponentsIntegration:
     async def test_error_handler_integration(self, server_config):
         """Test ErrorHandler integration."""
         app_builder = AppBuilder(server_config)
-        error_handler = ErrorHandler()
+        error_handler = APIErrorHandler()
 
         # Create app
         app = app_builder.create_app()

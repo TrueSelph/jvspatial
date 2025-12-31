@@ -7,7 +7,6 @@ safe to import from any layer (core, db, api). Keep dependencies minimal.
 from .context import GlobalContext
 from .decorators import (
     async_safe,
-    deprecated,
     log_calls,
     memoize,
     preserve_signature,
@@ -86,7 +85,6 @@ __all__ = [
     # Decorators
     "preserve_signature",
     "async_safe",
-    "deprecated",
     "memoize",
     "retry",
     "timeout",

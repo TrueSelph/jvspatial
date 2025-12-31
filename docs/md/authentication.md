@@ -511,7 +511,7 @@ class UserSpatialData(Walker):
 
         # Use current_user for access control
         if current_user.can_access_node_type(here.__class__.__name__):
-            self.response["nodes"].append(here.export())
+            self.response["nodes"].append(await here.export())
 ```
 
 ## Middleware Integration
