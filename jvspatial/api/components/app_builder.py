@@ -167,17 +167,8 @@ class AppBuilder:
         async def health_check() -> Dict[str, Any]:
             """Health check endpoint."""
             try:
-                # Test database connectivity through GraphContext
-                if graph_context:
-                    # Use explicit GraphContext
-                    root = await graph_context.get(Root, "n.Root.root")
-                    if not root:
-                        root = await graph_context.create(Root)
-                else:
-                    # Use default GraphContext behavior
-                    root = await Root.get("n.Root.root")
-                    if not root:
-                        root = await Root.create()
+                # Test database connectivity - Root.get() always returns singleton
+                root = await Root.get()
 
                 return {
                     "status": "healthy",

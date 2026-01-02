@@ -22,7 +22,9 @@ class JsonDB(Database):
             base_path: Base directory for JSON files
         """
         self.base_path = Path(base_path).resolve()
-        self.base_path.mkdir(parents=True, exist_ok=True)
+        # Don't create directory immediately - create it lazily on first use
+        # This prevents 'jvdb' from being created when DatabaseManager is auto-created
+        # before Server initializes with the correct database path
         self._lock: Optional[asyncio.Lock] = None
 
     def _ensure_lock(self) -> asyncio.Lock:
@@ -38,6 +40,10 @@ class JsonDB(Database):
 
     def _get_collection_dir(self, collection: str) -> Path:
         """Get the directory path for a collection."""
+        # Create base directory lazily (only when actually used)
+        # This prevents 'jvdb' from being created when DatabaseManager is auto-created
+        # before Server initializes with the correct database path
+        self.base_path.mkdir(parents=True, exist_ok=True)
         collection_dir = self.base_path / collection
         collection_dir.mkdir(parents=True, exist_ok=True)
         return collection_dir

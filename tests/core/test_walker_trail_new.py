@@ -4,11 +4,15 @@ Test suite for Walker trail tracking functionality.
 Tests the new always-on trail tracking system with TrailTracker component.
 """
 
+import tempfile
+import uuid
 from typing import Any, Dict, List
 
 import pytest
 
+from jvspatial.core.context import GraphContext, set_default_context
 from jvspatial.core.entities import Node, Walker
+from jvspatial.db.factory import create_database
 
 
 class TrailTestNode(Node):
@@ -148,6 +152,16 @@ class TestTrailRecording:
 class TestTrailAccessMethods:
     """Test trail access methods."""
 
+    @pytest.fixture
+    def temp_context(self):
+        """Create temporary context for testing."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            unique_path = f"{tmpdir}/test_{uuid.uuid4().hex}"
+            database = create_database("json", base_path=unique_path)
+            context = GraphContext(database=database)
+            set_default_context(context)
+            yield context
+
     async def test_get_trail(self):
         """Test get_trail() method."""
         walker = TrailTrackingWalker()
@@ -165,7 +179,7 @@ class TestTrailAccessMethods:
         )  # Trail contains node ID strings
 
     @pytest.mark.asyncio
-    async def test_get_trail_nodes(self):
+    async def test_get_trail_nodes(self, temp_context):
         """Test get_trail_nodes() method with database persistence."""
         walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
@@ -184,7 +198,7 @@ class TestTrailAccessMethods:
         assert [node.id for node in trail_nodes] == [node.id for node in nodes]
 
     @pytest.mark.asyncio
-    async def test_get_trail_path(self):
+    async def test_get_trail_path(self, temp_context):
         """Test get_trail_path() method with database persistence."""
         walker = TrailTrackingWalker()
         nodes = [TrailTestNode(name=f"node{i}") for i in range(3)]
@@ -396,8 +410,18 @@ class TestTrailEdgeCases:
         assert len(trail) == 3
         assert await walker.get_visit_count(node.id) == 3
 
+    @pytest.fixture
+    def temp_context(self):
+        """Create temporary context for testing."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            unique_path = f"{tmpdir}/test_{uuid.uuid4().hex}"
+            database = create_database("json", base_path=unique_path)
+            context = GraphContext(database=database)
+            set_default_context(context)
+            yield context
+
     @pytest.mark.asyncio
-    async def test_trail_with_missing_nodes(self):
+    async def test_trail_with_missing_nodes(self, temp_context):
         """Test trail with nodes that no longer exist."""
         walker = TrailTrackingWalker()
         node = TrailTestNode(name="test_node")

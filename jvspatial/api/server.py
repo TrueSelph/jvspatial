@@ -1035,17 +1035,8 @@ class Server:
         async def health_check() -> Union[Dict[str, Any], JSONResponse]:
             """Health check endpoint."""
             try:
-                # Test database connectivity through GraphContext
-                if self._graph_context:
-                    # Use explicit GraphContext
-                    root = await self._graph_context.get(Root, "n.Root.root")
-                    if not root:
-                        root = await self._graph_context.create(Root)
-                else:
-                    # Use default GraphContext behavior
-                    root = await Root.get("n.Root.root")
-                    if not root:
-                        root = await Root.create()
+                # Test database connectivity - Root.get() always returns singleton
+                root = await Root.get()
                 return {
                     "status": "healthy",
                     "database": "connected",

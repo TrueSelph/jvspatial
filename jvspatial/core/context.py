@@ -243,10 +243,58 @@ class GraphContext:
         if self._database is None:
             # Use current database from manager if available
             try:
+                from jvspatial.db.manager import DatabaseManager
+
+                # Check if DatabaseManager exists and was auto-created (not initialized by Server)
+                # If it was auto-created, it uses default 'jvdb' path which we want to avoid
+                if (
+                    DatabaseManager._instance is not None
+                    and DatabaseManager._instance._auto_created
+                ):
+                    # DatabaseManager was auto-created with default 'jvdb' path
+                    # Don't use it - require explicit database configuration
+                    raise RuntimeError(
+                        "Database not configured. GraphContext requires a database to be set "
+                        "explicitly or DatabaseManager to be initialized by Server first."
+                    )
+
                 self._database = get_current_database()
+            except RuntimeError as e:
+                # Re-raise our explicit error
+                if "Database not configured" in str(e):
+                    raise
+                # For other RuntimeErrors (e.g., prime database not initialized),
+                # fall back to creating default database only if DatabaseManager exists and wasn't auto-created
+                from jvspatial.db.manager import DatabaseManager
+
+                if (
+                    DatabaseManager._instance is not None
+                    and not DatabaseManager._instance._auto_created
+                ):
+                    # DatabaseManager exists and was explicitly initialized, create default
+                    self._database = create_database()
+                else:
+                    # DatabaseManager doesn't exist or was auto-created - don't create default database
+                    raise RuntimeError(
+                        "Database not configured. GraphContext requires a database to be set "
+                        "explicitly or DatabaseManager to be initialized by Server first."
+                    )
             except Exception:
-                # Create default database if current database unavailable
-                self._database = create_database()
+                # For other exceptions, only create default if DatabaseManager exists and wasn't auto-created
+                from jvspatial.db.manager import DatabaseManager
+
+                if (
+                    DatabaseManager._instance is not None
+                    and not DatabaseManager._instance._auto_created
+                ):
+                    # DatabaseManager exists and was explicitly initialized, create default database
+                    self._database = create_database()
+                else:
+                    # DatabaseManager doesn't exist or was auto-created - don't create default database
+                    raise RuntimeError(
+                        "Database not configured. GraphContext requires a database to be set "
+                        "explicitly or DatabaseManager to be initialized by Server first."
+                    )
         return self._database
 
     async def set_database(self, database: Database) -> None:
@@ -377,6 +425,19 @@ class GraphContext:
         Returns:
             Created and saved entity instance
         """
+        # Check if the entity class has overridden create() method
+        # If so, delegate to it (e.g., Root.create() enforces singleton)
+        if hasattr(entity_class, "create"):
+            # Check if create() is actually overridden (not inherited from Object)
+            from .entities.object import Object
+
+            if entity_class.create is not Object.create:
+                # Use the overridden create() method
+                entity = await entity_class.create(**kwargs)
+                entity._graph_context = self
+                return entity
+
+        # Default behavior: instantiate and save
         entity = entity_class(**kwargs)
         entity._graph_context = self
         await self.save(entity)
@@ -1134,6 +1195,21 @@ def get_default_context() -> GraphContext:
     """Get the default global context."""
     global _default_context
     if _default_context is None:
+        # Check if DatabaseManager was auto-created (not initialized by Server)
+        # If so, don't create a default GraphContext yet - wait for Server to initialize
+        from jvspatial.db.manager import DatabaseManager
+
+        if (
+            DatabaseManager._instance is not None
+            and DatabaseManager._instance._auto_created
+        ):
+            # DatabaseManager was auto-created with default 'jvdb' path
+            # Don't create default context - Server should initialize it
+            raise RuntimeError(
+                "Default GraphContext not initialized. Server must initialize the database "
+                "before accessing the default context. Ensure Server is initialized before "
+                "calling Root.get() or other operations that require a database."
+            )
         _default_context = GraphContext()
     return _default_context
 

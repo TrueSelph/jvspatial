@@ -56,8 +56,17 @@ import os
 from typing import Any, Dict
 
 # Import core components
-from .interfaces import FileStorageInterface, LocalFileInterface, S3FileInterface
+from .interfaces import FileStorageInterface, LocalFileInterface
 from .security import FileValidator, PathSanitizer
+
+# Conditional import for S3 (boto3 is optional)
+try:
+    from .interfaces import S3FileInterface
+
+    _HAS_S3 = True
+except ImportError:
+    S3FileInterface = None  # type: ignore
+    _HAS_S3 = False
 
 # Phase 3 imports (conditionally import if available)
 try:
@@ -102,7 +111,6 @@ __all__ = [
     # Core interfaces
     "FileStorageInterface",
     "LocalFileInterface",
-    "S3FileInterface",
     # Security components
     "PathSanitizer",
     "FileValidator",
@@ -122,6 +130,10 @@ __all__ = [
     "StorageProviderError",
     "AccessDeniedError",
 ]
+
+# Add S3FileInterface to __all__ if available
+if _HAS_S3:
+    __all__.append("S3FileInterface")
 
 
 def create_storage(provider: str = "local", **kwargs: Any) -> FileStorageInterface:
@@ -162,6 +174,11 @@ def create_storage(provider: str = "local", **kwargs: Any) -> FileStorageInterfa
         )
 
     elif provider == "s3":
+        if not _HAS_S3 or S3FileInterface is None:
+            raise ImportError(
+                "S3 storage requires boto3. Install it with: pip install boto3"
+            )
+
         bucket_name = kwargs.get("bucket_name") or os.getenv("JVSPATIAL_S3_BUCKET_NAME")
         if not bucket_name:
             raise ValueError("S3 bucket_name is required")

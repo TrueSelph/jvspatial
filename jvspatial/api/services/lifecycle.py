@@ -104,17 +104,12 @@ class LifecycleManager:
             if self.server._graph_context:
                 # Use explicit GraphContext
                 db_type = type(self.server._graph_context.database).__name__
-                # Ensure root node exists
-                root = await self.server._graph_context.get(Root, "n.Root.root")
-                if not root:
-                    root = await self.server._graph_context.create(Root)
             else:
                 # Use default GraphContext behavior
                 db_type = "default"
-                # Ensure root node exists
-                root = await Root.get("n.Root.root")
-                if not root:
-                    root = await Root.create()
+
+            # Ensure root node exists - Root.get() always returns singleton
+            root = await Root.get()
 
             # Log concise database initialization
             self._logger.info(
