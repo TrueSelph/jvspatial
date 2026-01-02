@@ -1,12 +1,35 @@
-"""Structured logging system for jvspatial applications.
+"""Logging system for jvspatial applications.
 
-This module provides structured logging as the default logging approach,
-following the new standard implementation.
+This module provides:
+1. Structured logging for console output (JVSpatialLogger)
+2. Database logging service for automatic persistence (BaseLoggingService)
+3. Custom log levels support (AUDIT, SECURITY, CUSTOM, etc.)
+4. Configuration utilities for both systems
+
+The logging system is designed to be extensible - implementations can extend
+the BaseLoggingService to add custom functionality and use custom log levels
+for domain-specific categorization.
 """
 
 import logging
 import sys
 from typing import Any, List, Optional
+
+# Import error logging components
+from jvspatial.logging.config import get_logging_config, initialize_logging_database
+from jvspatial.logging.custom_levels import (
+    CUSTOM_LEVEL_NUMBER,
+    add_custom_log_level,
+    get_custom_levels,
+    is_custom_level,
+)
+from jvspatial.logging.handler import (
+    DBLogHandler,
+    install_db_log_handler,
+    install_exception_hook,
+)
+from jvspatial.logging.models import DBLog
+from jvspatial.logging.service import BaseLoggingService, get_logging_service
 
 try:
     import structlog
@@ -102,6 +125,23 @@ class JVSpatialLogger:
         else:
             formatted_context = " ".join([f"{k}={v}" for k, v in context.items()])
             self.logger.critical(f"{message} {formatted_context}".strip())
+
+    def custom(self, message: str, **context: Any) -> None:
+        """Log custom level message with structured context.
+
+        Args:
+            message: Log message
+            **context: Additional context data
+        """
+        # Import here to avoid circular dependency
+        from jvspatial.logging.custom_levels import CUSTOM_LEVEL_NUMBER
+
+        if self.enable_structured:
+            # structlog doesn't have a custom method, use log() with level
+            self.logger.log(CUSTOM_LEVEL_NUMBER, message, **context)
+        else:
+            formatted_context = " ".join([f"{k}={v}" for k, v in context.items()])
+            self.logger.custom(f"{message} {formatted_context}".strip())
 
 
 class StructuredLoggingConfig:
@@ -396,6 +436,21 @@ security_logger = SecurityLogger()
 
 
 __all__ = [
+    # Error logging service (database persistence)
+    "BaseLoggingService",
+    "get_logging_service",
+    "DBLog",
+    "get_logging_config",
+    "initialize_logging_database",
+    "DBLogHandler",
+    "install_db_log_handler",
+    "install_exception_hook",
+    # Custom log levels
+    "add_custom_log_level",
+    "get_custom_levels",
+    "is_custom_level",
+    "CUSTOM_LEVEL_NUMBER",
+    # Structured console logging
     "JVSpatialLogger",
     "StructuredLoggingConfig",
     "PerformanceLogger",

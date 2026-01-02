@@ -64,6 +64,13 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 | [Caching](caching.md) | Cache strategies | Intermediate |
 | [Text Normalization](text-normalization.md) | Unicode to ASCII text normalization | All levels |
 
+### **Logging**
+
+| Document | Description | Audience |
+|----------|-------------|----------|
+| [Logging Service](logging-service.md) | Database logging with automatic persistence | All levels |
+| [Custom Log Levels](custom-log-levels.md) | Domain-specific log levels (AUDIT, SECURITY, etc.) | Intermediate |
+
 ### **Advanced Topics**
 
 | Document | Description | Audience |
@@ -144,6 +151,8 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 | Setup caching | [Caching](caching.md) | Configuration |
 | Handle files | [File Storage Usage](file-storage-usage.md) | Basic Usage |
 | Schedule jobs | [Scheduler](scheduler.md) | Basic Tasks |
+| Setup logging | [Logging Service](logging-service.md) | Quick Start |
+| Use custom log levels | [Custom Log Levels](custom-log-levels.md) | Quick Start |
 
 ### **Common Issues**
 
@@ -228,6 +237,10 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 - Caching
 - Pagination
 - Text Normalization
+
+**Logging**:
+- Logging Service
+- Custom Log Levels
 
 **Architecture**:
 - Module Responsibility Matrix

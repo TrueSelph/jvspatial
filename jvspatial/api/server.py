@@ -1509,7 +1509,12 @@ class Server:
             **uvicorn_kwargs: Additional uvicorn parameters
         """
         # Set up standard logging (colorized level names, consistent format)
-        configure_standard_logging(level=self.config.log_level, enable_colors=True)
+        # Preserve DBLogHandler to ensure database logging continues to work
+        configure_standard_logging(
+            level=self.config.log_level,
+            enable_colors=True,
+            preserve_handler_class_names=["DBLogHandler", "StartupLogCounter"],
+        )
 
         # Use provided values or fall back to config
         run_host = host or self.config.host

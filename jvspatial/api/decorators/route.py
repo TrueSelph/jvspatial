@@ -286,12 +286,121 @@ def _wrap_function_with_params(
     """
     import inspect
 
+    from fastapi import Request as FastAPIRequest
+    from starlette.requests import Request as StarletteRequest
+
     # Determine if this is a GET/HEAD request (query params) or other (body)
     is_get_request = methods and any(m.upper() in ("GET", "HEAD") for m in methods)
 
     if is_get_request:
         # For GET requests, FastAPI automatically handles query parameters from function signature
-        # No wrapping needed - FastAPI will extract params from the function signature
+        # But we still need to inject user_id from request.state.user if function has user_id parameter
+        func_sig = inspect.signature(func)
+        if "user_id" in func_sig.parameters:
+            # Check if function already has Request parameter
+            has_request = any(
+                param.annotation in (FastAPIRequest, StarletteRequest)
+                or (
+                    hasattr(param.annotation, "__name__")
+                    and param.annotation.__name__ == "Request"
+                    and (
+                        "fastapi" in str(getattr(param.annotation, "__module__", ""))
+                        or "starlette"
+                        in str(getattr(param.annotation, "__module__", ""))
+                    )
+                )
+                for param in func_sig.parameters.values()
+            )
+
+            if has_request:
+                # Function already has Request parameter - wrap to inject user_id
+                async def wrapped_get_func(*args: Any, **kwargs: Any) -> Any:
+                    """Wrapped GET function with user_id injection."""
+                    # Find Request object in args or kwargs
+                    request_obj = None
+                    for arg in args:
+                        if hasattr(arg, "state") and hasattr(arg, "headers"):
+                            request_obj = arg
+                            break
+                    if not request_obj:
+                        # Check kwargs for request parameter
+                        for _key, value in kwargs.items():
+                            if hasattr(value, "state") and hasattr(value, "headers"):
+                                request_obj = value
+                                break
+
+                    # Inject user_id from request.state.user if available
+                    if (
+                        request_obj
+                        and hasattr(request_obj, "state")
+                        and hasattr(request_obj.state, "user")
+                    ):
+                        user = request_obj.state.user
+                        if user:
+                            # Extract user_id from user object
+                            if hasattr(user, "id"):
+                                kwargs["user_id"] = str(user.id)
+                            elif hasattr(user, "user_id"):
+                                kwargs["user_id"] = str(user.user_id)
+                            elif isinstance(user, dict):
+                                kwargs["user_id"] = str(
+                                    user.get("id") or user.get("user_id") or ""
+                                )
+
+                    # Call original function
+                    return await func(*args, **kwargs)
+
+            else:
+                # Function doesn't have Request parameter - add it
+                async def wrapped_get_func(  # type: ignore[misc]
+                    request: FastAPIRequest, *args: Any, **kwargs: Any
+                ) -> Any:
+                    """Wrapped GET function with user_id injection."""
+                    # Inject user_id from request.state.user if available
+                    if hasattr(request, "state") and hasattr(request.state, "user"):
+                        user = request.state.user
+                        if user:
+                            # Extract user_id from user object
+                            if hasattr(user, "id"):
+                                kwargs["user_id"] = str(user.id)
+                            elif hasattr(user, "user_id"):
+                                kwargs["user_id"] = str(user.user_id)
+                            elif isinstance(user, dict):
+                                kwargs["user_id"] = str(
+                                    user.get("id") or user.get("user_id") or ""
+                                )
+
+                    # Call original function
+                    return await func(*args, **kwargs)
+
+                # Update signature to include Request parameter
+                new_params = [
+                    inspect.Parameter(
+                        "request",
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        annotation=FastAPIRequest,
+                    )
+                ] + list(func_sig.parameters.values())
+                new_sig = inspect.Signature(
+                    new_params, return_annotation=func_sig.return_annotation
+                )
+                wrapped_get_func.__signature__ = new_sig  # type: ignore[attr-defined]
+                wrapped_get_func.__annotations__ = {
+                    "request": FastAPIRequest,
+                    **func.__annotations__,
+                }
+
+            # Copy metadata
+            wrapped_get_func.__name__ = func.__name__
+            wrapped_get_func.__doc__ = func.__doc__
+            wrapped_get_func.__module__ = func.__module__
+            if not has_request:
+                # Signature already set above
+                pass
+
+            return wrapped_get_func
+
+        # No user_id parameter, return function as-is
         return func
 
     # For POST/PUT/etc, use Body for request body parameters
@@ -310,9 +419,6 @@ def _wrap_function_with_params(
     func_sig = inspect.signature(func)
 
     # Check if function has Request parameter (needs to be preserved for FastAPI injection)
-    from fastapi import Request as FastAPIRequest
-    from starlette.requests import Request as StarletteRequest
-
     has_request_param = False
     request_param_name = None
     for param_name, param in func_sig.parameters.items():
@@ -429,6 +535,33 @@ def _wrap_function_with_params(
             if has_request_param and request_param_name and request_obj is not None:
                 combined[request_param_name] = request_obj
 
+            # Inject user_id from request.state.user if function has user_id parameter
+            # and it's not already provided
+            if "user_id" in func_sig.parameters and "user_id" not in combined:
+                if request_obj is None:
+                    # Try to get request from args
+                    for arg in args:
+                        if hasattr(arg, "state") and hasattr(arg, "headers"):
+                            request_obj = arg
+                            break
+
+                if (
+                    request_obj
+                    and hasattr(request_obj, "state")
+                    and hasattr(request_obj.state, "user")
+                ):
+                    user = request_obj.state.user
+                    if user:
+                        # Extract user_id from user object
+                        if hasattr(user, "id"):
+                            combined["user_id"] = str(user.id)
+                        elif hasattr(user, "user_id"):
+                            combined["user_id"] = str(user.user_id)
+                        elif isinstance(user, dict):
+                            combined["user_id"] = str(
+                                user.get("id") or user.get("user_id") or ""
+                            )
+
             # Filter out None values for required non-path fields
             for param_name, param in func_sig.parameters.items():
                 if (
@@ -468,7 +601,117 @@ def _wrap_function_with_params(
 
     elif has_path_params and not has_body_params:
         # Only path parameters (and possibly Request) - FastAPI handles these directly
-        # No wrapper needed - FastAPI will inject Request automatically
+        # But we still need to inject user_id from request.state.user if function has user_id parameter
+        if "user_id" in func_sig.parameters:
+            # Check if function already has Request parameter
+            has_request = any(
+                param.annotation in (FastAPIRequest, StarletteRequest)
+                or (
+                    hasattr(param.annotation, "__name__")
+                    and param.annotation.__name__ == "Request"
+                    and (
+                        "fastapi" in str(getattr(param.annotation, "__module__", ""))
+                        or "starlette"
+                        in str(getattr(param.annotation, "__module__", ""))
+                    )
+                )
+                for param in func_sig.parameters.values()
+            )
+
+            if has_request:
+                # Function already has Request parameter - wrap to inject user_id
+                async def wrapped_path_func(*args: Any, **kwargs: Any) -> Any:
+                    """Wrapped function with user_id injection for path-only params."""
+                    # Find Request object in args or kwargs
+                    request_obj = None
+                    for arg in args:
+                        if hasattr(arg, "state") and hasattr(arg, "headers"):
+                            request_obj = arg
+                            break
+                    if not request_obj:
+                        # Check kwargs for request parameter
+                        for _key, value in kwargs.items():
+                            if hasattr(value, "state") and hasattr(value, "headers"):
+                                request_obj = value
+                                break
+
+                    # Inject user_id from request.state.user if available
+                    if (
+                        request_obj
+                        and hasattr(request_obj, "state")
+                        and hasattr(request_obj.state, "user")
+                    ):
+                        user = request_obj.state.user
+                        if user:
+                            # Extract user_id from user object
+                            if hasattr(user, "id"):
+                                kwargs["user_id"] = str(user.id)
+                            elif hasattr(user, "user_id"):
+                                kwargs["user_id"] = str(user.user_id)
+                            elif isinstance(user, dict):
+                                kwargs["user_id"] = str(
+                                    user.get("id") or user.get("user_id") or ""
+                                )
+
+                    # Call original function
+                    return await func(*args, **kwargs)
+
+                # Copy metadata
+                wrapped_path_func.__name__ = func.__name__
+                wrapped_path_func.__doc__ = func.__doc__
+                wrapped_path_func.__module__ = func.__module__
+                wrapped_path_func.__signature__ = func_sig  # type: ignore[attr-defined]
+                wrapped_path_func.__annotations__ = func.__annotations__
+
+                return wrapped_path_func
+            else:
+                # Function doesn't have Request parameter - add it
+                async def wrapped_path_func(  # type: ignore[misc]
+                    request: FastAPIRequest, *args: Any, **kwargs: Any
+                ) -> Any:
+                    """Wrapped function with user_id injection for path-only params."""
+                    # Inject user_id from request.state.user if available
+                    if hasattr(request, "state") and hasattr(request.state, "user"):
+                        user = request.state.user
+                        if user:
+                            # Extract user_id from user object
+                            if hasattr(user, "id"):
+                                kwargs["user_id"] = str(user.id)
+                            elif hasattr(user, "user_id"):
+                                kwargs["user_id"] = str(user.user_id)
+                            elif isinstance(user, dict):
+                                kwargs["user_id"] = str(
+                                    user.get("id") or user.get("user_id") or ""
+                                )
+
+                    # Call original function
+                    return await func(*args, **kwargs)
+
+                # Update signature to include Request parameter before path params
+                new_params = [
+                    inspect.Parameter(
+                        "request",
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        annotation=FastAPIRequest,
+                    )
+                ] + list(func_sig.parameters.values())
+                new_sig = inspect.Signature(
+                    new_params, return_annotation=func_sig.return_annotation
+                )
+                wrapped_path_func.__signature__ = new_sig  # type: ignore[attr-defined]
+                wrapped_path_func.__annotations__ = {
+                    "request": FastAPIRequest,
+                    **func.__annotations__,
+                }
+
+                # Copy metadata
+                wrapped_path_func.__name__ = func.__name__
+                wrapped_path_func.__doc__ = func.__doc__
+                wrapped_path_func.__module__ = func.__module__
+
+                return wrapped_path_func
+
+        # No user_id parameter, return function as-is
         return func
     else:
         # No path parameters - simple body parameter model
@@ -547,6 +790,33 @@ def _wrap_function_with_params(
             # Add Request parameter back if it was present
             if has_request_param and request_param_name and request_obj is not None:
                 data[request_param_name] = request_obj
+
+            # Inject user_id from request.state.user if function has user_id parameter
+            # and it's not already provided
+            if "user_id" in func_sig.parameters and "user_id" not in data:
+                if request_obj is None:
+                    # Try to get request from args
+                    for arg in args:
+                        if hasattr(arg, "state") and hasattr(arg, "headers"):
+                            request_obj = arg
+                            break
+
+                if (
+                    request_obj
+                    and hasattr(request_obj, "state")
+                    and hasattr(request_obj.state, "user")
+                ):
+                    user = request_obj.state.user
+                    if user:
+                        # Extract user_id from user object
+                        if hasattr(user, "id"):
+                            data["user_id"] = str(user.id)
+                        elif hasattr(user, "user_id"):
+                            data["user_id"] = str(user.user_id)
+                        elif isinstance(user, dict):
+                            data["user_id"] = str(
+                                user.get("id") or user.get("user_id") or ""
+                            )
 
             # Filter out None values for required fields - they should have been validated by Pydantic
             # But ensure we don't pass None for required fields
