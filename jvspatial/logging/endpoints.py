@@ -52,7 +52,7 @@ class LogsResponse(BaseModel):
     pagination: PaginationInfo = Field(..., description="Pagination information")
 
 
-@endpoint("/api/logs", methods=["GET"], auth=True)
+@endpoint("/logs", methods=["GET"], auth=True)
 async def get_logs(
     category: Optional[str] = Query(  # noqa: B008
         None,

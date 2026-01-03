@@ -241,7 +241,7 @@ class AppBuilder:
             format: str = Query(  # noqa: B008
                 default="dot",
                 description="Graph format: 'dot' (Graphviz) or 'mermaid'",
-                regex="^(dot|mermaid)$",
+                pattern="^(dot|mermaid)$",
             ),
             include_attributes: bool = Query(  # noqa: B008
                 default=True, description="Include node/edge attributes in labels"

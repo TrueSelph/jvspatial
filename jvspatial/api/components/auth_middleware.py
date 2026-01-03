@@ -106,19 +106,21 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
     and streamlined request processing, following the new standard implementation.
     """
 
-    def __init__(self, app, auth_config: AuthConfig, server=None):
+    def __init__(self, app, auth_config: AuthConfig, server):
         """Initialize the authentication middleware.
 
         Args:
             app: FastAPI application instance
             auth_config: Authentication configuration
-            server: Optional server instance (for test compatibility)
+            server: Server instance (required for endpoint auth checking)
         """
         super().__init__(app)
         self.auth_config = auth_config
         self.path_matcher = PathMatcher(auth_config.exempt_paths)
         self._logger = logging.getLogger(__name__)
-        self._server = server  # Store server reference for test compatibility
+        if server is None:
+            raise ValueError("AuthenticationMiddleware requires a server instance")
+        self._server = server  # Store server reference - always use this, not context
 
     async def dispatch(self, request: Request, call_next):
         """Optimized request processing with streamlined authentication logic.
@@ -133,9 +135,6 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         # Always allow OPTIONS requests (CORS preflight) to pass through
         # CORS middleware will handle these requests
         if request.method == "OPTIONS":
-            self._logger.debug(
-                f"Auth middleware: Allowing OPTIONS preflight for {request.url.path}"
-            )
             return await call_next(request)
 
         # Check if path is exempt from authentication
@@ -143,7 +142,9 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Check if this endpoint requires authentication
-        if not self._endpoint_requires_auth(request):
+        auth_required = self._endpoint_requires_auth(request)
+
+        if not auth_required:
             return await call_next(request)
 
         # Streamlined authentication logic
@@ -197,12 +198,13 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             True if endpoint requires authentication, False otherwise
         """
         try:
-            # Get the current server from context
-            from jvspatial.api.context import get_current_server
-
-            server = get_current_server()
+            # Always use stored server reference - it's required during initialization
+            server = self._server
 
             if not server:
+                self._logger.error(
+                    "_endpoint_requires_auth: No server found (this should never happen)"
+                )
                 return False
 
             # Check if any endpoints in the registry require auth for this path
@@ -227,6 +229,10 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                     if endpoint_config is not None:
                         # Found the endpoint - return its auth_required setting
                         return endpoint_config.get("auth_required", False)
+                    else:
+                        # If path starts with /api/, require auth as fallback
+                        if request_path.startswith("/api/"):
+                            return True
 
             # Check walker endpoints
             for walker_info in registry.list_walkers():
@@ -266,8 +272,14 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                             if endpoint_config is not None:
                                 # Found the endpoint - return its auth_required setting
                                 return endpoint_config.get("auth_required", False)
+                            else:
+                                # If path starts with /api/, require auth as fallback
+                                if request_path.startswith("/api/"):
+                                    return True
             except Exception as e:
-                self._logger.debug(f"Could not check FastAPI routes: {e}")
+                self._logger.warning(
+                    f"Could not check FastAPI routes: {e}", exc_info=True
+                )
 
             # Fallback: Apply auth to all /api/* endpoints except exempt ones
             # This ensures manually registered endpoints are protected
@@ -278,7 +290,9 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             return False
 
         except Exception as e:
-            self._logger.warning(f"Error checking endpoint auth requirements: {e}")
+            self._logger.warning(
+                f"Error checking endpoint auth requirements: {e}", exc_info=True
+            )
             return False
 
     async def _authenticate_request(self, request: Request) -> Optional[Any]:
@@ -319,15 +333,13 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             User object if JWT is valid, None otherwise
         """
         try:
-            # Try to get server from stored reference first (for test compatibility)
-            # Then fall back to context variable
+            # Always use stored server reference - it's required during initialization
             server = self._server
-            if not server:
-                from jvspatial.api.context import get_current_server
-
-                server = get_current_server()
 
             if not server:
+                self._logger.error(
+                    "_authenticate_jwt: No server found (this should never happen)"
+                )
                 return None
 
             # Initialize authentication service

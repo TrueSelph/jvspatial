@@ -437,11 +437,12 @@ def _wrap_function_with_params(
             else:
                 # Function doesn't have Request parameter - add it
                 async def wrapped_get_func(  # type: ignore[misc]
-                    request: FastAPIRequest, *args: Any, **kwargs: Any
+                    request: FastAPIRequest, **kwargs: Any
                 ) -> Any:
                     """Wrapped GET function with user_id injection."""
                     _inject_user_id_from_request(request, kwargs, ["user_id"])
-                    return await func(*args, **kwargs)
+                    # Don't pass request to func since it doesn't expect it
+                    return await func(**kwargs)
 
                 # Update signature to include Request parameter
                 # Exclude user_id from signature since it's injected from request.state.user
@@ -465,6 +466,9 @@ def _wrap_function_with_params(
             wrapped_get_func.__name__ = func.__name__
             wrapped_get_func.__doc__ = func.__doc__
             wrapped_get_func.__module__ = func.__module__
+            # Copy endpoint config if present
+            if hasattr(func, "_jvspatial_endpoint_config"):
+                wrapped_get_func._jvspatial_endpoint_config = func._jvspatial_endpoint_config  # type: ignore[attr-defined]
             if not has_request:
                 # Signature already set above
                 pass
@@ -690,6 +694,9 @@ def _wrap_function_with_params(
         wrapped_func.__name__ = func.__name__
         wrapped_func.__doc__ = func.__doc__
         wrapped_func.__module__ = func.__module__
+        # Copy endpoint config if present
+        if hasattr(func, "_jvspatial_endpoint_config"):
+            wrapped_func._jvspatial_endpoint_config = func._jvspatial_endpoint_config  # type: ignore[attr-defined]
 
         return wrapped_func
 
@@ -713,38 +720,54 @@ def _wrap_function_with_params(
                 wrapped_path_func.__module__ = func.__module__
                 wrapped_path_func.__signature__ = func_sig  # type: ignore[attr-defined]
                 wrapped_path_func.__annotations__ = func.__annotations__
+                # Copy endpoint config if present
+                if hasattr(func, "_jvspatial_endpoint_config"):
+                    wrapped_path_func._jvspatial_endpoint_config = func._jvspatial_endpoint_config  # type: ignore[attr-defined]
 
                 return wrapped_path_func
             else:
                 # Function doesn't have Request parameter - add it
                 async def wrapped_path_func(  # type: ignore[misc]
-                    request: FastAPIRequest, *args: Any, **kwargs: Any
+                    request: FastAPIRequest, **kwargs: Any
                 ) -> Any:
                     """Wrapped function with user_id injection for path-only params."""
                     _inject_user_id_from_request(request, kwargs, ["user_id"])
-                    return await func(*args, **kwargs)
+                    # Don't pass request to func since it doesn't expect it
+                    return await func(**kwargs)
 
                 # Update signature to include Request parameter before path params
+                # Exclude auth-injected parameters (user_id, current_user_id) since they're injected from request.state.user
                 new_params = [
                     inspect.Parameter(
                         "request",
                         inspect.Parameter.POSITIONAL_OR_KEYWORD,
                         annotation=FastAPIRequest,
                     )
-                ] + list(func_sig.parameters.values())
+                ] + [
+                    p
+                    for p in func_sig.parameters.values()
+                    if p.name not in _AUTH_INJECTED_PARAMS
+                ]
                 new_sig = inspect.Signature(
                     new_params, return_annotation=func_sig.return_annotation
                 )
                 wrapped_path_func.__signature__ = new_sig  # type: ignore[attr-defined]
                 wrapped_path_func.__annotations__ = {
                     "request": FastAPIRequest,
-                    **func.__annotations__,
+                    **{
+                        k: v
+                        for k, v in func.__annotations__.items()
+                        if k not in _AUTH_INJECTED_PARAMS
+                    },
                 }
 
                 # Copy metadata
                 wrapped_path_func.__name__ = func.__name__
                 wrapped_path_func.__doc__ = func.__doc__
                 wrapped_path_func.__module__ = func.__module__
+                # Copy endpoint config if present
+                if hasattr(func, "_jvspatial_endpoint_config"):
+                    wrapped_path_func._jvspatial_endpoint_config = func._jvspatial_endpoint_config  # type: ignore[attr-defined]
 
                 return wrapped_path_func
 
@@ -899,6 +922,9 @@ def _wrap_function_with_params(
         wrapped_func.__name__ = func.__name__
         wrapped_func.__doc__ = func.__doc__
         wrapped_func.__module__ = func.__module__
+        # Copy endpoint config if present
+        if hasattr(func, "_jvspatial_endpoint_config"):
+            wrapped_func._jvspatial_endpoint_config = func._jvspatial_endpoint_config  # type: ignore[attr-defined]
 
         return wrapped_func
 
