@@ -248,9 +248,9 @@ class EndpointDiscoveryService:
                 route_kwargs.update(endpoint_config["kwargs"])
 
             # Set authentication attributes on Walker class
-            obj._auth_required = auth_required
-            obj._required_permissions = permissions
-            obj._required_roles = roles
+            obj._auth_required = auth_required  # type: ignore[attr-defined]
+            obj._required_permissions = permissions  # type: ignore[attr-defined]
+            obj._required_roles = roles  # type: ignore[attr-defined]
 
             # Check if already registered - if so, still log it but skip registration
             if self.server._endpoint_registry.has_walker(obj):
@@ -383,13 +383,9 @@ class EndpointDiscoveryService:
                 roles = route_kwargs.pop("roles", [])
                 response = route_kwargs.pop("response", None)
 
-                # Wrap with auth if needed
-                if auth:
-                    from jvspatial.api.decorators.route import _wrap_function_with_auth
-
-                    wrapped_func = _wrap_function_with_auth(
-                        wrapped_func, auth, permissions, roles
-                    )
+                # Set auth attributes on the function (consistent with endpoint decorator handling)
+                obj._auth_required = auth  # type: ignore[attr-defined]
+                wrapped_func._auth_required = auth  # type: ignore[attr-defined]
 
                 # Propagate endpoint config onto the wrapped function
                 config = getattr(obj, "_jvspatial_endpoint_config", {})

@@ -12,8 +12,8 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from jvspatial.api.auth.config import AuthConfig
 from jvspatial.api.constants import APIRoutes
-from jvspatial.config import Config
 
 
 class PathMatcher:
@@ -106,7 +106,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
     and streamlined request processing, following the new standard implementation.
     """
 
-    def __init__(self, app, auth_config: Config, server=None):
+    def __init__(self, app, auth_config: AuthConfig, server=None):
         """Initialize the authentication middleware.
 
         Args:

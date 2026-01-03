@@ -1188,7 +1188,7 @@ class Server:
             self._register_walker_dynamically(walker_class, path, methods, **kwargs)
         else:
             # Pre-configure walker class with endpoint for discovery
-            walker_class._jvspatial_endpoint_config = {
+            walker_class._jvspatial_endpoint_config = {  # type: ignore[attr-defined]
                 "path": path,
                 "methods": methods or ["POST"],
                 "kwargs": kwargs,

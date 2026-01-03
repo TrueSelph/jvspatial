@@ -35,7 +35,7 @@ _ensured_indexes: Set[str] = set()
 class PerformanceMonitor:
     """Enhanced performance monitoring for database operations and general operations."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.db_operations: List[Dict[str, Any]] = []
         self.hook_executions: List[Dict[str, Any]] = []
         self.db_errors: List[Dict[str, Any]] = []

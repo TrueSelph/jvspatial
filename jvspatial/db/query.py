@@ -487,7 +487,7 @@ LogicalOperatorHandler = Callable[[Dict[str, Any], Any], bool]
 class QueryBuilder:
     """Builder for constructing MongoDB-style queries programmatically."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._query: Dict[str, Any] = {}
 
     def field(self, name: str) -> "FieldQuery":
