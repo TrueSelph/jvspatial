@@ -1,7 +1,7 @@
 """Authentication models for user management and JWT tokens."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -59,6 +59,9 @@ class User(Object):
     is_active: bool = Field(default=True, description="Whether user is active")
     created_at: datetime = Field(
         default_factory=datetime.utcnow, description="User creation timestamp"
+    )
+    last_accessed: Optional[datetime] = Field(
+        default=None, description="Last time the user authenticated on the platform"
     )
 
     @classmethod

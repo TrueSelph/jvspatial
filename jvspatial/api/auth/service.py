@@ -240,6 +240,10 @@ class AuthenticationService:
         if not user.is_active:
             raise ValueError("User account is deactivated")
 
+        # Update last_accessed timestamp
+        user.last_accessed = datetime.utcnow()
+        await user.save()
+
         # Generate JWT token
         token, expires_at = self._generate_jwt_token(user.id, user.email)
 
@@ -299,6 +303,10 @@ class AuthenticationService:
         # Check if user is still active
         if not user.is_active:
             return None
+
+        # Update last_accessed timestamp on token validation (user is authenticating)
+        user.last_accessed = datetime.utcnow()
+        await user.save()
 
         return UserResponse(
             id=user.id,
