@@ -66,7 +66,7 @@ def get_logging_config() -> Dict[str, Any]:
 
     # Build config based on database type
     if db_type == "json":
-        db_path = os.getenv("JVSPATIAL_LOG_DB_PATH", "./jvspatial.logs")
+        db_path = os.getenv("JVSPATIAL_LOG_DB_PATH", "./jvspatial_logs")
         config = {
             "enabled": enabled,
             "log_levels": log_levels,
@@ -78,7 +78,7 @@ def get_logging_config() -> Dict[str, Any]:
         }
     elif db_type == "sqlite":
         db_path = os.getenv(
-            "JVSPATIAL_LOG_DB_PATH", "jvspatial.logs/sqlite/jvspatial.logs.db"
+            "JVSPATIAL_LOG_DB_PATH", "jvspatial_logs/sqlite/jvspatial_logs.db"
         )
         config = {
             "enabled": enabled,
@@ -93,7 +93,7 @@ def get_logging_config() -> Dict[str, Any]:
         db_uri = os.getenv("JVSPATIAL_LOG_DB_URI") or os.getenv(
             "JVSPATIAL_MONGODB_URI", "mongodb://localhost:27017"
         )
-        db_name = os.getenv("JVSPATIAL_LOG_DB_NAME", "jvspatial.logs")
+        db_name = os.getenv("JVSPATIAL_LOG_DB_NAME", "jvspatial_logs")
         config = {
             "enabled": enabled,
             "log_levels": log_levels,
@@ -105,7 +105,7 @@ def get_logging_config() -> Dict[str, Any]:
             "db_name": db_name,
         }
     elif db_type == "dynamodb":
-        table_name = os.getenv("JVSPATIAL_LOG_DB_TABLE_NAME", "jvspatial.logs")
+        table_name = os.getenv("JVSPATIAL_LOG_DB_TABLE_NAME", "jvspatial_logs")
         region_name = os.getenv("JVSPATIAL_LOG_DB_REGION") or os.getenv(
             "JVSPATIAL_DYNAMODB_REGION", "us-east-1"
         )
@@ -129,7 +129,7 @@ def get_logging_config() -> Dict[str, Any]:
         }
     else:
         # Fallback to JSON
-        db_path = os.getenv("JVSPATIAL_LOG_DB_PATH", "./jvspatial.logs")
+        db_path = os.getenv("JVSPATIAL_LOG_DB_PATH", "./jvspatial_logs")
         config = {
             "enabled": enabled,
             "log_levels": log_levels,
@@ -221,7 +221,7 @@ def initialize_logging_database(
             # Fallback to JSON
             log_db = create_database(
                 db_type="json",
-                base_path=config.get("db_path", "./jvspatial.logs"),
+                base_path=config.get("db_path", "./jvspatial_logs"),
             )
 
         # Register database (idempotent - check if already registered)

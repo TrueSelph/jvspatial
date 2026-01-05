@@ -137,17 +137,17 @@ JVSPATIAL_DB_LOGGING_API_ENABLED=false
 JVSPATIAL_LOG_DB_TYPE=json
 
 # For JSON database
-JVSPATIAL_LOG_DB_PATH=./jvspatial.logs
+JVSPATIAL_LOG_DB_PATH=./jvspatial_logs
 
 # For SQLite database
-JVSPATIAL_LOG_DB_PATH=./logs/jvspatial.logs.db
+JVSPATIAL_LOG_DB_PATH=./logs/jvspatial_logs.db
 
 # For MongoDB
 JVSPATIAL_LOG_DB_URI=mongodb://localhost:27017
-JVSPATIAL_LOG_DB_NAME=jvspatial.logs
+JVSPATIAL_LOG_DB_NAME=jvspatial_logs
 
 # For DynamoDB
-JVSPATIAL_LOG_DB_TABLE_NAME=jvspatial.logs
+JVSPATIAL_LOG_DB_TABLE_NAME=jvspatial_logs
 JVSPATIAL_LOG_DB_REGION=us-east-1
 ```
 
