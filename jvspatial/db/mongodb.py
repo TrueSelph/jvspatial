@@ -1,4 +1,12 @@
-"""Simplified MongoDB database implementation."""
+"""Simplified MongoDB database implementation.
+
+Index Creation Behavior:
+    By default, index creation uses background mode to avoid blocking database operations.
+    This allows the database to remain operational during index creation, which is especially
+    important for large collections. Background index creation is slower but non-blocking.
+
+    To use foreground (blocking) index creation, pass background=False when calling create_index().
+"""
 
 import contextlib
 import logging
@@ -283,7 +291,9 @@ class MongoDB(Database):
             collection: Collection name
             field_or_fields: Single field name (str) or list of (field_name, direction) tuples for compound indexes
             unique: Whether the index should enforce uniqueness
-            **kwargs: Additional MongoDB-specific options (e.g., expireAfterSeconds for TTL indexes)
+            **kwargs: Additional MongoDB-specific options (e.g., expireAfterSeconds for TTL indexes).
+                     By default, background=True is used for non-blocking index creation.
+                     Pass background=False to use foreground (blocking) index creation.
 
         Raises:
             DatabaseError: If index creation fails
@@ -322,9 +332,15 @@ class MongoDB(Database):
                 index_options["unique"] = True
             if "expireAfterSeconds" in kwargs:
                 index_options["expireAfterSeconds"] = kwargs["expireAfterSeconds"]
+
+            # Use background index creation by default to avoid blocking operations
+            # This allows the database to remain operational during index creation
+            # Can be overridden by passing background=False in kwargs
+            index_options["background"] = kwargs.get("background", True)
+
             # Add any other MongoDB-specific options
             for key, value in kwargs.items():
-                if key not in ("expireAfterSeconds",):  # Already handled
+                if key not in ("expireAfterSeconds", "background"):  # Already handled
                     index_options[key] = value
 
             # Create the index

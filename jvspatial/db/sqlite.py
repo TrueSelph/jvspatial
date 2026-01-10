@@ -34,6 +34,12 @@ class SQLiteDB(Database):
 
     Stores records in a single table and keeps payloads as JSON to mirror the
     structure used by other database backends.
+
+    Index Creation Behavior:
+        SQLite index creation is synchronous and blocks until the index is built.
+        For typical use cases with small to medium datasets, index creation is very fast
+        (milliseconds to seconds). For very large databases, index creation may take longer
+        but is generally much faster than DynamoDB GSI creation.
     """
 
     def __init__(

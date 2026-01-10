@@ -1,7 +1,21 @@
-"""DynamoDB database implementation for AWS Lambda serverless deployments."""
+"""DynamoDB database implementation for AWS Lambda serverless deployments.
+
+Index Creation Behavior:
+    By default, index creation does NOT wait for Global Secondary Indexes (GSI) to become active,
+    allowing immediate graph usage. Indexes are created asynchronously and will be available
+    for queries once they become active (typically a few minutes).
+
+    To enable waiting for index activation (old behavior), set the environment variable:
+
+        JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX=true
+
+    When set to true, the system will wait up to 5 minutes per index for activation before
+    proceeding, which can cause significant delays during initialization.
+"""
 
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 try:
@@ -625,6 +639,7 @@ class DynamoDB(Database):
         attribute_definitions: List[Dict[str, str]],
         key_schema: List[Dict[str, str]],
         unique: bool = False,
+        wait_for_active: bool = True,
     ) -> None:
         """Update DynamoDB table to add a Global Secondary Index.
 
@@ -635,6 +650,7 @@ class DynamoDB(Database):
             attribute_definitions: List of attribute definitions needed for the GSI
             key_schema: Key schema for the GSI
             unique: Whether the index should be unique (handled at application level)
+            wait_for_active: Whether to wait for the index to become active (default: True)
 
         Raises:
             DatabaseError: If table update fails
@@ -692,12 +708,17 @@ class DynamoDB(Database):
             await client.update_table(**update_params)
             logger.info(f"Started creating GSI '{gsi_name}' on table '{table_name}'")
 
-            # Wait for index to become active
-            await self._wait_for_index_active(client, table_name, gsi_name)
-
-            logger.info(
-                f"GSI '{gsi_name}' created successfully on table '{table_name}'"
-            )
+            # Wait for index to become active if requested
+            if wait_for_active:
+                await self._wait_for_index_active(client, table_name, gsi_name)
+                logger.info(
+                    f"GSI '{gsi_name}' created successfully on table '{table_name}'"
+                )
+            else:
+                logger.info(
+                    f"GSI '{gsi_name}' creation initiated on table '{table_name}' "
+                    f"(not waiting for activation - index will be available when active)"
+                )
 
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "")
@@ -712,7 +733,8 @@ class DynamoDB(Database):
                 # Retry once
                 try:
                     await client.update_table(**update_params)
-                    await self._wait_for_index_active(client, table_name, gsi_name)
+                    if wait_for_active:
+                        await self._wait_for_index_active(client, table_name, gsi_name)
                 except ClientError as retry_error:
                     raise DatabaseError(
                         f"Failed to create GSI '{gsi_name}' after retry: {retry_error}"
@@ -725,6 +747,7 @@ class DynamoDB(Database):
         collection: str,
         field_or_fields: Union[str, List[Tuple[str, int]]],
         unique: bool = False,
+        wait_for_active: Optional[bool] = None,
         **kwargs: Any,
     ) -> None:
         """Create an index on the specified field(s) using DynamoDB Global Secondary Indexes.
@@ -738,11 +761,21 @@ class DynamoDB(Database):
             collection: Collection name
             field_or_fields: Single field name (str) or list of (field_name, direction) tuples
             unique: Whether the index should enforce uniqueness (handled at application level)
+            wait_for_active: Whether to wait for index activation. If None, uses environment
+                            variable JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX (default: False).
+                            Set to True to wait for activation (may take several minutes per index).
             **kwargs: Additional options (e.g., "name" for compound indexes)
 
         Raises:
             DatabaseError: If index creation fails
         """
+        # Determine whether to wait based on parameter or environment variable
+        # Default is False to allow immediate graph usage (indexes created asynchronously)
+        if wait_for_active is None:
+            wait_for_active = (
+                os.getenv("JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX", "false").lower()
+                == "true"
+            )
         table_name = await self._ensure_table_exists(collection)
         session = await self._get_session()
 
@@ -799,6 +832,7 @@ class DynamoDB(Database):
                         attribute_definitions,
                         key_schema,
                         unique,
+                        wait_for_active,
                     )
 
                     # Track the index
@@ -863,6 +897,7 @@ class DynamoDB(Database):
                         attribute_definitions,
                         key_schema,
                         unique,
+                        wait_for_active,
                     )
 
                     # Track the compound index
