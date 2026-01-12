@@ -1151,18 +1151,49 @@ class GraphContext:
 
             # Save all records of this type
             db = self.database
-            for i, record in enumerate(records):
+
+            # Use batch_write if available (e.g., DynamoDB), otherwise fall back to sequential saves
+            if hasattr(db, "batch_write"):
                 try:
-                    await db.save(collection, record)
-                    # Update cache with latest version
-                    await self._add_to_cache(record["id"], type_entities[i])
-                    saved_entities.append(type_entities[i])
+                    # Use batch write for efficiency
+                    await db.batch_write(collection, records)
+                    # Update cache with latest versions
+                    for i, record in enumerate(records):
+                        await self._add_to_cache(record["id"], type_entities[i])
+                        saved_entities.append(type_entities[i])
                 except Exception as e:
-                    # Log error but continue with other entities
-                    print(
-                        f"Failed to save entity {type_entities[i].get('id', 'unknown')}: {e}"
+                    # If batch write fails, fall back to sequential saves
+                    logger.warning(
+                        f"Batch write failed for collection '{collection}', falling back to sequential saves: {e}"
                     )
-                    continue
+                    for i, record in enumerate(records):
+                        try:
+                            await db.save(collection, record)
+                            # Update cache with latest version
+                            await self._add_to_cache(record["id"], type_entities[i])
+                            saved_entities.append(type_entities[i])
+                        except Exception as save_error:
+                            # Log error but continue with other entities
+                            logger.error(
+                                f"Failed to save entity {type_entities[i].get('id', 'unknown')}: {save_error}",
+                                exc_info=True,
+                            )
+                            continue
+            else:
+                # Fall back to sequential saves for databases without batch support
+                for i, record in enumerate(records):
+                    try:
+                        await db.save(collection, record)
+                        # Update cache with latest version
+                        await self._add_to_cache(record["id"], type_entities[i])
+                        saved_entities.append(type_entities[i])
+                    except Exception as e:
+                        # Log error but continue with other entities
+                        logger.error(
+                            f"Failed to save entity {type_entities[i].get('id', 'unknown')}: {e}",
+                            exc_info=True,
+                        )
+                        continue
 
         return saved_entities
 

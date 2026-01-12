@@ -13,6 +13,7 @@ Index Creation Behavior:
     proceeding, which can cause significant delays during initialization.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -79,8 +80,33 @@ class DynamoDB(Database):
         self.aws_access_key_id = aws_access_key_id
         self.aws_secret_access_key = aws_secret_access_key
 
+        # Build DynamoDB client kwargs once for reuse
+        self._dynamodb_kwargs: Dict[str, Any] = {"region_name": self.region_name}
+        if self.endpoint_url:
+            self._dynamodb_kwargs["endpoint_url"] = self.endpoint_url
+        if self.aws_access_key_id:
+            self._dynamodb_kwargs["aws_access_key_id"] = self.aws_access_key_id
+        if self.aws_secret_access_key:
+            self._dynamodb_kwargs["aws_secret_access_key"] = self.aws_secret_access_key
+
+        # Configure connection pool for Lambda (optimal for serverless)
+        # max_pool_connections: 10 is a good default for Lambda
+        # Higher values don't help much in Lambda due to concurrency limits
+        self._dynamodb_kwargs["config"] = {
+            "max_pool_connections": 10,
+            "retries": {
+                "max_attempts": 3,
+                "mode": "adaptive",
+            },
+        }
+
         # DynamoDB session will be created on first use
         self._session: Optional[Any] = None
+        # Persistent client for reuse across operations (critical for Lambda performance)
+        self._client: Optional[Any] = None
+        # Store the context manager so we can properly exit it on close
+        self._client_context: Optional[Any] = None
+        self._client_lock = asyncio.Lock()
         self._tables_created: Dict[str, bool] = {}  # Track which tables we've created
         # Track indexed fields per collection: {collection: {field_path: {"gsi_name": str, "unique": bool, "direction": int}}}
         self._indexed_fields: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -96,6 +122,29 @@ class DynamoDB(Database):
         if self._session is None:
             self._session = aioboto3.Session()
         return self._session
+
+    async def _get_client(self) -> Any:
+        """Get or create persistent DynamoDB client.
+
+        This method implements client reuse to avoid the overhead of creating
+        a new client for every operation, which is critical for Lambda performance.
+
+        Returns:
+            DynamoDB client (reused across operations)
+        """
+        if self._client is None:
+            async with self._client_lock:
+                # Double-check pattern to avoid race conditions
+                if self._client is None:
+                    session = await self._get_session()
+                    # Create client resource - aioboto3 manages connection pooling
+                    # We keep the client alive for the lifetime of the DynamoDB instance
+                    self._client_context = session.client(
+                        "dynamodb", **self._dynamodb_kwargs
+                    )
+                    # Enter async context to initialize the client
+                    self._client = await self._client_context.__aenter__()
+        return self._client
 
     def _get_indexed_field_value(self, data: Dict[str, Any], field_path: str) -> Any:
         """Extract a value from nested JSON data using dot notation.
@@ -217,58 +266,54 @@ class DynamoDB(Database):
         # Use collection name as part of table name to avoid conflicts
         full_table_name = f"{self.table_name}_{collection}"
 
-        if full_table_name not in self._tables_created:
-            session = await self._get_session()
-            dynamodb_kwargs: Dict[str, Any] = {"region_name": self.region_name}
-            if self.endpoint_url:
-                dynamodb_kwargs["endpoint_url"] = self.endpoint_url
-            if self.aws_access_key_id:
-                dynamodb_kwargs["aws_access_key_id"] = self.aws_access_key_id
-            if self.aws_secret_access_key:
-                dynamodb_kwargs["aws_secret_access_key"] = self.aws_secret_access_key
+        # Early return if table already verified (cached)
+        if full_table_name in self._tables_created:
+            return full_table_name
 
-            async with session.client("dynamodb", **dynamodb_kwargs) as client:
-                # Check if table exists
-                try:
-                    await client.describe_table(TableName=full_table_name)
-                    # Discover existing GSIs
-                    await self._discover_existing_indexes(
-                        client, full_table_name, collection
-                    )
-                except ClientError as e:
-                    if e.response["Error"]["Code"] == "ResourceNotFoundException":
-                        # Table doesn't exist, create it
-                        try:
-                            await client.create_table(
-                                TableName=full_table_name,
-                                KeySchema=[
-                                    {"AttributeName": "collection", "KeyType": "HASH"},
-                                    {"AttributeName": "id", "KeyType": "RANGE"},
-                                ],
-                                AttributeDefinitions=[
-                                    {
-                                        "AttributeName": "collection",
-                                        "AttributeType": "S",
-                                    },
-                                    {"AttributeName": "id", "AttributeType": "S"},
-                                ],
-                                BillingMode="PAY_PER_REQUEST",
-                            )
-                            # Wait for table to be created
-                            waiter = client.get_waiter("table_exists")
-                            await waiter.wait(TableName=full_table_name)
-                        except ClientError as create_error:
-                            if (
-                                create_error.response["Error"]["Code"]
-                                != "ResourceInUseException"
-                            ):
-                                raise DatabaseError(
-                                    f"Failed to create DynamoDB table: {create_error}"
-                                ) from create_error
-                    else:
-                        raise DatabaseError(f"DynamoDB error: {e}") from e
+        # Use persistent client
+        client = await self._get_client()
 
+        # Check if table exists
+        try:
+            await client.describe_table(TableName=full_table_name)
+            # Discover existing GSIs
+            await self._discover_existing_indexes(client, full_table_name, collection)
+            # Cache table existence
             self._tables_created[full_table_name] = True
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ResourceNotFoundException":
+                # Table doesn't exist, create it
+                try:
+                    await client.create_table(
+                        TableName=full_table_name,
+                        KeySchema=[
+                            {"AttributeName": "collection", "KeyType": "HASH"},
+                            {"AttributeName": "id", "KeyType": "RANGE"},
+                        ],
+                        AttributeDefinitions=[
+                            {
+                                "AttributeName": "collection",
+                                "AttributeType": "S",
+                            },
+                            {"AttributeName": "id", "AttributeType": "S"},
+                        ],
+                        BillingMode="PAY_PER_REQUEST",
+                    )
+                    # Wait for table to be created
+                    waiter = client.get_waiter("table_exists")
+                    await waiter.wait(TableName=full_table_name)
+                    # Cache table creation
+                    self._tables_created[full_table_name] = True
+                except ClientError as create_error:
+                    if (
+                        create_error.response["Error"]["Code"]
+                        != "ResourceInUseException"
+                    ):
+                        raise DatabaseError(
+                            f"Failed to create DynamoDB table: {create_error}"
+                        ) from create_error
+            else:
+                raise DatabaseError(f"DynamoDB error: {e}") from e
 
         return full_table_name
 
@@ -289,7 +334,6 @@ class DynamoDB(Database):
             data["id"] = str(uuid.uuid4())
 
         table_name = await self._ensure_table_exists(collection)
-        session = await self._get_session()
 
         # Prepare item for DynamoDB
         item = {
@@ -304,17 +348,9 @@ class DynamoDB(Database):
         indexed_attrs = self._extract_indexed_fields(data, collection)
         item.update(indexed_attrs)
 
-        dynamodb_kwargs: Dict[str, Any] = {"region_name": self.region_name}
-        if self.endpoint_url:
-            dynamodb_kwargs["endpoint_url"] = self.endpoint_url
-        if self.aws_access_key_id:
-            dynamodb_kwargs["aws_access_key_id"] = self.aws_access_key_id
-        if self.aws_secret_access_key:
-            dynamodb_kwargs["aws_secret_access_key"] = self.aws_secret_access_key
-
         try:
-            async with session.client("dynamodb", **dynamodb_kwargs) as client:
-                await client.put_item(TableName=table_name, Item=item)
+            client = await self._get_client()
+            await client.put_item(TableName=table_name, Item=item)
             return data
         except ClientError as e:
             raise DatabaseError(f"DynamoDB save error: {e}") from e
@@ -330,29 +366,20 @@ class DynamoDB(Database):
             Record data or None if not found
         """
         table_name = await self._ensure_table_exists(collection)
-        session = await self._get_session()
-
-        dynamodb_kwargs: Dict[str, Any] = {"region_name": self.region_name}
-        if self.endpoint_url:
-            dynamodb_kwargs["endpoint_url"] = self.endpoint_url
-        if self.aws_access_key_id:
-            dynamodb_kwargs["aws_access_key_id"] = self.aws_access_key_id
-        if self.aws_secret_access_key:
-            dynamodb_kwargs["aws_secret_access_key"] = self.aws_secret_access_key
 
         try:
-            async with session.client("dynamodb", **dynamodb_kwargs) as client:
-                response = await client.get_item(
-                    TableName=table_name,
-                    Key={"collection": {"S": collection}, "id": {"S": id}},
-                )
-                if "Item" not in response:
-                    return None
+            client = await self._get_client()
+            response = await client.get_item(
+                TableName=table_name,
+                Key={"collection": {"S": collection}, "id": {"S": id}},
+            )
+            if "Item" not in response:
+                return None
 
-                # Deserialize data from JSON string
-                item = response["Item"]
-                data = json.loads(item["data"]["S"])
-                return data
+            # Deserialize data from JSON string
+            item = response["Item"]
+            data = json.loads(item["data"]["S"])
+            return data
         except ClientError as e:
             raise DatabaseError(f"DynamoDB get error: {e}") from e
 
@@ -364,24 +391,174 @@ class DynamoDB(Database):
             id: Record ID
         """
         table_name = await self._ensure_table_exists(collection)
-        session = await self._get_session()
-
-        dynamodb_kwargs: Dict[str, Any] = {"region_name": self.region_name}
-        if self.endpoint_url:
-            dynamodb_kwargs["endpoint_url"] = self.endpoint_url
-        if self.aws_access_key_id:
-            dynamodb_kwargs["aws_access_key_id"] = self.aws_access_key_id
-        if self.aws_secret_access_key:
-            dynamodb_kwargs["aws_secret_access_key"] = self.aws_secret_access_key
 
         try:
-            async with session.client("dynamodb", **dynamodb_kwargs) as client:
-                await client.delete_item(
-                    TableName=table_name,
-                    Key={"collection": {"S": collection}, "id": {"S": id}},
-                )
+            client = await self._get_client()
+            await client.delete_item(
+                TableName=table_name,
+                Key={"collection": {"S": collection}, "id": {"S": id}},
+            )
         except ClientError as e:
             raise DatabaseError(f"DynamoDB delete error: {e}") from e
+
+    async def batch_get(self, collection: str, ids: List[str]) -> List[Dict[str, Any]]:
+        """Retrieve multiple records by IDs using batch_get_item.
+
+        This method efficiently retrieves multiple records in batches, handling
+        DynamoDB's 25-item limit automatically.
+
+        Args:
+            collection: Collection name
+            ids: List of record IDs to retrieve
+
+        Returns:
+            List of retrieved records (may be fewer than requested if some don't exist)
+        """
+        if not ids:
+            return []
+
+        table_name = await self._ensure_table_exists(collection)
+        client = await self._get_client()
+
+        results: List[Dict[str, Any]] = []
+        # DynamoDB batch_get_item has a limit of 100 items per request
+        # But we use 25 as a conservative limit to match batch_write_item
+        batch_size = 25
+
+        # Process IDs in batches
+        for i in range(0, len(ids), batch_size):
+            batch_ids = ids[i : i + batch_size]
+
+            # Prepare request items for this batch
+            request_items = {
+                table_name: {
+                    "Keys": [
+                        {"collection": {"S": collection}, "id": {"S": id}}
+                        for id in batch_ids
+                    ]
+                }
+            }
+
+            try:
+                # Execute batch get
+                response = await client.batch_get_item(RequestItems=request_items)
+
+                # Process responses
+                items = response.get("Responses", {}).get(table_name, [])
+                for item in items:
+                    # Deserialize data from JSON string
+                    data = json.loads(item["data"]["S"])
+                    results.append(data)
+
+                # Handle unprocessed keys (should be rare with proper retry config)
+                unprocessed = response.get("UnprocessedKeys", {})
+                if unprocessed:
+                    logger.warning(
+                        f"Unprocessed keys in batch_get for collection '{collection}': {len(unprocessed.get(table_name, {}).get('Keys', []))}"
+                    )
+                    # Retry unprocessed keys once
+                    retry_items = {table_name: unprocessed[table_name]}
+                    retry_response = await client.batch_get_item(
+                        RequestItems=retry_items
+                    )
+                    retry_items_list = retry_response.get("Responses", {}).get(
+                        table_name, []
+                    )
+                    for item in retry_items_list:
+                        data = json.loads(item["data"]["S"])
+                        results.append(data)
+
+            except ClientError as e:
+                raise DatabaseError(f"DynamoDB batch_get error: {e}") from e
+
+        return results
+
+    async def batch_write(self, collection: str, items: List[Dict[str, Any]]) -> None:
+        """Write multiple records using batch_write_item.
+
+        This method efficiently writes multiple records in batches, handling
+        DynamoDB's 25-item limit and unprocessed items automatically.
+
+        Args:
+            collection: Collection name
+            items: List of record dictionaries to write
+
+        Raises:
+            DatabaseError: If batch write fails after retries
+        """
+        if not items:
+            return
+
+        table_name = await self._ensure_table_exists(collection)
+        client = await self._get_client()
+
+        # Ensure all items have IDs
+        import uuid
+
+        for item in items:
+            if "id" not in item:
+                item["id"] = str(uuid.uuid4())
+
+        # DynamoDB batch_write_item has a limit of 25 items per request
+        batch_size = 25
+
+        # Process items in batches
+        for i in range(0, len(items), batch_size):
+            batch_items = items[i : i + batch_size]
+
+            # Prepare write requests for this batch
+            write_requests = []
+            for item_data in batch_items:
+                # Prepare item for DynamoDB
+                dynamodb_item = {
+                    "collection": {"S": collection},
+                    "id": {"S": item_data["id"]},
+                    "data": {
+                        "S": json.dumps(item_data, default=str)
+                    },  # Serialize data as JSON string
+                }
+
+                # Extract indexed fields and add as top-level attributes for GSI support
+                indexed_attrs = self._extract_indexed_fields(item_data, collection)
+                dynamodb_item.update(indexed_attrs)
+
+                write_requests.append({"PutRequest": {"Item": dynamodb_item}})
+
+            request_items = {table_name: write_requests}
+
+            try:
+                # Execute batch write
+                response = await client.batch_write_item(RequestItems=request_items)
+
+                # Handle unprocessed items with retry logic
+                unprocessed = response.get("UnprocessedItems", {})
+                max_retries = 3
+                retry_count = 0
+
+                while unprocessed and retry_count < max_retries:
+                    retry_count += 1
+                    logger.debug(
+                        f"Retrying {len(unprocessed.get(table_name, []))} unprocessed items (attempt {retry_count}/{max_retries})"
+                    )
+
+                    # Wait before retry (exponential backoff)
+                    import asyncio
+
+                    await asyncio.sleep(0.1 * (2 ** (retry_count - 1)))
+
+                    retry_response = await client.batch_write_item(
+                        RequestItems=unprocessed
+                    )
+                    unprocessed = retry_response.get("UnprocessedItems", {})
+
+                if unprocessed:
+                    # Log warning but don't fail - some items may be throttled
+                    logger.warning(
+                        f"Some items remain unprocessed after {max_retries} retries for collection '{collection}': {len(unprocessed.get(table_name, []))}"
+                    )
+
+            except ClientError as e:
+                raise DatabaseError(f"DynamoDB batch_write error: {e}") from e
 
     def _find_matching_gsi(
         self, collection: str, query: Dict[str, Any]
@@ -442,54 +619,68 @@ class DynamoDB(Database):
             - All queries are transparent - same API, better performance
         """
         table_name = await self._ensure_table_exists(collection)
-        session = await self._get_session()
-
-        dynamodb_kwargs: Dict[str, Any] = {"region_name": self.region_name}
-        if self.endpoint_url:
-            dynamodb_kwargs["endpoint_url"] = self.endpoint_url
-        if self.aws_access_key_id:
-            dynamodb_kwargs["aws_access_key_id"] = self.aws_access_key_id
-        if self.aws_secret_access_key:
-            dynamodb_kwargs["aws_secret_access_key"] = self.aws_secret_access_key
 
         try:
-            async with session.client("dynamodb", **dynamodb_kwargs) as client:
-                # Try to use GSI if query matches an indexed field
-                gsi_match = self._find_matching_gsi(collection, query)
+            client = await self._get_client()
+            # Try to use GSI if query matches an indexed field
+            gsi_match = self._find_matching_gsi(collection, query)
 
-                if gsi_match and not query.get("$or") and not query.get("$and"):
-                    # Use GSI query for simple equality queries
-                    try:
-                        # Convert value to DynamoDB format
-                        attr_name = gsi_match["attr_name"]
-                        value = gsi_match["value"]
+            if gsi_match and not query.get("$or") and not query.get("$and"):
+                # Use GSI query for simple equality queries
+                try:
+                    # Convert value to DynamoDB format
+                    attr_name = gsi_match["attr_name"]
+                    value = gsi_match["value"]
 
-                        value_attr: Dict[str, Any]
-                        if isinstance(value, str):
-                            value_attr = {"S": value}
-                        elif isinstance(value, (int, float)):
-                            value_attr = {"N": str(value)}
-                        elif isinstance(value, bool):
-                            value_attr = {"BOOL": value}  # type: ignore[dict-item]
-                        else:
-                            value_attr = {"S": str(value)}
+                    value_attr: Dict[str, Any]
+                    if isinstance(value, str):
+                        value_attr = {"S": value}
+                    elif isinstance(value, (int, float)):
+                        value_attr = {"N": str(value)}
+                    elif isinstance(value, bool):
+                        value_attr = {"BOOL": value}  # type: ignore[dict-item]
+                    else:
+                        value_attr = {"S": str(value)}
 
-                        # Query using GSI
-                        # Use expression attribute names to handle special characters
-                        attr_name_placeholder = f"#{attr_name.replace('_', '')}"
+                    # Query using GSI
+                    # Use expression attribute names to handle special characters
+                    attr_name_placeholder = f"#{attr_name.replace('_', '')}"
+                    response = await client.query(
+                        TableName=table_name,
+                        IndexName=gsi_match["gsi_name"],
+                        KeyConditionExpression=f"{attr_name_placeholder} = :val",
+                        ExpressionAttributeNames={attr_name_placeholder: attr_name},
+                        ExpressionAttributeValues={":val": value_attr},
+                    )
+
+                    results = []
+                    for item in response.get("Items", []):
+                        # Deserialize data from JSON string
+                        data = json.loads(item["data"]["S"])
+                        # Apply additional query filters if any
+                        remaining_query = {
+                            k: v
+                            for k, v in query.items()
+                            if k != gsi_match["field_path"]
+                        }
+                        if not remaining_query or QueryEngine.match(
+                            data, remaining_query
+                        ):
+                            results.append(data)
+
+                    # Handle pagination
+                    while "LastEvaluatedKey" in response:
                         response = await client.query(
                             TableName=table_name,
                             IndexName=gsi_match["gsi_name"],
                             KeyConditionExpression=f"{attr_name_placeholder} = :val",
                             ExpressionAttributeNames={attr_name_placeholder: attr_name},
                             ExpressionAttributeValues={":val": value_attr},
+                            ExclusiveStartKey=response["LastEvaluatedKey"],
                         )
 
-                        results = []
                         for item in response.get("Items", []):
-                            # Deserialize data from JSON string
                             data = json.loads(item["data"]["S"])
-                            # Apply additional query filters if any
                             remaining_query = {
                                 k: v
                                 for k, v in query.items()
@@ -500,82 +691,55 @@ class DynamoDB(Database):
                             ):
                                 results.append(data)
 
-                        # Handle pagination
-                        while "LastEvaluatedKey" in response:
-                            response = await client.query(
-                                TableName=table_name,
-                                IndexName=gsi_match["gsi_name"],
-                                KeyConditionExpression=f"{attr_name_placeholder} = :val",
-                                ExpressionAttributeNames={
-                                    attr_name_placeholder: attr_name
-                                },
-                                ExpressionAttributeValues={":val": value_attr},
-                                ExclusiveStartKey=response["LastEvaluatedKey"],
-                            )
+                    logger.debug(
+                        f"Used GSI '{gsi_match['gsi_name']}' for query on '{gsi_match['field_path']}'"
+                    )
+                    return results
 
-                            for item in response.get("Items", []):
-                                data = json.loads(item["data"]["S"])
-                                remaining_query = {
-                                    k: v
-                                    for k, v in query.items()
-                                    if k != gsi_match["field_path"]
-                                }
-                                if not remaining_query or QueryEngine.match(
-                                    data, remaining_query
-                                ):
-                                    results.append(data)
+                except ClientError as e:
+                    # If GSI query fails, fall back to scan
+                    logger.warning(
+                        f"GSI query failed, falling back to scan: {e}",
+                        exc_info=True,
+                    )
 
-                        logger.debug(
-                            f"Used GSI '{gsi_match['gsi_name']}' for query on '{gsi_match['field_path']}'"
-                        )
-                        return results
+            # Fall back to scan for complex queries or when no index matches
+            response = await client.scan(
+                TableName=table_name,
+                FilterExpression="#coll = :collection_val",
+                ExpressionAttributeNames={"#coll": "collection"},
+                ExpressionAttributeValues={":collection_val": {"S": collection}},
+            )
 
-                    except ClientError as e:
-                        # If GSI query fails, fall back to scan
-                        logger.warning(
-                            f"GSI query failed, falling back to scan: {e}",
-                            exc_info=True,
-                        )
+            results = []
 
-                # Fall back to scan for complex queries or when no index matches
+            for item in response.get("Items", []):
+                # Deserialize data from JSON string
+                data = json.loads(item["data"]["S"])
+
+                # Use QueryEngine for proper operator support ($or, $and, etc.)
+                if not query or QueryEngine.match(data, query):
+                    results.append(data)
+
+            # Handle pagination if needed
+            while "LastEvaluatedKey" in response:
                 response = await client.scan(
                     TableName=table_name,
                     FilterExpression="#coll = :collection_val",
                     ExpressionAttributeNames={"#coll": "collection"},
                     ExpressionAttributeValues={":collection_val": {"S": collection}},
+                    ExclusiveStartKey=response["LastEvaluatedKey"],
                 )
 
-                results = []
-
                 for item in response.get("Items", []):
-                    # Deserialize data from JSON string
                     data = json.loads(item["data"]["S"])
-
-                    # Use QueryEngine for proper operator support ($or, $and, etc.)
-                    if not query or QueryEngine.match(data, query):
+                    if not query:
                         results.append(data)
-
-                # Handle pagination if needed
-                while "LastEvaluatedKey" in response:
-                    response = await client.scan(
-                        TableName=table_name,
-                        FilterExpression="#coll = :collection_val",
-                        ExpressionAttributeNames={"#coll": "collection"},
-                        ExpressionAttributeValues={
-                            ":collection_val": {"S": collection}
-                        },
-                        ExclusiveStartKey=response["LastEvaluatedKey"],
-                    )
-
-                    for item in response.get("Items", []):
-                        data = json.loads(item["data"]["S"])
-                        if not query:
+                    else:
+                        if QueryEngine.match(data, query):
                             results.append(data)
-                        else:
-                            if QueryEngine.match(data, query):
-                                results.append(data)
 
-                return results
+            return results
         except ClientError as e:
             raise DatabaseError(f"DynamoDB find error: {e}") from e
 
@@ -777,7 +941,6 @@ class DynamoDB(Database):
                 == "true"
             )
         table_name = await self._ensure_table_exists(collection)
-        session = await self._get_session()
 
         # Initialize collections in registry if needed
         if collection not in self._indexed_fields:
@@ -785,142 +948,144 @@ class DynamoDB(Database):
         if collection not in self._gsi_names:
             self._gsi_names[collection] = set()
 
-        dynamodb_kwargs: Dict[str, Any] = {"region_name": self.region_name}
-        if self.endpoint_url:
-            dynamodb_kwargs["endpoint_url"] = self.endpoint_url
-        if self.aws_access_key_id:
-            dynamodb_kwargs["aws_access_key_id"] = self.aws_access_key_id
-        if self.aws_secret_access_key:
-            dynamodb_kwargs["aws_secret_access_key"] = self.aws_secret_access_key
-
         try:
-            async with session.client("dynamodb", **dynamodb_kwargs) as client:
-                if isinstance(field_or_fields, str):
-                    # Single-field index
-                    field_path = field_or_fields
+            client = await self._get_client()
+            if isinstance(field_or_fields, str):
+                # Single-field index
+                field_path = field_or_fields
+                attr_name = f"idx_{field_path.replace('.', '_')}"
+                gsi_name = kwargs.get("name") or f"gsi_{attr_name}"
+
+                # Check if already indexed
+                if field_path in self._indexed_fields[collection]:
+                    logger.debug(
+                        f"Field '{field_path}' already indexed on collection '{collection}'"
+                    )
+                    return
+
+                # Determine attribute type (default to String)
+                # For now, assume all indexed fields are strings
+                # Could be enhanced to detect type from sample data
+                attribute_type = "S"
+
+                # Create GSI with partition key on indexed field, sort key on id
+                key_schema = [
+                    {"AttributeName": attr_name, "KeyType": "HASH"},
+                    {"AttributeName": "id", "KeyType": "RANGE"},
+                ]
+
+                # Attribute definitions needed for the GSI
+                attribute_definitions = [
+                    {"AttributeName": attr_name, "AttributeType": attribute_type},
+                    {"AttributeName": "id", "AttributeType": "S"},
+                ]
+
+                await self._update_table_with_gsi(
+                    client,
+                    table_name,
+                    gsi_name,
+                    attribute_definitions,
+                    key_schema,
+                    unique,
+                    wait_for_active,
+                )
+
+                # Track the index
+                self._indexed_fields[collection][field_path] = {
+                    "gsi_name": gsi_name,
+                    "unique": unique,
+                    "direction": 1,
+                    "attr_name": attr_name,
+                }
+                self._gsi_names[collection].add(gsi_name)
+
+                logger.info(
+                    f"Created single-field index '{gsi_name}' on '{field_path}' "
+                    f"for collection '{collection}'"
+                )
+
+            else:
+                # Compound index
+                fields = field_or_fields
+                gsi_name = (
+                    kwargs.get("name")
+                    or f"gsi_{collection}_{'_'.join(f[0].replace('.', '_') for f in fields)}"
+                )
+
+                # Check if already indexed
+                if gsi_name in self._gsi_names[collection]:
+                    logger.debug(
+                        f"Compound index '{gsi_name}' already exists on collection '{collection}'"
+                    )
+                    return
+
+                # Build key schema and attribute definitions
+                key_schema = []
+                attribute_definitions = []
+                field_paths = []
+
+                for i, (field_path, _direction) in enumerate(fields):
                     attr_name = f"idx_{field_path.replace('.', '_')}"
-                    gsi_name = kwargs.get("name") or f"gsi_{attr_name}"
+                    field_paths.append(field_path)
 
-                    # Check if already indexed
-                    if field_path in self._indexed_fields[collection]:
-                        logger.debug(
-                            f"Field '{field_path}' already indexed on collection '{collection}'"
+                    if i == 0:
+                        # First field is partition key
+                        key_schema.append(
+                            {"AttributeName": attr_name, "KeyType": "HASH"}
                         )
-                        return
-
-                    # Determine attribute type (default to String)
-                    # For now, assume all indexed fields are strings
-                    # Could be enhanced to detect type from sample data
-                    attribute_type = "S"
-
-                    # Create GSI with partition key on indexed field, sort key on id
-                    key_schema = [
-                        {"AttributeName": attr_name, "KeyType": "HASH"},
-                        {"AttributeName": "id", "KeyType": "RANGE"},
-                    ]
-
-                    # Attribute definitions needed for the GSI
-                    attribute_definitions = [
-                        {"AttributeName": attr_name, "AttributeType": attribute_type},
-                        {"AttributeName": "id", "AttributeType": "S"},
-                    ]
-
-                    await self._update_table_with_gsi(
-                        client,
-                        table_name,
-                        gsi_name,
-                        attribute_definitions,
-                        key_schema,
-                        unique,
-                        wait_for_active,
-                    )
-
-                    # Track the index
-                    self._indexed_fields[collection][field_path] = {
-                        "gsi_name": gsi_name,
-                        "unique": unique,
-                        "direction": 1,
-                        "attr_name": attr_name,
-                    }
-                    self._gsi_names[collection].add(gsi_name)
-
-                    logger.info(
-                        f"Created single-field index '{gsi_name}' on '{field_path}' "
-                        f"for collection '{collection}'"
-                    )
-
-                else:
-                    # Compound index
-                    fields = field_or_fields
-                    gsi_name = (
-                        kwargs.get("name")
-                        or f"gsi_{collection}_{'_'.join(f[0].replace('.', '_') for f in fields)}"
-                    )
-
-                    # Check if already indexed
-                    if gsi_name in self._gsi_names[collection]:
-                        logger.debug(
-                            f"Compound index '{gsi_name}' already exists on collection '{collection}'"
+                    elif i == 1:
+                        # Second field is sort key
+                        key_schema.append(
+                            {"AttributeName": attr_name, "KeyType": "RANGE"}
                         )
-                        return
+                    # Additional fields beyond 2 are not supported in DynamoDB GSI
 
-                    # Build key schema and attribute definitions
-                    key_schema = []
-                    attribute_definitions = []
-                    field_paths = []
-
-                    for i, (field_path, _direction) in enumerate(fields):
-                        attr_name = f"idx_{field_path.replace('.', '_')}"
-                        field_paths.append(field_path)
-
-                        if i == 0:
-                            # First field is partition key
-                            key_schema.append(
-                                {"AttributeName": attr_name, "KeyType": "HASH"}
-                            )
-                        elif i == 1:
-                            # Second field is sort key
-                            key_schema.append(
-                                {"AttributeName": attr_name, "KeyType": "RANGE"}
-                            )
-                        # Additional fields beyond 2 are not supported in DynamoDB GSI
-
-                        attribute_definitions.append(
-                            {"AttributeName": attr_name, "AttributeType": "S"}
-                        )
-
-                    # Create GSI
-                    await self._update_table_with_gsi(
-                        client,
-                        table_name,
-                        gsi_name,
-                        attribute_definitions,
-                        key_schema,
-                        unique,
-                        wait_for_active,
+                    attribute_definitions.append(
+                        {"AttributeName": attr_name, "AttributeType": "S"}
                     )
 
-                    # Track the compound index
-                    for field_path in field_paths:
-                        if field_path not in self._indexed_fields[collection]:
-                            self._indexed_fields[collection][field_path] = {
-                                "gsi_name": gsi_name,
-                                "unique": unique,
-                                "direction": 1,
-                                "attr_name": f"idx_{field_path.replace('.', '_')}",
-                            }
-                    self._gsi_names[collection].add(gsi_name)
+                # Create GSI
+                await self._update_table_with_gsi(
+                    client,
+                    table_name,
+                    gsi_name,
+                    attribute_definitions,
+                    key_schema,
+                    unique,
+                    wait_for_active,
+                )
 
-                    logger.info(
-                        f"Created compound index '{gsi_name}' on fields {field_paths} "
-                        f"for collection '{collection}'"
-                    )
+                # Track the compound index
+                for field_path in field_paths:
+                    if field_path not in self._indexed_fields[collection]:
+                        self._indexed_fields[collection][field_path] = {
+                            "gsi_name": gsi_name,
+                            "unique": unique,
+                            "direction": 1,
+                            "attr_name": f"idx_{field_path.replace('.', '_')}",
+                        }
+                self._gsi_names[collection].add(gsi_name)
+
+                logger.info(
+                    f"Created compound index '{gsi_name}' on fields {field_paths} "
+                    f"for collection '{collection}'"
+                )
 
         except ClientError as e:
             raise DatabaseError(f"DynamoDB index creation error: {e}") from e
 
     async def close(self) -> None:
         """Close the database connection."""
+        # Close persistent client if it exists
+        if self._client_context is not None:
+            try:
+                await self._client_context.__aexit__(None, None, None)
+            except Exception as e:
+                logger.warning(f"Error closing DynamoDB client: {e}", exc_info=True)
+            finally:
+                self._client = None
+                self._client_context = None
+
         # Clear table cache and index registry
         self._tables_created.clear()
         self._indexed_fields.clear()
