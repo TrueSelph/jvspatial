@@ -199,6 +199,7 @@ class LambdaServer(Server):
     def _initialize_serverless_handler(self: "LambdaServer") -> None:
         """Initialize serverless Lambda handler."""
         try:
+            import mangum
             from mangum import Mangum
         except ImportError:
             self._logger.warning(
@@ -207,6 +208,19 @@ class LambdaServer(Server):
                 "or pip install jvspatial[serverless]"
             )
             return
+
+        # Verify Mangum version for SSE streaming support
+        try:
+            if hasattr(mangum, "__version__"):
+                version_str = mangum.__version__
+                version = tuple(map(int, version_str.split(".")[:3]))
+                if version < (0, 17, 0):
+                    self._logger.warning(
+                        f"Mangum version {version_str} < 0.17.0 may not fully support SSE streaming. "
+                        "Consider upgrading to mangum>=0.17.0 for optimal SSE support."
+                    )
+        except (AttributeError, ValueError) as e:
+            self._logger.debug(f"Could not verify Mangum version: {e}")
 
         # Lambda temp directory should already be set in __init__, but ensure it's set
         if self._is_lambda_environment() and not self._lambda_temp_dir:
@@ -306,6 +320,7 @@ class LambdaServer(Server):
         if self._lambda_handler is None:
             # Create handler on-demand
             try:
+                import mangum
                 from mangum import Mangum
             except ImportError:
                 raise ImportError(
@@ -313,6 +328,19 @@ class LambdaServer(Server):
                     "Install it with: pip install mangum>=0.17.0 "
                     "or pip install jvspatial[serverless]"
                 ) from None
+
+            # Verify Mangum version for SSE streaming support
+            try:
+                if hasattr(mangum, "__version__"):
+                    version_str = mangum.__version__
+                    version = tuple(map(int, version_str.split(".")[:3]))
+                    if version < (0, 17, 0):
+                        self._logger.warning(
+                            f"Mangum version {version_str} < 0.17.0 may not fully support SSE streaming. "
+                            "Consider upgrading to mangum>=0.17.0 for optimal SSE support."
+                        )
+            except (AttributeError, ValueError) as e:
+                self._logger.debug(f"Could not verify Mangum version: {e}")
 
             app = self.get_app()
             mangum_config = {

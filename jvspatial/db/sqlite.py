@@ -272,6 +272,10 @@ class SQLiteDB(Database):
 
         Returns:
             Record data if found, None otherwise
+
+        Note:
+            Read operations don't require the write lock since SQLite WAL mode
+            allows concurrent reads. Only write operations are serialized.
         """
         connection = await self._get_connection()
         cursor = await connection.execute(
@@ -310,6 +314,10 @@ class SQLiteDB(Database):
 
         Returns:
             List of matching records
+
+        Note:
+            Read operations don't require the write lock since SQLite WAL mode
+            allows concurrent reads. Only write operations are serialized.
         """
         connection = await self._get_connection()
         cursor = await connection.execute(

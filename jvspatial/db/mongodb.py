@@ -25,16 +25,24 @@ class MongoDB(Database):
     """Simplified MongoDB-based database implementation."""
 
     def __init__(
-        self, uri: str = "mongodb://localhost:27017", db_name: str = "jvdb"
+        self,
+        uri: str = "mongodb://localhost:27017",
+        db_name: str = "jvdb",
+        max_pool_size: int = 100,
+        min_pool_size: int = 10,
     ) -> None:
         """Initialize MongoDB database.
 
         Args:
             uri: MongoDB connection URI
             db_name: Database name
+            max_pool_size: Maximum number of connections in the connection pool (default: 100)
+            min_pool_size: Minimum number of connections in the connection pool (default: 10)
         """
         self.uri = uri
         self.db_name = db_name
+        self.max_pool_size = max_pool_size
+        self.min_pool_size = min_pool_size
         self._client: Optional[AsyncIOMotorClient] = None
         self._db: Optional[AsyncIOMotorDatabase] = None
         self._created_indexes: Dict[str, Set[str]] = (
@@ -120,7 +128,11 @@ class MongoDB(Database):
 
         # Create new client if needed (but not if we have a mock)
         if self._client is None:
-            self._client = AsyncIOMotorClient(self.uri)
+            self._client = AsyncIOMotorClient(
+                self.uri,
+                maxPoolSize=self.max_pool_size,
+                minPoolSize=self.min_pool_size,
+            )
             self._db = self._client[self.db_name]
 
         # Ensure _db is set if client exists but _db is None (shouldn't happen, but be defensive)

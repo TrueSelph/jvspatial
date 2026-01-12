@@ -21,3 +21,6 @@ email-validator>=2.0.0  # Email validation for pydantic
 
 # Task management
 schedule>=1.2.2  # Job scheduling
+
+# Async file operations
+aiofiles>=23.0.0  # Async file operations for JsonDB

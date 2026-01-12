@@ -41,6 +41,11 @@ class PerformanceMonitor:
         self.db_errors: List[Dict[str, Any]] = []
         self.general_operations: List[Dict[str, Any]] = []
         self.general_errors: List[Dict[str, Any]] = []
+        self.io_operations: List[Dict[str, Any]] = []  # Track file I/O operations
+        self.cache_stats: Dict[str, int] = {
+            "hits": 0,
+            "misses": 0,
+        }  # Track cache hit/miss ratios
 
     async def record_db_operation(
         self,
@@ -125,24 +130,93 @@ class PerformanceMonitor:
             }
         )
 
+    async def record_io_operation(
+        self,
+        operation_type: str,
+        duration: float,
+        file_path: Optional[str] = None,
+        bytes_read: Optional[int] = None,
+        bytes_written: Optional[int] = None,
+        **kwargs: Any,
+    ):
+        """Record an I/O operation (file read/write).
+
+        Args:
+            operation_type: Type of I/O operation (e.g., "read", "write", "delete")
+            duration: Duration in seconds
+            file_path: Optional file path for the operation
+            bytes_read: Optional number of bytes read
+            bytes_written: Optional number of bytes written
+            **kwargs: Additional operation metadata
+        """
+        self.io_operations.append(
+            {
+                "operation_type": operation_type,
+                "duration": duration,
+                "file_path": file_path,
+                "bytes_read": bytes_read,
+                "bytes_written": bytes_written,
+                "timestamp": time.time(),
+                **kwargs,
+            }
+        )
+
+    def record_cache_hit(self) -> None:
+        """Record a cache hit."""
+        self.cache_stats["hits"] += 1
+
+    def record_cache_miss(self) -> None:
+        """Record a cache miss."""
+        self.cache_stats["misses"] += 1
+
+    def get_cache_hit_ratio(self) -> float:
+        """Get cache hit ratio (0.0 to 1.0).
+
+        Returns:
+            Cache hit ratio, or 0.0 if no cache operations recorded
+        """
+        total = self.cache_stats["hits"] + self.cache_stats["misses"]
+        if total == 0:
+            return 0.0
+        return self.cache_stats["hits"] / total
+
     async def get_stats(self) -> Dict[str, Any]:
         """Get comprehensive performance statistics."""
         total_db_ops = len(self.db_operations)
         total_general_ops = len(self.general_operations)
-        total_ops = total_db_ops + total_general_ops
+        total_io_ops = len(self.io_operations)
+        total_ops = total_db_ops + total_general_ops + total_io_ops
 
         if total_ops == 0:
-            return {"total_operations": 0}
+            return {
+                "total_operations": 0,
+                "cache_hit_ratio": 0.0,
+                "cache_hits": 0,
+                "cache_misses": 0,
+            }
 
         # Calculate database operation statistics
         db_stats = {}
         if total_db_ops > 0:
-            avg_db_duration = (
-                sum(op["duration"] for op in self.db_operations) / total_db_ops
-            )
+            durations = [op["duration"] for op in self.db_operations]
+            avg_db_duration = sum(durations) / total_db_ops
+            # Calculate percentiles for database operations
+            sorted_durations = sorted(durations)
+            p50_idx = int(len(sorted_durations) * 0.5)
+            p95_idx = int(len(sorted_durations) * 0.95)
+            p99_idx = int(len(sorted_durations) * 0.99)
             db_stats = {
                 "db_operations": total_db_ops,
                 "avg_db_duration": avg_db_duration,
+                "p50_db_duration": (
+                    sorted_durations[p50_idx] if sorted_durations else 0.0
+                ),
+                "p95_db_duration": (
+                    sorted_durations[p95_idx] if sorted_durations else 0.0
+                ),
+                "p99_db_duration": (
+                    sorted_durations[p99_idx] if sorted_durations else 0.0
+                ),
                 "db_errors": len(self.db_errors),
             }
 
@@ -159,11 +233,50 @@ class PerformanceMonitor:
                 "general_errors": len(self.general_errors),
             }
 
+        # Calculate I/O operation statistics
+        io_stats = {}
+        if total_io_ops > 0:
+            durations = [op["duration"] for op in self.io_operations]
+            avg_io_duration = sum(durations) / total_io_ops
+            sorted_io_durations = sorted(durations)
+            p50_idx = int(len(sorted_io_durations) * 0.5)
+            p95_idx = int(len(sorted_io_durations) * 0.95)
+            p99_idx = int(len(sorted_io_durations) * 0.99)
+            total_bytes_read = sum(op.get("bytes_read", 0) for op in self.io_operations)
+            total_bytes_written = sum(
+                op.get("bytes_written", 0) for op in self.io_operations
+            )
+            io_stats = {
+                "io_operations": total_io_ops,
+                "avg_io_duration": avg_io_duration,
+                "p50_io_duration": (
+                    sorted_io_durations[p50_idx] if sorted_io_durations else 0.0
+                ),
+                "p95_io_duration": (
+                    sorted_io_durations[p95_idx] if sorted_io_durations else 0.0
+                ),
+                "p99_io_duration": (
+                    sorted_io_durations[p99_idx] if sorted_io_durations else 0.0
+                ),
+                "total_bytes_read": total_bytes_read,
+                "total_bytes_written": total_bytes_written,
+            }
+
+        # Calculate cache statistics
+        cache_hit_ratio = self.get_cache_hit_ratio()
+        cache_stats = {
+            "cache_hit_ratio": cache_hit_ratio,
+            "cache_hits": self.cache_stats["hits"],
+            "cache_misses": self.cache_stats["misses"],
+        }
+
         return {
             "total_operations": total_ops,
             "hook_executions": len(self.hook_executions),
             **db_stats,
             **general_stats,
+            **io_stats,
+            **cache_stats,
         }
 
 
@@ -345,7 +458,14 @@ class GraphContext:
 
     async def _get_from_cache(self, entity_id: str) -> Optional[Any]:
         """Get entity from cache if available."""
-        return await self._cache.get(entity_id)
+        result = await self._cache.get(entity_id)
+        # Track cache hit/miss
+        if self._perf_monitoring_enabled and self._perf_monitor:
+            if result is not None:
+                self._perf_monitor.record_cache_hit()
+            else:
+                self._perf_monitor.record_cache_miss()
+        return result
 
     async def _add_to_cache(self, entity_id: str, entity: Any) -> None:
         """Add entity to cache."""
