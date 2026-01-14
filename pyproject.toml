@@ -41,6 +41,7 @@ dependencies = [
     "typing-extensions>=4.0.0",  # For @override decorator and enhanced typing
     "aiosqlite>=0.19.0",  # SQLite database backend
     "aiofiles>=23.0.0",  # Async file operations for JsonDB
+    "aiboto3>=15.5.0",  # DynamoDB support
 ]
 
 [project.optional-dependencies]
