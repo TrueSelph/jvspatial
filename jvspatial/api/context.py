@@ -129,6 +129,13 @@ class ServerContext:
             The server instance that was set as current.
         """
         self.token = _current_server.set(self.server)
+
+        # Flush any deferred endpoints when entering context
+        # This ensures test scenarios and multi-server setups work correctly
+        from jvspatial.api.decorators.deferred_registry import flush_deferred_endpoints
+
+        flush_deferred_endpoints(self.server)
+
         return self.server
 
     def __exit__(self, *args: object) -> None:

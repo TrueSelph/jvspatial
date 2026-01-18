@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 
 from jvspatial.api.endpoints.response import EndpointResponse
 from jvspatial.api.endpoints.response import ResponseHelper as EndpointResponseHelper
-from jvspatial.api.endpoints.response import create_endpoint_helper
+from jvspatial.api.endpoints.response import create_endpoint_helper, format_response
 
 
 class TestEndpointResponse:
@@ -385,3 +385,95 @@ class TestCreateEndpointHelper:
 
         assert isinstance(helper, EndpointResponseHelper)
         assert helper.walker_instance is mock_walker
+
+
+class TestFormatResponse:
+    """Test cases for format_response function."""
+
+    def test_format_response_success_basic(self):
+        """Test basic success response formatting."""
+        result = format_response(data={"users": []})
+
+        assert result["success"] is True
+        assert result["data"] == {"users": []}
+
+    def test_format_response_success_with_message(self):
+        """Test success response with message."""
+        result = format_response(
+            data={"count": 10}, message="Users retrieved successfully"
+        )
+
+        assert result["success"] is True
+        assert result["data"] == {"count": 10}
+        assert result["message"] == "Users retrieved successfully"
+
+    def test_format_response_success_no_data(self):
+        """Test success response without data."""
+        result = format_response(message="Operation completed")
+
+        assert result["success"] is True
+        assert result["message"] == "Operation completed"
+        assert "data" not in result
+
+    def test_format_response_error_basic(self):
+        """Test basic error response formatting."""
+        result = format_response(success=False, error="Not found")
+
+        assert result["success"] is False
+        assert result["error"] == "Not found"
+
+    def test_format_response_error_with_detail(self):
+        """Test error response with detail."""
+        result = format_response(
+            success=False, error="Validation failed", detail="Email field is required"
+        )
+
+        assert result["success"] is False
+        assert result["error"] == "Validation failed"
+        assert result["detail"] == "Email field is required"
+
+    def test_format_response_error_with_code(self):
+        """Test error response with error code."""
+        result = format_response(
+            success=False, error="Resource not found", code="RESOURCE_NOT_FOUND"
+        )
+
+        assert result["success"] is False
+        assert result["error"] == "Resource not found"
+        assert result["code"] == "RESOURCE_NOT_FOUND"
+
+    def test_format_response_error_with_status(self):
+        """Test error response with status code."""
+        result = format_response(success=False, error="Unauthorized", status=401)
+
+        assert result["success"] is False
+        assert result["error"] == "Unauthorized"
+        assert result["status"] == 401
+
+    def test_format_response_error_complete(self):
+        """Test complete error response with all fields."""
+        result = format_response(
+            success=False,
+            error="Payment required",
+            detail="Subscription expired",
+            code="PAYMENT_REQUIRED",
+            status=402,
+            message="Please renew your subscription",
+        )
+
+        assert result["success"] is False
+        assert result["error"] == "Payment required"
+        assert result["detail"] == "Subscription expired"
+        assert result["code"] == "PAYMENT_REQUIRED"
+        assert result["status"] == 402
+        assert result["message"] == "Please renew your subscription"
+
+    def test_format_response_error_with_data(self):
+        """Test error response with additional data."""
+        result = format_response(
+            success=False, error="Partial failure", data={"succeeded": 5, "failed": 2}
+        )
+
+        assert result["success"] is False
+        assert result["error"] == "Partial failure"
+        assert result["data"] == {"succeeded": 5, "failed": 2}

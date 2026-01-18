@@ -1,6 +1,7 @@
 """GraphContext for managing database dependencies."""
 
 import logging
+import os
 import time
 from contextlib import asynccontextmanager, contextmanager
 from typing import (
@@ -935,9 +936,21 @@ class GraphContext:
         This method retrieves index definitions from the entity class and creates
         them in the database if they don't already exist. Index creation is idempotent.
 
+        By default, automatic index creation is disabled. To enable it, set the
+        environment variable:
+            JVSPATIAL_AUTO_CREATE_INDEXES=true
+
         Args:
             entity_class: Entity class to ensure indexes for
         """
+        # Check if automatic index creation is enabled
+        # Default is False - indexes must be created explicitly
+        auto_create = (
+            os.getenv("JVSPATIAL_AUTO_CREATE_INDEXES", "false").lower() == "true"
+        )
+        if not auto_create:
+            return  # Automatic index creation is disabled
+
         if not hasattr(entity_class, "get_indexes"):
             return  # Class doesn't support indexes
 

@@ -1852,20 +1852,45 @@ class GeoQuery(Walker):
 
 ### Rate Limiting
 
-Rate limiting is configured through the Server configuration:
+Rate limiting protects your API from abuse and ensures fair resource usage. Configure it globally or per-endpoint:
 
 ```python
 server = Server(
     title="My API",
-    auth_enabled=True,
-    # Rate limiting is handled automatically when auth is enabled
+    rate_limit_enabled=True,  # Enable rate limiting
+    rate_limit_default_requests=60,  # Default: 60 requests
+    rate_limit_default_window=60,  # Default: 60 seconds
     db_type="json",
     db_path="./jvdb"
 )
 
-# Per-user rate limits can be configured in user models
-# (See authentication documentation for details)
+# Per-endpoint rate limits
+@endpoint("/api/expensive", methods=["POST"], rate_limit={"requests": 10, "window": 60})
+class ExpensiveOperation(Walker):
+    @on_visit(Node)
+    async def process(self, here: Node):
+        # Heavy computation - limited to 10 requests per minute
+        self.response = {"result": "processed"}
 ```
+
+**Rate Limit Response (429):**
+```json
+{
+  "error_code": "rate_limit_exceeded",
+  "message": "Rate limit exceeded: 60 requests per 60 seconds",
+  "limit": 60,
+  "window": 60
+}
+```
+
+**Response Headers:**
+```
+X-RateLimit-Limit: 60
+X-RateLimit-Window: 60
+Retry-After: 60
+```
+
+📖 **[Complete Rate Limiting Guide →](rate-limiting.md)**
 
 ### Enhanced Response Handling with Authentication
 

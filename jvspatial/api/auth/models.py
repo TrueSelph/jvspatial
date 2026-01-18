@@ -1,7 +1,7 @@
 """Authentication models for user management and JWT tokens."""
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -106,4 +106,94 @@ class TokenBlacklist(Node):
     expires_at: datetime = Field(..., description="Token expiration time")
     blacklisted_at: datetime = Field(
         default_factory=datetime.utcnow, description="When token was blacklisted"
+    )
+
+
+class APIKeyCreateRequest(BaseModel):
+    """Request model for creating an API key."""
+
+    name: str = Field(..., description="Descriptive name for the key")
+    permissions: List[str] = Field(
+        default_factory=list, description="List of permissions granted to this key"
+    )
+    rate_limit_override: Optional[int] = Field(
+        None, description="Custom rate limit (requests per minute), None uses default"
+    )
+    expires_in_days: Optional[int] = Field(
+        None, description="Number of days until key expires, None for no expiration"
+    )
+    allowed_ips: List[str] = Field(
+        default_factory=list,
+        description="IP whitelist (empty list allows all IPs)",
+    )
+    allowed_endpoints: List[str] = Field(
+        default_factory=list,
+        description="Endpoint whitelist (empty list allows all endpoints)",
+    )
+
+
+class APIKeyCreateResponse(BaseModel):
+    """Response model for API key creation."""
+
+    key: str = Field(..., description="Full API key (shown ONCE only)")
+    key_id: str = Field(..., description="API key ID")
+    key_prefix: str = Field(..., description="Key prefix for display")
+    name: str = Field(..., description="Key name")
+    message: str = Field(
+        default="Store this key securely. It won't be shown again.",
+        description="Warning message",
+    )
+
+
+class APIKeyResponse(BaseModel):
+    """Response model for API key listing."""
+
+    id: str = Field(..., description="API key ID")
+    name: str = Field(..., description="Key name")
+    key_prefix: str = Field(..., description="Key prefix for display")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    last_used_at: Optional[datetime] = Field(None, description="Last usage timestamp")
+    expires_at: Optional[datetime] = Field(None, description="Expiration timestamp")
+    is_active: bool = Field(..., description="Whether key is active")
+    permissions: List[str] = Field(..., description="Granted permissions")
+    rate_limit_override: Optional[int] = Field(
+        None, description="Custom rate limit override"
+    )
+
+
+class APIKey(Object):
+    """API Key entity for authentication.
+
+    API keys are stored as Object entities (not Node) as they are fundamental
+    authentication objects that don't need graph relationships.
+    Keys are hashed (never stored in plaintext) for security.
+    """
+
+    key_hash: str = Field(..., description="SHA-256 hash of the API key")
+    key_prefix: str = Field(
+        ..., description="First 8-12 chars for display (e.g., 'sk_live_abc12345...')"
+    )
+    name: str = Field(..., description="Descriptive name for the key")
+    user_id: str = Field(..., description="Owner user ID")
+    permissions: List[str] = Field(
+        default_factory=list, description="Granted permissions"
+    )
+    rate_limit_override: Optional[int] = Field(
+        None, description="Custom rate limit (requests per minute)"
+    )
+
+    is_active: bool = Field(default=True, description="Whether key is active")
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow, description="Creation timestamp"
+    )
+    last_used_at: Optional[datetime] = Field(None, description="Last usage timestamp")
+    expires_at: Optional[datetime] = Field(None, description="Expiration timestamp")
+
+    # Security restrictions
+    allowed_ips: List[str] = Field(
+        default_factory=list, description="IP whitelist (empty = all IPs allowed)"
+    )
+    allowed_endpoints: List[str] = Field(
+        default_factory=list,
+        description="Endpoint whitelist (empty = all endpoints allowed)",
     )

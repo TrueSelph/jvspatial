@@ -8,7 +8,6 @@ and built-in modules) to ensure complete endpoint discovery.
 
 import inspect
 import logging
-import sys
 import warnings
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
@@ -88,17 +87,19 @@ class EndpointDiscoveryService:
         """
         self.server = server
         self.enabled = True
+        self._patterns: List[str] = []  # Explicit module patterns to scan
         self._logger = logging.getLogger(__name__)
 
     def discover_and_register(self, patterns: Optional[List[str]] = None) -> int:
-        """Discover and register ALL endpoints in the application.
+        """Discover and register endpoints from explicitly configured modules.
 
-        This method comprehensively scans ALL loaded modules in the application
-        (excluding jvspatial and built-in modules) to discover and register all
-        Walker classes and function endpoints decorated with @endpoint.
+        This method scans only explicitly configured module patterns for security.
+        Endpoints are automatically registered via the @endpoint decorator, so
+        explicit discovery is only needed for modules imported after server initialization.
 
         Args:
-            patterns: Optional patterns parameter (unused).
+            patterns: List of module name patterns to scan (e.g., ["myapp.routes", "myapp.api"]).
+                     If None, uses patterns configured via enable().
 
         Returns:
             Number of endpoints discovered and registered
@@ -106,29 +107,43 @@ class EndpointDiscoveryService:
         if not self.enabled:
             return 0
 
+        # Use provided patterns or fall back to configured patterns
+        scan_patterns = patterns or getattr(self, "_patterns", [])
+
+        if not scan_patterns:
+            # No patterns configured - endpoints are registered via decorators automatically
+            # Report on total number of registered endpoints
+            all_endpoints = self.server._endpoint_registry.list_all()
+            function_count = len(all_endpoints.get("functions", {}))
+            walker_count = len(all_endpoints.get("walkers", {}))
+            total_count = function_count + walker_count
+
+            if total_count > 0:
+                self._logger.debug(
+                    f"{LogIcons.DISCOVERY} Using automatic endpoint registration: "
+                    f"{total_count} endpoint(s) registered ({function_count} function(s), {walker_count} walker(s))"
+                )
+            else:
+                self._logger.debug(
+                    f"{LogIcons.DISCOVERY} Using automatic endpoint registration: no endpoints registered yet"
+                )
+            return 0
+
         self._logger.debug(
-            f"{LogIcons.DISCOVERY} Scanning for endpoints in loaded modules..."
+            f"{LogIcons.DISCOVERY} Scanning {len(scan_patterns)} explicitly configured module(s)..."
         )
 
         discovered_count = 0
         discovered_endpoints = []
 
-        # Scan all loaded modules
-        for module_name, module in list(sys.modules.items()):
-            # Skip jvspatial modules, built-in modules, and special modules
-            if (
-                module_name.startswith("jvspatial.")
-                or module_name == "jvspatial"
-                or module_name in ("__main__", "__builtin__", "builtins")
-                or module is None
-            ):
-                continue
-
-            # Skip modules that don't have a __file__ (likely built-in or namespace)
-            if not hasattr(module, "__file__") or module.__file__ is None:
-                continue
-
+        # Scan only explicitly configured modules
+        for pattern in scan_patterns:
             try:
+                # Import the module
+                import importlib
+
+                module = importlib.import_module(pattern)
+
                 # Discover endpoints in this module
                 walkers, functions = self._discover_in_module(module)
 
@@ -140,9 +155,13 @@ class EndpointDiscoveryService:
                     discovered_count += 1
                     discovered_endpoints.append(("function", func_name, path, methods))
 
+            except ImportError as e:
+                self._logger.debug(
+                    f"{LogIcons.WARNING} Could not import module {pattern}: {e}"
+                )
             except Exception as e:
                 self._logger.debug(
-                    f"{LogIcons.WARNING} Error scanning module {module_name}: {e}"
+                    f"{LogIcons.WARNING} Error scanning module {pattern}: {e}"
                 )
 
         # Log discovered endpoints
@@ -239,7 +258,9 @@ class EndpointDiscoveryService:
                     "roles",
                     "webhook",
                     "signature_required",
+                    "webhook_auth",
                     "response",
+                    "rate_limit",
                 ]
             }
 
@@ -253,6 +274,7 @@ class EndpointDiscoveryService:
             obj._required_roles = roles  # type: ignore[attr-defined]
 
             # Check if already registered - if so, still log it but skip registration
+            # (may have been registered via deferred registry or immediate registration)
             if self.server._endpoint_registry.has_walker(obj):
                 discovered_walkers.append((name, path, methods))
                 self._logger.debug(
@@ -337,6 +359,7 @@ class EndpointDiscoveryService:
             methods = endpoint_config.get("methods", ["GET"])
 
             # Check if already registered - if so, still log it but skip registration
+            # (may have been registered via deferred registry or immediate registration)
             if self.server._endpoint_registry.has_function(obj):
                 discovered_functions.append((name, path, methods))
                 self._logger.debug(
@@ -348,7 +371,18 @@ class EndpointDiscoveryService:
             route_kwargs = {
                 k: v
                 for k, v in endpoint_config.items()
-                if k not in ["path", "methods", "is_function", "kwargs"]
+                if k
+                not in [
+                    "path",
+                    "methods",
+                    "is_function",
+                    "kwargs",
+                    "webhook",
+                    "signature_required",
+                    "webhook_auth",
+                    "response",
+                    "rate_limit",
+                ]
             }
 
             if "kwargs" in endpoint_config:
@@ -447,11 +481,22 @@ class EndpointDiscoveryService:
 
         Args:
             enabled: Whether to enable endpoint discovery
-            patterns: Optional patterns parameter (unused).
+            patterns: List of module name patterns to scan (e.g., ["myapp.routes"]).
+                     Required for discovery to work - endpoints are otherwise
+                     registered automatically via @endpoint decorators.
         """
         self.enabled = enabled
+        if patterns is not None:
+            self._patterns = patterns
         status = "enabled" if enabled else "disabled"
-        self._logger.debug(f"{LogIcons.CONFIG} Endpoint discovery {status}")
+        pattern_info = (
+            f" with {len(self._patterns)} pattern(s)"
+            if self._patterns
+            else " (no patterns - decorator-based only)"
+        )
+        self._logger.debug(
+            f"{LogIcons.CONFIG} Endpoint discovery {status}{pattern_info}"
+        )
 
 
 __all__ = ["EndpointDiscoveryService"]

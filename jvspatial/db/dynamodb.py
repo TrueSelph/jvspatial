@@ -1,11 +1,17 @@
 """DynamoDB database implementation for AWS Lambda serverless deployments.
 
 Index Creation Behavior:
-    By default, index creation does NOT wait for Global Secondary Indexes (GSI) to become active,
-    allowing immediate graph usage. Indexes are created asynchronously and will be available
-    for queries once they become active (typically a few minutes).
+    By default, indexes are NOT created automatically. To enable automatic index creation,
+    set the environment variable:
 
-    To enable waiting for index activation (old behavior), set the environment variable:
+        JVSPATIAL_AUTO_CREATE_INDEXES=true
+
+    When automatic index creation is enabled, indexes are created asynchronously and do NOT
+    wait for Global Secondary Indexes (GSI) to become active by default, allowing immediate
+    graph usage. Indexes will be available for queries once they become active (typically
+    a few minutes).
+
+    To enable waiting for index activation (when auto-create is enabled), set:
 
         JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX=true
 
@@ -23,11 +29,18 @@ try:
     import aioboto3
     from botocore.exceptions import ClientError
 
+    try:
+        from aiobotocore.config import AioConfig as Config
+    except ImportError:
+        # Fallback to botocore.config.Config if aiobotocore.config not available
+        from botocore.config import Config
+
     _BOTO3_AVAILABLE = True
 except ImportError:
     _BOTO3_AVAILABLE = False
     aioboto3 = None  # type: ignore[assignment]
     ClientError = Exception  # type: ignore[assignment, misc]
+    Config = None  # type: ignore[assignment, misc]
 
 from jvspatial.db.database import Database
 from jvspatial.db.query import QueryEngine
@@ -71,7 +84,9 @@ class DynamoDB(Database):
         """
         if not _BOTO3_AVAILABLE:
             raise ImportError(
-                "aioboto3 is required for DynamoDB support. Install it with: pip install aioboto3"
+                "aioboto3 is required for DynamoDB support. "
+                "Install it with: pip install -r requirements-serverless.txt "
+                "or pip install aioboto3>=12.0.0"
             )
 
         self.table_name = table_name
@@ -92,13 +107,35 @@ class DynamoDB(Database):
         # Configure connection pool for Lambda (optimal for serverless)
         # max_pool_connections: 10 is a good default for Lambda
         # Higher values don't help much in Lambda due to concurrency limits
-        self._dynamodb_kwargs["config"] = {
+        # Use standard retry mode instead of adaptive to avoid potential hanging issues
+        config_kwargs = {
             "max_pool_connections": 10,
             "retries": {
                 "max_attempts": 3,
-                "mode": "adaptive",
+                "mode": "standard",  # Standard mode is more reliable than adaptive
             },
         }
+        # Try to add timeout parameters if supported
+        try:
+            config_kwargs["connect_timeout"] = 10
+            config_kwargs["read_timeout"] = 30
+        except Exception:
+            pass  # If not supported, continue without them
+
+        try:
+            self._dynamodb_kwargs["config"] = Config(**config_kwargs)
+        except Exception as e:
+            # If config creation fails, use basic config
+            logger.warning(
+                f"Failed to create Config with advanced options: {e}. Using basic config."
+            )
+            self._dynamodb_kwargs["config"] = Config(
+                max_pool_connections=10,
+                retries={
+                    "max_attempts": 3,
+                    "mode": "standard",
+                },
+            )
 
         # DynamoDB session will be created on first use
         self._session: Optional[Any] = None
@@ -106,12 +143,57 @@ class DynamoDB(Database):
         self._client: Optional[Any] = None
         # Store the context manager so we can properly exit it on close
         self._client_context: Optional[Any] = None
+        # Track the event loop the client was created in to detect loop changes
+        self._client_event_loop: Optional[Any] = None
         self._client_lock = asyncio.Lock()
         self._tables_created: Dict[str, bool] = {}  # Track which tables we've created
         # Track indexed fields per collection: {collection: {field_path: {"gsi_name": str, "unique": bool, "direction": int}}}
         self._indexed_fields: Dict[str, Dict[str, Dict[str, Any]]] = {}
         # Track GSI names per collection to avoid duplicate creation
         self._gsi_names: Dict[str, Set[str]] = {}
+
+    async def _close_aiohttp_session_directly(self) -> None:
+        """Attempt to close the aiohttp session directly.
+
+        This is used when the event loop is closed and we can't use __aexit__.
+        """
+        if self._client is None:
+            return
+        await self._close_aiohttp_session_from_client(
+            self._client, asyncio.get_event_loop()
+        )
+
+    async def _close_aiohttp_session_from_client(self, client: Any, loop: Any) -> None:
+        """Attempt to close the aiohttp session from a client reference.
+
+        Note: This may not work if the session is tied to a closed event loop,
+        but we try our best to clean up.
+        """
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            # Access the aiohttp session through the aiobotocore client
+            # AioEndpoint uses 'http_session' attribute (not '_client')
+            if hasattr(client, "_endpoint"):
+                endpoint = getattr(client, "_endpoint", None)
+                if endpoint and hasattr(endpoint, "http_session"):
+                    http_client = getattr(endpoint, "http_session", None)
+                    if http_client and hasattr(http_client, "close"):
+                        if asyncio.iscoroutinefunction(http_client.close):
+                            with contextlib.suppress(
+                                RuntimeError, AttributeError, asyncio.TimeoutError
+                            ):
+                                # Use timeout to prevent hanging
+                                await asyncio.wait_for(http_client.close(), timeout=0.5)
+                            # Loop is closed, session already closed, or timeout - try direct connector close
+                            with contextlib.suppress(Exception):
+                                if hasattr(http_client, "_connector"):
+                                    connector = getattr(http_client, "_connector", None)
+                                    if connector and hasattr(connector, "close"):
+                                        # Close connector synchronously (it's not async)
+                                        connector.close()
+                        else:
+                            http_client.close()
 
     async def _get_session(self) -> Any:
         """Get or create aioboto3 session.
@@ -129,9 +211,69 @@ class DynamoDB(Database):
         This method implements client reuse to avoid the overhead of creating
         a new client for every operation, which is critical for Lambda performance.
 
+        If the event loop has changed (e.g., after bootstrap), the client is
+        recreated to avoid "Event loop is closed" errors.
+
         Returns:
             DynamoDB client (reused across operations)
         """
+        current_loop = asyncio.get_event_loop()
+
+        # Check if client exists and is in the same event loop
+        if (
+            self._client is not None
+            and self._client_event_loop is not None
+            and (
+                self._client_event_loop is not current_loop
+                or self._client_event_loop.is_closed()
+            )
+        ):
+            # If event loop has changed or closed, recreate the client
+            # Close old client context if it exists
+            # Try to close the aiohttp session even if the event loop is closed
+            if self._client_context is not None:
+                if not self._client_event_loop.is_closed():
+                    try:
+                        # Only try to close if we're still in the same event loop
+                        old_loop = self._client_event_loop
+                        if old_loop is current_loop:
+                            await self._client_context.__aexit__(None, None, None)
+                        else:
+                            # Different loop - try to close aiohttp session directly
+                            await self._close_aiohttp_session_directly()
+                    except Exception as e:
+                        logger.warning(
+                            f"Error closing old client context: {e}", exc_info=True
+                        )
+                        # Try to close aiohttp session directly as fallback
+                        import contextlib
+
+                        with contextlib.suppress(Exception):
+                            await self._close_aiohttp_session_directly()
+            elif self._client_context is not None:
+                # Loop is closed, can't await __aexit__
+                # Try to close aiohttp session directly
+                import contextlib
+
+                with contextlib.suppress(Exception):
+                    await self._close_aiohttp_session_directly()  # Best effort cleanup
+
+                # Reset client state AFTER attempting to close
+                old_client = self._client
+                self._client = None
+                self._client_context = None
+                self._client_event_loop = None
+
+                # If we still have the old client and couldn't close via context,
+                # try to close the aiohttp session directly in the new event loop
+                if old_client is not None and not current_loop.is_closed():
+                    import contextlib
+
+                    with contextlib.suppress(Exception):
+                        await self._close_aiohttp_session_from_client(
+                            old_client, current_loop
+                        )
+
         if self._client is None:
             async with self._client_lock:
                 # Double-check pattern to avoid race conditions
@@ -142,8 +284,16 @@ class DynamoDB(Database):
                     self._client_context = session.client(
                         "dynamodb", **self._dynamodb_kwargs
                     )
-                    # Enter async context to initialize the client
-                    self._client = await self._client_context.__aenter__()
+                    try:
+                        self._client = await self._client_context.__aenter__()
+                        # Store the event loop this client was created in
+                        self._client_event_loop = current_loop
+                    except Exception as e:
+                        logger.error(
+                            f"Error during client initialization: {type(e).__name__}: {e}",
+                            exc_info=True,
+                        )
+                        raise
         return self._client
 
     def _get_indexed_field_value(self, data: Dict[str, Any], field_path: str) -> Any:
@@ -350,7 +500,16 @@ class DynamoDB(Database):
 
         try:
             client = await self._get_client()
-            await client.put_item(TableName=table_name, Item=item)
+            # Add timeout to prevent hanging
+            try:
+                await asyncio.wait_for(
+                    client.put_item(TableName=table_name, Item=item),
+                    timeout=30.0,  # 30 second timeout
+                )
+            except asyncio.TimeoutError:
+                raise DatabaseError(
+                    f"DynamoDB save operation timed out for table: {table_name}"
+                )
             return data
         except ClientError as e:
             raise DatabaseError(f"DynamoDB save error: {e}") from e
@@ -405,7 +564,8 @@ class DynamoDB(Database):
         """Retrieve multiple records by IDs using batch_get_item.
 
         This method efficiently retrieves multiple records in batches, handling
-        DynamoDB's 25-item limit automatically.
+        DynamoDB's 100-item limit automatically. Batches are processed in parallel
+        for better performance.
 
         Args:
             collection: Collection name
@@ -420,14 +580,16 @@ class DynamoDB(Database):
         table_name = await self._ensure_table_exists(collection)
         client = await self._get_client()
 
-        results: List[Dict[str, Any]] = []
         # DynamoDB batch_get_item has a limit of 100 items per request
-        # But we use 25 as a conservative limit to match batch_write_item
-        batch_size = 25
+        # Use 100 for maximum efficiency (was 25, which was too conservative)
+        batch_size = 100
 
-        # Process IDs in batches
-        for i in range(0, len(ids), batch_size):
-            batch_ids = ids[i : i + batch_size]
+        # Split into batches
+        batches = [ids[i : i + batch_size] for i in range(0, len(ids), batch_size)]
+
+        async def process_batch(batch_ids: List[str]) -> List[Dict[str, Any]]:
+            """Process a single batch of IDs."""
+            batch_results: List[Dict[str, Any]] = []
 
             # Prepare request items for this batch
             request_items = {
@@ -448,12 +610,12 @@ class DynamoDB(Database):
                 for item in items:
                     # Deserialize data from JSON string
                     data = json.loads(item["data"]["S"])
-                    results.append(data)
+                    batch_results.append(data)
 
                 # Handle unprocessed keys (should be rare with proper retry config)
                 unprocessed = response.get("UnprocessedKeys", {})
                 if unprocessed:
-                    logger.warning(
+                    logger.debug(
                         f"Unprocessed keys in batch_get for collection '{collection}': {len(unprocessed.get(table_name, {}).get('Keys', []))}"
                     )
                     # Retry unprocessed keys once
@@ -466,10 +628,23 @@ class DynamoDB(Database):
                     )
                     for item in retry_items_list:
                         data = json.loads(item["data"]["S"])
-                        results.append(data)
+                        batch_results.append(data)
 
             except ClientError as e:
                 raise DatabaseError(f"DynamoDB batch_get error: {e}") from e
+
+            return batch_results
+
+        # Process all batches in parallel for better performance
+        if len(batches) > 1:
+            batch_results = await asyncio.gather(
+                *[process_batch(batch) for batch in batches]
+            )
+            # Flatten results
+            results = [item for batch_result in batch_results for item in batch_result]
+        else:
+            # Single batch, no need for parallelization
+            results = await process_batch(batches[0] if batches else [])
 
         return results
 
@@ -478,6 +653,7 @@ class DynamoDB(Database):
 
         This method efficiently writes multiple records in batches, handling
         DynamoDB's 25-item limit and unprocessed items automatically.
+        Batches are processed in parallel for better performance.
 
         Args:
             collection: Collection name
@@ -502,10 +678,11 @@ class DynamoDB(Database):
         # DynamoDB batch_write_item has a limit of 25 items per request
         batch_size = 25
 
-        # Process items in batches
-        for i in range(0, len(items), batch_size):
-            batch_items = items[i : i + batch_size]
+        # Split into batches
+        batches = [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
 
+        async def process_batch(batch_items: List[Dict[str, Any]]) -> None:
+            """Process a single batch of items."""
             # Prepare write requests for this batch
             write_requests = []
             for item_data in batch_items:
@@ -542,8 +719,6 @@ class DynamoDB(Database):
                     )
 
                     # Wait before retry (exponential backoff)
-                    import asyncio
-
                     await asyncio.sleep(0.1 * (2 ** (retry_count - 1)))
 
                     retry_response = await client.batch_write_item(
@@ -559,6 +734,13 @@ class DynamoDB(Database):
 
             except ClientError as e:
                 raise DatabaseError(f"DynamoDB batch_write error: {e}") from e
+
+        # Process all batches in parallel for better performance
+        if len(batches) > 1:
+            await asyncio.gather(*[process_batch(batch) for batch in batches])
+        else:
+            # Single batch, no need for parallelization
+            await process_batch(batches[0] if batches else [])
 
     def _find_matching_gsi(
         self, collection: str, query: Dict[str, Any]
@@ -598,23 +780,92 @@ class DynamoDB(Database):
 
         return None
 
+    def _build_filter_expression(
+        self, query: Dict[str, Any], collection: str
+    ) -> tuple[Optional[str], Dict[str, str], Dict[str, Any]]:
+        """Build DynamoDB FilterExpression from query for simple equality filters.
+
+        This is a limited implementation that only handles simple equality filters
+        on indexed fields. Complex queries still require client-side filtering.
+
+        Args:
+            query: Query parameters
+            collection: Collection name
+
+        Returns:
+            Tuple of (FilterExpression, ExpressionAttributeNames, ExpressionAttributeValues)
+            Returns (None, {}, {}) if query is too complex for FilterExpression
+        """
+        if not query or query.get("$or") or query.get("$and"):
+            return None, {}, {}
+
+        # Only handle simple equality filters on indexed fields
+        filter_parts = []
+        attr_names: Dict[str, str] = {}
+        attr_values: Dict[str, Any] = {}
+        attr_counter = 0
+
+        for field_path, value in query.items():
+            # Skip complex operators
+            if isinstance(value, dict):
+                continue
+
+            # Check if this field is indexed
+            if (
+                collection in self._indexed_fields
+                and field_path in self._indexed_fields[collection]
+            ):
+                index_info = self._indexed_fields[collection][field_path]
+                attr_name = index_info["attr_name"]
+
+                # Add to attribute names
+                attr_name_placeholder = f"#attr{attr_counter}"
+                attr_names[attr_name_placeholder] = attr_name
+
+                # Convert value to DynamoDB format
+                if isinstance(value, str):
+                    value_attr = {"S": value}
+                elif isinstance(value, (int, float)):
+                    value_attr = {"N": str(value)}
+                elif isinstance(value, bool):
+                    value_attr = {"BOOL": value}  # type: ignore[dict-item]
+                else:
+                    value_attr = {"S": str(value)}
+
+                # Add to attribute values
+                value_placeholder = f":val{attr_counter}"
+                attr_values[value_placeholder] = value_attr
+
+                # Add filter condition
+                filter_parts.append(f"{attr_name_placeholder} = {value_placeholder}")
+                attr_counter += 1
+
+        if not filter_parts:
+            return None, {}, {}
+
+        filter_expression = " AND ".join(filter_parts)
+        return filter_expression, attr_names, attr_values
+
     async def find(
-        self, collection: str, query: Dict[str, Any]
+        self, collection: str, query: Dict[str, Any], limit: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """Find records matching a query.
 
         Optimizes queries by using Global Secondary Indexes (GSI) when available.
         Falls back to table scan for complex queries or when no index matches.
+        Uses FilterExpression where possible to push filtering to DynamoDB.
 
         Args:
             collection: Collection name
             query: Query parameters (empty dict for all records)
+            limit: Optional maximum number of results to return
 
         Returns:
             List of matching records
 
         Note:
             - Uses GSI query() for simple equality queries on indexed fields
+            - Uses FilterExpression to push simple filters to DynamoDB
             - Falls back to scan() for complex queries or unindexed fields
             - All queries are transparent - same API, better performance
         """
@@ -642,59 +893,78 @@ class DynamoDB(Database):
                     else:
                         value_attr = {"S": str(value)}
 
-                    # Query using GSI
-                    # Use expression attribute names to handle special characters
-                    attr_name_placeholder = f"#{attr_name.replace('_', '')}"
-                    response = await client.query(
-                        TableName=table_name,
-                        IndexName=gsi_match["gsi_name"],
-                        KeyConditionExpression=f"{attr_name_placeholder} = :val",
-                        ExpressionAttributeNames={attr_name_placeholder: attr_name},
-                        ExpressionAttributeValues={":val": value_attr},
+                    # Build FilterExpression for additional filters
+                    remaining_query = {
+                        k: v for k, v in query.items() if k != gsi_match["field_path"]
+                    }
+                    filter_expr, filter_attr_names, filter_attr_values = (
+                        self._build_filter_expression(remaining_query, collection)
                     )
+
+                    # Combine attribute names and values
+                    expr_attr_names = {"#key": attr_name}
+                    expr_attr_values = {":val": value_attr}
+                    if filter_expr:
+                        expr_attr_names.update(filter_attr_names)
+                        expr_attr_values.update(filter_attr_values)
+
+                    # Query using GSI with optional FilterExpression
+                    query_params: Dict[str, Any] = {
+                        "TableName": table_name,
+                        "IndexName": gsi_match["gsi_name"],
+                        "KeyConditionExpression": "#key = :val",
+                        "ExpressionAttributeNames": expr_attr_names,
+                        "ExpressionAttributeValues": expr_attr_values,
+                    }
+                    if limit:
+                        query_params["Limit"] = limit
+                    if filter_expr:
+                        query_params["FilterExpression"] = filter_expr
+
+                    response = await client.query(**query_params)
 
                     results = []
                     for item in response.get("Items", []):
                         # Deserialize data from JSON string
                         data = json.loads(item["data"]["S"])
-                        # Apply additional query filters if any
-                        remaining_query = {
-                            k: v
-                            for k, v in query.items()
-                            if k != gsi_match["field_path"]
-                        }
-                        if not remaining_query or QueryEngine.match(
-                            data, remaining_query
+                        # Only apply client-side filtering if FilterExpression wasn't used
+                        if (
+                            not filter_expr
+                            and remaining_query
+                            and not QueryEngine.match(data, remaining_query)
                         ):
-                            results.append(data)
+                            continue
+                        results.append(data)
+                        if limit and len(results) >= limit:
+                            break
 
-                    # Handle pagination
-                    while "LastEvaluatedKey" in response:
-                        response = await client.query(
-                            TableName=table_name,
-                            IndexName=gsi_match["gsi_name"],
-                            KeyConditionExpression=f"{attr_name_placeholder} = :val",
-                            ExpressionAttributeNames={attr_name_placeholder: attr_name},
-                            ExpressionAttributeValues={":val": value_attr},
-                            ExclusiveStartKey=response["LastEvaluatedKey"],
-                        )
+                    # Handle pagination (only if limit not reached)
+                    while "LastEvaluatedKey" in response and (
+                        not limit or len(results) < limit
+                    ):
+                        query_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+                        if limit:
+                            query_params["Limit"] = limit - len(results)
+                        response = await client.query(**query_params)
 
                         for item in response.get("Items", []):
                             data = json.loads(item["data"]["S"])
-                            remaining_query = {
-                                k: v
-                                for k, v in query.items()
-                                if k != gsi_match["field_path"]
-                            }
-                            if not remaining_query or QueryEngine.match(
-                                data, remaining_query
+                            if (
+                                not filter_expr
+                                and remaining_query
+                                and not QueryEngine.match(data, remaining_query)
                             ):
-                                results.append(data)
+                                continue
+                            results.append(data)
+                            if limit and len(results) >= limit:
+                                break
+                        if limit and len(results) >= limit:
+                            break
 
                     logger.debug(
                         f"Used GSI '{gsi_match['gsi_name']}' for query on '{gsi_match['field_path']}'"
                     )
-                    return results
+                    return results[:limit] if limit else results
 
                 except ClientError as e:
                     # If GSI query fails, fall back to scan
@@ -704,42 +974,67 @@ class DynamoDB(Database):
                     )
 
             # Fall back to scan for complex queries or when no index matches
-            response = await client.scan(
-                TableName=table_name,
-                FilterExpression="#coll = :collection_val",
-                ExpressionAttributeNames={"#coll": "collection"},
-                ExpressionAttributeValues={":collection_val": {"S": collection}},
+            # Build FilterExpression for simple equality filters
+            filter_expr, filter_attr_names, filter_attr_values = (
+                self._build_filter_expression(query, collection)
             )
 
-            results = []
+            # Always include collection filter
+            scan_attr_names = {"#coll": "collection"}
+            scan_attr_values = {":collection_val": {"S": collection}}
 
+            # Combine with query filters if available
+            if filter_expr:
+                scan_attr_names.update(filter_attr_names)
+                scan_attr_values.update(filter_attr_values)
+                # Combine collection filter with query filters
+                combined_filter = f"#coll = :collection_val AND {filter_expr}"
+            else:
+                combined_filter = "#coll = :collection_val"
+
+            scan_params: Dict[str, Any] = {
+                "TableName": table_name,
+                "FilterExpression": combined_filter,
+                "ExpressionAttributeNames": scan_attr_names,
+                "ExpressionAttributeValues": scan_attr_values,
+            }
+            if limit:
+                scan_params["Limit"] = limit
+
+            response = await client.scan(**scan_params)
+
+            results = []
             for item in response.get("Items", []):
                 # Deserialize data from JSON string
                 data = json.loads(item["data"]["S"])
 
-                # Use QueryEngine for proper operator support ($or, $and, etc.)
-                if not query or QueryEngine.match(data, query):
-                    results.append(data)
+                # Only apply client-side filtering if FilterExpression wasn't used or query is complex
+                if not filter_expr and query and not QueryEngine.match(data, query):
+                    continue
+                results.append(data)
+                if limit and len(results) >= limit:
+                    break
 
-            # Handle pagination if needed
-            while "LastEvaluatedKey" in response:
-                response = await client.scan(
-                    TableName=table_name,
-                    FilterExpression="#coll = :collection_val",
-                    ExpressionAttributeNames={"#coll": "collection"},
-                    ExpressionAttributeValues={":collection_val": {"S": collection}},
-                    ExclusiveStartKey=response["LastEvaluatedKey"],
-                )
+            # Handle pagination (only if limit not reached)
+            while "LastEvaluatedKey" in response and (
+                not limit or len(results) < limit
+            ):
+                scan_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+                if limit:
+                    scan_params["Limit"] = limit - len(results)
+                response = await client.scan(**scan_params)
 
                 for item in response.get("Items", []):
                     data = json.loads(item["data"]["S"])
-                    if not query:
-                        results.append(data)
-                    else:
-                        if QueryEngine.match(data, query):
-                            results.append(data)
+                    if not filter_expr and query and not QueryEngine.match(data, query):
+                        continue
+                    results.append(data)
+                    if limit and len(results) >= limit:
+                        break
+                if limit and len(results) >= limit:
+                    break
 
-            return results
+            return results[:limit] if limit else results
         except ClientError as e:
             raise DatabaseError(f"DynamoDB find error: {e}") from e
 
@@ -891,8 +1186,6 @@ class DynamoDB(Database):
                 logger.warning(
                     f"Table '{table_name}' is being updated, waiting for completion..."
                 )
-                import asyncio
-
                 await asyncio.sleep(5)
                 # Retry once
                 try:
@@ -1079,12 +1372,53 @@ class DynamoDB(Database):
         # Close persistent client if it exists
         if self._client_context is not None:
             try:
-                await self._client_context.__aexit__(None, None, None)
+                # Try to get current event loop
+                try:
+                    current_loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    current_loop = None
+
+                # Only try to close if we're in an active event loop
+                if current_loop and not current_loop.is_closed():
+                    # If the client was created in a different closed loop, we can't properly close it
+                    if (
+                        self._client_event_loop is not None
+                        and self._client_event_loop is not current_loop
+                        and self._client_event_loop.is_closed()
+                    ):
+                        # Try to close aiohttp session directly
+                        import contextlib
+
+                        with contextlib.suppress(Exception):
+                            await self._close_aiohttp_session_directly()  # Best effort cleanup
+                    else:
+                        # Properly close the context manager with timeout
+                        try:
+                            await asyncio.wait_for(
+                                self._client_context.__aexit__(None, None, None),
+                                timeout=1.0,
+                            )
+                        except asyncio.TimeoutError:
+                            # Timeout - try to close aiohttp session directly
+                            logger.debug(
+                                "Context manager close timed out, closing aiohttp session directly"
+                            )
+                            import contextlib
+
+                            with contextlib.suppress(Exception):
+                                await self._close_aiohttp_session_directly()
+                else:
+                    # No active loop, try to close aiohttp session directly
+                    import contextlib
+
+                    with contextlib.suppress(Exception):
+                        await self._close_aiohttp_session_directly()  # Best effort cleanup
             except Exception as e:
                 logger.warning(f"Error closing DynamoDB client: {e}", exc_info=True)
             finally:
                 self._client = None
                 self._client_context = None
+                self._client_event_loop = None
 
         # Clear table cache and index registry
         self._tables_created.clear()

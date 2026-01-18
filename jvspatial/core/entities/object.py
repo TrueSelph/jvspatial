@@ -414,11 +414,14 @@ class Object(AttributeMixin, BaseModel):
     async def save(self: "Object") -> "Object":
         """Save the object to the database.
 
+        Note: Indexes are only created automatically if JVSPATIAL_AUTO_CREATE_INDEXES=true
+        is set. By default, indexes are not created automatically.
+
         Returns:
             The saved object instance
         """
         context = await self.get_context()
-        # Ensure indexes are created on first save
+        # Ensure indexes are created on first save (only if auto-create is enabled)
         await context.ensure_indexes(self.__class__)
         await context.save(self)
         return self
@@ -477,7 +480,7 @@ class Object(AttributeMixin, BaseModel):
         from ..context import get_default_context
 
         context = get_default_context()
-        # Ensure indexes are created on first find
+        # Ensure indexes are created on first find (only if auto-create is enabled)
         await context.ensure_indexes(cls)
         collection, final_query = await cls._build_database_query(
             context, query, kwargs

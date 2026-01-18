@@ -342,6 +342,33 @@ class AppBuilder:
         # Use explicit tags=["App"] to ensure it only appears under App tag
         if server and hasattr(server, "_endpoint_registry"):
             try:
+                # Check if graph endpoint is already registered to prevent duplicates
+                # This can happen if register_core_routes is called multiple times
+                graph_path = "/api/graph"
+
+                # Check endpoint registry by path (most reliable)
+                if server._endpoint_registry.has_path(graph_path):
+                    # Check if GET method is already registered at this path
+                    existing_endpoints = server._endpoint_registry.get_by_path(
+                        graph_path
+                    )
+                    for endpoint_info in existing_endpoints:
+                        if "GET" in endpoint_info.methods:
+                            # Already registered, skip to avoid duplicates
+                            return
+
+                # Also check if route already exists in the app (fallback check)
+                from fastapi.routing import APIRoute
+
+                for route in app.routes:
+                    if (
+                        isinstance(route, APIRoute)
+                        and route.path == graph_path
+                        and "GET" in route.methods
+                    ):
+                        # Already registered, skip to avoid duplicates
+                        return
+
                 from jvspatial.api.endpoints.factory import ParameterModelFactory
 
                 # Create parameter model if function has parameters
@@ -375,22 +402,26 @@ class AppBuilder:
                 wrapped_func._jvspatial_endpoint_config["tags"] = tags  # type: ignore[attr-defined]
 
                 # Register with endpoint registry using full path
-                server._endpoint_registry.register_function(
-                    get_graph,  # Original function
-                    "/api/graph",  # Full path for registry
-                    methods=["GET"],
-                    route_config={
-                        "path": "/api/graph",  # Full path
-                        "endpoint": wrapped_func,
-                        "methods": ["GET"],
-                        "auth_required": True,
-                        "response_class": PlainTextResponse,
-                        "tags": tags,  # Explicitly ["App"] only
-                    },
-                    auth_required=True,
-                    response_class=PlainTextResponse,
-                    tags=tags,  # Explicitly ["App"] only
-                )
+                # Check if already registered to avoid duplicates
+                from contextlib import suppress
+
+                with suppress(Exception):
+                    server._endpoint_registry.register_function(
+                        get_graph,  # Original function
+                        "/api/graph",  # Full path for registry
+                        methods=["GET"],
+                        route_config={
+                            "path": "/api/graph",  # Full path
+                            "endpoint": wrapped_func,
+                            "methods": ["GET"],
+                            "auth_required": True,
+                            "response_class": PlainTextResponse,
+                            "tags": tags,  # Explicitly ["App"] only
+                        },
+                        auth_required=True,
+                        response_class=PlainTextResponse,
+                        tags=tags,  # Explicitly ["App"] only
+                    )
 
                 # Register with endpoint router - path is relative to router prefix (/api)
                 # This ensures the endpoint is only registered once with explicit tags
@@ -402,6 +433,7 @@ class AppBuilder:
                     auth=True,
                     response_class=PlainTextResponse,
                     tags=tags,  # Explicitly set to only ["App"] - prevents default tag
+                    operation_id="get_graph_visualization",  # Explicit operation_id to prevent duplicates
                 )
 
                 # Mark server as having auth endpoints
@@ -412,13 +444,28 @@ class AppBuilder:
                     f"Could not register graph endpoint with registry: {e}"
                 )
                 # Fallback: register directly with FastAPI and set auth attribute
-                # Explicitly set tags to prevent default tag addition
-                app.get(
-                    "/api/graph",
-                    response_class=PlainTextResponse,
-                    tags=["App"],  # Explicitly set to only App tag
-                )(get_graph)
-                get_graph._auth_required = True  # type: ignore[attr-defined]
+                # Check if already registered to avoid duplicates
+                from fastapi.routing import APIRoute
+
+                graph_path = "/api/graph"
+                route_already_exists = False
+                for route in app.routes:
+                    if (
+                        isinstance(route, APIRoute)
+                        and route.path == graph_path
+                        and "GET" in route.methods
+                    ):
+                        route_already_exists = True
+                        break
+
+                if not route_already_exists:
+                    app.get(
+                        "/api/graph",
+                        response_class=PlainTextResponse,
+                        tags=["App"],  # Explicitly set to only App tag
+                        operation_id="get_graph_visualization",  # Explicit operation_id to prevent duplicates
+                    )(get_graph)
+                    get_graph._auth_required = True  # type: ignore[attr-defined]
 
 
 __all__ = ["AppBuilder"]

@@ -275,46 +275,77 @@ async def refresh_token(request: TokenRefreshRequest):
 
 ## API Key Authentication
 
-### Creating API Keys
+### Quick Start
 
 ```python
-@auth_endpoint("/auth/api-keys", methods=["POST"])
-async def create_api_key(request: APIKeyCreateRequest):
-    # Built-in endpoint creates API key with:
-    # - Unique key ID and secret
-    # - Endpoint restrictions
-    # - Rate limits
-    # - Expiration dates
-    pass
+from jvspatial.api import Server
+
+server = Server(
+    title="My API",
+    auth_enabled=True,
+    api_key_auth_enabled=True,  # Enable API key authentication
+    db_type="json"
+)
+```
+
+### Creating API Keys
+
+API keys are created through authenticated endpoints. First login to get a JWT token, then create keys:
+
+```bash
+# Login
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@example.com", "password": "password123"}'
+
+# Create API key
+curl -X POST http://localhost:8000/auth/api-keys \
+  -H "Authorization: Bearer <jwt_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Production Key",
+    "permissions": ["read", "write"],
+    "rate_limit_override": 1000,
+    "expires_in_days": 90
+  }'
+```
+
+**Response (shown ONCE only):**
+```json
+{
+  "key": "sk_live_abc123...xyz789",
+  "key_id": "k:APIKey:uuid",
+  "key_prefix": "sk_live_abc12345",
+  "name": "Production Key",
+  "message": "Store this key securely. It won't be shown again."
+}
 ```
 
 ### Using API Keys
 
+Include the API key in the `X-API-Key` header:
+
 ```python
-# Method 1: Header-based
-headers = {
-    "X-API-Key": "your-api-key-secret"
-}
+import requests
 
-# Method 2: Query parameter
-url = "https://api.example.com/data?api_key=your-api-key-secret"
-
-# Server validates API key automatically
+headers = {"X-API-Key": "sk_live_abc123...xyz789"}
+response = requests.get("http://localhost:8000/api/data", headers=headers)
 ```
 
 ### API Key Management
 
-```python
-# List user's API keys
-@auth_endpoint("/auth/api-keys", methods=["GET"])
-async def list_api_keys():
-    pass
+- **List Keys**: `GET /auth/api-keys` (requires JWT authentication)
+- **Revoke Key**: `DELETE /auth/api-keys/{key_id}` (requires JWT authentication)
 
-# Revoke API key
-@auth_endpoint("/auth/api-keys/revoke", methods=["POST"])
-async def revoke_api_key(request: APIKeyRevokeRequest):
-    pass
-```
+### Security Features
+
+- **Hashed Storage**: Keys are hashed (SHA-256) before storage, never stored in plaintext
+- **IP Restrictions**: Whitelist specific IP addresses
+- **Endpoint Restrictions**: Limit keys to specific API endpoints
+- **Expiration**: Optional expiration dates
+- **Per-Key Rate Limits**: Custom rate limits per key
+
+📖 **[Complete API Keys Guide →](api-keys.md)**
 
 ## Role-Based Access Control
 
@@ -541,6 +572,44 @@ The `AuthenticationMiddleware` automatically:
 - **Handles authentication errors** with proper HTTP responses
 - **Exempts public endpoints** from authentication
 
+### Registry-Based Authentication
+
+The authentication middleware uses the **endpoint registry** as the single source of truth for authentication decisions:
+
+1. **Registered Endpoints**: All endpoints registered via the `@endpoint` decorator are tracked in the endpoint registry
+2. **Auth Settings**: The `auth` parameter in `@endpoint` determines whether authentication is required:
+   - `auth=True`: Endpoint requires authentication
+   - `auth=False`: Endpoint is public (no authentication required)
+   - Default: `auth=False` (endpoints are public by default)
+3. **Unregistered Endpoints**: Endpoints not in the registry **require authentication by default** (deny by default security model)
+
+**Important**: Only endpoints explicitly registered with `auth=False` are public. This ensures that:
+- Dynamically registered endpoints (e.g., from extended applications) respect their `auth` settings
+- Public endpoints with `auth=False` are accessible without authentication
+- The authentication behavior is consistent across all registered endpoints
+- Unknown endpoints are protected by default, preventing security vulnerabilities
+
+### Security Model: Deny By Default
+
+The authentication middleware follows a **"deny by default"** security model:
+
+1. **Exempt Paths**: Only paths explicitly listed in `exempt_paths` bypass authentication
+2. **Registered Endpoints**: Endpoints in the registry with `auth=False` are public
+3. **Unknown Endpoints**: Endpoints not in the registry **require authentication**
+4. **Error Handling**: Any error during authentication checking **denies access**
+
+This approach ensures that:
+- Path matching failures don't create security vulnerabilities
+- New endpoints are protected by default until explicitly configured
+- Configuration errors fail securely (deny access rather than allow)
+- Bypass attempts via path manipulation are blocked
+
+**Important**: All non-authenticated endpoints must either:
+- Be listed in `exempt_paths` configuration, OR
+- Be registered with `@endpoint(..., auth=False)`
+
+Unregistered endpoints will require authentication regardless of intent.
+
 ### Configuring Exemptions
 
 ```python
@@ -558,6 +627,8 @@ exempted_paths = [
 
 # Custom exemption patterns can be added in middleware configuration
 ```
+
+**Note**: Exempt paths are checked **before** registry lookups, so they bypass authentication entirely. Use exempt paths for system routes like health checks and documentation.
 
 ## Security Best Practices
 

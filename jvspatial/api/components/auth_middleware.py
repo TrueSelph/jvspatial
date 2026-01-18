@@ -189,13 +189,18 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         return bool(re.match(regex_pattern, path))
 
     def _endpoint_requires_auth(self, request: Request) -> bool:
-        """Check if the current endpoint requires authentication.
+        """Check if endpoint requires authentication using registry only.
+
+        SECURITY: This method defaults to requiring authentication unless the endpoint
+        is explicitly registered with auth=False. This "deny by default" approach
+        ensures that path matching failures don't create security vulnerabilities.
 
         Args:
             request: Incoming request
 
         Returns:
-            True if endpoint requires authentication, False otherwise
+            True if authentication is required (default), False only if endpoint
+            is explicitly registered with auth=False
         """
         try:
             # Always use stored server reference - it's required during initialization
@@ -203,97 +208,101 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
             if not server:
                 self._logger.error(
-                    "_endpoint_requires_auth: No server found (this should never happen)"
+                    "_endpoint_requires_auth: No server found - DENYING access"
                 )
-                return False
+                return True  # SECURITY: Deny by default
 
             # Check if any endpoints in the registry require auth for this path
             registry = server._endpoint_registry
             request_path = request.url.path
 
-            # Check function endpoints
-            for func_info in registry.list_functions():
-                # Handle both dict and other formats
-                if isinstance(func_info, dict):
-                    func_path = func_info.get("path")
-                    func = func_info.get("func")
-                else:
-                    # If func_info is not a dict, skip or handle differently
-                    continue
+            # Normalize request path by removing API prefix for registry comparison
+            # Registry stores paths without prefix (router adds it when including routes)
+            # Requests include prefix (e.g., "/api/agents/123")
+            api_prefix = APIRoutes.PREFIX
+            normalized_path = request_path
 
-                # Match exact path or check if request path matches the route pattern
-                if func_path == request_path or self._path_matches(
-                    func_path, request_path
+            if api_prefix and request_path.startswith(api_prefix):
+                # Remove prefix: "/api/agents/123" -> "/agents/123"
+                normalized_path = request_path[len(api_prefix) :]
+                # Handle edge case: "/api" -> "" should become "/"
+                if not normalized_path:
+                    normalized_path = "/"
+
+            # Log path normalization for debugging (at debug level)
+            if normalized_path != request_path:
+                self._logger.debug(
+                    f"Path normalized: {request_path} -> {normalized_path}"
+                )
+
+            # Check function endpoints by accessing internal registry directly
+            # This gives us access to both the handler and the EndpointInfo
+            for func, endpoint_info in registry._function_registry.items():
+                func_path = endpoint_info.path
+
+                # Match using normalized path (for paths registered without prefix)
+                # Also check original request path for backward compatibility
+                if (
+                    func_path in (normalized_path, request_path)
+                    or self._path_matches(func_path, normalized_path)
+                    or self._path_matches(func_path, request_path)
                 ):
                     endpoint_config = getattr(func, "_jvspatial_endpoint_config", None)
-                    if endpoint_config is not None:
-                        # Found the endpoint - return its auth_required setting
-                        return endpoint_config.get("auth_required", False)
-                    else:
-                        # If path starts with /api/, require auth as fallback
-                        if request_path.startswith("/api/"):
-                            return True
+                    if endpoint_config is None:
+                        # SECURITY: Endpoint found but no config - deny access
+                        self._logger.warning(
+                            f"Endpoint found in registry but missing config: {normalized_path} - DENYING access"
+                        )
+                        return True
 
-            # Check walker endpoints
-            for walker_info in registry.list_walkers():
-                # Handle both dict and other formats
-                if isinstance(walker_info, dict):
-                    walker_path = walker_info.get("path")
-                    walker_class = walker_info.get("walker_class")
-                else:
-                    # If walker_info is not a dict, skip or handle differently
-                    continue
+                    auth_required = endpoint_config.get("auth_required", False)
+                    self._logger.debug(
+                        f"Function endpoint {normalized_path}: auth_required={auth_required}"
+                    )
+                    return auth_required
 
-                # Match exact path or check if request path matches the route pattern
-                if walker_path == request_path or self._path_matches(
-                    walker_path, request_path
+            # Check walker endpoints by accessing internal registry directly
+            for walker_class, endpoint_info in registry._walker_registry.items():
+                walker_path = endpoint_info.path
+
+                # Match using normalized path (for paths registered without prefix)
+                # Also check original request path for backward compatibility
+                if (
+                    walker_path in (normalized_path, request_path)
+                    or self._path_matches(walker_path, normalized_path)
+                    or self._path_matches(walker_path, request_path)
                 ):
                     endpoint_config = getattr(
                         walker_class, "_jvspatial_endpoint_config", None
                     )
-                    if endpoint_config is not None:
-                        # Found the endpoint - return its auth_required setting
-                        return endpoint_config.get("auth_required", False)
+                    if endpoint_config is None:
+                        # SECURITY: Endpoint found but no config - deny access
+                        self._logger.warning(
+                            f"Walker endpoint found in registry but missing config: {normalized_path} - DENYING access"
+                        )
+                        return True
 
-            # Check manually registered endpoints by inspecting the FastAPI app routes
-            # This is needed because manually registered endpoints bypass the registry
-            try:
-                app = server.get_app()
-                for route in app.routes:
-                    if hasattr(route, "path") and hasattr(route, "endpoint"):
-                        route_path = route.path
-                        # Match exact path or check if request path matches the route pattern
-                        if route_path == request_path or self._path_matches(
-                            route_path, request_path
-                        ):
-                            endpoint_config = getattr(
-                                route.endpoint, "_jvspatial_endpoint_config", None
-                            )
-                            if endpoint_config is not None:
-                                # Found the endpoint - return its auth_required setting
-                                return endpoint_config.get("auth_required", False)
-                            else:
-                                # If path starts with /api/, require auth as fallback
-                                if request_path.startswith("/api/"):
-                                    return True
-            except Exception as e:
-                self._logger.warning(
-                    f"Could not check FastAPI routes: {e}", exc_info=True
-                )
+                    auth_required = endpoint_config.get("auth_required", False)
+                    self._logger.debug(
+                        f"Walker endpoint {normalized_path}: auth_required={auth_required}"
+                    )
+                    return auth_required
 
-            # Fallback: Apply auth to all /api/* endpoints except exempt ones
-            # This ensures manually registered endpoints are protected
-            # Only use fallback if we didn't find the endpoint above
-            if request_path.startswith("/api/"):
-                return True
-
-            return False
+            # SECURITY: Endpoint not in registry - DENY by default
+            # This is a critical security decision: we require authentication for any
+            # endpoint that isn't explicitly registered, preventing bypass via path manipulation
+            self._logger.debug(
+                f"Endpoint not found in registry: {normalized_path} (original: {request_path}) - DENYING access"
+            )
+            return True  # SECURITY: Deny by default
 
         except Exception as e:
-            self._logger.warning(
-                f"Error checking endpoint auth requirements: {e}", exc_info=True
+            # SECURITY: On any error, deny access to prevent bypasses
+            self._logger.error(
+                f"Error checking endpoint auth requirements for {request.url.path}: {e} - DENYING access",
+                exc_info=True,
             )
-            return False
+            return True  # SECURITY: Deny on error
 
     async def _authenticate_request(self, request: Request) -> Optional[Any]:
         """Authenticate the incoming request.
@@ -342,10 +351,15 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 )
                 return None
 
-            # Initialize authentication service
+            # Initialize authentication service with JWT config from auth_config
             from jvspatial.api.auth.service import AuthenticationService
 
-            auth_service = AuthenticationService(server._graph_context)
+            auth_service = AuthenticationService(
+                server._graph_context,
+                jwt_secret=self.auth_config.jwt_secret,
+                jwt_algorithm=self.auth_config.jwt_algorithm,
+                jwt_expire_minutes=self.auth_config.jwt_expire_minutes,
+            )
 
             # Extract token from Authorization header
             auth_header = request.headers.get("authorization", "")
@@ -375,19 +389,67 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             User object if API key is valid, None otherwise
         """
         try:
-            # Placeholder API key authentication implementation
-            api_key = request.headers.get("x-api-key", "")
+            # Get API key from header
+            api_key_header = self.auth_config.api_key_header or "x-api-key"
+            api_key = request.headers.get(api_key_header, "")
             if not api_key:
                 return None
 
-            # Simple API key validation (replace with actual verification)
-            if api_key and len(api_key) > 5:
-                return {"user_id": "api_user", "api_key": api_key}
+            # Use API key service for validation
+            from jvspatial.api.auth.api_key_service import APIKeyService
+            from jvspatial.core.context import GraphContext
+            from jvspatial.db import get_prime_database
 
-            return None
+            # API key service should use prime database, not server's graph context
+            prime_ctx = GraphContext(database=get_prime_database())
+            service = APIKeyService(prime_ctx)
+
+            # Validate the API key
+            api_key_entity = await service.validate_key(api_key)
+            if not api_key_entity:
+                return None
+
+            # Check IP restrictions
+            client_ip = request.client.host if request.client else None
+            if (
+                api_key_entity.allowed_ips
+                and client_ip
+                and client_ip not in api_key_entity.allowed_ips
+            ):
+                self._logger.debug(
+                    f"API key {api_key_entity.id} rejected: IP {client_ip} not in whitelist"
+                )
+                return None
+
+            # Check endpoint restrictions
+            if api_key_entity.allowed_endpoints:
+                request_path = request.url.path
+                if not any(
+                    request_path.startswith(ep)
+                    for ep in api_key_entity.allowed_endpoints
+                ):
+                    self._logger.debug(
+                        f"API key {api_key_entity.id} rejected: endpoint {request_path} not in whitelist"
+                    )
+                    return None
+
+            # Update last used timestamp (fire and forget)
+            try:
+                await service.update_key_usage(api_key_entity)
+            except Exception as e:
+                # Log but don't fail authentication if update fails
+                self._logger.warning(f"Failed to update API key usage timestamp: {e}")
+
+            # Return user-like object for consistency with JWT authentication
+            return {
+                "user_id": api_key_entity.user_id,
+                "api_key_id": api_key_entity.id,
+                "permissions": api_key_entity.permissions,
+                "rate_limit_override": api_key_entity.rate_limit_override,
+            }
 
         except Exception as e:
-            self._logger.error(f"API key authentication error: {e}")
+            self._logger.error(f"API key authentication error: {e}", exc_info=True)
             return None
 
     async def _authenticate_session(self, request: Request) -> Optional[Any]:

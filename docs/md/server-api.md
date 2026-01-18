@@ -72,14 +72,15 @@ from jvspatial.api.decorators import EndpointField
 from jvspatial.core import Walker, Node, on_visit
 
 # Create a server instance
+from jvspatial.api.config_groups import DatabaseConfig, AuthConfig
+
 server = Server(
     title="My Spatial API",
     description="A spatial data management API",
     version="1.0.0",
     debug=True,
-    db_type="json",
-    db_path="./jvdb",
-    auth_enabled=False  # Set to True to enable authentication
+    database=DatabaseConfig(db_type="json", db_path="./jvdb"),
+    auth=AuthConfig(auth_enabled=False)  # Set to True to enable authentication
 )
 
 # Define a Walker endpoint
@@ -155,14 +156,18 @@ config = ServerConfig(
     redoc_url="/redoc",
 
     # CORS Configuration
-    cors_enabled=True,
-    cors_origins=["https://myapp.com"],
-    cors_methods=["GET", "POST"],
-    cors_headers=["*"],
+    cors=CORSConfig(
+        cors_enabled=True,
+        cors_origins=["https://myapp.com"],
+        cors_methods=["GET", "POST"],
+        cors_headers=["*"],
+    ),
 
     # Database Configuration
-    db_type="json",
-    db_path="jvdb/production",
+    database=DatabaseConfig(
+        db_type="json",
+        db_path="jvdb/production",
+    ),
 
     # Logging
     log_level="info"

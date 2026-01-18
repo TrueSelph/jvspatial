@@ -236,3 +236,65 @@ class TestWebhookEndpointDecorator:
 
         # Clean up
         set_current_server(None)
+
+    async def test_webhook_endpoint_with_api_key_auth(self):
+        """Test @webhook_endpoint with webhook_auth='api_key'."""
+        from jvspatial.api.context import set_current_server
+
+        set_current_server(self.mock_server)
+
+        @webhook_endpoint(
+            "/webhook/api-key", methods=["POST"], webhook=True, webhook_auth="api_key"
+        )
+        async def api_key_webhook(payload: dict, endpoint):
+            return endpoint.response(content={"status": "ok"})
+
+        config = api_key_webhook._jvspatial_endpoint_config
+        assert config["webhook"] is True
+        assert config["webhook_auth"] == "api_key"
+        assert config["methods"] == ["POST"]
+
+        # Clean up
+        set_current_server(None)
+
+    async def test_webhook_endpoint_with_api_key_path_auth(self):
+        """Test @webhook_endpoint with webhook_auth='api_key_path'."""
+        from jvspatial.api.context import set_current_server
+
+        set_current_server(self.mock_server)
+
+        @webhook_endpoint(
+            "/webhook/{api_key}/trigger",
+            methods=["POST"],
+            webhook=True,
+            webhook_auth="api_key_path",
+        )
+        async def api_key_path_webhook(api_key: str, payload: dict, endpoint):
+            return endpoint.response(content={"status": "ok"})
+
+        config = api_key_path_webhook._jvspatial_endpoint_config
+        assert config["webhook"] is True
+        assert config["webhook_auth"] == "api_key_path"
+        assert config["path"] == "/webhook/{api_key}/trigger"
+
+        # Clean up
+        set_current_server(None)
+
+    async def test_webhook_endpoint_without_auth(self):
+        """Test @webhook_endpoint with webhook_auth=False (no API key auth)."""
+        from jvspatial.api.context import set_current_server
+
+        set_current_server(self.mock_server)
+
+        @webhook_endpoint(
+            "/webhook/no-auth", methods=["POST"], webhook=True, webhook_auth=False
+        )
+        async def no_auth_webhook(payload: dict, endpoint):
+            return endpoint.response(content={"status": "ok"})
+
+        config = no_auth_webhook._jvspatial_endpoint_config
+        assert config["webhook"] is True
+        assert config["webhook_auth"] is False
+
+        # Clean up
+        set_current_server(None)

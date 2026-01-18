@@ -56,23 +56,66 @@ def format_response(
     data: Optional[Dict[str, Any]] = None,
     message: Optional[str] = None,
     success: bool = True,
+    *,
+    error: Optional[str] = None,
+    detail: Optional[str] = None,
+    code: Optional[str] = None,
+    status: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Format a response dictionary.
+    """Format a response dictionary (canonical formatter for all API responses).
+
+    This is the single source of truth for response formatting across the API.
+    Handles both success and error responses with consistent structure.
 
     Args:
-        data: Response data
-        message: Optional message
+        data: Response data for successful responses
+        message: Optional message for successful responses
         success: Whether the response represents success
+        error: Error message for failed responses
+        detail: Additional error details
+        code: Error code
+        status: HTTP status code for error responses
 
     Returns:
         Formatted response dictionary
+
+    Examples:
+        # Success response
+        format_response(data={"users": []}, message="Users retrieved")
+
+        # Error response
+        format_response(
+            success=False,
+            error="Not found",
+            detail="User ID 123 does not exist",
+            code="USER_NOT_FOUND",
+            status=404
+        )
     """
-    response = {"success": success}
-    if message is not None:
-        response["message"] = message
-    if data is not None:
-        response["data"] = data
-    return response
+    if success:
+        # Success path
+        response: Dict[str, Any] = {"success": True}
+        if message is not None:
+            response["message"] = message
+        if data is not None:
+            response["data"] = data
+        return response
+    else:
+        # Error path: construct structured error dict
+        error_resp: Dict[str, Any] = {"success": False}
+        if error is not None:
+            error_resp["error"] = error
+        if detail is not None:
+            error_resp["detail"] = detail
+        if code is not None:
+            error_resp["code"] = code
+        if status is not None:
+            error_resp["status"] = status
+        if message is not None:
+            error_resp["message"] = message
+        if data is not None:
+            error_resp["data"] = data
+        return error_resp
 
 
 class EndpointResponse:

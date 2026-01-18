@@ -19,7 +19,7 @@ Examples:
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable, List, Optional, Tuple, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 
 from pydantic import BaseModel
 
@@ -162,8 +162,11 @@ def endpoint(
     # Webhook configuration
     webhook: bool = False,
     signature_required: bool = False,
+    webhook_auth: Optional[Union[str, bool]] = None,
     # Response schema
     response: Optional[Any] = None,
+    # Rate limiting
+    rate_limit: Optional[Dict[str, int]] = None,
     # Additional configuration
     **kwargs: Any,
 ) -> Callable:
@@ -180,7 +183,12 @@ def endpoint(
         roles: List of required roles
         webhook: If True, configure as webhook endpoint
         signature_required: If True, require webhook signature verification
+        webhook_auth: API key authentication mode for webhooks
+            - "api_key": Authenticate via query parameter or header (default for webhooks)
+            - "api_key_path": Authenticate via API key in URL path
+            - False/None: No API key authentication
         response: Response schema definition (ResponseSchema instance)
+        rate_limit: Rate limit configuration dict with "requests" and "window" keys
         **kwargs: Additional configuration options
 
     Returns:
@@ -197,6 +205,11 @@ def endpoint(
         async def admin_panel():
             return {"admin": "dashboard"}
 
+        # Endpoint with rate limiting
+        @endpoint("/api/search", methods=["POST"], rate_limit={"requests": 10, "window": 60})
+        async def search():
+            return {"results": []}
+
         # Endpoint with response schema
         @endpoint("/api/users", response=response_schema(
             data={
@@ -211,6 +224,11 @@ def endpoint(
         @endpoint("/webhook", webhook=True, signature_required=True)
         async def webhook_handler():
             return {"status": "ok"}
+
+        # Webhook with API key authentication
+        @endpoint("/webhook/third-party", methods=["POST"], webhook=True, webhook_auth="api_key")
+        async def third_party_webhook(payload: dict):
+            return {"status": "received"}
     """
 
     def decorator(target: Union[Callable, type]) -> Union[Callable, type]:
@@ -248,7 +266,9 @@ def endpoint(
                 "roles",
                 "webhook",
                 "signature_required",
+                "webhook_auth",
                 "response",
+                "rate_limit",
                 "is_function",
             ]
         }
@@ -260,7 +280,9 @@ def endpoint(
             "roles": config_roles,
             "webhook": webhook,
             "signature_required": signature_required,
+            "webhook_auth": webhook_auth,
             "response": response,
+            "rate_limit": rate_limit,
             "is_function": is_func,
             "kwargs": config_kwargs,
             **kwargs,  # Also include at top level for direct access
@@ -391,9 +413,20 @@ def endpoint(
                         roles=reg_roles,
                         **route_kwargs_for_reg,
                     )
+            else:
+                # No server available - register to deferred registry
+                from jvspatial.api.decorators.deferred_registry import (
+                    register_deferred_endpoint,
+                )
+
+                register_deferred_endpoint(target, config)
         except ImportError:
-            # No server context available, configuration will be picked up later
-            pass
+            # No server context available - register to deferred registry
+            from jvspatial.api.decorators.deferred_registry import (
+                register_deferred_endpoint,
+            )
+
+            register_deferred_endpoint(target, config)
 
         return target
 

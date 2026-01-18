@@ -86,19 +86,19 @@ class MiddlewareManager:
         Args:
             app: FastAPI application instance
         """
-        if not self.server.config.cors_enabled:
+        if not self.server.config.cors.cors_enabled:
             return
 
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=self.server.config.cors_origins,
-            allow_methods=self.server.config.cors_methods,
-            allow_headers=self.server.config.cors_headers,
+            allow_origins=self.server.config.cors.cors_origins,
+            allow_methods=self.server.config.cors.cors_methods,
+            allow_headers=self.server.config.cors.cors_headers,
             allow_credentials=True,
         )
         self._logger.debug(
             f"{LogIcons.SUCCESS} CORS middleware configured with "
-            f"origins: {self.server.config.cors_origins}"
+            f"origins: {self.server.config.cors.cors_origins}"
         )
 
     def _configure_auth_middleware(self, app: FastAPI) -> None:
@@ -182,7 +182,9 @@ class MiddlewareManager:
             return
 
         try:
-            from jvspatial.api.webhook.middleware import add_webhook_middleware
+            from jvspatial.api.integrations.webhooks.middleware import (
+                add_webhook_middleware,
+            )
 
             add_webhook_middleware(app, server=self.server)
             self._logger.info(f"{LogIcons.WEBHOOK} Webhook middleware added to server")
@@ -199,17 +201,20 @@ class MiddlewareManager:
         """
         # Check walker endpoints from registry
         registry = self.server._endpoint_registry
-        if any(
-            getattr(walker_class, "_webhook_required", False)
-            for walker_class in registry._walker_registry.keys()
-        ):
-            return True
 
-        # Check function endpoints from registry
-        return any(
-            getattr(func, "_webhook_required", False)
-            for func in registry._function_registry.keys()
-        )
+        # Check walker endpoints (config-based approach)
+        for walker_class in registry._walker_registry.keys():
+            endpoint_config = getattr(walker_class, "_jvspatial_endpoint_config", None)
+            if endpoint_config and endpoint_config.get("webhook", False):
+                return True
+
+        # Check function endpoints from registry (config-based approach)
+        for func in registry._function_registry.keys():
+            endpoint_config = getattr(func, "_jvspatial_endpoint_config", None)
+            if endpoint_config and endpoint_config.get("webhook", False):
+                return True
+
+        return False
 
     def _configure_file_storage(self, app: FastAPI) -> None:
         """Configure file storage endpoints if enabled.
@@ -220,7 +225,7 @@ class MiddlewareManager:
         Args:
             app: FastAPI application instance
         """
-        if not self.server.config.file_storage_enabled:
+        if not self.server.config.file_storage.file_storage_enabled:
             return
 
         if self.server._file_storage_service is None:

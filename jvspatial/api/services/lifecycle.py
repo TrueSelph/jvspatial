@@ -122,9 +122,9 @@ class LifecycleManager:
 
     async def _verify_file_storage(self) -> None:
         """Verify file storage configuration if enabled."""
-        if self.server.config.file_storage_enabled:
-            storage_info = f"{self.server.config.file_storage_provider}@{self.server.config.file_storage_root}"
-            if self.server.config.proxy_enabled:
+        if self.server.config.file_storage.file_storage_enabled:
+            storage_info = f"{self.server.config.file_storage.file_storage_provider}@{self.server.config.file_storage.file_storage_root}"
+            if self.server.config.proxy.proxy_enabled:
                 storage_info += " | proxy enabled"
             self._logger.info(f"{LogIcons.STORAGE} Storage: {storage_info}")
 

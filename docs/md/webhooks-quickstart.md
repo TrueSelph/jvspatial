@@ -76,12 +76,63 @@ async def payment_webhook(payload: dict, endpoint):
     )
 ```
 
-### Path-Based Authentication
+### API Key Authentication (Recommended)
+
+For third-party services that cannot set custom headers, use `webhook_auth="api_key"` to enable API key authentication via query parameters or headers:
+
+```python
+from jvspatial.api import endpoint
+
+# Simple webhook with API key authentication
+@endpoint(
+    "/webhook/third-party",
+    methods=["POST"],
+    webhook=True,
+    webhook_auth="api_key"  # Enables API key auth via query param or header
+)
+async def third_party_webhook(payload: dict):
+    """Webhook that accepts API key in query parameter or header."""
+    # Authentication handled automatically
+    # request.state.user contains authenticated user info
+    return {"status": "received", "data": payload}
+
+# Usage:
+# curl -X POST "https://api.example.com/webhook/third-party?api_key=sk_live_abc123"
+# OR
+# curl -X POST "https://api.example.com/webhook/third-party" -H "X-API-Key: sk_live_abc123"
+```
+
+### Path-Based API Key Authentication
+
+For maximum security, embed the API key directly in the URL path:
+
+```python
+@endpoint(
+    "/webhook/{api_key}/trigger",
+    methods=["POST"],
+    webhook=True,
+    webhook_auth="api_key_path"  # API key must be in URL path
+)
+async def path_authenticated_webhook(api_key: str, payload: dict):
+    """Webhook with API key embedded in path."""
+    # api_key parameter is automatically extracted and validated
+    # No need to manually check - middleware handles it
+    return {"status": "triggered"}
+
+# Usage:
+# curl -X POST "https://api.example.com/webhook/sk_live_abc123/trigger" \
+#   -H "Content-Type: application/json" \
+#   -d '{"event": "data"}'
+```
+
+### Legacy Path-Based Authentication
+
+Use `webhook_auth="api_key_path"` for path-based API key authentication:
 
 ```python
 @webhook_endpoint(
     "/webhook/stripe/{key}",
-    path_key_auth=True,
+    webhook_auth="api_key_path",
     hmac_secret="stripe-webhook-secret"
 )
 async def stripe_webhook(raw_body: bytes, content_type: str, endpoint):

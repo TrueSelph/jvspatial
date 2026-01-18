@@ -10,6 +10,12 @@ This module provides:
 
 from .config import ServerConfig
 from .context import ServerContext, get_current_server, set_current_server
+from .decorators.deferred_registry import (
+    clear_deferred_endpoints,
+    flush_deferred_endpoints,
+    get_deferred_endpoint_count,
+    register_deferred_endpoint,
+)
 from .decorators.field import EndpointField, EndpointFieldInfo, endpoint_field
 from .decorators.route import endpoint
 from .endpoints.response import ResponseHelper, format_response
@@ -33,4 +39,9 @@ __all__ = [
     "EndpointFieldInfo",
     "format_response",
     "ResponseHelper",
+    # Deferred registry utilities (for debugging and testing)
+    "register_deferred_endpoint",
+    "flush_deferred_endpoints",
+    "get_deferred_endpoint_count",
+    "clear_deferred_endpoints",
 ]
