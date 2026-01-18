@@ -8,13 +8,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jvspatial.api.integrations.webhooks.decorators import webhook_endpoint
+from jvspatial.api import endpoint
 from jvspatial.api.server import Server
 from jvspatial.core.entities import Walker
 
 
 class TestWebhookEndpointDecorator:
-    """Test the @webhook_endpoint decorator."""
+    """Test the @endpoint decorator with webhook=True."""
 
     def setup_method(self):
         """Set up test mocks."""
@@ -27,12 +27,12 @@ class TestWebhookEndpointDecorator:
         self.test_user = MagicMock(id="user_123")
 
     async def test_webhook_endpoint_basic(self):
-        """Test basic @webhook_endpoint decorator application."""
+        """Test basic @endpoint decorator with webhook=True."""
         from jvspatial.api.context import set_current_server
 
         set_current_server(self.mock_server)
 
-        @webhook_endpoint("/webhook/basic")
+        @endpoint("/webhook/basic", webhook=True)
         async def basic_webhook(payload: dict, endpoint):
             return endpoint.response(content={"status": "ok"})
 
@@ -44,18 +44,18 @@ class TestWebhookEndpointDecorator:
         assert config["auth_required"] is False
         assert config["permissions"] == []
         assert config["roles"] == []
-        assert config["webhook"] is False
+        assert config["webhook"] is True
 
         # Clean up
         set_current_server(None)
 
     async def test_webhook_endpoint_with_custom_methods(self):
-        """Test @webhook_endpoint with custom HTTP methods."""
+        """Test @endpoint with custom HTTP methods and webhook=True."""
         from jvspatial.api.context import set_current_server
 
         set_current_server(self.mock_server)
 
-        @webhook_endpoint("/webhook/custom", methods=["POST", "PUT"])
+        @endpoint("/webhook/custom", methods=["POST", "PUT"], webhook=True)
         async def custom_methods_webhook(payload: dict, endpoint):
             return endpoint.response(content={"status": "ok"})
 
@@ -67,35 +67,37 @@ class TestWebhookEndpointDecorator:
         set_current_server(None)
 
     async def test_webhook_endpoint_with_hmac_secret(self):
-        """Test @webhook_endpoint with HMAC secret."""
+        """Test @endpoint with HMAC secret and webhook=True."""
         from jvspatial.api.context import set_current_server
 
         set_current_server(self.mock_server)
 
-        @webhook_endpoint(
-            "/webhook/hmac", hmac_secret="secret123"  # pragma: allowlist secret
+        @endpoint(
+            "/webhook/hmac",
+            webhook=True,
+            hmac_secret="secret123",  # pragma: allowlist secret
         )
         async def hmac_webhook(payload: dict, endpoint):
             return endpoint.response(content={"status": "ok"})
 
         config = hmac_webhook._jvspatial_endpoint_config
-        # webhook_endpoint is just an alias for endpoint, so webhook-specific params are ignored
-        assert config["webhook"] is False
+        assert config["webhook"] is True
 
         # Clean up
         set_current_server(None)
 
     async def test_webhook_endpoint_with_auth_requirements(self):
-        """Test @webhook_endpoint with authentication requirements."""
+        """Test @endpoint with authentication requirements and webhook=True."""
         from jvspatial.api.context import set_current_server
 
         set_current_server(self.mock_server)
 
-        @webhook_endpoint(
+        @endpoint(
             "/webhook/auth",
+            webhook=True,
             permissions=["webhook:receive"],
             roles=["webhook_handler"],
-            auth_required=True,
+            auth=True,
         )
         async def auth_webhook(payload: dict, endpoint):
             return endpoint.response(content={"status": "ok"})
@@ -109,13 +111,14 @@ class TestWebhookEndpointDecorator:
         set_current_server(None)
 
     async def test_webhook_endpoint_with_custom_webhook_config(self):
-        """Test @webhook_endpoint with custom webhook configuration."""
+        """Test @endpoint with custom webhook configuration."""
         from jvspatial.api.context import set_current_server
 
         set_current_server(self.mock_server)
 
-        @webhook_endpoint(
+        @endpoint(
             "/webhook/custom-config",
+            webhook=True,
             hmac_secret="custom_secret",  # pragma: allowlist secret
         )
         async def custom_config_webhook(payload: dict, endpoint):
@@ -123,19 +126,18 @@ class TestWebhookEndpointDecorator:
 
         config = custom_config_webhook._jvspatial_endpoint_config
         webhook_config = config["webhook"]
-        # webhook_endpoint is just an alias for endpoint, so webhook-specific params are ignored
-        assert webhook_config is False
+        assert webhook_config is True
 
         # Clean up
         set_current_server(None)
 
     async def test_webhook_endpoint_on_walker_class(self):
-        """Test @webhook_endpoint decorator on Walker class."""
+        """Test @endpoint decorator on Walker class with webhook=True."""
         from jvspatial.api.context import set_current_server
 
         set_current_server(self.mock_server)
 
-        @webhook_endpoint("/webhook/walker")
+        @endpoint("/webhook/walker", webhook=True)
         class WebhookWalker(Walker):
             async def process_webhook(self, payload: dict, endpoint):
                 return endpoint.response(content={"status": "processed"})
@@ -145,7 +147,7 @@ class TestWebhookEndpointDecorator:
         config = WebhookWalker._jvspatial_endpoint_config
         assert config["path"] == "/webhook/walker"
         assert config["methods"] == ["GET"]
-        assert config["webhook"] is False
+        assert config["webhook"] is True
 
         # Clean up
         set_current_server(None)
@@ -157,7 +159,7 @@ class TestWebhookEndpointDecorator:
         # Ensure no server is set
         set_current_server(None)
 
-        @webhook_endpoint("/webhook/no-server")
+        @endpoint("/webhook/no-server", webhook=True)
         async def no_server_webhook(payload: dict, endpoint):
             return endpoint.response(content={"status": "ok"})
 
@@ -165,7 +167,7 @@ class TestWebhookEndpointDecorator:
         assert hasattr(no_server_webhook, "_jvspatial_endpoint_config")
         config = no_server_webhook._jvspatial_endpoint_config
         assert config["path"] == "/webhook/no-server"
-        assert config["webhook"] is not None
+        assert config["webhook"] is True
 
     async def test_webhook_endpoint_default_values(self):
         """Test webhook endpoint with default configuration values."""
@@ -173,15 +175,15 @@ class TestWebhookEndpointDecorator:
 
         set_current_server(self.mock_server)
 
-        @webhook_endpoint("/webhook/defaults")
+        @endpoint("/webhook/defaults", webhook=True)
         async def default_webhook(payload: dict, endpoint):
             return endpoint.response(content={"status": "ok"})
 
         config = default_webhook._jvspatial_endpoint_config
         webhook_config = config["webhook"]
 
-        # Check default values - webhook_endpoint is just an alias for endpoint
-        assert webhook_config is False
+        # Check default values
+        assert webhook_config is True
 
         # Clean up
         set_current_server(None)
@@ -192,8 +194,9 @@ class TestWebhookEndpointDecorator:
 
         set_current_server(self.mock_server)
 
-        @webhook_endpoint(
+        @endpoint(
             "/webhook/openapi",
+            webhook=True,
             openapi_extra={"tags": ["webhooks"], "summary": "Test webhook"},
         )
         async def openapi_webhook(payload: dict, endpoint):
@@ -215,7 +218,7 @@ class TestWebhookEndpointDecorator:
         set_current_server(self.mock_server)
 
         # Test with empty permissions and roles
-        @webhook_endpoint("/webhook/empty", permissions=[], roles=[])
+        @endpoint("/webhook/empty", webhook=True, permissions=[], roles=[])
         async def empty_webhook(payload: dict, endpoint):
             return endpoint.response(content={"status": "ok"})
 
@@ -224,26 +227,27 @@ class TestWebhookEndpointDecorator:
         assert config["roles"] == []
 
         # Test with just hmac_secret
-        @webhook_endpoint(
-            "/webhook/hmac-only", hmac_secret="test_secret"  # pragma: allowlist secret
+        @endpoint(
+            "/webhook/hmac-only",
+            webhook=True,
+            hmac_secret="test_secret",  # pragma: allowlist secret
         )
         async def hmac_only_webhook(payload: dict, endpoint):
             return endpoint.response(content={"status": "ok"})
 
         config = hmac_only_webhook._jvspatial_endpoint_config
-        # webhook_endpoint is just an alias for endpoint, so webhook-specific params are ignored
-        assert config["webhook"] is False
+        assert config["webhook"] is True
 
         # Clean up
         set_current_server(None)
 
     async def test_webhook_endpoint_with_api_key_auth(self):
-        """Test @webhook_endpoint with webhook_auth='api_key'."""
+        """Test @endpoint with webhook_auth='api_key'."""
         from jvspatial.api.context import set_current_server
 
         set_current_server(self.mock_server)
 
-        @webhook_endpoint(
+        @endpoint(
             "/webhook/api-key", methods=["POST"], webhook=True, webhook_auth="api_key"
         )
         async def api_key_webhook(payload: dict, endpoint):
@@ -258,12 +262,12 @@ class TestWebhookEndpointDecorator:
         set_current_server(None)
 
     async def test_webhook_endpoint_with_api_key_path_auth(self):
-        """Test @webhook_endpoint with webhook_auth='api_key_path'."""
+        """Test @endpoint with webhook_auth='api_key_path'."""
         from jvspatial.api.context import set_current_server
 
         set_current_server(self.mock_server)
 
-        @webhook_endpoint(
+        @endpoint(
             "/webhook/{api_key}/trigger",
             methods=["POST"],
             webhook=True,
@@ -281,12 +285,12 @@ class TestWebhookEndpointDecorator:
         set_current_server(None)
 
     async def test_webhook_endpoint_without_auth(self):
-        """Test @webhook_endpoint with webhook_auth=False (no API key auth)."""
+        """Test @endpoint with webhook_auth=False (no API key auth)."""
         from jvspatial.api.context import set_current_server
 
         set_current_server(self.mock_server)
 
-        @webhook_endpoint(
+        @endpoint(
             "/webhook/no-auth", methods=["POST"], webhook=True, webhook_auth=False
         )
         async def no_auth_webhook(payload: dict, endpoint):

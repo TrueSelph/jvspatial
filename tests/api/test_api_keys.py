@@ -237,8 +237,7 @@ class TestAPIKeyIntegration:
             db_path=f"./.test_dbs/test_db_api_keys_{test_id}",
             auth=dict(
                 auth_enabled=True,
-                api_key_auth_enabled=True,
-                jwt_auth_enabled=True,
+                api_key_management_enabled=True,
                 jwt_secret="test-secret",
             ),
         )
@@ -402,3 +401,71 @@ class TestAPIKeyIntegration:
         # This test would require testing the middleware logic
         # For now, we test the service logic
         pass
+
+    def test_api_key_authentication_with_add_route_endpoint(self, server, unique_email):
+        """Test API key authentication works with endpoints registered via add_route().
+
+        This verifies that endpoints registered via endpoint_router.add_route() with auth=True
+        properly require authentication and accept API keys.
+        """
+        from jvspatial.api.context import set_current_server
+
+        # Set server context
+        set_current_server(server)
+
+        # Create endpoint function
+        async def add_route_protected_endpoint():
+            return {"message": "add_route_authenticated"}
+
+        # Register via add_route with auth=True
+        server.endpoint_router.add_route(
+            path="/add-route-protected",
+            endpoint=add_route_protected_endpoint,
+            methods=["GET"],
+            auth=True,
+        )
+
+        # Verify endpoint config is set
+        endpoint_config = getattr(
+            add_route_protected_endpoint, "_jvspatial_endpoint_config", {}
+        )
+        assert (
+            endpoint_config.get("auth_required") is True
+        ), "add_route must set auth_required in _jvspatial_endpoint_config"
+
+        # Force app rebuild to include the new endpoint
+        server.app = None
+        client = TestClient(server.get_app())
+
+        # Register, login, and create a key
+        client.post(
+            "/auth/register",
+            json={"email": unique_email, "password": "password123"},
+        )
+        login_response = client.post(
+            "/auth/login",
+            json={"email": unique_email, "password": "password123"},
+        )
+        token = login_response.json()["access_token"]
+
+        create_response = client.post(
+            "/auth/api-keys",
+            json={"name": "Test Key"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        api_key = create_response.json()["key"]
+
+        # Test endpoint without auth - should fail
+        response = client.get("/api/add-route-protected")
+        assert (
+            response.status_code == 401
+        ), "Endpoint registered via add_route with auth=True must require authentication"
+
+        # Test endpoint with API key - should succeed
+        response = client.get(
+            "/api/add-route-protected", headers={"X-API-Key": api_key}
+        )
+        assert (
+            response.status_code == 200
+        ), "Endpoint registered via add_route should accept API key authentication"
+        assert response.json()["message"] == "add_route_authenticated"

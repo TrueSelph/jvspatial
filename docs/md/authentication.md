@@ -22,7 +22,7 @@ The jvspatial authentication system provides comprehensive user management, JWT-
 Set up authentication in minutes:
 
 ```python
-from jvspatial.api import create_server, endpoint, auth_endpoint, admin_endpoint
+from jvspatial.api import create_server, endpoint
 from jvspatial.api.auth import configure_auth, AuthenticationMiddleware
 
 # Configure authentication
@@ -46,16 +46,16 @@ server.app.add_middleware(AuthenticationMiddleware)
 async def public_info():
     return {"message": "This is public"}
 
-@auth_endpoint("/protected/data", permissions=["read_data"])
+@endpoint("/protected/data", auth=True, permissions=["read_data"])
 async def protected_data():
     return {"message": "This requires authentication and read_data permission"}
 
-@admin_endpoint("/admin/users")
+@endpoint("/admin/users", auth=True, roles=["admin"])
 async def admin_users():
     return {"message": "Admin only"}
 
 # Unified decorators work with Walker classes too
-@admin_endpoint("/admin/process")
+@endpoint("/admin/process", auth=True, roles=["admin"])
 class AdminProcessor(Walker):
     pass
 
@@ -255,7 +255,7 @@ headers = {
 # Server automatically validates and extracts user context
 from jvspatial.api.auth import get_current_user
 
-@auth_endpoint("/protected/data")
+@endpoint("/protected/data", auth=True)
 async def get_data(request: Request):
     current_user = get_current_user(request)
     return {"user": current_user.email, "data": "protected content"}
@@ -282,11 +282,18 @@ from jvspatial.api import Server
 
 server = Server(
     title="My API",
-    auth_enabled=True,
-    api_key_auth_enabled=True,  # Enable API key authentication
+    auth_enabled=True,  # Master switch - enables both JWT and API key auth
+    api_key_management_enabled=True,  # Enable API key management endpoints (/auth/api-keys)
     db_type="json"
 )
 ```
+
+**Configuration Flags:**
+- `auth_enabled`: Master switch that enables authentication middleware. When `True`:
+  - JWT authentication is always available (via `Authorization: Bearer <token>` header)
+  - API key authentication is always available (via `X-API-Key` header)
+  - Both methods appear in Swagger/OpenAPI documentation
+- `api_key_management_enabled`: Controls whether API key management endpoints (`/auth/api-keys`) are registered. Does NOT control whether API key authentication works - that's always available when `auth_enabled=True`.
 
 ### Creating API Keys
 
@@ -404,7 +411,7 @@ admin_user = await User.create(
 user.allowed_regions = ["north_america", "europe"]
 
 # In spatial queries, check region access
-@auth_endpoint("/spatial/query", permissions=["read_spatial_data"])
+@endpoint("/spatial/query", auth=True, permissions=["read_spatial_data"])
 class SpatialQuery(Walker):
     region: str = EndpointField(description="Target region")
 
@@ -425,7 +432,7 @@ class SpatialQuery(Walker):
 user.allowed_node_types = ["City", "Highway", "POI"]
 
 # Validate node type access in walkers
-@auth_endpoint("/nodes/process")
+@endpoint("/nodes/process", auth=True)
 class ProcessNodes(Walker):
     @on_visit(Node)
     async def process(self, here: Node):
@@ -442,7 +449,7 @@ class ProcessNodes(Walker):
 
 ```python
 # Limit graph traversal depth for users
-@auth_endpoint("/graph/traverse")
+@endpoint("/graph/traverse", auth=True)
 class GraphTraversal(Walker):
     max_depth: int = EndpointField(default=5)
 
@@ -471,34 +478,34 @@ class PublicSearch(Walker):
     pass
 
 # 2. Authenticated endpoints (login required, auto-detects functions/walkers)
-@auth_endpoint("/user/profile")
+@endpoint("/user/profile", auth=True)
 async def user_profile():
     return {"message": "Must be logged in"}
 
-@auth_endpoint("/user/data")
+@endpoint("/user/data", auth=True)
 class UserData(Walker):
     pass
 
 # 3. Permission-based endpoints (auto-detects functions/walkers)
-@auth_endpoint("/reports/generate", permissions=["generate_reports"])
+@endpoint("/reports/generate", auth=True, permissions=["generate_reports"])
 async def generate_report():
     return {"message": "Must have generate_reports permission"}
 
-@auth_endpoint("/spatial/analysis", permissions=["analyze_spatial_data"])
+@endpoint("/spatial/analysis", auth=True, permissions=["analyze_spatial_data"])
 class SpatialAnalysis(Walker):
     pass
 
 # 4. Role-based endpoints (auto-detects functions/walkers)
-@auth_endpoint("/admin/settings", roles=["admin"])
+@endpoint("/admin/settings", auth=True, roles=["admin"])
 async def admin_settings():
     return {"message": "Must be admin"}
 
-# 5. Admin-only endpoints (shortcut, auto-detects functions/walkers)
-@admin_endpoint("/admin/users")
+# 5. Admin-only endpoints (auto-detects functions/walkers)
+@endpoint("/admin/users", auth=True, roles=["admin"])
 async def manage_users():
     return {"message": "Admin access required"}
 
-@admin_endpoint("/admin/process")
+@endpoint("/admin/process", auth=True, roles=["admin"])
 class AdminProcessor(Walker):
     pass
 ```
@@ -507,8 +514,9 @@ class AdminProcessor(Walker):
 
 ```python
 # Require specific permissions AND roles
-@auth_endpoint(
+@endpoint(
     "/advanced/operation",
+    auth=True,
     permissions=["advanced_operations", "write_data"],
     roles=["analyst", "admin"]
 )
@@ -522,7 +530,7 @@ async def advanced_operation():
 ```python
 from jvspatial.api.auth import get_current_user
 
-@auth_endpoint("/user/dashboard")
+@endpoint("/user/dashboard", auth=True)
 async def user_dashboard(request: Request):
     current_user = get_current_user(request)
 
@@ -534,7 +542,7 @@ async def user_dashboard(request: Request):
         }
     }
 
-@auth_endpoint("/user/spatial-data")
+@endpoint("/user/spatial-data", auth=True)
 class UserSpatialData(Walker):
     @on_visit(Node)
     async def process(self, here: Node):
@@ -712,27 +720,25 @@ All authentication endpoints are automatically registered:
 ### Authentication Decorators
 
 ```python
-# Import decorators
-from jvspatial.api.auth import (
-    auth_endpoint,          # Unified authenticated endpoint (auto-detects functions/walkers)
-    admin_endpoint,         # Unified admin endpoint (auto-detects functions/walkers)
-    webhook_endpoint        # Unified webhook endpoint (auto-detects functions/walkers)
-)
+# Import decorator
+from jvspatial.api import endpoint
 
 # Usage patterns - work with both functions and Walker classes
-@auth_endpoint("/path", methods=["GET"], permissions=["perm"], roles=["role"])
+# Authenticated endpoint
+@endpoint("/path", auth=True, methods=["GET"], permissions=["perm"], roles=["role"])
 async def auth_function():
     pass
 
-@auth_endpoint("/path", permissions=["perm"], roles=["role"])
+@endpoint("/path", auth=True, permissions=["perm"], roles=["role"])
 class AuthWalker(Walker):
     pass
 
-@admin_endpoint("/admin/path", methods=["GET"])
+# Admin-only endpoint
+@endpoint("/admin/path", auth=True, roles=["admin"], methods=["GET"])
 async def admin_function():
     pass
 
-@admin_endpoint("/admin/path")
+@endpoint("/admin/path", auth=True, roles=["admin"])
 class AdminWalker(Walker):
     pass
 ```
@@ -774,7 +780,7 @@ async def get_data():
     return {"data": "anyone can access"}
 
 # Protected endpoint (requires authentication and permissions)
-@auth_endpoint("/data", permissions=["read_data"])
+@endpoint("/data", auth=True, permissions=["read_data"])
 async def get_data():
     return {"data": "authenticated users with read_data permission"}
 ```
@@ -788,10 +794,10 @@ configure_auth(jwt_secret_key="your-secret-key")
 # Step 2: Add middleware
 server.app.add_middleware(AuthenticationMiddleware)
 
-# Step 3: Update endpoint decorators as needed
-# Public endpoints: Keep @endpoint (works with both functions and walkers)
-# Protected endpoints: Change to @auth_endpoint (works with both functions and walkers)
-# Admin endpoints: Change to @admin_endpoint (works with both functions and walkers)
+# Step 3: Use endpoint decorators with auth parameters
+# Public endpoints: @endpoint("/path") - no auth required
+# Protected endpoints: @endpoint("/path", auth=True) - requires authentication
+# Admin endpoints: @endpoint("/path", auth=True, roles=["admin"]) - requires admin role
 ```
 
 ## See Also

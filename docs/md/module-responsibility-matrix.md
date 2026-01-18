@@ -55,7 +55,7 @@ This document provides a clear matrix of module responsibilities, helping develo
 
 | Subdirectory | Purpose | Key Components |
 |--------------|---------|----------------|
-| `decorators/` | Route & field decorators | `@endpoint`, `@auth_endpoint`, `endpoint_field` |
+| `decorators/` | Route & field decorators | `@endpoint`, `endpoint_field` |
 | `endpoints/` | Endpoint management | `EndpointRouter`, `ResponseHelper`, `Registry` |
 | `integrations/` | External services | Webhooks, scheduler, storage |
 | `middleware/` | Request processing | `MiddlewareManager`, `ErrorMiddleware` |
@@ -230,7 +230,7 @@ from jvspatial.core import GraphContext, on_visit, on_exit
 ### **API**
 ```python
 from jvspatial.api import Server, ServerConfig
-from jvspatial.api.decorators import endpoint, auth_endpoint, endpoint_field
+from jvspatial.api.decorators import endpoint, endpoint_field
 ```
 
 ### **Database**

@@ -4,9 +4,10 @@ This module provides logical configuration groups that compose into ServerConfig
 improving organization and maintainability.
 """
 
+import warnings
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class DatabaseConfig(BaseModel):
@@ -54,19 +55,45 @@ class CORSConfig(BaseModel):
 
 
 class AuthConfig(BaseModel):
-    """Authentication configuration group."""
+    """Authentication configuration group.
+
+    Authentication behavior:
+    - auth_enabled: Master switch for authentication middleware. When True:
+      * JWT authentication is always available (via Authorization: Bearer header)
+      * API key authentication is always available (via X-API-Key header)
+      * Both appear in OpenAPI/Swagger documentation
+    - api_key_management_enabled: Controls whether API key management endpoints
+      (/auth/api-keys) are registered. Does NOT control whether API key auth works.
+    - jwt_auth_enabled: DEPRECATED - JWT is always available when auth_enabled=True
+    - session_auth_enabled: DEPRECATED - Session auth not fully implemented
+    """
 
     auth_enabled: bool = Field(
-        default=False, description="Enable authentication middleware"
+        default=False, description="Enable authentication middleware (JWT + API key)"
     )
+
+    # API key management endpoint control
+    api_key_management_enabled: bool = Field(
+        default=True,
+        description="Enable API key management endpoints (/auth/api-keys). "
+        "Does not affect API key authentication availability.",
+    )
+
+    # Deprecated flags (kept for backward compatibility)
     jwt_auth_enabled: bool = Field(
-        default=False, description="Enable JWT authentication"
+        default=False,
+        description="DEPRECATED: JWT is always available when auth_enabled=True. "
+        "This flag has no effect.",
     )
     api_key_auth_enabled: bool = Field(
-        default=False, description="Enable API key authentication"
+        default=False,
+        description="DEPRECATED: Use api_key_management_enabled instead. "
+        "API key authentication is always available when auth_enabled=True.",
     )
     session_auth_enabled: bool = Field(
-        default=False, description="Enable session authentication"
+        default=False,
+        description="DEPRECATED: Session authentication not fully implemented. "
+        "This flag has no effect.",
     )
 
     # JWT Configuration
@@ -109,6 +136,41 @@ class AuthConfig(BaseModel):
             "/auth/register",
         ]
     )
+
+    @model_validator(mode="after")
+    def _handle_deprecated_flags(self) -> "AuthConfig":
+        """Handle deprecated flags for backward compatibility."""
+        # Map api_key_auth_enabled to api_key_management_enabled
+        if self.api_key_auth_enabled:
+            warnings.warn(
+                "api_key_auth_enabled is deprecated. "
+                "Use api_key_management_enabled instead. "
+                "API key authentication is always available when auth_enabled=True.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            # Set new flag if old flag is True
+            self.api_key_management_enabled = True
+
+        # Warn about deprecated jwt_auth_enabled
+        if self.jwt_auth_enabled:
+            warnings.warn(
+                "jwt_auth_enabled is deprecated and has no effect. "
+                "JWT authentication is always available when auth_enabled=True.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        # Warn about deprecated session_auth_enabled
+        if self.session_auth_enabled:
+            warnings.warn(
+                "session_auth_enabled is deprecated and has no effect. "
+                "Session authentication is not fully implemented.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        return self
 
 
 class RateLimitConfig(BaseModel):

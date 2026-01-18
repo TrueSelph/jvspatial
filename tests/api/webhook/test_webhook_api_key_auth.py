@@ -24,8 +24,7 @@ class TestWebhookAPIKeyAuthentication:
             db_path=f"./.test_dbs/test_db_webhook_{test_id}",
             auth=dict(
                 auth_enabled=True,
-                api_key_auth_enabled=True,
-                jwt_auth_enabled=True,
+                api_key_management_enabled=True,
                 jwt_secret="test-secret",
             ),
             webhook=dict(

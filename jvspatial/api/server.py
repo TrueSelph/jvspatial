@@ -180,6 +180,17 @@ class Server:
         """Configure authentication middleware and register auth endpoints if enabled."""
         from jvspatial.api.components.auth_configurator import AuthConfigurator
 
+        # Validate configuration
+        if (
+            self.config.auth.auth_enabled
+            and self.config.auth.jwt_secret
+            == "your-secret-key"  # pragma: allowlist secret
+        ):
+            # Warn if using default JWT secret in production
+            self._logger.warning(
+                "⚠️  Using default JWT secret. Set jwt_secret in production!"
+            )
+
         auth_configurator = AuthConfigurator(self.config, self._logger)
         self._auth_config = auth_configurator.configure()
         self._auth_router = auth_configurator.auth_router

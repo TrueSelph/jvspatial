@@ -400,6 +400,7 @@ class AppBuilder:
                 if not hasattr(wrapped_func, "_jvspatial_endpoint_config"):
                     wrapped_func._jvspatial_endpoint_config = {}  # type: ignore[attr-defined]
                 wrapped_func._jvspatial_endpoint_config["tags"] = tags  # type: ignore[attr-defined]
+                wrapped_func._jvspatial_endpoint_config["auth_required"] = True  # type: ignore[attr-defined]
 
                 # Register with endpoint registry using full path
                 # Check if already registered to avoid duplicates

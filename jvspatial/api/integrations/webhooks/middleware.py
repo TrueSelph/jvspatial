@@ -671,7 +671,7 @@ def add_webhook_middleware(
     Example:
         ```python
         from fastapi import FastAPI
-        from jvspatial.api.webhook.middleware import add_webhook_middleware
+        from jvspatial.api.integrations.webhooks.middleware import add_webhook_middleware
 
         app = FastAPI()
         add_webhook_middleware(app)

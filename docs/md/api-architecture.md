@@ -154,26 +154,25 @@ class AdminProcessor(Walker):
 
 ### 5. Webhook System
 
-[`webhook/`](../../jvspatial/api/webhook/) provides webhook endpoint support:
+[`integrations/webhooks/`](../../jvspatial/api/integrations/webhooks/) provides webhook endpoint support:
 
-**[`webhook/endpoint.py`](../../jvspatial/api/webhook/endpoint.py:1)** - Webhook endpoint helpers:
-- [`create_webhook_wrapper()`](../../jvspatial/api/webhook/endpoint.py:155) - Wrap function endpoints
-- [`create_webhook_walker_wrapper()`](../../jvspatial/api/webhook/endpoint.py:237) - Wrap walker endpoints
-- [`inject_webhook_payload()`](../../jvspatial/api/webhook/endpoint.py:54) - Automatic payload injection
-- [`WebhookEndpointResponseHelper`](../../jvspatial/api/webhook/endpoint.py:17) - Webhook-specific responses
+**[`integrations/webhooks/helpers.py`](../../jvspatial/api/integrations/webhooks/helpers.py:1)** - Webhook endpoint helpers:
+- [`create_webhook_endpoint_helper()`](../../jvspatial/api/integrations/webhooks/helpers.py:24) - Create webhook endpoint helper
+- Webhook payload injection
+- Webhook response handling
 
-**[`webhook/middleware.py`](../../jvspatial/api/webhook/middleware.py:1)** - Request processing:
+**[`integrations/webhooks/middleware.py`](../../jvspatial/api/integrations/webhooks/middleware.py:1)** - Request processing:
 - HMAC signature verification
 - Payload parsing (JSON/XML/binary)
 - Idempotency key handling
 - Path-based authentication token extraction
 
-**[`webhook/entities.py`](../../jvspatial/api/webhook/entities.py:1)** - Webhook data models:
+**[`integrations/webhooks/models.py`](../../jvspatial/api/integrations/webhooks/models.py:1)** - Webhook data models:
 - Webhook request tracking
 - Idempotency management
 - Webhook configuration storage
 
-**[`webhook/utils.py`](../../jvspatial/api/webhook/utils.py:1)** - Utility functions:
+**[`integrations/webhooks/utils.py`](../../jvspatial/api/integrations/webhooks/utils.py:1)** - Utility functions:
 - HMAC signature generation and verification
 - Content type detection
 - Payload parsing helpers
@@ -434,7 +433,7 @@ async def get_item(item_id: str, endpoint):
 
 ```python
 # ✅ Good - Always return 200 for webhooks
-@webhook_endpoint("/webhook/github")
+@endpoint("/webhook/github", webhook=True)
 async def github_webhook(payload: dict, endpoint):
     try:
         # Process webhook

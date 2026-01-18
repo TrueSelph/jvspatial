@@ -61,14 +61,14 @@ class TestServerConfigGroups:
         config.auth.jwt_secret = "secret-key"
         config.auth.jwt_algorithm = "HS256"
         config.auth.jwt_expire_minutes = 60
-        config.auth.api_key_auth_enabled = True
+        config.auth.api_key_management_enabled = True
         config.auth.api_key_prefix = "sk_test_"
 
         assert config.auth.auth_enabled is True
         assert config.auth.jwt_secret == "secret-key"
         assert config.auth.jwt_algorithm == "HS256"
         assert config.auth.jwt_expire_minutes == 60
-        assert config.auth.api_key_auth_enabled is True
+        assert config.auth.api_key_management_enabled is True
         assert config.auth.api_key_prefix == "sk_test_"
 
     def test_config_database_group(self):

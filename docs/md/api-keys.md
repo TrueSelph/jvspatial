@@ -29,12 +29,18 @@ from jvspatial.api import Server
 
 server = Server(
     title="My API",
-    auth_enabled=True,
-    api_key_auth_enabled=True,  # Enable API key authentication
+    auth_enabled=True,  # Master switch - enables both JWT and API key auth
+    api_key_management_enabled=True,  # Enable API key management endpoints (/auth/api-keys)
     api_key_prefix="sk_",  # Optional: custom prefix
     db_type="json"
 )
 ```
+
+**Important Notes:**
+- `auth_enabled=True` automatically enables both JWT and API key authentication
+- API key authentication is always available when `auth_enabled=True` (middleware checks for X-API-Key header)
+- `api_key_management_enabled` only controls whether the `/auth/api-keys` endpoints are registered
+- Both authentication methods appear in Swagger/OpenAPI docs when `auth_enabled=True`
 
 ## Creating API Keys
 

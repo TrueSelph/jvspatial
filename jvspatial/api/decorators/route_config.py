@@ -241,7 +241,7 @@ class EndpointDecorator:
                     func_wrapper._required_roles = config.roles  # type: ignore[attr-defined]
 
                 # Note: Standard auth endpoints are automatically available
-                # when using @auth_endpoint decorators through the existing
+                # when using @endpoint(..., auth=True) decorators through the existing
                 # auth system in jvspatial.api.auth.endpoints
 
                 # Register with endpoint registry and router

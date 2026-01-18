@@ -122,9 +122,19 @@ class BaseRouter:
             if source_obj is not None
             else None
         )
-        auth_required = kwargs.get("auth", False) or (
-            endpoint_config and endpoint_config.get("auth_required", False)
-        )
+        # Determine auth_required: prioritize explicit kwargs, then endpoint config, then source config
+        if "auth" in kwargs:
+            # Explicit auth parameter takes precedence
+            auth_required = bool(kwargs.get("auth", False))
+        elif endpoint_config and "auth_required" in endpoint_config:
+            # Use value from endpoint config if present
+            auth_required = bool(endpoint_config.get("auth_required", False))
+        elif source_config and "auth_required" in source_config:
+            # Fall back to source config if present
+            auth_required = bool(source_config.get("auth_required", False))
+        else:
+            # Default to False if nothing is specified
+            auth_required = False
 
         # Handle response schema: read from endpoint config, else fallback to source object config (e.g., walker class)
         response_schema = None
@@ -203,21 +213,22 @@ class BaseRouter:
         if response_schema:
             fastapi_kwargs["response_model"] = response_schema
 
+        # Extract permissions and roles for both OpenAPI and endpoint config
+        permissions = (
+            kwargs.get("permissions", [])
+            or (endpoint_config and endpoint_config.get("permissions", []))
+            or []
+        )
+        roles = (
+            kwargs.get("roles", [])
+            or (endpoint_config and endpoint_config.get("roles", []))
+            or []
+        )
+
         # Add security requirements for OpenAPI if auth is required
         if auth_required:
             from jvspatial.api.auth.openapi_config import (
                 get_endpoint_security_requirements,
-            )
-
-            permissions = (
-                kwargs.get("permissions", [])
-                or (endpoint_config and endpoint_config.get("permissions", []))
-                or []
-            )
-            roles = (
-                kwargs.get("roles", [])
-                or (endpoint_config and endpoint_config.get("roles", []))
-                or []
             )
 
             # Add security to the route
@@ -235,6 +246,15 @@ class BaseRouter:
             )
             fastapi_kwargs["openapi_extra"] = fastapi_kwargs.get("openapi_extra", {})
             fastapi_kwargs["openapi_extra"]["security"] = security_requirements
+
+        # Ensure endpoint config has auth_required set for middleware to read
+        if not hasattr(endpoint, "_jvspatial_endpoint_config"):
+            endpoint._jvspatial_endpoint_config = {}  # type: ignore[attr-defined]
+        endpoint._jvspatial_endpoint_config["auth_required"] = auth_required  # type: ignore[attr-defined]
+        if permissions:
+            endpoint._jvspatial_endpoint_config["permissions"] = permissions  # type: ignore[attr-defined]
+        if roles:
+            endpoint._jvspatial_endpoint_config["roles"] = roles  # type: ignore[attr-defined]
 
         self.router.add_api_route(
             path=path,

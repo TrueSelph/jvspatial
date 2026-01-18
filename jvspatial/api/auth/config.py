@@ -46,6 +46,11 @@ class AuthConfig(BaseModel):
     api_key_header: str = Field(
         default="x-api-key", description="Header name for API key"
     )
+    api_key_management_enabled: bool = Field(
+        default=True,
+        description="Enable API key management endpoints (/auth/api-keys). "
+        "Does not affect API key authentication availability.",
+    )
 
     # Session Configuration
     session_cookie_name: str = Field(

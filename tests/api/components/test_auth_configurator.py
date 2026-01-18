@@ -21,7 +21,7 @@ class TestAuthConfigurator:
                 jwt_secret="test-secret",
                 jwt_algorithm="HS256",
                 jwt_expire_minutes=30,
-                api_key_auth_enabled=True,
+                api_key_management_enabled=True,
                 api_key_prefix="sk_test_",
             )
         )
@@ -97,7 +97,7 @@ class TestAuthConfigurator:
         config = ServerConfig(
             auth=dict(
                 auth_enabled=True,
-                api_key_auth_enabled=False,
+                api_key_management_enabled=False,
             )
         )
         configurator = AuthConfigurator(config)
@@ -119,3 +119,41 @@ class TestAuthConfigurator:
         assert result1 is result2
         # Should not register endpoints twice
         assert configurator._auth_endpoints_registered is True
+
+    def test_backward_compatibility_old_flag(self):
+        """Test backward compatibility with deprecated api_key_auth_enabled flag."""
+        import warnings
+
+        # Should warn about deprecation when config is created
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+
+            # Test that old flag still works - create config inside warning context
+            config = ServerConfig(
+                auth=dict(
+                    auth_enabled=True,
+                    api_key_auth_enabled=True,  # Old deprecated flag
+                )
+            )
+
+            configurator = AuthConfigurator(config)
+            configurator.configure()
+
+            # Should have deprecation warning
+            deprecation_warnings = [
+                warning
+                for warning in w
+                if issubclass(warning.category, DeprecationWarning)
+            ]
+            assert (
+                len(deprecation_warnings) > 0
+            ), f"No deprecation warnings found. All warnings: {[str(warning.message) for warning in w]}"
+            assert any(
+                "api_key_auth_enabled" in str(warning.message)
+                for warning in deprecation_warnings
+            )
+
+        # Should still register API key endpoints
+        router = configurator.auth_router
+        routes = [route.path for route in router.routes if hasattr(route, "path")]
+        assert any("api-keys" in path for path in routes)

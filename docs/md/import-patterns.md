@@ -54,13 +54,10 @@ from jvspatial.api.server import Server  # Too specific
 # ✅ Best: Import from api.decorators
 from jvspatial.api.decorators import (
     endpoint,
-    auth_endpoint,
-    webhook_endpoint,
-    admin_endpoint,
 )
 
 # ✅ Also good: Import from main api
-from jvspatial.api import endpoint, auth_endpoint
+from jvspatial.api import endpoint
 
 # ❌ Avoid: Import from internal modules
 from jvspatial.api.decorators.route import endpoint  # Too specific
@@ -306,7 +303,6 @@ from jvspatial.api import (
     Server,
     ServerConfig,
     endpoint,
-    auth_endpoint,
 )
 
 # JVspatial - Database

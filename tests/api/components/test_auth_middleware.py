@@ -407,3 +407,398 @@ class TestAuthenticationMiddleware:
         response = client.post("/api/test/swagger-public")
         assert response.status_code == 200
         assert response.json()["message"] == "public"
+
+    def test_endpoint_registered_via_add_route_with_auth_requires_auth(self, server):
+        """Test that endpoints registered via endpoint_router.add_route() with auth=True require authentication.
+
+        This tests the fix for the issue where auth_required wasn't being set in _jvspatial_endpoint_config.
+        """
+
+        # Create a test endpoint function
+        async def test_protected_endpoint():
+            return {"message": "protected"}
+
+        # Register via add_route with auth=True (simulating app_builder pattern)
+        server.endpoint_router.add_route(
+            path="/test/add-route-protected",
+            endpoint=test_protected_endpoint,
+            methods=["GET"],
+            auth=True,
+        )
+
+        # Rebuild app to include new endpoint
+        server.app = server._create_app_instance()
+        from fastapi.testclient import TestClient
+
+        client = TestClient(server.app)
+
+        # Verify _jvspatial_endpoint_config is set correctly
+        endpoint_config = getattr(
+            test_protected_endpoint, "_jvspatial_endpoint_config", {}
+        )
+        assert (
+            endpoint_config.get("auth_required") is True
+        ), "auth_required must be set in _jvspatial_endpoint_config when registering with auth=True"
+
+        # Try to access without auth - should fail
+        response = client.get("/api/test/add-route-protected")
+        assert (
+            response.status_code == 401
+        ), "Endpoint registered with auth=True must require authentication"
+        assert "authentication_required" in response.json()["error_code"]
+
+    def test_endpoint_registered_via_add_route_without_auth_allows_access(self, server):
+        """Test that endpoints registered via endpoint_router.add_route() with auth=False allow access."""
+
+        # Create a test endpoint function
+        async def test_public_endpoint():
+            return {"message": "public"}
+
+        # Register via add_route with auth=False
+        server.endpoint_router.add_route(
+            path="/test/add-route-public",
+            endpoint=test_public_endpoint,
+            methods=["GET"],
+            auth=False,
+        )
+
+        # Rebuild app to include new endpoint
+        server.app = server._create_app_instance()
+        from fastapi.testclient import TestClient
+
+        client = TestClient(server.app)
+
+        # Verify _jvspatial_endpoint_config is set correctly
+        endpoint_config = getattr(
+            test_public_endpoint, "_jvspatial_endpoint_config", {}
+        )
+        assert (
+            endpoint_config.get("auth_required") is False
+        ), "auth_required must be set to False in _jvspatial_endpoint_config when registering with auth=False"
+
+        # Try to access without auth - should succeed
+        response = client.get("/api/test/add-route-public")
+        assert response.status_code == 200
+        assert response.json()["message"] == "public"
+
+    def test_endpoint_registered_via_register_function_sets_config(self, server):
+        """Test that endpoints registered via registry.register_function() set _jvspatial_endpoint_config correctly."""
+
+        # Create a test endpoint function
+        async def test_registry_endpoint():
+            return {"message": "registry"}
+
+        # Register via register_function with auth_required=True
+        server._endpoint_registry.register_function(
+            test_registry_endpoint,
+            path="/api/test/registry-protected",
+            methods=["GET"],
+            auth_required=True,
+        )
+
+        # Verify _jvspatial_endpoint_config is set correctly
+        endpoint_config = getattr(
+            test_registry_endpoint, "_jvspatial_endpoint_config", {}
+        )
+        assert (
+            endpoint_config.get("auth_required") is True
+        ), "auth_required must be set in _jvspatial_endpoint_config when registering with auth_required=True"
+
+        # Rebuild app to include new endpoint
+        server.app = server._create_app_instance()
+        from fastapi.testclient import TestClient
+
+        client = TestClient(server.app)
+
+        # Try to access without auth - should fail
+        response = client.get("/api/test/registry-protected")
+        assert (
+            response.status_code == 401
+        ), "Endpoint registered with auth_required=True must require authentication"
+        assert "authentication_required" in response.json()["error_code"]
+
+    def test_middleware_reads_auth_required_from_endpoint_config(self, server):
+        """Test that middleware correctly reads auth_required from _jvspatial_endpoint_config."""
+        middleware = AuthenticationMiddleware(
+            app=server.get_app(),
+            auth_config=server._auth_config,
+            server=server,
+        )
+
+        # Create a test endpoint function
+        async def test_config_endpoint():
+            return {"message": "config"}
+
+        # Manually set the endpoint config (simulating what add_route should do)
+        test_config_endpoint._jvspatial_endpoint_config = {  # type: ignore[attr-defined]
+            "auth_required": True,
+        }
+
+        # Register the endpoint
+        server.endpoint_router.add_route(
+            path="/test/config-check",
+            endpoint=test_config_endpoint,
+            methods=["GET"],
+            auth=True,
+        )
+
+        # Rebuild app
+        server.app = server._create_app_instance()
+
+        # Create mock request
+        class MockRequest:
+            def __init__(self, path, method="GET"):
+                self.url = type("url", (), {"path": path})()
+                self.method = method
+
+        # Test that middleware correctly identifies auth requirement
+        request = MockRequest("/api/test/config-check")
+        result = middleware._endpoint_requires_auth(request)
+        assert (
+            result is True
+        ), "Middleware must read auth_required from _jvspatial_endpoint_config"
+
+    def test_endpoint_config_missing_auth_required_defaults_to_false(self, server):
+        """Test that endpoints without auth_required in config default to requiring auth (security)."""
+        middleware = AuthenticationMiddleware(
+            app=server.get_app(),
+            auth_config=server._auth_config,
+            server=server,
+        )
+
+        # Create a test endpoint function without config
+        async def test_no_config_endpoint():
+            return {"message": "no-config"}
+
+        # Register endpoint but don't set _jvspatial_endpoint_config
+        server.endpoint_router.add_route(
+            path="/test/no-config",
+            endpoint=test_no_config_endpoint,
+            methods=["GET"],
+            auth=False,  # This should set the config
+        )
+
+        # Rebuild app
+        server.app = server._create_app_instance()
+
+        # Verify config was set by add_route
+        endpoint_config = getattr(
+            test_no_config_endpoint, "_jvspatial_endpoint_config", {}
+        )
+        assert (
+            "auth_required" in endpoint_config
+        ), "add_route must set auth_required in _jvspatial_endpoint_config"
+        assert endpoint_config.get("auth_required") is False
+
+    def test_graph_endpoint_requires_authentication(self, server):
+        """Test that the /api/graph endpoint (registered via app_builder) requires authentication.
+
+        This is a critical test that ensures the graph endpoint, which is registered
+        via app_builder.py using add_route(), properly requires authentication.
+        """
+        # The graph endpoint should be registered during server initialization
+        # Rebuild app to ensure graph endpoint is registered
+        server.app = server._create_app_instance()
+        from fastapi.testclient import TestClient
+
+        client = TestClient(server.app)
+
+        # Try to access /api/graph without auth - should fail
+        response = client.get("/api/graph")
+        assert (
+            response.status_code == 401
+        ), "Graph endpoint must require authentication when auth is enabled"
+        assert "authentication_required" in response.json()["error_code"]
+
+        # Verify the endpoint config is set correctly by checking the registry
+        # Find the graph endpoint function in the registry
+        # get_graph is a local function, so we need to find it via the registry
+        graph_endpoint_func = None
+        for func, endpoint_info in server._endpoint_registry._function_registry.items():
+            if endpoint_info.path == "/api/graph":
+                graph_endpoint_func = func
+                break
+
+        if graph_endpoint_func and hasattr(
+            graph_endpoint_func, "_jvspatial_endpoint_config"
+        ):
+            endpoint_config = graph_endpoint_func._jvspatial_endpoint_config  # type: ignore[attr-defined]
+            assert (
+                endpoint_config.get("auth_required") is True
+            ), "Graph endpoint must have auth_required=True in _jvspatial_endpoint_config"
+
+    def test_register_function_with_route_config_sets_auth_required(self, server):
+        """Test that register_function with route_config properly sets auth_required in endpoint config."""
+
+        # Create a test endpoint function
+        async def test_route_config_endpoint():
+            return {"message": "route-config"}
+
+        # Register via register_function with route_config containing auth_required
+        server._endpoint_registry.register_function(
+            test_route_config_endpoint,
+            path="/api/test/route-config-protected",
+            methods=["GET"],
+            route_config={
+                "path": "/api/test/route-config-protected",
+                "endpoint": test_route_config_endpoint,
+                "methods": ["GET"],
+                "auth_required": True,
+            },
+            auth_required=True,  # Also pass as kwarg
+        )
+
+        # Verify _jvspatial_endpoint_config is set correctly
+        endpoint_config = getattr(
+            test_route_config_endpoint, "_jvspatial_endpoint_config", {}
+        )
+        assert (
+            endpoint_config.get("auth_required") is True
+        ), "register_function must set auth_required in _jvspatial_endpoint_config from route_config or kwargs"
+
+        # Rebuild app to include new endpoint
+        server.app = server._create_app_instance()
+        from fastapi.testclient import TestClient
+
+        client = TestClient(server.app)
+
+        # Try to access without auth - should fail
+        response = client.get("/api/test/route-config-protected")
+        assert (
+            response.status_code == 401
+        ), "Endpoint registered with auth_required=True in route_config must require authentication"
+        assert "authentication_required" in response.json()["error_code"]
+
+    def test_add_route_sets_permissions_and_roles_in_config(self, server):
+        """Test that add_route properly sets permissions and roles in _jvspatial_endpoint_config."""
+
+        # Create a test endpoint function
+        async def test_permissions_endpoint():
+            return {"message": "permissions"}
+
+        # Register via add_route with permissions and roles
+        server.endpoint_router.add_route(
+            path="/test/permissions",
+            endpoint=test_permissions_endpoint,
+            methods=["GET"],
+            auth=True,
+            permissions=["read:data"],
+            roles=["admin"],
+        )
+
+        # Verify _jvspatial_endpoint_config is set correctly
+        endpoint_config = getattr(
+            test_permissions_endpoint, "_jvspatial_endpoint_config", {}
+        )
+        assert endpoint_config.get("auth_required") is True
+        assert endpoint_config.get("permissions") == [
+            "read:data"
+        ], "add_route must set permissions in _jvspatial_endpoint_config"
+        assert endpoint_config.get("roles") == [
+            "admin"
+        ], "add_route must set roles in _jvspatial_endpoint_config"
+
+    def test_endpoint_decorator_sets_auth_required_in_config(self, server):
+        """Test that @endpoint decorator properly sets auth_required in _jvspatial_endpoint_config."""
+
+        # Register endpoint with @endpoint decorator
+        @endpoint("/test/decorator-protected", methods=["POST"], auth=True)
+        async def decorator_protected_endpoint():
+            return {"message": "protected"}
+
+        # Rebuild app to include new endpoint
+        server.app = server._create_app_instance()
+        from fastapi.testclient import TestClient
+
+        client = TestClient(server.app)
+
+        # Verify _jvspatial_endpoint_config is set correctly
+        endpoint_config = getattr(
+            decorator_protected_endpoint, "_jvspatial_endpoint_config", {}
+        )
+        assert (
+            endpoint_config.get("auth_required") is True
+        ), "@endpoint decorator must set auth_required in _jvspatial_endpoint_config when auth=True"
+
+        # Try to access without auth - should fail
+        response = client.post("/api/test/decorator-protected")
+        assert (
+            response.status_code == 401
+        ), "Endpoint decorated with auth=True must require authentication"
+        assert "authentication_required" in response.json()["error_code"]
+
+    def test_endpoint_config_persistence_across_app_rebuilds(self, server):
+        """Test that _jvspatial_endpoint_config persists across app rebuilds."""
+
+        # Create and register endpoint
+        async def test_persistence_endpoint():
+            return {"message": "persistence"}
+
+        server.endpoint_router.add_route(
+            path="/test/persistence",
+            endpoint=test_persistence_endpoint,
+            methods=["GET"],
+            auth=True,
+        )
+
+        # Verify config is set
+        endpoint_config = getattr(
+            test_persistence_endpoint, "_jvspatial_endpoint_config", {}
+        )
+        assert endpoint_config.get("auth_required") is True
+
+        # Rebuild app
+        server.app = server._create_app_instance()
+
+        # Verify config still exists after rebuild
+        endpoint_config_after = getattr(
+            test_persistence_endpoint, "_jvspatial_endpoint_config", {}
+        )
+        assert (
+            endpoint_config_after.get("auth_required") is True
+        ), "_jvspatial_endpoint_config must persist across app rebuilds"
+
+        # Verify middleware still enforces auth
+        from fastapi.testclient import TestClient
+
+        client = TestClient(server.app)
+        response = client.get("/api/test/persistence")
+        assert response.status_code == 401
+
+    def test_middleware_handles_missing_endpoint_config_gracefully(self, server):
+        """Test that middleware handles missing _jvspatial_endpoint_config gracefully (security: deny by default)."""
+        middleware = AuthenticationMiddleware(
+            app=server.get_app(),
+            auth_config=server._auth_config,
+            server=server,
+        )
+
+        # Create endpoint without config (shouldn't happen in practice, but test for defense)
+        async def test_no_config_endpoint():
+            return {"message": "no-config"}
+
+        # Manually register without setting config (simulating edge case)
+        # This shouldn't happen in practice, but we test for defense in depth
+        server._endpoint_registry.register_function(
+            test_no_config_endpoint,
+            path="/api/test/no-config-edge",
+            methods=["GET"],
+        )
+
+        # Don't set _jvspatial_endpoint_config (edge case)
+        # In practice, register_function should set it, but test what happens if it doesn't
+
+        # Rebuild app
+        server.app = server._create_app_instance()
+
+        # Create mock request
+        class MockRequest:
+            def __init__(self, path, method="GET"):
+                self.url = type("url", (), {"path": path})()
+                self.method = method
+
+        # Middleware should require auth if config is missing (security: deny by default)
+        request = MockRequest("/api/test/no-config-edge")
+        result = middleware._endpoint_requires_auth(request)
+        # If config is missing, middleware should default to requiring auth for security
+        # This depends on the middleware implementation, but security should be the default

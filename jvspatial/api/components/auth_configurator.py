@@ -74,6 +74,12 @@ class AuthConfigurator:
         auth_config_kwargs["jwt_expire_minutes"] = self.config.auth.jwt_expire_minutes
         if self.config.auth.api_key_header is not None:
             auth_config_kwargs["api_key_header"] = self.config.auth.api_key_header
+        # Include api_key_management_enabled (supports both new and old flag names)
+        api_key_mgmt_enabled = getattr(
+            self.config.auth, "api_key_management_enabled", None
+        ) or getattr(self.config.auth, "api_key_auth_enabled", True)
+        if api_key_mgmt_enabled is not None:
+            auth_config_kwargs["api_key_management_enabled"] = api_key_mgmt_enabled
         if self.config.auth.session_cookie_name is not None:
             auth_config_kwargs["session_cookie_name"] = (
                 self.config.auth.session_cookie_name
@@ -93,7 +99,13 @@ class AuthConfigurator:
         # Register authentication endpoints
         self._register_auth_endpoints()
 
-        self._logger.debug("🔐 Authentication configured and endpoints registered")
+        # Log authentication configuration
+        api_key_mgmt = getattr(self._auth_config, "api_key_management_enabled", True)
+        self._logger.debug(
+            f"🔐 Authentication configured: JWT=enabled, "
+            f"API-key-mgmt={api_key_mgmt}, "
+            f"endpoints-registered={self._auth_endpoints_registered}"
+        )
 
         return self._auth_config
 
@@ -219,7 +231,11 @@ class AuthConfigurator:
                 raise HTTPException(status_code=500, detail="Internal server error")
 
         # API Key Management Endpoints (require authentication)
-        if self.config.auth.api_key_auth_enabled:
+        # Support both new and deprecated flag names for backward compatibility
+        api_key_mgmt_enabled = getattr(
+            self.config.auth, "api_key_management_enabled", None
+        ) or getattr(self.config.auth, "api_key_auth_enabled", True)
+        if api_key_mgmt_enabled:
             # Helper function to get API key service
             def get_api_key_service():
                 """Get API key service using prime database."""
@@ -227,7 +243,11 @@ class AuthConfigurator:
                 return APIKeyService(prime_ctx)
 
             # Create API key endpoint
-            @auth_router.post("/api-keys", response_model=APIKeyCreateResponse)
+            @auth_router.post(
+                "/api-keys",
+                response_model=APIKeyCreateResponse,
+                dependencies=[Depends(security)],  # Require authentication
+            )
             async def create_api_key(
                 request: APIKeyCreateRequest,
                 current_user: UserResponse = Depends(get_current_user),  # noqa: B008
@@ -260,7 +280,11 @@ class AuthConfigurator:
                     raise HTTPException(status_code=500, detail="Internal server error")
 
             # List API keys endpoint
-            @auth_router.get("/api-keys", response_model=List[APIKeyResponse])
+            @auth_router.get(
+                "/api-keys",
+                response_model=List[APIKeyResponse],
+                dependencies=[Depends(security)],  # Require authentication
+            )
             async def list_api_keys(
                 current_user: UserResponse = Depends(get_current_user),  # noqa: B008
             ):
@@ -288,7 +312,10 @@ class AuthConfigurator:
                     raise HTTPException(status_code=500, detail="Internal server error")
 
             # Revoke API key endpoint
-            @auth_router.delete("/api-keys/{key_id}")
+            @auth_router.delete(
+                "/api-keys/{key_id}",
+                dependencies=[Depends(security)],  # Require authentication
+            )
             async def revoke_api_key(
                 key_id: str,
                 current_user: UserResponse = Depends(get_current_user),  # noqa: B008
