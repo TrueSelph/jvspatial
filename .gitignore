@@ -29,7 +29,7 @@ MANIFEST
 jvdb
 test_db
 test_db_*
-.test_dbs
+.test_dbs/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

@@ -142,35 +142,6 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         Returns:
             Response from next handler or authentication error response
         """
-        # #region agent log
-        import json
-        import time
-
-        with open(
-            "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log", "a"
-        ) as f:
-            f.write(
-                json.dumps(
-                    {
-                        "sessionId": "debug-session",
-                        "runId": "run1",
-                        "hypothesisId": "A",
-                        "location": "auth_middleware.py:135",
-                        "message": "Request received",
-                        "data": {
-                            "path": request.url.path,
-                            "method": request.method,
-                            "has_auth_header": "authorization" in request.headers,
-                            "has_api_key": "x-api-key"  # pragma: allowlist secret
-                            in request.headers,
-                        },
-                        "timestamp": int(time.time() * 1000),
-                    }
-                )
-                + "\n"
-            )
-        # #endregion
-
         # Always allow OPTIONS requests (CORS preflight) to pass through
         # CORS middleware will handle these requests
         if request.method == "OPTIONS":
@@ -178,25 +149,6 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
         # Check if path is exempt from authentication
         is_exempt = self.path_matcher.is_exempt(request.url.path)
-        # #region agent log
-        with open(
-            "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log", "a"
-        ) as f:
-            f.write(
-                json.dumps(
-                    {
-                        "sessionId": "debug-session",
-                        "runId": "run1",
-                        "hypothesisId": "B",
-                        "location": "auth_middleware.py:152",
-                        "message": "Path exemption check",
-                        "data": {"path": request.url.path, "is_exempt": is_exempt},
-                        "timestamp": int(time.time() * 1000),
-                    }
-                )
-                + "\n"
-            )
-        # #endregion
         if is_exempt:
             return await call_next(request)
 
@@ -204,75 +156,13 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         auth_required = self._endpoint_requires_auth(request)
         has_fastapi_auth = self._endpoint_has_fastapi_auth(request)
 
-        # #region agent log
-        with open(
-            "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log", "a"
-        ) as f:
-            f.write(
-                json.dumps(
-                    {
-                        "sessionId": "debug-session",
-                        "runId": "run1",
-                        "hypothesisId": "C",
-                        "location": "auth_middleware.py:158",
-                        "message": "Auth requirement check",
-                        "data": {
-                            "path": request.url.path,
-                            "auth_required": auth_required,
-                            "has_fastapi_auth": has_fastapi_auth,
-                        },
-                        "timestamp": int(time.time() * 1000),
-                    }
-                )
-                + "\n"
-            )
-        # #endregion
-
         if not auth_required:
-            # #region agent log
-            with open(
-                "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log", "a"
-            ) as f:
-                f.write(
-                    json.dumps(
-                        {
-                            "sessionId": "debug-session",
-                            "runId": "run1",
-                            "hypothesisId": "D",
-                            "location": "auth_middleware.py:164",
-                            "message": "Allowing through - no auth required",
-                            "data": {"path": request.url.path},
-                            "timestamp": int(time.time() * 1000),
-                        }
-                    )
-                    + "\n"
-                )
-            # #endregion
             return await call_next(request)
 
         # If the route has FastAPI auth dependencies (like Depends(security)),
         # let FastAPI handle authentication via its dependency injection system
         # The middleware should not interfere with FastAPI's auth dependencies
         if has_fastapi_auth:
-            # #region agent log
-            with open(
-                "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log", "a"
-            ) as f:
-                f.write(
-                    json.dumps(
-                        {
-                            "sessionId": "debug-session",
-                            "runId": "run1",
-                            "hypothesisId": "E",
-                            "location": "auth_middleware.py:175",
-                            "message": "Allowing through - FastAPI auth",
-                            "data": {"path": request.url.path},
-                            "timestamp": int(time.time() * 1000),
-                        }
-                    )
-                    + "\n"
-                )
-            # #endregion
             self._logger.debug(
                 f"Route {request.url.path} has FastAPI auth dependencies, allowing through"
             )
@@ -280,58 +170,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
         # Streamlined authentication logic for routes without FastAPI auth dependencies
         user = await self._authenticate_request(request)
-        # #region agent log
-        with open(
-            "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log", "a"
-        ) as f:
-            # Extract user_id safely - handle both UserResponse objects and dicts
-            user_id = None
-            if user:
-                if isinstance(user, dict):
-                    user_id = user.get("user_id")
-                elif hasattr(user, "id"):
-                    user_id = user.id
-                elif hasattr(user, "user_id"):
-                    user_id = user.user_id
-            f.write(
-                json.dumps(
-                    {
-                        "sessionId": "debug-session",
-                        "runId": "run1",
-                        "hypothesisId": "F",
-                        "location": "auth_middleware.py:189",
-                        "message": "Authentication result",
-                        "data": {
-                            "path": request.url.path,
-                            "user_authenticated": user is not None,
-                            "user_id": user_id,
-                        },
-                        "timestamp": int(time.time() * 1000),
-                    }
-                )
-                + "\n"
-            )
-        # #endregion
         if not user:
-            # #region agent log
-            with open(
-                "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log", "a"
-            ) as f:
-                f.write(
-                    json.dumps(
-                        {
-                            "sessionId": "debug-session",
-                            "runId": "run1",
-                            "hypothesisId": "G",
-                            "location": "auth_middleware.py:195",
-                            "message": "Returning 401 - no user",
-                            "data": {"path": request.url.path},
-                            "timestamp": int(time.time() * 1000),
-                        }
-                    )
-                    + "\n"
-                )
-            # #endregion
             return JSONResponse(
                 status_code=401,
                 content={
@@ -343,34 +182,6 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
         # Set user in request state for downstream handlers
         request.state.user = user
-        # #region agent log
-        with open(
-            "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log", "a"
-        ) as f:
-            # Extract user_id safely - handle both UserResponse objects and dicts
-            user_id = None
-            if user:
-                if isinstance(user, dict):
-                    user_id = user.get("user_id")
-                elif hasattr(user, "id"):
-                    user_id = user.id
-                elif hasattr(user, "user_id"):
-                    user_id = user.user_id
-            f.write(
-                json.dumps(
-                    {
-                        "sessionId": "debug-session",
-                        "runId": "run1",
-                        "hypothesisId": "H",
-                        "location": "auth_middleware.py:210",
-                        "message": "Allowing through - authenticated",
-                        "data": {"path": request.url.path, "user_id": user_id},
-                        "timestamp": int(time.time() * 1000),
-                    }
-                )
-                + "\n"
-            )
-        # #endregion
         return await call_next(request)
 
     def _path_matches(self, pattern: str, path: str) -> bool:
@@ -436,29 +247,6 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             is explicitly registered with auth=False
         """
         try:
-            # #region agent log
-            import json
-            import time
-
-            with open(
-                "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log", "a"
-            ) as f:
-                f.write(
-                    json.dumps(
-                        {
-                            "sessionId": "debug-session",
-                            "runId": "run1",
-                            "hypothesisId": "I",
-                            "location": "auth_middleware.py:230",
-                            "message": "_endpoint_requires_auth called",
-                            "data": {"path": request.url.path},
-                            "timestamp": int(time.time() * 1000),
-                        }
-                    )
-                    + "\n"
-                )
-            # #endregion
-
             # Always use stored server reference - it's required during initialization
             server = self._server
 
@@ -522,32 +310,6 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                         return True
 
                     auth_required = endpoint_config.get("auth_required", False)
-                    # #region agent log
-                    with open(
-                        "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log",
-                        "a",
-                    ) as f:
-                        f.write(
-                            json.dumps(
-                                {
-                                    "sessionId": "debug-session",
-                                    "runId": "run1",
-                                    "hypothesisId": "J",
-                                    "location": "auth_middleware.py:282",
-                                    "message": "Found in function registry",
-                                    "data": {
-                                        "path": normalized_path,
-                                        "auth_required": auth_required,
-                                        "endpoint_config": self._safe_serialize_endpoint_config(
-                                            endpoint_config
-                                        ),
-                                    },
-                                    "timestamp": int(time.time() * 1000),
-                                }
-                            )
-                            + "\n"
-                        )
-                    # #endregion
                     self._logger.debug(
                         f"Function endpoint {normalized_path}: auth_required={auth_required}"
                     )
@@ -585,32 +347,6 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                         return True
 
                     auth_required = endpoint_config.get("auth_required", False)
-                    # #region agent log
-                    with open(
-                        "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log",
-                        "a",
-                    ) as f:
-                        f.write(
-                            json.dumps(
-                                {
-                                    "sessionId": "debug-session",
-                                    "runId": "run1",
-                                    "hypothesisId": "K",
-                                    "location": "auth_middleware.py:309",
-                                    "message": "Found in walker registry",
-                                    "data": {
-                                        "path": normalized_path,
-                                        "auth_required": auth_required,
-                                        "endpoint_config": self._safe_serialize_endpoint_config(
-                                            endpoint_config
-                                        ),
-                                    },
-                                    "timestamp": int(time.time() * 1000),
-                                }
-                            )
-                            + "\n"
-                        )
-                    # #endregion
                     self._logger.debug(
                         f"Walker endpoint {normalized_path}: auth_required={auth_required}"
                     )
@@ -640,103 +376,16 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                                 request_method is None
                                 or request_method in route.methods
                             ):
-                                # #region agent log
-                                with open(
-                                    "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log",
-                                    "a",
-                                ) as f:
-                                    f.write(
-                                        json.dumps(
-                                            {
-                                                "sessionId": "debug-session",
-                                                "runId": "run1",
-                                                "hypothesisId": "M",
-                                                "location": "auth_middleware.py:345",
-                                                "message": "FastAPI route matched",
-                                                "data": {
-                                                    "request_path": request_path,
-                                                    "route_path": route_path,
-                                                    "normalized_path": normalized_path,
-                                                    "has_dependencies": bool(
-                                                        route.dependencies
-                                                    ),
-                                                    "dependencies_count": (
-                                                        len(route.dependencies)
-                                                        if route.dependencies
-                                                        else 0
-                                                    ),
-                                                },
-                                                "timestamp": int(time.time() * 1000),
-                                            }
-                                        )
-                                        + "\n"
-                                    )
-                                # #endregion
-
                                 # Check if route has auth dependencies
                                 if route.dependencies:
                                     # Check for security/authentication dependencies
                                     for dep in route.dependencies:
                                         dep_str = str(dep).lower()
-                                        # #region agent log
-                                        with open(
-                                            "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log",
-                                            "a",
-                                        ) as f:
-                                            f.write(
-                                                json.dumps(
-                                                    {
-                                                        "sessionId": "debug-session",
-                                                        "runId": "run1",
-                                                        "hypothesisId": "N",
-                                                        "location": "auth_middleware.py:360",
-                                                        "message": "Checking dependency",
-                                                        "data": {
-                                                            "dep_str": dep_str,
-                                                            "has_security": "security"
-                                                            in dep_str,
-                                                            "has_bearer": "bearer"
-                                                            in dep_str,
-                                                            "has_auth": "auth"
-                                                            in dep_str,
-                                                        },
-                                                        "timestamp": int(
-                                                            time.time() * 1000
-                                                        ),
-                                                    }
-                                                )
-                                                + "\n"
-                                            )
-                                        # #endregion
                                         if (
                                             "security" in dep_str
                                             or "bearer" in dep_str
                                             or "auth" in dep_str
                                         ):
-                                            # #region agent log
-                                            with open(
-                                                "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log",
-                                                "a",
-                                            ) as f:
-                                                f.write(
-                                                    json.dumps(
-                                                        {
-                                                            "sessionId": "debug-session",
-                                                            "runId": "run1",
-                                                            "hypothesisId": "O",
-                                                            "location": "auth_middleware.py:375",
-                                                            "message": "Found FastAPI auth dependency",
-                                                            "data": {
-                                                                "path": request_path
-                                                            },
-                                                            "timestamp": int(
-                                                                time.time() * 1000
-                                                            ),
-                                                        }
-                                                    )
-                                                    + "\n"
-                                                )
-                                            # #endregion
                                             self._logger.debug(
                                                 f"Router endpoint {request_path} has FastAPI auth dependency"
                                             )
@@ -750,28 +399,6 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                                     and request_path
                                     not in self.auth_config.exempt_paths
                                 ):
-                                    # #region agent log
-                                    with open(
-                                        "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log",
-                                        "a",
-                                    ) as f:
-                                        f.write(
-                                            json.dumps(
-                                                {
-                                                    "sessionId": "debug-session",
-                                                    "runId": "run1",
-                                                    "hypothesisId": "P",
-                                                    "location": "auth_middleware.py:390",
-                                                    "message": "Auth path - requiring auth",
-                                                    "data": {"path": request_path},
-                                                    "timestamp": int(
-                                                        time.time() * 1000
-                                                    ),
-                                                }
-                                            )
-                                            + "\n"
-                                        )
-                                    # #endregion
                                     # Auth endpoints require authentication unless explicitly exempt
                                     self._logger.debug(
                                         f"Auth router endpoint {request_path} requires auth"
@@ -787,34 +414,6 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                                         auth_required = endpoint_config.get(
                                             "auth_required", True
                                         )
-                                        # #region agent log
-                                        with open(
-                                            "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log",
-                                            "a",
-                                        ) as f:
-                                            f.write(
-                                                json.dumps(
-                                                    {
-                                                        "sessionId": "debug-session",
-                                                        "runId": "run1",
-                                                        "hypothesisId": "Q",
-                                                        "location": "auth_middleware.py:405",
-                                                        "message": "FastAPI route with endpoint config",
-                                                        "data": {
-                                                            "path": request_path,
-                                                            "auth_required": auth_required,
-                                                            "endpoint_config": self._safe_serialize_endpoint_config(
-                                                                endpoint_config
-                                                            ),
-                                                        },
-                                                        "timestamp": int(
-                                                            time.time() * 1000
-                                                        ),
-                                                    }
-                                                )
-                                                + "\n"
-                                            )
-                                        # #endregion
                                         self._logger.debug(
                                             f"FastAPI route {request_path} has endpoint config: auth_required={auth_required}"
                                         )
@@ -824,26 +423,6 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                                 # require authentication by default (deny by default)
                                 # Only routes explicitly registered with auth=False should be allowed
                                 # Unregistered route - require auth by default
-                                # #region agent log
-                                with open(
-                                    "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log",
-                                    "a",
-                                ) as f:
-                                    f.write(
-                                        json.dumps(
-                                            {
-                                                "sessionId": "debug-session",
-                                                "runId": "run1",
-                                                "hypothesisId": "Q",
-                                                "location": "auth_middleware.py:405",
-                                                "message": "Unregistered route - requiring auth",
-                                                "data": {"path": request_path},
-                                                "timestamp": int(time.time() * 1000),
-                                            }
-                                        )
-                                        + "\n"
-                                    )
-                                # #endregion
                                 self._logger.debug(
                                     f"Unregistered route {request_path} found, requiring auth (deny by default)"
                                 )
@@ -852,28 +431,6 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             # SECURITY: Endpoint not found in registry or FastAPI routes - DENY by default
             # This is a critical security decision: we require authentication for any
             # endpoint that isn't explicitly registered, preventing bypass via path manipulation
-            # #region agent log
-            with open(
-                "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log", "a"
-            ) as f:
-                f.write(
-                    json.dumps(
-                        {
-                            "sessionId": "debug-session",
-                            "runId": "run1",
-                            "hypothesisId": "L",
-                            "location": "auth_middleware.py:369",
-                            "message": "Not found in registry or routes - requiring auth",
-                            "data": {
-                                "normalized_path": normalized_path,
-                                "request_path": request_path,
-                            },
-                            "timestamp": int(time.time() * 1000),
-                        }
-                    )
-                    + "\n"
-                )
-            # #endregion
             self._logger.debug(
                 f"Endpoint not found in registry or routes: {normalized_path} (original: {request_path}) - DENYING access"
             )
@@ -900,29 +457,6 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             True if the route has FastAPI auth dependencies, False otherwise
         """
         try:
-            # #region agent log
-            import json
-            import time
-
-            with open(
-                "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log", "a"
-            ) as f:
-                f.write(
-                    json.dumps(
-                        {
-                            "sessionId": "debug-session",
-                            "runId": "run1",
-                            "hypothesisId": "R",
-                            "location": "auth_middleware.py:430",
-                            "message": "_endpoint_has_fastapi_auth called",
-                            "data": {"path": request.url.path},
-                            "timestamp": int(time.time() * 1000),
-                        }
-                    )
-                    + "\n"
-                )
-            # #endregion
-
             server = self._server
             if not server or not hasattr(server, "app") or not server.app:
                 return False
@@ -954,104 +488,14 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                             # Check for security/authentication dependencies
                             for dep in route.dependencies:
                                 dep_str = str(dep).lower()
-                                # #region agent log
-                                with open(
-                                    "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log",
-                                    "a",
-                                ) as f:
-                                    f.write(
-                                        json.dumps(
-                                            {
-                                                "sessionId": "debug-session",
-                                                "runId": "run1",
-                                                "hypothesisId": "S",
-                                                "location": "auth_middleware.py:460",
-                                                "message": "Checking FastAPI dependency",
-                                                "data": {
-                                                    "path": request_path,
-                                                    "dep_str": dep_str,
-                                                    "has_security": "security"
-                                                    in dep_str,
-                                                    "has_bearer": "bearer" in dep_str,
-                                                    "has_auth": "auth" in dep_str,
-                                                },
-                                                "timestamp": int(time.time() * 1000),
-                                            }
-                                        )
-                                        + "\n"
-                                    )
-                                # #endregion
                                 if (
                                     "security" in dep_str
                                     or "bearer" in dep_str
                                     or "auth" in dep_str
                                 ):
-                                    # #region agent log
-                                    with open(
-                                        "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log",
-                                        "a",
-                                    ) as f:
-                                        f.write(
-                                            json.dumps(
-                                                {
-                                                    "sessionId": "debug-session",
-                                                    "runId": "run1",
-                                                    "hypothesisId": "T",
-                                                    "location": "auth_middleware.py:475",
-                                                    "message": "Found FastAPI auth - returning True",
-                                                    "data": {"path": request_path},
-                                                    "timestamp": int(
-                                                        time.time() * 1000
-                                                    ),
-                                                }
-                                            )
-                                            + "\n"
-                                        )
-                                    # #endregion
                                     return True
-            # #region agent log
-            with open(
-                "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log", "a"
-            ) as f:
-                f.write(
-                    json.dumps(
-                        {
-                            "sessionId": "debug-session",
-                            "runId": "run1",
-                            "hypothesisId": "U",
-                            "location": "auth_middleware.py:485",
-                            "message": "No FastAPI auth found",
-                            "data": {"path": request_path},
-                            "timestamp": int(time.time() * 1000),
-                        }
-                    )
-                    + "\n"
-                )
-            # #endregion
             return False
-        except Exception as e:
-            # #region agent log
-            import json
-            import time
-
-            with open(
-                "/Users/eldonmarks/Briefcase/dev/jv/jvspatial/.cursor/debug.log", "a"
-            ) as f:
-                f.write(
-                    json.dumps(
-                        {
-                            "sessionId": "debug-session",
-                            "runId": "run1",
-                            "hypothesisId": "V",
-                            "location": "auth_middleware.py:495",
-                            "message": "Exception in _endpoint_has_fastapi_auth",
-                            "data": {"path": request.url.path, "error": str(e)},
-                            "timestamp": int(time.time() * 1000),
-                        }
-                    )
-                    + "\n"
-                )
-            # #endregion
+        except Exception:
             return False
 
     async def _authenticate_request(self, request: Request) -> Optional[Any]:
