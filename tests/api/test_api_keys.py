@@ -260,13 +260,13 @@ class TestAPIKeyIntegration:
         """Test API key creation endpoint."""
         # First, register and login a user
         register_response = client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={"email": unique_email, "password": "password123"},
         )
         assert register_response.status_code == 200
 
         login_response = client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"email": unique_email, "password": "password123"},
         )
         assert login_response.status_code == 200
@@ -274,7 +274,7 @@ class TestAPIKeyIntegration:
 
         # Create API key
         create_response = client.post(
-            "/auth/api-keys",
+            "/api/auth/api-keys",
             json={"name": "Test Key", "permissions": ["read", "write"]},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -291,18 +291,18 @@ class TestAPIKeyIntegration:
         """Test API key listing endpoint."""
         # Register, login, and create a key
         client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={"email": unique_email, "password": "password123"},
         )
         login_response = client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"email": unique_email, "password": "password123"},
         )
         token = login_response.json()["access_token"]
 
         # Create a key
         create_response = client.post(
-            "/auth/api-keys",
+            "/api/auth/api-keys",
             json={"name": "Test Key"},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -310,7 +310,7 @@ class TestAPIKeyIntegration:
 
         # List keys
         list_response = client.get(
-            "/auth/api-keys", headers={"Authorization": f"Bearer {token}"}
+            "/api/auth/api-keys", headers={"Authorization": f"Bearer {token}"}
         )
 
         assert list_response.status_code == 200
@@ -323,17 +323,17 @@ class TestAPIKeyIntegration:
         """Test API key revocation endpoint."""
         # Register, login, and create a key
         client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={"email": unique_email, "password": "password123"},
         )
         login_response = client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"email": unique_email, "password": "password123"},
         )
         token = login_response.json()["access_token"]
 
         create_response = client.post(
-            "/auth/api-keys",
+            "/api/auth/api-keys",
             json={"name": "Test Key"},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -341,7 +341,7 @@ class TestAPIKeyIntegration:
 
         # Revoke key
         revoke_response = client.delete(
-            f"/auth/api-keys/{key_id}",
+            f"/api/auth/api-keys/{key_id}",
             headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -365,17 +365,17 @@ class TestAPIKeyIntegration:
 
         # Register, login, and create a key
         client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={"email": unique_email, "password": "password123"},
         )
         login_response = client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"email": unique_email, "password": "password123"},
         )
         token = login_response.json()["access_token"]
 
         create_response = client.post(
-            "/auth/api-keys",
+            "/api/auth/api-keys",
             json={"name": "Test Key"},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -439,17 +439,17 @@ class TestAPIKeyIntegration:
 
         # Register, login, and create a key
         client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={"email": unique_email, "password": "password123"},
         )
         login_response = client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"email": unique_email, "password": "password123"},
         )
         token = login_response.json()["access_token"]
 
         create_response = client.post(
-            "/auth/api-keys",
+            "/api/auth/api-keys",
             json={"name": "Test Key"},
             headers={"Authorization": f"Bearer {token}"},
         )

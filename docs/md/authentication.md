@@ -273,6 +273,63 @@ async def refresh_token(request: TokenRefreshRequest):
     pass
 ```
 
+### Token Validation Behavior
+
+The authentication system validates JWT tokens using a decode-first approach:
+
+**Validation Order:**
+- Tokens are decoded first using `jwt.decode()`, which automatically handles expiration validation
+- Only successfully decoded, non-expired tokens are checked against the blacklist
+- This prevents false positives where expired tokens might be incorrectly flagged
+
+**Expiration Handling:**
+- Token expiration is handled by the `jwt.decode()` function, not manual timestamp checks
+- Expired tokens are rejected during decode, before any blacklist checks occur
+- This ensures consistent expiration validation across all token types
+
+**Debug Logging:**
+- Detailed debug logging is available for troubleshooting authentication issues
+- Logs include: token decode results, blacklist check outcomes, user lookup results, and validation failures
+- Enable debug logging to trace authentication flow and diagnose 401 errors
+
+**Performance Optimization:**
+- Blacklist checks use an in-memory cache to reduce database queries
+- Cache entries have configurable TTL (time-to-live) for optimal performance
+- Cache misses trigger database lookups and update the cache
+
+### Refresh Token Generation
+
+The system generates refresh tokens with resilience and reliability:
+
+**Resilient Generation:**
+- Login succeeds even if refresh token generation or storage fails
+- Access tokens work independently of refresh tokens
+- If refresh token generation fails, login returns `refresh_token=None` but the access token is still valid
+
+**Automatic Index Management:**
+- Indexes are automatically created before saving refresh tokens
+- This ensures optimal database performance for token lookups
+- The `ensure_indexes()` call happens transparently during token storage
+
+**Token Storage:**
+- Refresh tokens are hashed before storage using secure hashing algorithms (bcrypt, argon2, or passlib)
+- Plaintext tokens are never stored in the database
+- Token verification uses secure hash comparison
+
+### API Endpoint Organization
+
+Endpoints are organized by tags in OpenAPI documentation:
+
+**Tag Organization:**
+- Authentication endpoints (`/api/auth/*`) are tagged as **"Auth"** in OpenAPI docs
+- Application endpoints (`/api/graph`, `/api/logs`) are tagged as **"App"**
+- Tags help organize and filter endpoints in Swagger UI
+
+**Benefits:**
+- Clear separation between authentication and application endpoints
+- Easier navigation in API documentation
+- Better organization for API consumers
+
 ## API Key Authentication
 
 ### Quick Start

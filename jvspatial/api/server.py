@@ -201,11 +201,15 @@ class Server:
         """Disable a specific auth endpoint by removing it from the auth router.
 
         This method removes routes from the auth router before it's included in the app.
-        The path should be relative to the router prefix ("/auth"), so "/register"
-        will disable "/auth/register".
+        The path can be either:
+        - Relative to router prefix: "/register" (recommended)
+        - Full path including router prefix: "/auth/register"
+
+        The endpoint will be accessible at "/api/auth/register" when the router
+        is included with the API prefix.
 
         Args:
-            path: Path relative to auth router prefix (e.g., "/register" for "/auth/register")
+            path: Path to disable, either relative ("/register") or full ("/auth/register")
 
         Returns:
             True if endpoint was found and removed, False otherwise
@@ -220,26 +224,71 @@ class Server:
         if not path.startswith("/"):
             path = f"/{path}"
 
-        # Build full path with router prefix
-        full_path = f"/auth{path}"
+        # FastAPI routers with a prefix store routes with the full path including prefix
+        # The auth router has prefix="/auth", so routes are stored as "/auth/register", etc.
+        # Normalize the input path to include "/auth" prefix if not present
+        if path.startswith("/auth/"):
+            # Already has full path
+            full_path = path
+            relative_path = path[6:]  # Remove "/auth/" for logging
+        elif path.startswith("/auth"):
+            full_path = "/auth"
+            relative_path = "/"
+        else:
+            # Relative path provided, add "/auth" prefix
+            full_path = f"/auth{path}"
+            relative_path = path
 
         # Find and remove matching routes
+        from fastapi.routing import APIRoute
+
         routes_to_remove = []
+        available_paths = []
+
+        # Normalize full_path for comparison (remove trailing slash if present)
+        normalized_full_path = full_path.rstrip("/")
+        # Also try the relative path in case routes don't include prefix
+        normalized_relative_path = relative_path.rstrip("/")
+
         for route in self._auth_router.routes:
-            # Check if route path matches (accounting for router prefix)
-            route_path = getattr(route, "path", None)
-            if route_path and route_path in (path, full_path):
-                routes_to_remove.append(route)
+            # Only process APIRoute instances (ignore Mount, etc.)
+            if isinstance(route, APIRoute):
+                route_path = route.path
+                if route_path:
+                    available_paths.append(route_path)
+                    # Normalize paths for comparison (strip trailing slashes)
+                    normalized_route_path = route_path.rstrip("/")
+                    normalized_full = normalized_full_path
+                    normalized_rel = normalized_relative_path
+
+                    # Match against full path (routes include the router prefix)
+                    # Try both full path and relative path matching
+                    if normalized_route_path in (normalized_full, normalized_rel):
+                        routes_to_remove.append(route)
 
         # Remove routes from router
         if routes_to_remove:
             for route in routes_to_remove:
                 self._auth_router.routes.remove(route)
-                route_path = getattr(route, "path", None)
-                self._logger.info(f"🔒 Disabled auth endpoint: {route_path or path}")
+                route_path = route.path if isinstance(route, APIRoute) else None
+                self._logger.info(
+                    f"🔒 Disabled auth endpoint: {route_path or full_path}"
+                )
             return True
         else:
-            self._logger.debug(f"Auth endpoint not found: {path}")
+            # Provide helpful error message with available paths
+            if available_paths:
+                self._logger.warning(
+                    f"Could not find {full_path} endpoint to disable. "
+                    f"Available auth endpoints: {', '.join(available_paths)}. "
+                    f"The endpoint may have already been disabled or removed."
+                )
+            else:
+                self._logger.warning(
+                    f"Could not find {full_path} endpoint to disable. "
+                    f"No auth endpoints found in router. "
+                    f"Auth endpoints may not be registered yet."
+                )
             return False
 
     def _merge_config(self, config, kwargs) -> Dict[str, Any]:
@@ -453,7 +502,7 @@ class Server:
 
         # Include authentication router if configured
         if self._auth_endpoints_registered and hasattr(self, "_auth_router"):
-            app.include_router(self._auth_router)
+            app.include_router(self._auth_router, prefix=APIRoutes.PREFIX)
 
         # Configure OpenAPI security
         self.app_builder.configure_openapi_security(app, self._has_auth_endpoints)

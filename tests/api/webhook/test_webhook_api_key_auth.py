@@ -49,13 +49,13 @@ class TestWebhookAPIKeyAuthentication:
         """Helper to register and login a user."""
         # Try to register, ignore if already exists
         register_response = client.post(
-            "/auth/register",
+            "/api/auth/register",
             json={"email": email, "password": password},
         )
         # If registration fails, try login
         if register_response.status_code != 200:
             login_response = client.post(
-                "/auth/login",
+                "/api/auth/login",
                 json={"email": email, "password": password},
             )
             if login_response.status_code == 200:
@@ -65,7 +65,7 @@ class TestWebhookAPIKeyAuthentication:
 
         # Registration succeeded, now login
         login_response = client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"email": email, "password": password},
         )
         assert login_response.status_code == 200
@@ -91,7 +91,7 @@ class TestWebhookAPIKeyAuthentication:
 
         # Create API key
         create_response = client.post(
-            "/auth/api-keys",
+            "/api/auth/api-keys",
             json={"name": "Webhook Key"},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -125,7 +125,7 @@ class TestWebhookAPIKeyAuthentication:
         token = self._register_and_login(client, unique_email)
 
         create_response = client.post(
-            "/auth/api-keys",
+            "/api/auth/api-keys",
             json={"name": "Webhook Key"},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -163,7 +163,7 @@ class TestWebhookAPIKeyAuthentication:
         token = self._register_and_login(client, unique_email)
 
         create_response = client.post(
-            "/auth/api-keys",
+            "/api/auth/api-keys",
             json={"name": "Webhook Key"},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -252,14 +252,14 @@ class TestWebhookAPIKeyAuthentication:
         token = self._register_and_login(client, unique_email)
 
         create_response1 = client.post(
-            "/auth/api-keys",
+            "/api/auth/api-keys",
             json={"name": "Key 1"},
             headers={"Authorization": f"Bearer {token}"},
         )
         key1 = create_response1.json()["key"]
 
         create_response2 = client.post(
-            "/auth/api-keys",
+            "/api/auth/api-keys",
             json={"name": "Key 2"},
             headers={"Authorization": f"Bearer {token}"},
         )

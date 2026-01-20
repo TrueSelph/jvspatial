@@ -5,7 +5,7 @@ extracted from the Server class for better separation of concerns.
 """
 
 import logging
-from typing import Any, List, Optional
+from typing import Any, List, Optional, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -16,6 +16,7 @@ from jvspatial.api.auth.models import (
     APIKeyCreateRequest,
     APIKeyCreateResponse,
     APIKeyResponse,
+    TokenRefreshRequest,
     TokenResponse,
     UserCreate,
     UserLogin,
@@ -61,7 +62,7 @@ class AuthConfigurator:
 
         # Create auth configuration - only pass fields that are not None
         # AuthConfig has defaults for all fields, so we only override when explicitly set
-        auth_config_kwargs = {
+        auth_config_kwargs: dict[str, Any] = {
             "enabled": True,
         }
 
@@ -72,6 +73,19 @@ class AuthConfigurator:
         auth_config_kwargs["jwt_secret"] = self.config.auth.jwt_secret
         auth_config_kwargs["jwt_algorithm"] = self.config.auth.jwt_algorithm
         auth_config_kwargs["jwt_expire_minutes"] = self.config.auth.jwt_expire_minutes
+        # Include refresh token config
+        if hasattr(self.config.auth, "jwt_refresh_expire_days"):
+            auth_config_kwargs["refresh_expire_days"] = (
+                self.config.auth.jwt_refresh_expire_days
+            )
+        if hasattr(self.config.auth, "refresh_token_rotation"):
+            auth_config_kwargs["refresh_token_rotation"] = getattr(
+                self.config.auth, "refresh_token_rotation", False
+            )
+        if hasattr(self.config.auth, "blacklist_cache_ttl_seconds"):
+            auth_config_kwargs["blacklist_cache_ttl_seconds"] = cast(
+                int, getattr(self.config.auth, "blacklist_cache_ttl_seconds", 3600)
+            )
         if self.config.auth.api_key_header is not None:
             auth_config_kwargs["api_key_header"] = self.config.auth.api_key_header
         # Include api_key_management_enabled (supports both new and old flag names)
@@ -95,6 +109,13 @@ class AuthConfigurator:
         self._jwt_secret = self._auth_config.jwt_secret
         self._jwt_algorithm = self._auth_config.jwt_algorithm
         self._jwt_expire_minutes = self._auth_config.jwt_expire_minutes
+        self._refresh_expire_days = getattr(self._auth_config, "refresh_expire_days", 7)
+        self._refresh_token_rotation = getattr(
+            self._auth_config, "refresh_token_rotation", False
+        )
+        self._blacklist_cache_ttl_seconds = getattr(
+            self._auth_config, "blacklist_cache_ttl_seconds", 3600
+        )
 
         # Register authentication endpoints
         self._register_auth_endpoints()
@@ -119,6 +140,9 @@ class AuthConfigurator:
         jwt_secret = self._jwt_secret
         jwt_algorithm = self._jwt_algorithm
         jwt_expire_minutes = self._jwt_expire_minutes
+        refresh_expire_days = self._refresh_expire_days
+        refresh_token_rotation = self._refresh_token_rotation
+        blacklist_cache_ttl_seconds = self._blacklist_cache_ttl_seconds
 
         def get_auth_service():
             """Get authentication service using prime database for core persistence.
@@ -133,10 +157,13 @@ class AuthConfigurator:
                 jwt_secret=jwt_secret,
                 jwt_algorithm=jwt_algorithm,
                 jwt_expire_minutes=jwt_expire_minutes,
+                refresh_expire_days=refresh_expire_days,
+                refresh_token_rotation=refresh_token_rotation,
+                blacklist_cache_ttl_seconds=blacklist_cache_ttl_seconds,
             )
 
         # Create auth router
-        auth_router = APIRouter(prefix="/auth", tags=["App"])
+        auth_router = APIRouter(prefix="/auth", tags=["Auth"])
 
         # Create custom security scheme for BearerAuth compatibility
         security = HTTPBearer(scheme_name="BearerAuth")
@@ -228,6 +255,41 @@ class AuthConfigurator:
                 return {"message": "Logged out successfully"}
             except Exception as e:
                 self._logger.error(f"Logout error: {e}")
+                raise HTTPException(status_code=500, detail="Internal server error")
+
+        # Refresh token endpoint
+        @auth_router.post("/refresh", response_model=TokenResponse)
+        async def refresh_token(request: TokenRefreshRequest):
+            """Refresh access token using refresh token."""
+            try:
+                auth_service = get_auth_service()
+                token_response = await auth_service.refresh_access_token(
+                    request.refresh_token
+                )
+                return token_response
+            except ValueError as e:
+                raise HTTPException(status_code=401, detail=str(e))
+            except Exception as e:
+                self._logger.error(f"Token refresh error: {e}")
+                raise HTTPException(status_code=500, detail="Internal server error")
+
+        # Revoke all tokens endpoint (requires authentication)
+        @auth_router.post("/revoke-all", dependencies=[_default_security_dep])
+        async def revoke_all_tokens(
+            current_user: UserResponse = Depends(get_current_user),  # noqa: B008
+        ):
+            """Revoke all refresh tokens for the authenticated user."""
+            try:
+                auth_service = get_auth_service()
+                revoked_count = await auth_service.revoke_all_user_tokens(
+                    current_user.id
+                )
+                return {
+                    "message": f"Revoked {revoked_count} token(s) successfully",
+                    "revoked_count": revoked_count,
+                }
+            except Exception as e:
+                self._logger.error(f"Revoke all tokens error: {e}")
                 raise HTTPException(status_code=500, detail="Internal server error")
 
         # API Key Management Endpoints (require authentication)

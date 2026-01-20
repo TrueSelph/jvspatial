@@ -52,7 +52,7 @@ class LogsResponse(BaseModel):
     pagination: PaginationInfo = Field(..., description="Pagination information")
 
 
-@endpoint("/logs", methods=["GET"], auth=True)
+@endpoint("/logs", methods=["GET"], auth=True, tags=["App"])
 async def get_logs(
     category: Optional[str] = Query(  # noqa: B008
         None,
@@ -77,23 +77,26 @@ async def get_logs(
 ) -> LogsResponse:
     """Query logs with filters and pagination.
 
-    This endpoint requires authentication and allows querying logs with various
-    filters including log level category, date range, and agent_id for cross-referencing.
+    Retrieves paginated log entries with optional filtering by log level category,
+    date range, and agent ID. Requires authentication.
 
-    Args:
-        category: Filter by log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        start_date: ISO format start date
-        end_date: ISO format end date
-        agent_id: Filter by agent_id for cross-referencing
-        page: Page number (1-indexed)
-        page_size: Items per page (max 200)
+    **Query Parameters:**
+    - `category`: Filter by log level (DEBUG, INFO, WARNING, ERROR, CRITICAL, or custom levels)
+    - `start_date`: Start date in ISO format (e.g., `2024-01-01T00:00:00Z`)
+    - `end_date`: End date in ISO format (e.g., `2024-01-31T23:59:59Z`)
+    - `agent_id`: Filter by agent ID for cross-referencing
+    - `page`: Page number (1-indexed, default: 1)
+    - `page_size`: Items per page (1-200, default: 50)
 
-    Returns:
-        LogsResponse with paginated log entries and metadata
+    **Returns:**
+    - `LogsResponse` containing paginated log entries and pagination metadata
 
-    Example:
-        GET /api/logs?category=ERROR&page=1&page_size=50
-        GET /api/logs?agent_id=agent_123&start_date=2024-01-01T00:00:00Z
+    **Examples:**
+    ```
+    GET /api/logs?category=ERROR&page=1&page_size=50
+    GET /api/logs?agent_id=agent_123&start_date=2024-01-01T00:00:00Z
+    GET /api/logs?category=WARNING&start_date=2024-01-01T00:00:00Z&end_date=2024-01-31T23:59:59Z&page=1&page_size=100
+    ```
     """
     try:
         # Get logging service

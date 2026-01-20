@@ -273,6 +273,8 @@ export JVSPATIAL_RATE_LIMIT_ENABLED=true
 ### "Invalid token" errors
 - Check that `jwt_secret_key` is consistent between token creation and validation
 - Ensure tokens haven't expired (default 24 hours)
+- Enable debug logging to see detailed token validation information
+- Token validation decodes tokens first, then checks blacklist - expired tokens are rejected during decode
 
 ### Rate limiting too strict
 - Adjust `default_rate_limit_per_hour` in `configure_auth()`
@@ -281,6 +283,8 @@ export JVSPATIAL_RATE_LIMIT_ENABLED=true
 ### Authentication not working
 - Ensure `AuthenticationMiddleware` is added to your server
 - Check that protected endpoints use `@endpoint(..., auth=True)` instead of just `@endpoint(...)`
+- Enable debug logging to trace token validation flow and identify where validation fails
+- Login succeeds even if refresh token generation fails - check access token, not just refresh token
 
 ---
 

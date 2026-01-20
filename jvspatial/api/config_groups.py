@@ -128,11 +128,14 @@ class AuthConfig(BaseModel):
             "/redoc",
             "/openapi.json",
             "/favicon.ico",
-            "/api/auth/login",
-            "/api/auth/logout",
             "/api/auth/register",
+            "/api/auth/login",
+            "/api/auth/refresh",
+            "/api/auth/logout",
             "/auth/login",
             "/auth/logout",
+            "/auth/register",
+            "/auth/refresh",
             "/auth/register",
         ]
     )

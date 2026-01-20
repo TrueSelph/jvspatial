@@ -32,6 +32,9 @@ class AuthConfig(BaseModel):
             "/redoc",
             "/openapi.json",
             "/favicon.ico",
+            "/api/auth/register",
+            "/api/auth/login",
+            "/api/auth/refresh",
         ]
     )
 
@@ -40,6 +43,15 @@ class AuthConfig(BaseModel):
     jwt_algorithm: str = Field(default="HS256", description="JWT algorithm")
     jwt_expire_minutes: int = Field(
         default=30, description="JWT expiration time in minutes"
+    )
+    refresh_expire_days: int = Field(
+        default=7, description="Refresh token expiration time in days"
+    )
+    refresh_token_rotation: bool = Field(
+        default=False, description="Enable refresh token rotation on refresh"
+    )
+    blacklist_cache_ttl_seconds: int = Field(
+        default=3600, description="Cache TTL for blacklist checks in seconds"
     )
 
     # API Key Configuration

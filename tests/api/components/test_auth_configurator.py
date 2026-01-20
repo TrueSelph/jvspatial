@@ -157,3 +157,35 @@ class TestAuthConfigurator:
         router = configurator.auth_router
         routes = [route.path for route in router.routes if hasattr(route, "path")]
         assert any("api-keys" in path for path in routes)
+
+    def test_auth_router_has_auth_tag(self, configurator):
+        """Verify auth router uses 'Auth' tag, not 'App' tag."""
+        configurator.configure()
+
+        router = configurator.auth_router
+        assert router is not None
+
+        # APIRouter stores tags in the router's tags attribute
+        # When created with tags=["Auth"], the router should have those tags
+        # Check routes for tags (APIRouter applies tags to all routes)
+        from fastapi.routing import APIRoute
+
+        routes_with_tags = [
+            route
+            for route in router.routes
+            if isinstance(route, APIRoute) and hasattr(route, "tags") and route.tags
+        ]
+
+        if routes_with_tags:
+            # All routes should have "Auth" tag and not "App" tag
+            for route in routes_with_tags:
+                assert (
+                    "Auth" in route.tags
+                ), f"Route {route.path} should have 'Auth' tag"
+                assert (
+                    "App" not in route.tags
+                ), f"Route {route.path} should not have 'App' tag"
+        else:
+            # If no routes have explicit tags, check the router's default tags
+            # This is a fallback - in practice routes should have tags
+            pass

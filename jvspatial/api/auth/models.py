@@ -41,7 +41,19 @@ class TokenResponse(BaseModel):
     access_token: str = Field(..., description="JWT access token")
     token_type: str = Field(default="bearer", description="Token type")
     expires_in: int = Field(..., description="Token expiration time in seconds")
+    refresh_token: Optional[str] = Field(
+        None, description="Refresh token for obtaining new access tokens"
+    )
+    refresh_expires_in: Optional[int] = Field(
+        None, description="Refresh token expiration time in seconds"
+    )
     user: UserResponse = Field(..., description="User information")
+
+
+class TokenRefreshRequest(BaseModel):
+    """Request model for refreshing access token."""
+
+    refresh_token: str = Field(..., description="Refresh token to exchange")
 
 
 class User(Object):
@@ -197,3 +209,26 @@ class APIKey(Object):
         default_factory=list,
         description="Endpoint whitelist (empty = all endpoints allowed)",
     )
+
+
+class RefreshToken(Object):
+    """Refresh Token entity for authentication.
+
+    Refresh tokens are stored as Object entities (not Node) as they are fundamental
+    authentication objects that don't need graph relationships.
+    Tokens are hashed (never stored in plaintext) for security.
+    """
+
+    token_hash: str = Field(..., description="Hashed refresh token (never plaintext)")
+    user_id: str = Field(..., description="Owner user ID")
+    access_token_jti: str = Field(
+        ..., description="JTI of associated access token for tracking"
+    )
+    expires_at: datetime = Field(..., description="Token expiration timestamp")
+    is_active: bool = Field(default=True, description="Whether token is active")
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow, description="Creation timestamp"
+    )
+    last_used_at: Optional[datetime] = Field(None, description="Last usage timestamp")
+    device_info: Optional[str] = Field(None, description="Optional device identifier")
+    ip_address: Optional[str] = Field(None, description="Optional IP address")

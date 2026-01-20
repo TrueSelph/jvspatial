@@ -429,7 +429,8 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             HTTPException: If authentication fails
         """
         from jvspatial.api.auth.api_key_service import APIKeyService
-        from jvspatial.core.context import get_default_context
+        from jvspatial.core.context import GraphContext
+        from jvspatial.db import get_prime_database
 
         api_key = None
         source = None
@@ -521,8 +522,10 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             )
 
         # Validate API key using database-backed service
+        # Use prime database for API key validation (consistent with auth service)
         try:
-            service = APIKeyService(get_default_context())
+            prime_ctx = GraphContext(database=get_prime_database())
+            service = APIKeyService(prime_ctx)
             api_key_entity = await service.validate_key(api_key)
 
             if not api_key_entity:

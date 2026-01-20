@@ -394,16 +394,17 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
                                 # Route exists and method matches
                                 # For /auth/ endpoints (except exempt ones), require auth
-                                if (
-                                    "/auth/" in request_path
-                                    and request_path
-                                    not in self.auth_config.exempt_paths
-                                ):
-                                    # Auth endpoints require authentication unless explicitly exempt
-                                    self._logger.debug(
-                                        f"Auth router endpoint {request_path} requires auth"
+                                # Use path_matcher instead of direct list check for consistency
+                                if "/auth/" in request_path:
+                                    is_auth_exempt = self.path_matcher.is_exempt(
+                                        request_path
                                     )
-                                    return True
+                                    if not is_auth_exempt:
+                                        # Auth endpoints require authentication unless explicitly exempt
+                                        self._logger.debug(
+                                            f"Auth router endpoint {request_path} requires auth"
+                                        )
+                                        return True
 
                                 # Check endpoint's _jvspatial_endpoint_config if available
                                 # This allows add_route() to set auth=False even if not in registry
