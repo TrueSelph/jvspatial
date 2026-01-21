@@ -20,12 +20,10 @@ from .decorators.field import EndpointField, EndpointFieldInfo, endpoint_field
 from .decorators.route import endpoint
 from .endpoints.response import ResponseHelper, format_response
 from .endpoints.router import BaseRouter, EndpointRouter
-from .lambda_server import LambdaServer
 from .server import Server, create_server
 
 __all__ = [
     "Server",
-    "LambdaServer",
     "ServerConfig",
     "create_server",
     "get_current_server",
