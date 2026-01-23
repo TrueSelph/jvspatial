@@ -5,7 +5,6 @@ from typing import Any, List, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
-from jvspatial.core.entities.node import Node
 from jvspatial.core.entities.object import Object
 
 
@@ -110,8 +109,14 @@ class User(Object):
         return await super().create(**kwargs)
 
 
-class TokenBlacklist(Node):
-    """Token blacklist entity for logout functionality."""
+class TokenBlacklist(Object):
+    """Token blacklist entity for logout functionality.
+
+    TokenBlacklist is stored as an Object entity (not Node) as it is a fundamental
+    authentication lookup table that doesn't need graph relationships.
+    Blacklist entries are used to track revoked JWT tokens and don't require
+    graph connections via edges.
+    """
 
     token_id: str = Field(..., description="JWT token ID")
     user_id: str = Field(..., description="User ID who owns the token")
