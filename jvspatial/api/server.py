@@ -70,9 +70,6 @@ class Server:
     - Authentication setup
     - Lifecycle management
 
-    For Lambda/serverless deployments, use LambdaServer which extends this class
-    with Lambda-specific functionality.
-
     Example:
         ```python
         from jvspatial.api.server import Server, endpoint

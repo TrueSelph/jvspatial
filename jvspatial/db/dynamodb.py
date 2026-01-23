@@ -1,4 +1,4 @@
-"""DynamoDB database implementation for AWS Lambda serverless deployments.
+"""DynamoDB database implementation.
 
 Index Creation Behavior:
     By default, indexes are NOT created automatically. To enable automatic index creation,
@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 
 class DynamoDB(Database):
-    """DynamoDB-based database implementation for serverless deployments.
+    """DynamoDB-based database implementation.
 
     This implementation uses DynamoDB tables to store collections, with each
     collection mapped to a DynamoDB table. The table uses a composite key:
@@ -85,8 +85,7 @@ class DynamoDB(Database):
         if not _BOTO3_AVAILABLE:
             raise ImportError(
                 "aioboto3 is required for DynamoDB support. "
-                "Install it with: pip install -r requirements-serverless.txt "
-                "or pip install aioboto3>=12.0.0"
+                "Install it with: pip install aioboto3>=12.0.0"
             )
 
         self.table_name = table_name
@@ -104,9 +103,8 @@ class DynamoDB(Database):
         if self.aws_secret_access_key:
             self._dynamodb_kwargs["aws_secret_access_key"] = self.aws_secret_access_key
 
-        # Configure connection pool for Lambda (optimal for serverless)
-        # max_pool_connections: 10 is a good default for Lambda
-        # Higher values don't help much in Lambda due to concurrency limits
+        # Configure connection pool
+        # max_pool_connections: 10 is a good default
         # Use standard retry mode instead of adaptive to avoid potential hanging issues
         config_kwargs = {
             "max_pool_connections": 10,

@@ -349,12 +349,10 @@ class AuthenticationService:
                 return False
 
             # Create blacklist entry using service's context
-            # TokenBlacklist is a Node, so we can use Node.create() but need to use our context
+            # TokenBlacklist is an Object, so we need to use our context
             from jvspatial.core.utils import generate_id
 
-            blacklist_id = generate_id(
-                "n", "TokenBlacklist"
-            )  # TokenBlacklist is a Node
+            blacklist_id = generate_id("o", "TokenBlacklist")
             blacklist_entry = TokenBlacklist(
                 id=blacklist_id,
                 token_id=token_id,
@@ -842,7 +840,7 @@ class AuthenticationService:
             # We can't decode it without the token string, but we can add to blacklist by JTI
             from jvspatial.core.utils import generate_id
 
-            blacklist_id = generate_id("n", "TokenBlacklist")
+            blacklist_id = generate_id("o", "TokenBlacklist")
             # Estimate expiration (access tokens expire in minutes, refresh in days)
             # Use a reasonable default expiration
             estimated_expires_at = datetime.utcnow() + timedelta(
@@ -911,7 +909,7 @@ class AuthenticationService:
 
         for jti in access_token_jtis:
             try:
-                blacklist_id = generate_id("n", "TokenBlacklist")
+                blacklist_id = generate_id("o", "TokenBlacklist")
                 blacklist_entry = TokenBlacklist(
                     id=blacklist_id,
                     token_id=jti,

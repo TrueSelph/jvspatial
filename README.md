@@ -15,7 +15,6 @@ An async-first Python library for building graph-based spatial applications with
 - [Installation](#installation)
 - [Quick Start](#quick-start)
   - [Basic Example](#basic-example)
-  - [Serverless Deployment (AWS Lambda)](#serverless-deployment-aws-lambda)
 - [Core Concepts](#core-concepts)
 - [Configuration](#configuration)
 - [Documentation](#documentation)
@@ -27,8 +26,6 @@ An async-first Python library for building graph-based spatial applications with
 jvspatial is an async-first Python library for building graph-based spatial applications with FastAPI integration. It provides entity-centric database operations with automatic context management.
 
 Inspired by [Jaseci's](https://jaseci.org) object-spatial paradigm and leveraging Python's async capabilities, jvspatial empowers developers to model complex relationships, traverse object graphs, and implement agent-based architectures that scale with modern cloud-native concurrency requirements.
-
-**🚀 Serverless Ready**: Deploy to AWS Lambda with zero configuration changes. Use `LambdaServer` and your FastAPI app is automatically wrapped with Mangum for Lambda compatibility. Includes native DynamoDB support for persistent storage in serverless environments.
 
 **Key Design Principles:**
 - **Hierarchy**: Object → Node → Edge/Walker inheritance
@@ -61,14 +58,6 @@ Inspired by [Jaseci's](https://jaseci.org) object-spatial paradigm and leveragin
 - Custom database registration for extensibility
 - Pagination with `ObjectPager`
 
-### ☁️ Serverless Deployment (AWS Lambda)
-- **Zero-configuration Lambda deployment** with `LambdaServer`
-- Automatic Mangum integration for FastAPI → Lambda compatibility
-- **Native DynamoDB support** for persistent storage in serverless environments
-- Handler automatically exposed at module level for Lambda
-- Works seamlessly with API Gateway
-- See [Lambda Example](examples/api/lambda_example.py) for complete deployment guide
-
 ### ⚙️ Unified Configuration
 - Single `Config` class for all settings
 - Environment variable support
@@ -80,16 +69,12 @@ Inspired by [Jaseci's](https://jaseci.org) object-spatial paradigm and leveragin
 - Authentication and authorization with automatic endpoint registration when enabled
 - Response schema definitions with examples
 - Entity-centric CRUD operations
-- **Serverless deployment** to AWS Lambda with automatic handler setup
 
 ## Installation
 
 ```bash
 # Core installation
 pip install jvspatial
-
-# With serverless support (AWS Lambda + DynamoDB)
-pip install jvspatial[serverless]
 ```
 
 ## Quick Start
@@ -97,7 +82,6 @@ pip install jvspatial[serverless]
 > **💡 Standard Examples**: For production-ready API implementations, see:
 > - **Authenticated API**: [`examples/api/authenticated_endpoints_example.py`](examples/api/authenticated_endpoints_example.py) - Complete CRUD with authentication
 > - **Unauthenticated API**: [`examples/api/unauthenticated_endpoints_example.py`](examples/api/unauthenticated_endpoints_example.py) - Public read-only API
-> - **🚀 Serverless Lambda**: [`examples/api/lambda_example.py`](examples/api/lambda_example.py) - AWS Lambda deployment with DynamoDB
 
 ### Basic Example
 
@@ -130,47 +114,6 @@ async def get_user(user_id: str):
 if __name__ == "__main__":
     server.run()
 ```
-
-### Serverless Deployment (AWS Lambda)
-
-Deploy to AWS Lambda with zero configuration changes:
-
-```python
-from jvspatial.api import endpoint
-from jvspatial.api.lambda_server import LambdaServer
-from jvspatial.core import Node
-
-# Use LambdaServer for Lambda deployments - handler is automatically created and exposed
-# DynamoDB is the default database (can be overridden)
-server = LambdaServer(
-    title="Lambda API",
-    dynamodb_table_name="myapp",
-    dynamodb_region="us-east-1",
-)
-
-class Product(Node):
-    name: str = ""
-    price: float = 0.0
-
-@endpoint("/products", methods=["GET"])
-async def list_products():
-    products = await Product.find({})
-    import asyncio
-    products_list = await asyncio.gather(*[p.export() for p in products])
-    return {"products": products_list}
-
-# Handler is automatically available at module level for Lambda
-# No manual assignment needed! AWS Lambda will call: lambda_example.handler
-```
-
-**Deployment Steps:**
-1. Install: `pip install jvspatial[serverless]`
-2. Package your code and dependencies
-3. Set Lambda handler to: `your_module.handler`
-4. Configure API Gateway trigger
-5. Deploy!
-
-See the [complete Lambda example](examples/api/lambda_example.py) for full deployment guide.
 
 ## Core Concepts
 
@@ -303,10 +246,9 @@ server = Server(
 
 ### API Development
 - [REST API Guide](docs/md/rest-api.md) - API design patterns
-- [Server API Guide](docs/md/server-api.md) - Server configuration and **serverless deployment**
+- [Server API Guide](docs/md/server-api.md) - Server configuration
 - [Authentication Guide](docs/md/authentication.md) - Authentication patterns
 - [Entity Reference](docs/md/entity-reference.md) - Node, Edge, Walker classes
-- [Lambda Deployment Example](examples/api/lambda_example.py) - Complete AWS Lambda setup with DynamoDB
 
 ### Advanced Topics
 - [API Architecture](docs/md/api-architecture.md) - System architecture

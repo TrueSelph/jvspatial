@@ -151,7 +151,7 @@ def create_database(
         # SQLite database (file-based storage)
         db = create_database("sqlite", db_path="./data/app.db")
 
-        # DynamoDB database (AWS Lambda serverless)
+        # DynamoDB database
         db = create_database("dynamodb", table_name="myapp", region_name="us-east-1")
 
         # Custom database (after registration)
