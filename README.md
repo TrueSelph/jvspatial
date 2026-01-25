@@ -70,6 +70,11 @@ Inspired by [Jaseci's](https://jaseci.org) object-spatial paradigm and leveragin
 - Response schema definitions with examples
 - Entity-centric CRUD operations
 
+### ⚡ Performance Mixins
+- **DeferredSaveMixin**: Batch multiple `save()` calls into a single database write
+- Configurable via `JVSPATIAL_ENABLE_DEFERRED_SAVES` environment variable
+- Ideal for entities with rapid, sequential updates
+
 ## Installation
 
 ```bash

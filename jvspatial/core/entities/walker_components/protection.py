@@ -47,6 +47,9 @@ class TraversalProtection:
         self._steps = 0
         self._visit_counts: dict[str, int] = {}
         self._start_time: Optional[float] = None
+        # Track visit violations for O(1) check_limits() - set when any node
+        # reaches max_visits_per_node (before raising exception)
+        self._visit_violation_detected: bool = False
 
     async def increment_step(self) -> None:
         """Increment the step counter and check protection limits."""
@@ -77,6 +80,8 @@ class TraversalProtection:
         count = self._visit_counts.get(node_id, 0) + 1
         self._visit_counts[node_id] = count
         if count >= self._max_visits_per_node:
+            # Set violation flag for O(1) check_limits() before raising
+            self._visit_violation_detected = True
             raise ProtectionViolation(
                 "max_visits_per_node",
                 {
@@ -105,6 +110,7 @@ class TraversalProtection:
         """Reset protection state and start timing."""
         self._steps = 0
         self._visit_counts.clear()
+        self._visit_violation_detected = False
         self._start_time = time.time()
 
     @property
@@ -155,13 +161,18 @@ class TraversalProtection:
         return time.time() - self._start_time
 
     async def check_limits(self) -> bool:
-        """Check if limits are exceeded without raising. Returns True if OK."""
+        """Check if limits are exceeded without raising. Returns True if OK.
+
+        This method uses O(1) checks by leveraging the violation flag set
+        during record_visit() instead of iterating through all visit counts.
+        """
+        # O(1) step count check
         if self._steps >= self._max_steps:
             return False
-        for count in self._visit_counts.values():
-            if count >= self._max_visits_per_node:
-                return False
-        # Check timeout
+        # O(1) visit violation check (flag set by record_visit)
+        if self._visit_violation_detected:
+            return False
+        # O(1) timeout check
         if self._start_time is not None and self._max_execution_time > 0:
             elapsed = time.time() - self._start_time
             if elapsed >= self._max_execution_time:

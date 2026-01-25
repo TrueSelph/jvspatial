@@ -1236,7 +1236,8 @@ class GraphContext:
 
         # Fetch uncached entities from database
         if uncached_ids:
-            collection = self._get_collection_name(entity_class.type_code)
+            type_code = self._get_entity_type_code(entity_class)
+            collection = self._get_collection_name(type_code)
             db = self.database
 
             # Use database batch query if available
@@ -1301,7 +1302,8 @@ class GraphContext:
         if query is None:
             query = {}
 
-        collection = self._get_collection_name(node_class.type_code)
+        type_code = self._get_entity_type_code(node_class)
+        collection = self._get_collection_name(type_code)
         db = self.database
 
         # Use database cursor if available, otherwise use find
@@ -1333,7 +1335,8 @@ class GraphContext:
         if query is None:
             query = {}
 
-        collection = self._get_collection_name(edge_class.type_code)
+        type_code = self._get_entity_type_code(edge_class)
+        collection = self._get_collection_name(type_code)
         db = self.database
 
         # Use database cursor if available, otherwise use find

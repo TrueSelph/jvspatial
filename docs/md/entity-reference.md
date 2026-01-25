@@ -252,6 +252,71 @@ async def paginate_by_field(
 ) -> List[Object]
 ```
 
+### Mixins
+
+#### `DeferredSaveMixin`
+
+A mixin that adds deferred save capability to entities, allowing multiple `save()` calls to be batched into a single database write.
+
+```python
+from jvspatial.core import Node
+from jvspatial.core.mixins import DeferredSaveMixin
+
+class MyEntity(DeferredSaveMixin, Node):
+    counter: int = 0
+    status: str = "pending"
+```
+
+**Important**: Place `DeferredSaveMixin` before `Node` in the inheritance list.
+
+**Methods:**
+
+```python
+def enable_deferred_saves() -> None
+    """Enable deferred mode - save() marks dirty instead of writing"""
+
+def disable_deferred_saves() -> None
+    """Disable deferred mode - save() writes immediately"""
+
+async def save(*args, **kwargs) -> Any
+    """Save entity (deferred if enabled, immediate if disabled)"""
+
+async def flush() -> None
+    """Force write if dirty, then clear dirty flag"""
+```
+
+**Properties:**
+
+```python
+@property
+def is_dirty() -> bool
+    """True if entity has pending changes"""
+
+@property
+def deferred_saves_enabled() -> bool
+    """True if deferred mode is active"""
+```
+
+**Environment Variable:**
+
+- `JVSPATIAL_ENABLE_DEFERRED_SAVES` - Global control (default: `true`)
+
+**Usage Example:**
+
+```python
+entity.enable_deferred_saves()
+
+entity.counter = 1
+await entity.save()  # Marks dirty only
+
+entity.status = "done"
+await entity.save()  # Still just marks dirty
+
+await entity.flush()  # Single DB write for both changes
+```
+
+See [Optimization Guide - Deferred Saves](optimization.md#deferred-saves) for detailed usage patterns.
+
 ### Decorators
 
 #### `@on_visit(target_type=None)`

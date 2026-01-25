@@ -67,6 +67,9 @@ from .core.context import GraphContext
 # Unified entity system
 from .core.entities import Edge, Node, Object, Root, Walker
 
+# Mixins
+from .core.mixins import ENABLE_DEFERRED_SAVES, DeferredSaveMixin
+
 # Simplified database and cache
 from .db import Database, create_database
 
@@ -89,6 +92,9 @@ __all__ = [
     "Walker",
     "Root",
     "GraphContext",
+    # Mixins
+    "DeferredSaveMixin",
+    "ENABLE_DEFERRED_SAVES",
     # Simplified decorators
     "attribute",
     "endpoint",
