@@ -68,7 +68,7 @@ class DBLogHandler(logging.Handler):
     - Message from log record
     - Log level from record (including custom levels)
     - Exception/traceback from exc_info
-    - status_code, event_code (or error_code/code), path, method from extra
+    - status_code, event_code, path, method from extra
     - agent_id from extra (for cross-referencing)
     - Any other fields from extra (stored in log_data)
 
@@ -172,14 +172,8 @@ class DBLogHandler(logging.Handler):
             status_code = getattr(record, "status_code", None) or extra_dict.get(
                 "status_code"
             )
-            # Support error_code, event_code, and code field names (all are valid)
-            event_code = (
-                getattr(record, "error_code", None)
-                or getattr(record, "event_code", None)
-                or getattr(record, "code", None)
-                or extra_dict.get("error_code")
-                or extra_dict.get("event_code")
-                or extra_dict.get("code", "")
+            event_code = getattr(record, "event_code", None) or extra_dict.get(
+                "event_code", ""
             )
             path = getattr(record, "path", "") or extra_dict.get("path", "")
             method = getattr(record, "method", "") or extra_dict.get("method", "")
@@ -255,9 +249,7 @@ class DBLogHandler(logging.Handler):
             # Fields we've already extracted and added to log_data
             already_handled = {
                 "status_code",
-                "error_code",
                 "event_code",
-                "code",
                 "path",
                 "method",
                 "details",

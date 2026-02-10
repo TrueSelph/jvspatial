@@ -42,7 +42,7 @@ class BaseLoggingService:
         service = get_logging_service()
         await service.log_error(
             status_code=500,
-            error_code="internal_error",
+            event_code="internal_error",
             message="Database connection failed",
             path="/api/users",
             method="POST",
@@ -55,7 +55,7 @@ class BaseLoggingService:
         ```python
         await service.log_error(
             status_code=422,
-            error_code="validation_error",
+            event_code="validation_error",
             message="Invalid input",
             path="/api/data",
             method="POST",
@@ -123,7 +123,7 @@ class BaseLoggingService:
     async def log_error(
         self,
         status_code: Optional[int] = None,
-        error_code: str = "",
+        event_code: str = "",
         message: str = "",
         path: str = "",
         method: str = "",
@@ -139,7 +139,7 @@ class BaseLoggingService:
 
         Args:
             status_code: Optional HTTP status code (None for non-HTTP logs)
-            error_code: Machine-readable event/code identifier
+            event_code: Machine-readable event identifier
             message: Human-readable log message
             path: Optional request path (empty for non-HTTP logs)
             method: Optional HTTP method (empty for non-HTTP logs)
@@ -158,7 +158,7 @@ class BaseLoggingService:
             ```python
             await service.log_error(
                 status_code=500,
-                error_code="database_error",
+                event_code="database_error",
                 message="Connection timeout",
                 path="/api/users",
                 method="POST",
@@ -172,7 +172,7 @@ class BaseLoggingService:
             Custom log level:
             ```python
             await service.log_error(
-                error_code="audit_event",
+                event_code="audit_event",
                 message="User action performed",
                 log_level="AUDIT",
                 details={"action": "data_export"},
@@ -182,7 +182,7 @@ class BaseLoggingService:
         """
         try:
             logger.debug(
-                f"Attempting to log error {error_code} (status {status_code}) at {path}"
+                f"Attempting to log error {event_code} (status {status_code}) at {path}"
             )
 
             # Get logging database
@@ -228,7 +228,7 @@ class BaseLoggingService:
             # Create log entry
             log_entry = DBLog(
                 status_code=status_code,
-                event_code=error_code,
+                event_code=event_code,
                 log_level=log_level,
                 path=path,
                 method=method,
@@ -247,7 +247,7 @@ class BaseLoggingService:
             await log_entry.set_context(log_context)
             await log_entry.save()
             logger.info(
-                f"Successfully logged error {error_code} (status {status_code}) to logging database"
+                f"Successfully logged error {event_code} (status {status_code}) to logging database"
             )
 
         except Exception as e:
@@ -293,7 +293,7 @@ class BaseLoggingService:
         """
         await self.log_error(
             status_code=status_code,
-            error_code=event_code,
+            event_code=event_code,
             message=message,
             path=path,
             method=method,
@@ -304,7 +304,7 @@ class BaseLoggingService:
 
     async def get_error_logs(
         self,
-        error_code: Optional[str] = None,
+        event_code: Optional[str] = None,
         status_code: Optional[int] = None,
         path: Optional[str] = None,
         start_time: Optional[datetime] = None,
@@ -318,7 +318,7 @@ class BaseLoggingService:
         This method can query logs at any level (ERROR, WARNING, INFO, or custom levels).
 
         Args:
-            error_code: Optional error code filter
+            event_code: Optional event code filter
             status_code: Optional status code filter
             path: Optional path filter
             start_time: Optional start time filter
@@ -368,8 +368,8 @@ class BaseLoggingService:
                 "entity": "DBLog",
             }
 
-            if error_code:
-                query["context.event_code"] = error_code
+            if event_code:
+                query["context.event_code"] = event_code
             if status_code:
                 query["context.status_code"] = status_code
             if path:
@@ -478,7 +478,7 @@ class BaseLoggingService:
 
     async def purge_error_logs(
         self,
-        error_code: Optional[str] = None,
+        event_code: Optional[str] = None,
         status_code: Optional[int] = None,
         path: Optional[str] = None,
         start_time: Optional[datetime] = None,
@@ -490,7 +490,7 @@ class BaseLoggingService:
         This method can purge logs at any level (ERROR, WARNING, INFO, or custom levels).
 
         Args:
-            error_code: Optional error code filter
+            event_code: Optional event code filter
             status_code: Optional status code filter
             path: Optional path filter
             start_time: Optional start time filter (delete logs before this time)
@@ -517,8 +517,8 @@ class BaseLoggingService:
                 "entity": "DBLog",
             }
 
-            if error_code:
-                query["context.event_code"] = error_code
+            if event_code:
+                query["context.event_code"] = event_code
             if status_code:
                 query["context.status_code"] = status_code
             if path:

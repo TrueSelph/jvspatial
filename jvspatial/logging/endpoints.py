@@ -27,13 +27,13 @@ class LogEntry(BaseModel):
         description="Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL, or custom levels)",
     )
     status_code: int = Field(..., description="HTTP status code")
-    error_code: str = Field(..., description="Machine-readable error code")
+    event_code: str = Field(..., description="Machine-readable event identifier")
     message: str = Field(..., description="Log message")
     path: str = Field(..., description="Request path")
     method: str = Field(..., description="HTTP method")
     agent_id: Optional[str] = Field(None, description="Agent ID for cross-referencing")
     logged_at: str = Field(..., description="ISO timestamp when logged")
-    error_data: Dict[str, Any] = Field(..., description="Additional log data")
+    log_data: Dict[str, Any] = Field(..., description="Additional log data")
 
 
 class PaginationInfo(BaseModel):
@@ -120,7 +120,7 @@ async def get_logs(
         # Query logs using the service
         # Note: The service needs to be enhanced to support log_level filtering
         result = await service.get_error_logs(
-            error_code=None,
+            event_code=None,
             status_code=None,
             path=None,
             start_time=start_time,
@@ -132,23 +132,24 @@ async def get_logs(
             agent_id=agent_id,
         )
 
-        # Transform error logs to log entries
+        # Transform service result to log entries (service returns event_code and log_data)
         log_entries: List[LogEntry] = []
-        for error in result.get("errors", []):
-            error_data = error.get("error_data", {})
-            log_entry = LogEntry(
-                log_id=error["log_id"],
-                log_level=error_data.get("log_level", "ERROR"),
-                status_code=error["status_code"],
-                error_code=error["error_code"],
-                message=error.get("message", ""),
-                path=error["path"],
-                method=error["method"],
-                agent_id=error_data.get("agent_id"),
-                logged_at=error["logged_at"],
-                error_data=error_data,
+        for entry in result.get("errors", []):
+            log_data = entry.get("log_data", {})
+            log_entries.append(
+                LogEntry(
+                    log_id=entry.get("log_id", ""),
+                    log_level=log_data.get("log_level", "ERROR"),
+                    status_code=entry.get("status_code") or 0,
+                    event_code=entry.get("event_code", ""),
+                    message=entry.get("message", ""),
+                    path=entry.get("path", ""),
+                    method=entry.get("method", ""),
+                    agent_id=log_data.get("agent_id"),
+                    logged_at=entry.get("logged_at", ""),
+                    log_data=log_data,
+                )
             )
-            log_entries.append(log_entry)
 
         # Build pagination info
         pagination_data = result.get("pagination", {})

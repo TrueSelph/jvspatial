@@ -48,8 +48,9 @@ class _SaveableProtocol(Protocol):
         ...
 
 
-# Global configuration for deferred saves
-# Default to "true" to enable the optimization
+# Global configuration for deferred saves (no effect until enable_deferred_saves()
+# is called on an instance). Default "true" enables the optimization when deferred
+# mode is enabled.
 ENABLE_DEFERRED_SAVES = (
     os.getenv("JVSPATIAL_ENABLE_DEFERRED_SAVES", "true").lower() == "true"
 )
@@ -178,6 +179,11 @@ class DeferredSaveMixin:
 
         This should be called when you're done making updates and
         want to persist all accumulated changes to the database.
+
+        Note:
+            When using deferred saves, callers must not rely on arguments
+            passed to save() (e.g. *args, **kwargs) being applied at flush
+            time; flush() invokes the underlying save with no arguments.
 
         Raises:
             Exception: Re-raises any exception from save(), preserving

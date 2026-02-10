@@ -45,7 +45,7 @@ logger.error(
     extra={
         "details": {"field": "email", "value": "invalid"},
         "status_code": 422,
-        "error_code": "validation_error",
+        "event_code": "validation_error",
         "path": "/api/users",
         "method": "POST",
         "agent_id": "agent_456"  # For cross-referencing
@@ -210,13 +210,13 @@ GET /api/logs?category=ERROR&page=1&page_size=50
       "log_id": "log_123",
       "log_level": "ERROR",
       "status_code": 500,
-      "error_code": "internal_error",
+      "event_code": "internal_error",
       "message": "Database connection failed",
       "path": "/api/users",
       "method": "POST",
       "agent_id": "agent_456",
       "logged_at": "2024-01-15T10:30:00Z",
-      "error_data": {
+      "log_data": {
         "message": "Database connection failed",
         "log_level": "ERROR",
         "details": {...}
