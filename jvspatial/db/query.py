@@ -366,11 +366,15 @@ class QueryEngine:
                     pattern = operand.get("pattern", "")
                     if operand.get("ignoreCase"):
                         flags |= re.IGNORECASE
+                elif isinstance(condition, dict) and condition.get("$options") == "i":
+                    flags |= re.IGNORECASE
                 try:
                     if re.search(pattern, value, flags) is None:
                         return False
                 except re.error:
                     return False
+            elif op == "$options":
+                pass  # MongoDB-style; handled with $regex above
             elif op == "$size":
                 try:
                     if len(value) != int(operand):

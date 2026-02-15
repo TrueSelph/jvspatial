@@ -48,6 +48,8 @@ class PathMatcher:
 
         expanded: List[str] = []
         for path in exempt_paths:
+            if path is None or not isinstance(path, str):
+                continue
             # normalize path to start with "/"
             normalized = path if path.startswith("/") else f"/{path}"
             expanded.append(normalized)
