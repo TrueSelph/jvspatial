@@ -109,6 +109,22 @@ class BaseRouter:
         if methods is None:
             methods = ["POST"]
 
+        # Skip duplicate registration: same path+methods causes FastAPI duplicate operation_id warning.
+        methods_set = {m.upper() for m in methods}
+        for route in self.router.routes:
+            if hasattr(route, "path") and hasattr(route, "methods"):
+                route_methods = getattr(route, "methods", None) or []
+                route_methods_set = {
+                    str(m).upper()
+                    for m in (
+                        route_methods
+                        if isinstance(route_methods, (list, set))
+                        else [route_methods]
+                    )
+                }
+                if route.path == path and route_methods_set == methods_set:
+                    return
+
         if source_obj and isinstance(source_obj, AuthEndpoint):
             # Propagate auth metadata to the endpoint function
             endpoint._auth_required = source_obj._auth_required  # type: ignore[attr-defined]
