@@ -66,4 +66,4 @@ repos:
         name: Detect Secrets
         args: ['scan', '.']
         files: \.(py|txt|yaml|json)$
-        exclude: "^(venv|.mypy_cache)/"
+        exclude: "^(venv|.mypy_cache|.test_dbs|tests)/"

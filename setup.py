@@ -48,7 +48,7 @@ setup(
         "bcrypt",  # Password hashing for authentication
         "schedule>=1.2.2",  # Job scheduling
         "typing-extensions",  # For @override decorator and enhanced typing
-        "boto3",  # AWS SDK for S3 storage support
+        "aioboto3",  # AWS SDK for S3 storage support
     ],
     extras_require={
         "dev": [

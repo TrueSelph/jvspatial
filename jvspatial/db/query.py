@@ -366,11 +366,15 @@ class QueryEngine:
                     pattern = operand.get("pattern", "")
                     if operand.get("ignoreCase"):
                         flags |= re.IGNORECASE
+                elif isinstance(condition, dict) and condition.get("$options") == "i":
+                    flags |= re.IGNORECASE
                 try:
                     if re.search(pattern, value, flags) is None:
                         return False
                 except re.error:
                     return False
+            elif op == "$options":
+                pass  # MongoDB-style; handled with $regex above
             elif op == "$size":
                 try:
                     if len(value) != int(operand):
@@ -487,7 +491,7 @@ LogicalOperatorHandler = Callable[[Dict[str, Any], Any], bool]
 class QueryBuilder:
     """Builder for constructing MongoDB-style queries programmatically."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._query: Dict[str, Any] = {}
 
     def field(self, name: str) -> "FieldQuery":

@@ -28,6 +28,7 @@ from .graph import (
     generate_graph_dot,
     generate_graph_mermaid,
 )
+from .mixins import ENABLE_DEFERRED_SAVES, DeferredSaveMixin
 from .pager import ObjectPager, paginate_by_field, paginate_objects
 from .utils import find_subclass_by_name, generate_id, serialize_datetime
 
@@ -39,6 +40,9 @@ __all__ = [
     "Walker",
     "Root",
     "NodeQuery",
+    # Mixins
+    "DeferredSaveMixin",
+    "ENABLE_DEFERRED_SAVES",
     # Pagination
     "ObjectPager",
     "paginate_objects",

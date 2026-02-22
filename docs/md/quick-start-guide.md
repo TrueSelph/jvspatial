@@ -1,7 +1,7 @@
 # Quick Start Guide
 
-**Version**: 0.0.1
-**Date**: 2025-10-20
+**Version**: 0.0.3
+**Date**: 2025-02-22
 
 Get started with jvspatial in 5 minutes! This guide covers installation, basic concepts, and your first application.
 
@@ -14,8 +14,8 @@ Get started with jvspatial in 5 minutes! This guide covers installation, basic c
 pip install jvspatial
 
 # Install with optional dependencies
-pip install jvspatial[redis]  # For Redis cache
-pip install jvspatial[s3]     # For S3 storage
+pip install jvspatial[dev]    # Development tools (pytest, pre-commit)
+pip install jvspatial[test]   # Testing (pytest, httpx)
 pip install jvspatial[all]    # All optional deps
 ```
 
@@ -122,23 +122,8 @@ async def get_user(user_id: str):
 ### **Step 4: Start the Server**
 
 ```python
-import asyncio
-
-async def main():
-    # Create server
-    server = Server(
-        config=ServerConfig(
-            host="0.0.0.0",
-            port=8000,
-            title="My First jvspatial App",
-        )
-    )
-
-    # Start server
-    await server.start()
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    server.run()
 ```
 
 ### **Step 5: Run It!**
@@ -155,11 +140,13 @@ Visit: `http://localhost:8000/docs` for interactive API documentation!
 
 ### **Pattern 1: Creating Nodes**
 
+When using a **Server**, the server injects context automatically—no explicit context needed. When running **standalone** (scripts, tests), use `GraphContext`:
+
 ```python
 from jvspatial import Node
 from jvspatial.core import GraphContext
 
-# Create a node
+# Standalone (scripts, tests): explicit context required
 async with GraphContext() as ctx:
     user = User(
         name="Alice",
@@ -225,7 +212,7 @@ async def list_all_users():
 ```python
 from jvspatial.utils import memoize
 
-@memoize(maxsize=100, ttl=300)  # Cache for 5 minutes
+@memoize(maxsize=100)
 async def expensive_calculation(n: int):
     """Expensive function that benefits from caching."""
     # ... complex computation ...
@@ -242,49 +229,36 @@ Create a `.env` file:
 
 ```bash
 # Database
-DATABASE_BACKEND=jsondb
-DATABASE_PATH=./data
+JVSPATIAL_DB_TYPE=json
+JVSPATIAL_JSONDB_PATH=./jvdb
 
 # Cache
-CACHE_BACKEND=memory
-CACHE_TTL=300
+JVSPATIAL_CACHE_BACKEND=memory
+JVSPATIAL_CACHE_SIZE=1000
 
 # Server
-SERVER_HOST=0.0.0.0
-SERVER_PORT=8000
+JVSPATIAL_HOST=0.0.0.0
+JVSPATIAL_PORT=8000
 
 # Authentication
-JWT_SECRET_KEY=your-secret-key-here
-JWT_ALGORITHM=HS256
-JWT_EXPIRATION=3600
+JVSPATIAL_JWT_SECRET=your-secret-key-here
 ```
 
 ### **Programmatic Configuration**
 
 ```python
-from jvspatial.api import Server, ServerConfig
+from jvspatial.api import Server
 
-config = ServerConfig(
-    host="0.0.0.0",
-    port=8000,
+# Server accepts kwargs directly (recommended)
+server = Server(
     title="My API",
     description="Built with jvspatial",
     version="1.0.0",
-
-    # CORS
-    cors_enabled=True,
-    cors_origins=["http://localhost:3000"],
-
-    # Database
-    database_backend="jsondb",
-    database_path="./data",
-
-    # Cache
-    cache_backend="redis",
-    redis_url="redis://localhost:6379",
+    host="0.0.0.0",
+    port=8000,
+    db_type="json",
+    db_path="./jvdb",
 )
-
-server = Server(config=config)
 ```
 
 ---
@@ -354,7 +328,7 @@ ls -la
 
 # Run examples
 python core/cities.py
-python server/server_demo.py
+python api/authenticated_endpoints_example.py
 python walkers/walker_traversal_demo.py
 ```
 
@@ -369,15 +343,20 @@ python walkers/walker_traversal_demo.py
 
 ## 🎓 **Common Gotchas**
 
-### **1. Forgetting Context**
+### **1. Context When Not Using Server**
+
+When running **standalone** (scripts, tests), you must provide context. When using a **Server**, context is automatic.
 
 ```python
-# ❌ Wrong: No context
+# ❌ Wrong: Standalone without context
 user = await User.get(user_id)
 
-# ✅ Correct: With context
+# ✅ Correct: Standalone with explicit context
 async with GraphContext() as ctx:
     user = await User.get(user_id, ctx=ctx)
+
+# ✅ Correct: With Server - no explicit context needed
+# The server injects context for endpoint handlers
 ```
 
 ### **2. Blocking Operations**
@@ -422,7 +401,7 @@ You now know the basics of jvspatial! Start building your graph-based applicatio
 
 ---
 
-**Last Updated**: 2025-10-20
-**Version**: 0.0.1
+**Last Updated**: 2025-02-22
+**Version**: 0.0.3
 **Maintainer**: JVspatial Team
 

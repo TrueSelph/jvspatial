@@ -44,12 +44,14 @@ def configure_openapi_security(app: FastAPI) -> None:
         }
     }
 
-    # Only add API key authentication if it's enabled
-    if server and server.config.api_key_auth_enabled:
+    # Add API key authentication when auth is enabled
+    # API key auth is always available when auth is enabled (middleware attempts it)
+    # The api_key_auth_enabled flag only controls endpoint registration, not availability
+    if server and server.config.auth.auth_enabled:
         security_schemes["ApiKeyAuth"] = {
             "type": "apiKey",
             "in": "header",
-            "name": server.config.api_key_header,
+            "name": server.config.auth.api_key_header,
             "description": "API key authentication",
         }
 
@@ -199,8 +201,9 @@ def get_endpoint_security_requirements(
     # Add JWT Bearer authentication
     security_requirements.append({"BearerAuth": []})
 
-    # Only add API key authentication if it's enabled
-    if server and server.config.api_key_auth_enabled:
+    # Add API key authentication when auth is enabled
+    # API key auth is always available when auth is enabled (middleware attempts it)
+    if server and server.config.auth.auth_enabled:
         security_requirements.append({"ApiKeyAuth": []})
 
     return security_requirements

@@ -8,7 +8,6 @@ setup, lifecycle management, and endpoint routing.
 
 import contextlib
 import logging
-import re
 from typing import (
     Any,
     Callable,
@@ -34,7 +33,6 @@ from jvspatial.api.services.discovery import EndpointDiscoveryService
 from jvspatial.api.services.lifecycle import LifecycleManager
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node, Root, Walker
-from jvspatial.db.factory import create_database
 from jvspatial.logging import configure_standard_logging
 
 
@@ -71,9 +69,6 @@ class Server:
     - Middleware and exception handling
     - Authentication setup
     - Lifecycle management
-
-    For Lambda/serverless deployments, use LambdaServer which extends this class
-    with Lambda-specific functionality.
 
     Example:
         ```python
@@ -158,175 +153,140 @@ class Server:
 
         set_current_server(self)
 
+        # Flush any deferred endpoints that were decorated before server initialization
+        from jvspatial.api.decorators.deferred_registry import flush_deferred_endpoints
+
+        flushed_count = flush_deferred_endpoints(self)
+        if flushed_count > 0:
+            self._logger.debug(
+                f"Registered {flushed_count} deferred endpoint(s) during server initialization"
+            )
+
         # Initialize GraphContext if database configuration is provided
-        if self.config.db_type:
+        if self.config.database.db_type:
             self._initialize_graph_context()
 
         # Configure authentication if enabled (after context is initialized)
         self._configure_authentication()
 
         # Initialize file storage if enabled
-        if self.config.file_storage_enabled:
+        if self.config.file_storage.file_storage_enabled:
             self._initialize_file_storage()
 
     def _configure_authentication(self: "Server") -> None:
         """Configure authentication middleware and register auth endpoints if enabled."""
-        if not self.config.auth_enabled:
-            return
+        from jvspatial.api.components.auth_configurator import AuthConfigurator
 
-        # Create auth configuration
-        from jvspatial.api.auth.config import AuthConfig
+        # Validate configuration
+        if (
+            self.config.auth.auth_enabled
+            and self.config.auth.jwt_secret
+            == "your-secret-key"  # pragma: allowlist secret
+        ):
+            # Warn if using default JWT secret in production
+            self._logger.warning(
+                "⚠️  Using default JWT secret. Set jwt_secret in production!"
+            )
 
-        self._auth_config = AuthConfig(
-            enabled=True,
-            exempt_paths=self.config.auth_exempt_paths,
-            jwt_secret=self.config.jwt_secret,
-            jwt_algorithm=self.config.jwt_algorithm,
-            jwt_expire_minutes=self.config.jwt_expire_minutes,
-            api_key_header=self.config.api_key_header,
-            session_cookie_name=self.config.session_cookie_name,
-            session_expire_minutes=self.config.session_expire_minutes,
-        )
+        auth_configurator = AuthConfigurator(self.config, self._logger)
+        self._auth_config = auth_configurator.configure()
+        self._auth_router = auth_configurator.auth_router
+        self._auth_endpoints_registered = auth_configurator.has_auth_endpoints
+        self._has_auth_endpoints = auth_configurator.has_auth_endpoints
 
-        # Register authentication endpoints
-        self._register_auth_endpoints()
+    def disable_auth_endpoint(self: "Server", path: str) -> bool:
+        """Disable a specific auth endpoint by removing it from the auth router.
 
-        self._logger.debug("🔐 Authentication configured and endpoints registered")
+        This method removes routes from the auth router before it's included in the app.
+        The path can be either:
+        - Relative to router prefix: "/register" (recommended)
+        - Full path including router prefix: "/auth/register"
 
-    def _register_auth_endpoints(self: "Server") -> None:
-        """Register authentication endpoints if auth is enabled."""
-        if self._auth_endpoints_registered:
-            return
+        The endpoint will be accessible at "/api/auth/register" when the router
+        is included with the API prefix.
 
-        # Import authentication service and models
-        from typing import Optional
+        Args:
+            path: Path to disable, either relative ("/register") or full ("/auth/register")
 
-        from fastapi import APIRouter, Depends, Header, HTTPException
-        from fastapi.security import (
-            HTTPAuthorizationCredentials,
-            HTTPBearer,
-        )
+        Returns:
+            True if endpoint was found and removed, False otherwise
+        """
+        if not hasattr(self, "_auth_router") or self._auth_router is None:
+            self._logger.debug(
+                f"Auth router not available, cannot disable endpoint: {path}"
+            )
+            return False
 
-        from jvspatial.api.auth.models import (
-            TokenResponse,
-            UserCreate,
-            UserLogin,
-            UserResponse,
-        )
-        from jvspatial.api.auth.service import AuthenticationService
+        # Normalize path (ensure it starts with /)
+        if not path.startswith("/"):
+            path = f"/{path}"
 
-        # Helper function to get authentication service
-        def get_auth_service():
-            """Get authentication service using prime database for core persistence.
+        # FastAPI routers with a prefix store routes with the full path including prefix
+        # The auth router has prefix="/auth", so routes are stored as "/auth/register", etc.
+        # Normalize the input path to include "/auth" prefix if not present
+        if path.startswith("/auth/"):
+            # Already has full path
+            full_path = path
+            relative_path = path[6:]  # Remove "/auth/" for logging
+        elif path.startswith("/auth"):
+            full_path = "/auth"
+            relative_path = "/"
+        else:
+            # Relative path provided, add "/auth" prefix
+            full_path = f"/auth{path}"
+            relative_path = path
 
-            Authentication and session management always use the prime database
-            regardless of the current database context.
-            """
-            from jvspatial.db import get_prime_database
+        # Find and remove matching routes
+        from fastapi.routing import APIRoute
 
-            # Create context with prime database for auth operations
-            prime_ctx = GraphContext(database=get_prime_database())
-            return AuthenticationService(prime_ctx)
+        routes_to_remove = []
+        available_paths = []
 
-        # Create auth router
-        auth_router = APIRouter(prefix="/auth", tags=["App"])
+        # Normalize full_path for comparison (remove trailing slash if present)
+        normalized_full_path = full_path.rstrip("/")
+        # Also try the relative path in case routes don't include prefix
+        normalized_relative_path = relative_path.rstrip("/")
 
-        # Create custom security scheme for BearerAuth compatibility
-        security = HTTPBearer(scheme_name="BearerAuth")
+        for route in self._auth_router.routes:
+            # Only process APIRoute instances (ignore Mount, etc.)
+            if isinstance(route, APIRoute):
+                route_path = route.path
+                if route_path:
+                    available_paths.append(route_path)
+                    # Normalize paths for comparison (strip trailing slashes)
+                    normalized_route_path = route_path.rstrip("/")
+                    normalized_full = normalized_full_path
+                    normalized_rel = normalized_relative_path
 
-        # Helper function to get current user from token
-        # Note: Header(None) is required by FastAPI for optional headers
-        _default_header = Header(None)  # noqa: B008
+                    # Match against full path (routes include the router prefix)
+                    # Try both full path and relative path matching
+                    if normalized_route_path in (normalized_full, normalized_rel):
+                        routes_to_remove.append(route)
 
-        async def get_current_user(
-            authorization: Optional[str] = _default_header,  # type: ignore[assignment]
-        ) -> UserResponse:
-            """Get current user from Authorization header."""
-            if not authorization:
-                raise HTTPException(
-                    status_code=401, detail="Authorization header required"
+        # Remove routes from router
+        if routes_to_remove:
+            for route in routes_to_remove:
+                self._auth_router.routes.remove(route)
+                route_path = route.path if isinstance(route, APIRoute) else None
+                self._logger.info(
+                    f"🔒 Disabled auth endpoint: {route_path or full_path}"
                 )
-
-            # Extract token from "Bearer <token>" format
-            try:
-                scheme, token = authorization.split(" ", 1)
-                if scheme.lower() != "bearer":
-                    raise HTTPException(
-                        status_code=401, detail="Invalid authentication scheme"
-                    )
-            except ValueError:
-                raise HTTPException(
-                    status_code=401, detail="Invalid authorization header format"
+            return True
+        else:
+            # Provide helpful error message with available paths
+            if available_paths:
+                self._logger.warning(
+                    f"Could not find {full_path} endpoint to disable. "
+                    f"Available auth endpoints: {', '.join(available_paths)}. "
+                    f"The endpoint may have already been disabled or removed."
                 )
-
-            # Initialize authentication service and validate token
-            auth_service = get_auth_service()
-            user = await auth_service.validate_token(token)
-            if not user:
-                raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-            return user
-
-        # Register endpoint
-        @auth_router.post("/register", response_model=UserResponse)
-        async def register(user_data: UserCreate):
-            """Register a new user.
-
-            The email field is validated by Pydantic's EmailStr type,
-            which ensures proper email format before this function is called.
-            """
-            try:
-                # Initialize authentication service with current context
-                auth_service = get_auth_service()
-                user = await auth_service.register_user(user_data)
-                return user
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
-            except Exception as e:
-                self._logger.error(f"Registration error: {e}")
-                raise HTTPException(status_code=500, detail="Internal server error")
-
-        # Login endpoint
-        @auth_router.post("/login", response_model=TokenResponse)
-        async def login(login_data: UserLogin):
-            """Login endpoint for authentication."""
-            try:
-                # Initialize authentication service with current context
-                auth_service = get_auth_service()
-                token_response = await auth_service.login_user(login_data)
-                return token_response
-            except ValueError as e:
-                raise HTTPException(status_code=401, detail=str(e))
-            except Exception as e:
-                self._logger.error(f"Login error: {e}")
-                raise HTTPException(status_code=500, detail="Internal server error")
-
-        # Logout endpoint (requires authentication)
-        # Note: Depends(security) is required by FastAPI for dependency injection
-        _default_security_dep = Depends(security)  # noqa: B008
-
-        @auth_router.post("/logout", dependencies=[_default_security_dep])
-        async def logout(credentials: HTTPAuthorizationCredentials = _default_security_dep):  # type: ignore[assignment]
-            """Logout endpoint for authentication."""
-            try:
-                # Initialize authentication service with current context
-                auth_service = get_auth_service()
-
-                # Get token from credentials
-                token = credentials.credentials
-
-                # Validate token and blacklist it
-                await auth_service.logout_user(token)
-
-                return {"message": "Logged out successfully"}
-            except Exception as e:
-                self._logger.error(f"Logout error: {e}")
-                raise HTTPException(status_code=500, detail="Internal server error")
-
-        # Register auth router with the app when it's created
-        self._auth_router = auth_router
-        self._auth_endpoints_registered = True
-        self._has_auth_endpoints = True  # Enable OpenAPI security configuration
+            else:
+                self._logger.warning(
+                    f"Could not find {full_path} endpoint to disable. "
+                    f"No auth endpoints found in router. "
+                    f"Auth endpoints may not be registered yet."
+                )
+            return False
 
     def _merge_config(self, config, kwargs) -> Dict[str, Any]:
         """Clean configuration merging.
@@ -352,91 +312,10 @@ class Server:
         (authentication, session management) and creates a GraphContext
         that uses the current database from DatabaseManager.
         """
-        try:
-            from jvspatial.db.manager import (
-                DatabaseManager,
-                get_database_manager,
-                set_database_manager,
-            )
+        from jvspatial.api.components.database_configurator import DatabaseConfigurator
 
-            # Create prime database based on configuration FIRST
-            # This ensures we use the server's configuration, not default environment variables
-            prime_db = None
-
-            if self.config.db_type == "json":
-                # Check if db_path is an S3 path (not supported for file-based databases)
-                db_path = self.config.db_path or "./jvdb"
-                if db_path.startswith("s3://"):
-                    raise ValueError(
-                        f"JSON database does not support S3 paths. "
-                        f"Received: {db_path}. "
-                        f"Use a local path or DynamoDB (db_type='dynamodb') for cloud storage."
-                    )
-
-                # Create database with the (potentially overridden) db_path
-                prime_db = create_database(
-                    db_type="json",
-                    base_path=db_path,
-                )
-            elif self.config.db_type == "mongodb":
-                prime_db = create_database(
-                    db_type="mongodb",
-                    uri=self.config.db_connection_string or "mongodb://localhost:27017",
-                    db_name=self.config.db_database_name or "jvdb",
-                )
-            elif self.config.db_type == "sqlite":
-                # Check if db_path is an S3 path (not supported for file-based databases)
-                db_path = self.config.db_path or "jvdb/sqlite/jvspatial.db"
-                if db_path.startswith("s3://"):
-                    raise ValueError(
-                        f"SQLite database does not support S3 paths. "
-                        f"Received: {db_path}. "
-                        f"Use a local path or DynamoDB (db_type='dynamodb') for cloud storage."
-                    )
-                prime_db = create_database(
-                    db_type="sqlite",
-                    db_path=db_path,
-                )
-            elif self.config.db_type == "dynamodb":
-                prime_db = create_database(
-                    db_type="dynamodb",
-                    table_name=self.config.dynamodb_table_name or "jvspatial",
-                    region_name=self.config.dynamodb_region or "us-east-1",
-                    endpoint_url=self.config.dynamodb_endpoint_url,
-                    aws_access_key_id=self.config.dynamodb_access_key_id,
-                    aws_secret_access_key=self.config.dynamodb_secret_access_key,
-                )
-            else:
-                raise ValueError(f"Unsupported database type: {self.config.db_type}")
-
-            # Get or create database manager and set the prime database
-            # This ensures the manager uses our configured database, not defaults
-
-            try:
-                manager = get_database_manager()
-                # Update prime database if manager already exists
-                manager._prime_database = prime_db
-                manager._databases["prime"] = prime_db
-            except (RuntimeError, AttributeError):
-                # Manager doesn't exist yet, create it with our prime database
-                manager = DatabaseManager(prime_database=prime_db)
-                set_database_manager(manager)
-
-            # Create GraphContext using current database (which defaults to prime)
-            self._graph_context = GraphContext(database=manager.get_current_database())
-
-            # Set as default context so entities can use it automatically
-            from jvspatial.core.context import set_default_context
-
-            set_default_context(self._graph_context)
-
-            self._logger.debug(
-                f"🎯 GraphContext initialized with {self.config.db_type} database (prime) and set as default"
-            )
-
-        except Exception as e:
-            self._logger.error(f"❌ Failed to initialize GraphContext: {e}")
-            raise
+        db_configurator = DatabaseConfigurator(self.config)
+        self._graph_context = db_configurator.initialize_graph_context()
 
     def _initialize_file_storage(self: "Server") -> None:
         """Initialize file storage interface and proxy manager."""
@@ -445,30 +324,30 @@ class Server:
             from jvspatial.storage import create_storage, get_proxy_manager
 
             # Initialize file interface
-            if self.config.file_storage_provider == "local":
-                storage_root = self.config.file_storage_root or ".files"
+            if self.config.file_storage.file_storage_provider == "local":
+                storage_root = self.config.file_storage.file_storage_root or ".files"
                 self._file_interface = create_storage(
                     provider="local",
                     root_dir=storage_root,
-                    base_url=self.config.file_storage_base_url,
-                    max_file_size=self.config.file_storage_max_size,
+                    base_url=self.config.file_storage.file_storage_base_url,
+                    max_file_size=self.config.file_storage.file_storage_max_size,
                 )
-            elif self.config.file_storage_provider == "s3":
+            elif self.config.file_storage.file_storage_provider == "s3":
                 self._file_interface = create_storage(
                     provider="s3",
-                    bucket_name=self.config.s3_bucket_name,
-                    region=self.config.s3_region,
-                    access_key=self.config.s3_access_key,
-                    secret_key=self.config.s3_secret_key,
-                    endpoint_url=self.config.s3_endpoint_url,
+                    bucket_name=self.config.file_storage.s3_bucket_name,
+                    region=self.config.file_storage.s3_region,
+                    access_key=self.config.file_storage.s3_access_key,
+                    secret_key=self.config.file_storage.s3_secret_key,
+                    endpoint_url=self.config.file_storage.s3_endpoint_url,
                 )
             else:
                 raise ValueError(
-                    f"Unsupported file storage provider: {self.config.file_storage_provider}"
+                    f"Unsupported file storage provider: {self.config.file_storage.file_storage_provider}"
                 )
 
             # Initialize proxy manager if enabled
-            if self.config.proxy_enabled:
+            if self.config.proxy.proxy_enabled:
                 self._proxy_manager = get_proxy_manager()
 
             # Create FileStorageService instance
@@ -479,7 +358,7 @@ class Server:
             )
 
             self._logger.info(
-                f"📁 File storage initialized: {self.config.file_storage_provider}"
+                f"📁 File storage initialized: {self.config.file_storage.file_storage_provider}"
             )
 
         except Exception as e:
@@ -592,6 +471,9 @@ class Server:
         # Add error logging context middleware for cleanup
         self._configure_error_logging_context_middleware(app)
 
+        # Configure rate limiting middleware BEFORE auth (rate limit first)
+        self._configure_rate_limit_middleware(app)
+
         # Configure authentication middleware if enabled
         self._configure_auth_middleware(app)
 
@@ -617,7 +499,7 @@ class Server:
 
         # Include authentication router if configured
         if self._auth_endpoints_registered and hasattr(self, "_auth_router"):
-            app.include_router(self._auth_router)
+            app.include_router(self._auth_router, prefix=APIRoutes.PREFIX)
 
         # Configure OpenAPI security
         self.app_builder.configure_openapi_security(app, self._has_auth_endpoints)
@@ -712,255 +594,10 @@ class Server:
             # They will be logged with stack traces for debugging
             return await APIErrorHandler.handle_exception(request, exc)
 
-        # Configure Starlette's error logger to suppress stack traces for known errors
-        # Starlette logs exceptions before they reach our handlers, so we need to
-        # configure the logger to not print stack traces for HTTPException and JVSpatialAPIException
-        import logging
+        # Configure exception logging using LoggingConfigurator
+        from jvspatial.api.components.logging_config import LoggingConfigurator
 
-        from fastapi import HTTPException
-
-        from jvspatial.exceptions import JVSpatialAPIException
-
-        starlette_error_logger = logging.getLogger("starlette.error")
-        uvicorn_error_logger = logging.getLogger("uvicorn.error")
-        uvicorn_access_logger = logging.getLogger("uvicorn.access")
-
-        # Set log level to CRITICAL to prevent these loggers from emitting ERROR logs
-        # This adds defense in depth alongside the filter
-        starlette_error_logger.setLevel(logging.CRITICAL)
-        uvicorn_error_logger.setLevel(logging.CRITICAL)
-
-        def _is_client_error(exc_type, exc_value) -> bool:
-            """Check if exception is a known client error (4xx)."""
-            # Check for FastAPI HTTPException
-            if exc_type is HTTPException:
-                return exc_value.status_code < 500
-
-            # Check for JVSpatialAPIException
-            if exc_type is JVSpatialAPIException or isinstance(
-                exc_value, JVSpatialAPIException
-            ):
-                return hasattr(exc_value, "status_code") and exc_value.status_code < 500
-
-            # Check for httpx.HTTPStatusError (external API errors)
-            try:
-                import httpx
-
-                if isinstance(exc_value, httpx.HTTPStatusError):
-                    return exc_value.response.status_code < 500
-            except ImportError:
-                pass  # httpx not installed
-
-            return False
-
-        # Create a filter that suppresses framework-level error logs
-        # Our APIErrorHandler is the authoritative source for error logging
-        class CentralizedErrorFilter(logging.Filter):
-            """Filter that suppresses framework-level error logs.
-
-            Our APIErrorHandler is the authoritative source for error logging.
-            This filter suppresses uvicorn/starlette error logs to prevent duplicates,
-            ensuring each exception is logged exactly once with proper context.
-            """
-
-            def filter(self, record: logging.LogRecord) -> bool:
-                """Filter out framework-level exception log records."""
-                # Only filter exception logs from uvicorn/starlette
-                logger_name = record.name
-
-                # NEVER filter our own error handler logs - it's the authoritative source
-                if logger_name == "jvspatial.api.components.error_handler":
-                    return True  # Always allow our error handler logs
-
-                # Check for exact logger name match
-                # Suppress ALL ERROR/CRITICAL level logs from uvicorn/starlette
-                # Our custom exception handlers log all exceptions with proper context
-                # This prevents duplicate logging - we suppress unconditionally since uvicorn
-                # logs BEFORE our handler runs, so timing-based checks won't work
-                if (
-                    logger_name == "uvicorn.error" or logger_name == "starlette.error"
-                ) and record.levelno >= logging.ERROR:
-                    # Suppress ALL ERROR/CRITICAL logs from these loggers
-                    # Our handler will log all exceptions properly
-                    return False
-
-                # Also check root logger handlers for propagated uvicorn/starlette errors
-                # Sometimes errors propagate to root logger, but only suppress if NOT from our handler
-                if (
-                    record.levelno >= logging.ERROR
-                    and logger_name != "jvspatial.api.components.error_handler"
-                ):
-                    try:
-                        message = str(record.getMessage())
-                        # Check if this looks like a uvicorn/starlette error message
-                        # But be careful - our error handler also includes tracebacks
-                        # Only suppress if it's clearly a uvicorn/starlette message
-                        if any(
-                            pattern in message
-                            for pattern in [
-                                "Exception in ASGI application",
-                                "During handling of the above exception",
-                            ]
-                        ):
-                            # This is likely a propagated uvicorn/starlette error
-                            # Suppress it since our handler will log it
-                            return False
-                    except Exception:
-                        pass
-
-                # Allow all other logs
-                return True
-
-        # Create a filter that suppresses uvicorn access logs for error responses
-        # that were already logged by our error handler
-        class ErrorAwareAccessFilter(logging.Filter):
-            """Filter that suppresses access logs for error responses already logged by error handler.
-
-            This filter intelligently correlates access logs with error logs to prevent
-            duplicate reporting. If an error response (4xx/5xx) was already logged by
-            the internal error handler, the corresponding access log is suppressed.
-            Successful responses (2xx/3xx) are always logged.
-            """
-
-            def filter(self, record: logging.LogRecord) -> bool:
-                """Filter out access logs for error responses that were already logged."""
-                # Only filter uvicorn.access logs
-                if record.name != "uvicorn.access":
-                    return True  # Allow all non-access logs
-
-                # Parse status code and request details from access log message
-                # Format: "127.0.0.1:57637 - "POST /auth/login HTTP/1.1" 401"
-                try:
-                    message = record.getMessage()
-
-                    # Extract status code from end of message (last 3-digit number)
-                    status_match = re.search(r"\s(\d{3})\s*$", message)
-                    if not status_match:
-                        # Can't parse status code, allow the log (fail open)
-                        return True
-
-                    status_code = int(status_match.group(1))
-
-                    # Only suppress error responses (4xx, 5xx)
-                    # Successful responses (2xx, 3xx) should always be logged
-                    if status_code < 400:
-                        return True  # Always log successful responses
-
-                    # Check if this error response was already logged by error handler
-                    from jvspatial.api.components.error_handler import (
-                        _logged_error_responses,
-                    )
-
-                    try:
-                        logged_responses = _logged_error_responses.get()
-                        # Check if any error response with matching status code was logged
-                        # Since access logs come after error logs in the request lifecycle,
-                        # any error logged by our handler should be in the context
-                        # We check for matching status code - if multiple errors with same
-                        # status occur, we suppress all (conservative approach)
-                        if any(status == status_code for _, status in logged_responses):
-                            # An error with this status code was logged by our handler
-                            # Suppress the access log to avoid duplication
-                            return False
-                    except LookupError:
-                        # No logged errors in context, allow the log
-                        # This can happen if error handler didn't run or context wasn't initialized
-                        pass
-
-                    # If we can't determine correlation, allow the log (fail open)
-                    return True
-
-                except Exception:
-                    # If parsing fails, allow the log (fail open for safety)
-                    # Better to have duplicate logs than missing logs
-                    return True
-
-        # Create a custom formatter that suppresses tracebacks for known errors
-        class KnownErrorFormatter(logging.Formatter):
-            """Formatter that suppresses stack traces for known errors."""
-
-            def formatException(self, ei):  # noqa: N802
-                """Override to return empty string for known errors."""
-                if ei:
-                    exc_type, exc_value, _ = ei
-                    # Suppress stack traces for client errors (4xx) - they're not real exceptions
-                    if _is_client_error(exc_type, exc_value):
-                        return ""  # No stack trace for client errors
-                return super().formatException(ei) if ei else ""
-
-        # Apply filter and formatter to Starlette's error logger
-        # Apply filter at logger level FIRST to catch all logs before handlers process them
-        centralized_error_filter = CentralizedErrorFilter()
-        error_aware_access_filter = ErrorAwareAccessFilter()
-        known_error_formatter = KnownErrorFormatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        )
-
-        # Add filter to logger itself FIRST (applies to all handlers, including future ones)
-        # This ensures the filter runs before any handlers process the log records
-        starlette_error_logger.addFilter(centralized_error_filter)
-        uvicorn_error_logger.addFilter(centralized_error_filter)
-        uvicorn_access_logger.addFilter(error_aware_access_filter)
-
-        # Apply filter and formatter to existing handlers
-        from logging import Handler
-
-        # Get a fresh copy of handlers list to avoid modification during iteration
-        starlette_handlers = list(starlette_error_logger.handlers)
-        uvicorn_handlers = list(uvicorn_error_logger.handlers)
-        uvicorn_access_handlers = list(uvicorn_access_logger.handlers)
-
-        for log_handler in starlette_handlers:
-            # Remove any existing CentralizedErrorFilter to avoid duplicates
-            log_handler.filters = [
-                f
-                for f in log_handler.filters
-                if not isinstance(f, CentralizedErrorFilter)
-            ]
-            log_handler.addFilter(centralized_error_filter)
-            log_handler.setFormatter(known_error_formatter)
-
-        # Also configure uvicorn's error logger
-        for uvicorn_log_handler in uvicorn_handlers:
-            # Remove any existing CentralizedErrorFilter to avoid duplicates
-            uvicorn_log_handler.filters = [
-                f
-                for f in uvicorn_log_handler.filters
-                if not isinstance(f, CentralizedErrorFilter)
-            ]
-            uvicorn_log_handler.addFilter(centralized_error_filter)
-            uvicorn_log_handler.setFormatter(known_error_formatter)
-
-        # Configure uvicorn's access logger with error-aware filter
-        for uvicorn_access_handler in uvicorn_access_handlers:
-            # Remove any existing ErrorAwareAccessFilter to avoid duplicates
-            uvicorn_access_handler.filters = [
-                f
-                for f in uvicorn_access_handler.filters
-                if not isinstance(f, ErrorAwareAccessFilter)
-            ]
-            uvicorn_access_handler.addFilter(error_aware_access_filter)
-
-        # Also add filter to root logger handlers to catch any propagated logs
-        root_logger = logging.getLogger()
-        for root_handler in root_logger.handlers:
-            # Only add filter if it's not already there
-            if not any(
-                isinstance(f, CentralizedErrorFilter) for f in root_handler.filters
-            ):
-                root_handler.addFilter(centralized_error_filter)
-            # Also add access filter if not present
-            if not any(
-                isinstance(f, ErrorAwareAccessFilter) for f in root_handler.filters
-            ):
-                root_handler.addFilter(error_aware_access_filter)
-
-        # Also configure the logger to use this formatter for any new handlers
-        if not starlette_error_logger.handlers:
-            new_handler: Handler = logging.StreamHandler()
-            new_handler.addFilter(centralized_error_filter)
-            new_handler.setFormatter(known_error_formatter)
-            starlette_error_logger.addHandler(new_handler)
+        LoggingConfigurator.configure_exception_logging()
 
     def _configure_error_logging_context_middleware(
         self: "Server", app: FastAPI
@@ -1006,9 +643,114 @@ class Server:
         # for the entire request lifecycle
         app.add_middleware(ErrorLoggingContextMiddleware)
 
+    def _configure_rate_limit_middleware(self: "Server", app: FastAPI) -> None:
+        """Configure rate limiting middleware if rate limiting is enabled."""
+        if not self.config.rate_limit.rate_limit_enabled:
+            return
+
+        try:
+            from jvspatial.api.middleware.rate_limit import RateLimitMiddleware
+            from jvspatial.api.middleware.rate_limit_backend import (
+                MemoryRateLimitBackend,
+            )
+
+            # Build rate limit configuration from endpoint registry
+            rate_limits = self._build_rate_limit_config()
+
+            # Use memory backend by default (can be overridden via config)
+            backend = (
+                getattr(self.config, "rate_limit_backend", None)
+                or MemoryRateLimitBackend()
+            )
+
+            app.add_middleware(
+                RateLimitMiddleware,
+                config=rate_limits,
+                default_limit=self.config.rate_limit.rate_limit_default_requests,
+                default_window=self.config.rate_limit.rate_limit_default_window,
+                backend=backend,
+            )
+
+            self._logger.debug(
+                f"🔒 Rate limiting enabled: {len(rate_limits)} endpoints configured, "
+                f"default {self.config.rate_limit.rate_limit_default_requests} req/{self.config.rate_limit.rate_limit_default_window}s"
+            )
+        except ImportError as e:
+            self._logger.warning(f"Could not add rate limiting middleware: {e}")
+
+    def _build_rate_limit_config(self: "Server") -> Dict[str, Any]:
+        """Build rate limit configuration from endpoint registry and decorator configs.
+
+        Returns:
+            Dictionary mapping endpoint paths to RateLimitConfig objects
+        """
+        from jvspatial.api.constants import APIRoutes
+        from jvspatial.api.middleware.rate_limit import RateLimitConfig
+
+        rate_limits: Dict[str, RateLimitConfig] = {}
+        api_prefix = APIRoutes.PREFIX
+
+        # Check endpoint registry for rate limit configurations
+        registry = self._endpoint_registry
+
+        # Check function endpoints - iterate over registry directly
+        for func, endpoint_info in registry._function_registry.items():
+            if endpoint_info and hasattr(endpoint_info, "path"):
+                func_path = endpoint_info.path
+                endpoint_config = getattr(func, "_jvspatial_endpoint_config", None)
+                if endpoint_config and endpoint_config.get("rate_limit"):
+                    rate_limit_dict = endpoint_config["rate_limit"]
+                    # Add API prefix to path for matching (endpoints are accessed with /api prefix)
+                    full_path = (
+                        f"{api_prefix}{func_path}"
+                        if not func_path.startswith(api_prefix)
+                        else func_path
+                    )
+                    rate_limits[full_path] = RateLimitConfig(
+                        requests=rate_limit_dict.get("requests", 60),
+                        window=rate_limit_dict.get("window", 60),
+                    )
+
+        # Check walker endpoints - iterate over registry directly
+        for walker_class, endpoint_info in registry._walker_registry.items():
+            if endpoint_info and hasattr(endpoint_info, "path"):
+                walker_path = endpoint_info.path
+                endpoint_config = getattr(
+                    walker_class, "_jvspatial_endpoint_config", None
+                )
+                if endpoint_config and endpoint_config.get("rate_limit"):
+                    rate_limit_dict = endpoint_config["rate_limit"]
+                    # Add API prefix to path for matching (endpoints are accessed with /api prefix)
+                    full_path = (
+                        f"{api_prefix}{walker_path}"
+                        if not walker_path.startswith(api_prefix)
+                        else walker_path
+                    )
+                    rate_limits[full_path] = RateLimitConfig(
+                        requests=rate_limit_dict.get("requests", 60),
+                        window=rate_limit_dict.get("window", 60),
+                    )
+
+        # Add server config overrides
+        for path, override in self.config.rate_limit.rate_limit_overrides.items():
+            # Ensure override paths have the prefix
+            full_path = (
+                f"{api_prefix}{path}" if not path.startswith(api_prefix) else path
+            )
+            rate_limits[full_path] = RateLimitConfig(
+                requests=override.get(
+                    "requests", self.config.rate_limit.rate_limit_default_requests
+                ),
+                window=override.get(
+                    "window", self.config.rate_limit.rate_limit_default_window
+                ),
+            )
+
+        return rate_limits
+
     def _configure_auth_middleware(self: "Server", app: FastAPI) -> None:
         """Configure authentication middleware if authentication is enabled."""
-        if not self.config.auth_enabled or not self._auth_config:
+        if not self.config.auth.auth_enabled or not self._auth_config:
             return
 
         try:
@@ -1035,17 +777,8 @@ class Server:
         async def health_check() -> Union[Dict[str, Any], JSONResponse]:
             """Health check endpoint."""
             try:
-                # Test database connectivity through GraphContext
-                if self._graph_context:
-                    # Use explicit GraphContext
-                    root = await self._graph_context.get(Root, "n.Root.root")
-                    if not root:
-                        root = await self._graph_context.create(Root)
-                else:
-                    # Use default GraphContext behavior
-                    root = await Root.get("n.Root.root")
-                    if not root:
-                        root = await Root.create()
+                # Test database connectivity - Root.get() always returns singleton
+                root = await Root.get()
                 return {
                     "status": "healthy",
                     "database": "connected",
@@ -1197,7 +930,7 @@ class Server:
             self._register_walker_dynamically(walker_class, path, methods, **kwargs)
         else:
             # Pre-configure walker class with endpoint for discovery
-            walker_class._jvspatial_endpoint_config = {
+            walker_class._jvspatial_endpoint_config = {  # type: ignore[attr-defined]
                 "path": path,
                 "methods": methods or ["POST"],
                 "kwargs": kwargs,
@@ -1354,82 +1087,11 @@ class Server:
 
         return removed_count
 
-    def disable_auth_endpoint(self: "Server", path: str) -> bool:
-        """Disable a specific authentication endpoint by removing it from the auth router.
-
-        This method removes routes from the auth router before the app is created.
-        It only works with auth endpoints registered through the auth router.
-
-        Args:
-            path: The path of the auth endpoint to disable (e.g., "/register", "/login")
-                  Can be relative to router prefix or full path including prefix.
-
-        Returns:
-            True if the endpoint was found and disabled, False otherwise
-        """
-        if not hasattr(self, "_auth_router") or self._auth_router is None:
-            self._logger.debug("Auth router not found - cannot disable endpoint")
-            return False
-
-        # Normalize path (ensure it starts with "/")
-        normalized_path = path if path.startswith("/") else f"/{path}"
-
-        # Get router prefix (default is "/auth")
-        router_prefix = getattr(self._auth_router, "prefix", "/auth")
-        if not router_prefix:
-            router_prefix = ""
-
-        # Build full path with prefix for matching
-        # FastAPI routes store the full path including the router prefix
-        full_path_with_prefix = f"{router_prefix}{normalized_path}"
-
-        # Find and remove routes matching the path
-        routes_to_remove = []
-        for route in self._auth_router.routes:
-            # FastAPI routes include the router prefix in the path
-            # So "/auth/register" is stored as "/auth/register", not "/register"
-            if hasattr(route, "path") and route.path == full_path_with_prefix:
-                routes_to_remove.append(route)
-                self._logger.debug(f"Found route to remove: {route.path}")
-
-        if routes_to_remove:
-            for route in routes_to_remove:
-                self._auth_router.routes.remove(route)
-            self._logger.debug(f"🔒 Disabled auth endpoint: {full_path_with_prefix}")
-
-            # If the app has already been created, mark it for rebuilding
-            # so the changes take effect
-            if hasattr(self, "app") and self.app is not None:
-                self._app_needs_rebuild = True
-                self._logger.debug("App already exists - marked for rebuild")
-
-            return True
-        else:
-            # Log available routes for debugging
-            available_paths = [
-                route.path
-                for route in self._auth_router.routes
-                if hasattr(route, "path")
-            ]
-            self._logger.debug(
-                f"Could not find endpoint {full_path_with_prefix} to disable. "
-                f"Available routes: {available_paths}"
-            )
-            return False
-
     async def list_function_endpoints(self: "Server") -> Dict[str, Dict[str, Any]]:
         """Get information about all registered function endpoints.
 
         Returns:
             Dictionary mapping function names to their endpoint information
-        """
-        return self._endpoint_registry.list_functions()
-
-    def list_function_endpoints_safe(self: "Server") -> Dict[str, Dict[str, Any]]:
-        """Get serializable information about all registered function endpoints (no function objects).
-
-        Returns:
-            Dictionary mapping function names to their serializable endpoint information
         """
         return self._endpoint_registry.list_functions()
 
@@ -1441,27 +1103,11 @@ class Server:
         """
         return self._endpoint_registry.list_all()
 
-    def list_all_endpoints_safe(self: "Server") -> Dict[str, Any]:
-        """Get serializable information about all registered endpoints (walkers and functions).
-
-        Returns:
-            Dictionary with 'walkers' and 'functions' keys containing serializable endpoint information
-        """
-        return self._endpoint_registry.list_all()
-
     def list_walker_endpoints(self: "Server") -> Dict[str, Dict[str, Any]]:
         """Get information about all registered walkers.
 
         Returns:
             Dictionary mapping walker class names to their endpoint information
-        """
-        return self._endpoint_registry.list_walkers()
-
-    def list_walker_endpoints_safe(self: "Server") -> Dict[str, Dict[str, Any]]:
-        """Get serializable information about all registered walkers (no class objects).
-
-        Returns:
-            Dictionary mapping walker class names to their serializable endpoint information
         """
         return self._endpoint_registry.list_walkers()
 
@@ -1518,7 +1164,12 @@ class Server:
             **uvicorn_kwargs: Additional uvicorn parameters
         """
         # Set up standard logging (colorized level names, consistent format)
-        configure_standard_logging(level=self.config.log_level, enable_colors=True)
+        # Preserve DBLogHandler to ensure database logging continues to work
+        configure_standard_logging(
+            level=self.config.log_level,
+            enable_colors=True,
+            preserve_handler_class_names=["DBLogHandler", "StartupLogCounter"],
+        )
 
         # Use provided values or fall back to config
         run_host = host or self.config.host
@@ -1672,16 +1323,18 @@ class Server:
             **db_config: Database-specific configuration
         """
         # Update configuration
-        self.config.db_type = db_type
+        self.config.database.db_type = db_type
 
         # Handle common database configurations
         if db_type == "json" and "base_path" in db_config:
-            self.config.db_path = db_config["base_path"]
+            self.config.database.db_path = db_config["base_path"]
         elif db_type == "mongodb":
             if "connection_string" in db_config:
-                self.config.db_connection_string = db_config["connection_string"]
+                self.config.database.db_connection_string = db_config[
+                    "connection_string"
+                ]
             if "database_name" in db_config:
-                self.config.db_database_name = db_config["database_name"]
+                self.config.database.db_database_name = db_config["database_name"]
 
         # Initialize or re-initialize GraphContext
         self._initialize_graph_context()

@@ -1,11 +1,10 @@
 """Authentication models for user management and JWT tokens."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
-from jvspatial.core.entities.node import Node
 from jvspatial.core.entities.object import Object
 
 
@@ -41,7 +40,19 @@ class TokenResponse(BaseModel):
     access_token: str = Field(..., description="JWT access token")
     token_type: str = Field(default="bearer", description="Token type")
     expires_in: int = Field(..., description="Token expiration time in seconds")
+    refresh_token: Optional[str] = Field(
+        None, description="Refresh token for obtaining new access tokens"
+    )
+    refresh_expires_in: Optional[int] = Field(
+        None, description="Refresh token expiration time in seconds"
+    )
     user: UserResponse = Field(..., description="User information")
+
+
+class TokenRefreshRequest(BaseModel):
+    """Request model for refreshing access token."""
+
+    refresh_token: str = Field(..., description="Refresh token to exchange")
 
 
 class User(Object):
@@ -59,6 +70,9 @@ class User(Object):
     is_active: bool = Field(default=True, description="Whether user is active")
     created_at: datetime = Field(
         default_factory=datetime.utcnow, description="User creation timestamp"
+    )
+    last_accessed: Optional[datetime] = Field(
+        default=None, description="Last time the user authenticated on the platform"
     )
 
     @classmethod
@@ -95,8 +109,14 @@ class User(Object):
         return await super().create(**kwargs)
 
 
-class TokenBlacklist(Node):
-    """Token blacklist entity for logout functionality."""
+class TokenBlacklist(Object):
+    """Token blacklist entity for logout functionality.
+
+    TokenBlacklist is stored as an Object entity (not Node) as it is a fundamental
+    authentication lookup table that doesn't need graph relationships.
+    Blacklist entries are used to track revoked JWT tokens and don't require
+    graph connections via edges.
+    """
 
     token_id: str = Field(..., description="JWT token ID")
     user_id: str = Field(..., description="User ID who owns the token")
@@ -104,3 +124,116 @@ class TokenBlacklist(Node):
     blacklisted_at: datetime = Field(
         default_factory=datetime.utcnow, description="When token was blacklisted"
     )
+
+
+class APIKeyCreateRequest(BaseModel):
+    """Request model for creating an API key."""
+
+    name: str = Field(..., description="Descriptive name for the key")
+    permissions: List[str] = Field(
+        default_factory=list, description="List of permissions granted to this key"
+    )
+    rate_limit_override: Optional[int] = Field(
+        None, description="Custom rate limit (requests per minute), None uses default"
+    )
+    expires_in_days: Optional[int] = Field(
+        None, description="Number of days until key expires, None for no expiration"
+    )
+    allowed_ips: List[str] = Field(
+        default_factory=list,
+        description="IP whitelist (empty list allows all IPs)",
+    )
+    allowed_endpoints: List[str] = Field(
+        default_factory=list,
+        description="Endpoint whitelist (empty list allows all endpoints)",
+    )
+
+
+class APIKeyCreateResponse(BaseModel):
+    """Response model for API key creation."""
+
+    key: str = Field(..., description="Full API key (shown ONCE only)")
+    key_id: str = Field(..., description="API key ID")
+    key_prefix: str = Field(..., description="Key prefix for display")
+    name: str = Field(..., description="Key name")
+    message: str = Field(
+        default="Store this key securely. It won't be shown again.",
+        description="Warning message",
+    )
+
+
+class APIKeyResponse(BaseModel):
+    """Response model for API key listing."""
+
+    id: str = Field(..., description="API key ID")
+    name: str = Field(..., description="Key name")
+    key_prefix: str = Field(..., description="Key prefix for display")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    last_used_at: Optional[datetime] = Field(None, description="Last usage timestamp")
+    expires_at: Optional[datetime] = Field(None, description="Expiration timestamp")
+    is_active: bool = Field(..., description="Whether key is active")
+    permissions: List[str] = Field(..., description="Granted permissions")
+    rate_limit_override: Optional[int] = Field(
+        None, description="Custom rate limit override"
+    )
+
+
+class APIKey(Object):
+    """API Key entity for authentication.
+
+    API keys are stored as Object entities (not Node) as they are fundamental
+    authentication objects that don't need graph relationships.
+    Keys are hashed (never stored in plaintext) for security.
+    """
+
+    key_hash: str = Field(..., description="SHA-256 hash of the API key")
+    key_prefix: str = Field(
+        ..., description="First 8-12 chars for display (e.g., 'sk_live_abc12345...')"
+    )
+    name: str = Field(..., description="Descriptive name for the key")
+    user_id: str = Field(..., description="Owner user ID")
+    permissions: List[str] = Field(
+        default_factory=list, description="Granted permissions"
+    )
+    rate_limit_override: Optional[int] = Field(
+        None, description="Custom rate limit (requests per minute)"
+    )
+
+    is_active: bool = Field(default=True, description="Whether key is active")
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow, description="Creation timestamp"
+    )
+    last_used_at: Optional[datetime] = Field(None, description="Last usage timestamp")
+    expires_at: Optional[datetime] = Field(None, description="Expiration timestamp")
+
+    # Security restrictions
+    allowed_ips: List[str] = Field(
+        default_factory=list, description="IP whitelist (empty = all IPs allowed)"
+    )
+    allowed_endpoints: List[str] = Field(
+        default_factory=list,
+        description="Endpoint whitelist (empty = all endpoints allowed)",
+    )
+
+
+class RefreshToken(Object):
+    """Refresh Token entity for authentication.
+
+    Refresh tokens are stored as Object entities (not Node) as they are fundamental
+    authentication objects that don't need graph relationships.
+    Tokens are hashed (never stored in plaintext) for security.
+    """
+
+    token_hash: str = Field(..., description="Hashed refresh token (never plaintext)")
+    user_id: str = Field(..., description="Owner user ID")
+    access_token_jti: str = Field(
+        ..., description="JTI of associated access token for tracking"
+    )
+    expires_at: datetime = Field(..., description="Token expiration timestamp")
+    is_active: bool = Field(default=True, description="Whether token is active")
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow, description="Creation timestamp"
+    )
+    last_used_at: Optional[datetime] = Field(None, description="Last usage timestamp")
+    device_info: Optional[str] = Field(None, description="Optional device identifier")
+    ip_address: Optional[str] = Field(None, description="Optional IP address")

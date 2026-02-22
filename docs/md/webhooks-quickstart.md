@@ -1,6 +1,6 @@
 # JVspatial Webhooks Quickstart
 
-JVspatial provides powerful webhook functionality through the `@webhook_endpoint` decorator, enabling secure, reliable webhook processing with features like HMAC verification, idempotency handling, and asynchronous processing.
+JVspatial provides powerful webhook functionality through the `@endpoint` decorator with `webhook=True`, enabling secure, reliable webhook processing with features like HMAC verification, idempotency handling, and asynchronous processing.
 
 ## Simplified Response Handling
 
@@ -11,9 +11,9 @@ Webhook endpoints use the standard endpoint response methods (`endpoint.success(
 ### Simple Webhook Endpoint
 
 ```python
-from jvspatial.api.webhook.decorators import webhook_endpoint
+from jvspatial.api import endpoint
 
-@webhook_endpoint("/webhook/simple")
+@endpoint("/webhook/simple", webhook=True)
 async def simple_webhook(payload: dict, endpoint):
     """Process webhook payload and return response."""
     event_type = payload.get("type", "unknown")
@@ -31,10 +31,10 @@ async def simple_webhook(payload: dict, endpoint):
 ### Walker-Based Webhook
 
 ```python
-from jvspatial.api.webhook.decorators import webhook_endpoint
+from jvspatial.api import endpoint
 from jvspatial.core.entities import Walker, Node, on_visit
 
-@webhook_endpoint("/webhook/data-update")
+@endpoint("/webhook/data-update", webhook=True)
 class DataUpdateWalker(Walker):
     """Walker that updates graph data based on webhook events."""
 
@@ -61,8 +61,9 @@ class DataUpdateWalker(Walker):
 ### HMAC Signature Verification
 
 ```python
-@webhook_endpoint(
+@endpoint(
     "/webhook/payment",
+    webhook=True,
     hmac_secret="your-webhook-secret"
 )
 async def payment_webhook(payload: dict, endpoint):
@@ -76,12 +77,64 @@ async def payment_webhook(payload: dict, endpoint):
     )
 ```
 
-### Path-Based Authentication
+### API Key Authentication (Recommended)
+
+For third-party services that cannot set custom headers, use `webhook_auth="api_key"` to enable API key authentication via query parameters or headers:
 
 ```python
-@webhook_endpoint(
+from jvspatial.api import endpoint
+
+# Simple webhook with API key authentication
+@endpoint(
+    "/webhook/third-party",
+    methods=["POST"],
+    webhook=True,
+    webhook_auth="api_key"  # Enables API key auth via query param or header
+)
+async def third_party_webhook(payload: dict):
+    """Webhook that accepts API key in query parameter or header."""
+    # Authentication handled automatically
+    # request.state.user contains authenticated user info
+    return {"status": "received", "data": payload}
+
+# Usage:
+# curl -X POST "https://api.example.com/webhook/third-party?api_key=sk_live_abc123"
+# OR
+# curl -X POST "https://api.example.com/webhook/third-party" -H "X-API-Key: sk_live_abc123"
+```
+
+### Path-Based API Key Authentication
+
+For maximum security, embed the API key directly in the URL path:
+
+```python
+@endpoint(
+    "/webhook/{api_key}/trigger",
+    methods=["POST"],
+    webhook=True,
+    webhook_auth="api_key_path"  # API key must be in URL path
+)
+async def path_authenticated_webhook(api_key: str, payload: dict):
+    """Webhook with API key embedded in path."""
+    # api_key parameter is automatically extracted and validated
+    # No need to manually check - middleware handles it
+    return {"status": "triggered"}
+
+# Usage:
+# curl -X POST "https://api.example.com/webhook/sk_live_abc123/trigger" \
+#   -H "Content-Type: application/json" \
+#   -d '{"event": "data"}'
+```
+
+### Legacy Path-Based Authentication
+
+Use `webhook_auth="api_key_path"` for path-based API key authentication:
+
+```python
+@endpoint(
     "/webhook/stripe/{key}",
-    path_key_auth=True,
+    webhook=True,
+    webhook_auth="api_key_path",
     hmac_secret="stripe-webhook-secret"
 )
 async def stripe_webhook(raw_body: bytes, content_type: str, endpoint):
@@ -104,8 +157,9 @@ async def stripe_webhook(raw_body: bytes, content_type: str, endpoint):
 ### Idempotency Handling
 
 ```python
-@webhook_endpoint(
+@endpoint(
     "/webhook/order",
+    webhook=True,
     hmac_secret="order-secret",
     idempotency_ttl_hours=48  # Keep idempotency records for 2 days
 )
@@ -125,8 +179,9 @@ async def order_webhook(payload: dict, endpoint):
 ### Asynchronous Processing
 
 ```python
-@webhook_endpoint(
+@endpoint(
     "/webhook/bulk-process",
+    webhook=True,
     async_processing=True,
     permissions=["process_bulk_data"]
 )
@@ -152,8 +207,9 @@ async def bulk_processing_webhook(payload: dict, endpoint):
 ### Permission-Based Access Control
 
 ```python
-@webhook_endpoint(
+@endpoint(
     "/webhook/admin",
+    webhook=True,
     permissions=["admin_webhooks"],
     roles=["admin", "webhook_manager"]
 )
@@ -175,7 +231,7 @@ async def admin_webhook(payload: dict, endpoint):
 The webhook decorators automatically inject the appropriate payload format based on your function parameters:
 
 ```python
-@webhook_endpoint("/webhook/flexible")
+@endpoint("/webhook/flexible", webhook=True)
 async def flexible_webhook(
     payload: dict,          # Parsed JSON payload
     raw_body: bytes,        # Raw request body
@@ -206,7 +262,7 @@ async def flexible_webhook(
 ## Error Handling
 
 ```python
-@webhook_endpoint("/webhook/robust")
+@endpoint("/webhook/robust", webhook=True)
 async def robust_webhook(payload: dict, endpoint):
     """Webhook with comprehensive error handling."""
 
@@ -279,7 +335,8 @@ WEBHOOK_HTTPS_REQUIRED=true
 ### Programmatic Configuration
 
 ```python
-from jvspatial.api.webhook.middleware import WebhookConfig, WebhookMiddleware
+from jvspatial.api.integrations.webhooks.middleware import WebhookMiddleware
+from jvspatial.api.integrations.webhooks.utils import WebhookConfig
 
 # Custom webhook configuration
 config = WebhookConfig(
@@ -351,7 +408,7 @@ def test_webhook_endpoint():
 Webhook events are automatically stored in the database for tracking and debugging:
 
 ```python
-from jvspatial.api.webhook.entities import WebhookEvent, WebhookIdempotencyKey
+from jvspatial.api.integrations.webhooks.models import WebhookEvent, WebhookIdempotencyKey
 
 # Query webhook events
 events = await WebhookEvent.find(
@@ -360,7 +417,7 @@ events = await WebhookEvent.find(
 ).to_list()
 
 # Clean up expired data
-from jvspatial.api.webhook.entities import cleanup_expired_webhook_data
+from jvspatial.api.integrations.webhooks.models import cleanup_expired_webhook_data
 
 cleanup_stats = await cleanup_expired_webhook_data()
 print(f"Cleaned up {cleanup_stats['events_cleaned']} events")
@@ -384,7 +441,7 @@ print(f"Cleaned up {cleanup_stats['events_cleaned']} events")
 Webhook endpoints use standard endpoint response methods, providing consistency across all endpoint types.
 
 # Standard endpoint response methods
-@webhook_endpoint("/webhook/new")
+@endpoint("/webhook/new", webhook=True)
 async def new_webhook(payload: dict, endpoint):
     # Success response
     return endpoint.success(
@@ -405,8 +462,9 @@ async def new_webhook(payload: dict, endpoint):
 ```python
 
 
-@webhook_endpoint(
+@endpoint(
     "/webhook/modern/{key}",
+    webhook=True,
     path_key_auth=True,
     hmac_secret="webhook-secret"
 )

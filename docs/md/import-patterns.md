@@ -1,7 +1,7 @@
 # Import Patterns Guide
 
-**Version**: 0.0.1
-**Date**: 2025-10-20
+**Version**: 0.0.3
+**Date**: 2025-02-22
 
 This guide documents recommended import patterns for the jvspatial library, ensuring consistency and maintainability across your codebase.
 
@@ -34,11 +34,12 @@ from jvspatial.core.node import Node  # Too specific
 ### **Server & API**
 
 ```python
-# ✅ Best: Import from main package
-from jvspatial import Server, ServerConfig
+# ✅ Best: Import from api (ServerConfig is not in top-level jvspatial)
+from jvspatial.api import Server, ServerConfig, endpoint
 
-# ✅ Also good: Import from api
-from jvspatial.api import Server, ServerConfig
+# ✅ Also good: Server from main package
+from jvspatial import Server
+from jvspatial.api import ServerConfig
 
 # ❌ Avoid: Import from server file
 from jvspatial.api.server import Server  # Too specific
@@ -54,13 +55,10 @@ from jvspatial.api.server import Server  # Too specific
 # ✅ Best: Import from api.decorators
 from jvspatial.api.decorators import (
     endpoint,
-    auth_endpoint,
-    webhook_endpoint,
-    admin_endpoint,
 )
 
 # ✅ Also good: Import from main api
-from jvspatial.api import endpoint, auth_endpoint
+from jvspatial.api import endpoint
 
 # ❌ Avoid: Import from internal modules
 from jvspatial.api.decorators.route import endpoint  # Too specific
@@ -128,15 +126,15 @@ db = create_database("mongodb", db_name="mydb", connection_string="mongodb://loc
 
 ```python
 # ✅ Best: Import factory function
-from jvspatial.cache import get_cache_backend
+from jvspatial.cache import create_cache
 
 # ✅ For specific backends
 from jvspatial.cache import MemoryCache, RedisCache, LayeredCache
 
 # Example usage
-from jvspatial.cache import get_cache_backend
+from jvspatial.cache import create_cache
 
-cache = get_cache_backend()  # Uses env config
+cache = create_cache()  # Or create_cache("memory"), create_cache("redis", redis_url="...")
 await cache.set("key", "value", ttl=300)
 ```
 
@@ -306,7 +304,6 @@ from jvspatial.api import (
     Server,
     ServerConfig,
     endpoint,
-    auth_endpoint,
 )
 
 # JVspatial - Database
@@ -316,7 +313,7 @@ from jvspatial.db import (
 )
 
 # JVspatial - Cache
-from jvspatial.cache import get_cache_backend
+from jvspatial.cache import create_cache
 
 # JVspatial - Utils
 from jvspatial.utils import (
@@ -345,17 +342,16 @@ async def get_user(user_id: str):
         return {"user": user.to_dict()}
 
 # Server setup
-async def main():
-    server = Server(
-        config=ServerConfig(
-            host="0.0.0.0",
-            port=8000,
-        )
-    )
-    await server.start()
+server = Server(
+    title="My API",
+    host="0.0.0.0",
+    port=8000,
+    db_type="json",
+    db_path="./jvdb",
+)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    server.run()
 ```
 
 ---
@@ -378,7 +374,7 @@ from jvspatial.api import Server, endpoint
 
 ```python
 # ❌ Bad: Importing from internal modules
-from jvspatial.core.walker.event_system import EventManager
+from jvspatial.core.entities.walker_components.event_system import EventManager
 from jvspatial.api.endpoints.router import BaseRouter
 
 # ✅ Good: Use public API
@@ -425,7 +421,7 @@ from jvspatial.api import Server
 | Graph decorators | `jvspatial.core` | `from jvspatial.core import on_visit` |
 | Server | `jvspatial.api` | `from jvspatial.api import Server` |
 | Database | `jvspatial.db` | `from jvspatial.db import create_database` |
-| Cache | `jvspatial.cache` | `from jvspatial.cache import get_cache_backend` |
+| Cache | `jvspatial.cache` | `from jvspatial.cache import create_cache` |
 | Storage | `jvspatial.storage.interfaces` | `from jvspatial.storage.interfaces import LocalFileInterface` |
 | Utils decorators | `jvspatial.utils` | `from jvspatial.utils import memoize` |
 | Type system | `jvspatial.utils` | `from jvspatial.utils import NodeId, is_dict` |
@@ -466,7 +462,7 @@ Add to `.vscode/settings.json`:
 
 ---
 
-**Last Updated**: 2025-10-20
-**Version**: 0.0.1
+**Last Updated**: 2025-02-22
+**Version**: 0.0.3
 **Maintainer**: JVspatial Team
 

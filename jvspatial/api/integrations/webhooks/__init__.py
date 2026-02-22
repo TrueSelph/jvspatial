@@ -1,15 +1,15 @@
 """Webhook integration for jvspatial API.
 
-Provides webhook decorators, event handling, and HMAC verification.
+Provides webhook event handling, HMAC verification, and middleware.
+
+Note: Use @endpoint with webhook=True parameter for webhook endpoints.
 """
 
 try:
-    from .decorators import webhook_endpoint  # noqa: F401
     from .middleware import WebhookMiddleware  # noqa: F401
     from .models import WebhookEvent, WebhookIdempotencyKey  # noqa: F401
 
     __all__ = [
-        "webhook_endpoint",
         "WebhookEvent",
         "WebhookIdempotencyKey",
         "WebhookMiddleware",

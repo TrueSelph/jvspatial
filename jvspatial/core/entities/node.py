@@ -1,6 +1,7 @@
 """Node class for jvspatial graph entities."""
 
 import inspect
+import logging
 import weakref
 from typing import (
     TYPE_CHECKING,
@@ -20,11 +21,13 @@ from ..annotations import attribute
 from .edge import Edge
 from .object import Object
 
+# Import Walker at runtime for __init_subclass__ validation
+from .walker import Walker
+
 if TYPE_CHECKING:
     from ..context import GraphContext
 
-# Import Walker at runtime for __init_subclass__ validation
-from .walker import Walker
+logger = logging.getLogger(__name__)
 
 
 class Node(Object):
@@ -252,11 +255,30 @@ class Node(Object):
         Returns:
             List of edge instances
         """
+        if not self.edge_ids:
+            return []
+
+        from ..context import get_default_context
+
+        context = get_default_context()
+
+        # Use batch query for efficiency (N+1 -> 1 query)
+        edge_results = await context.database.find(
+            "edge", {"id": {"$in": self.edge_ids}}
+        )
+
         edges = []
-        for edge_id in self.edge_ids:
-            edge_obj = await Edge.get(edge_id)
-            if edge_obj:
-                edges.append(edge_obj)
+        for result in edge_results:
+            try:
+                edge_obj = await context._deserialize_entity(Edge, result)
+                if edge_obj:
+                    edges.append(edge_obj)
+            except Exception as e:
+                # Log at debug level and skip invalid edges
+                logger.debug(f"Skipping invalid edge during deserialization: {e}")
+                continue
+
+        # Filter by direction if specified
         if direction == "out":
             return [e for e in edges if e.source == self.id]
         elif direction == "in":
@@ -432,23 +454,18 @@ class Node(Object):
         from .edge import Edge as EdgeClass
 
         edges = []
+        edge_cls = edge_filter if isinstance(edge_filter, type) else EdgeClass
 
-        if direction in ["out", "both"]:
-            # Find outgoing edges
-            outgoing_edges = await context.find_edges_between(
-                source_id=self.id,
-                edge_class=edge_filter if isinstance(edge_filter, type) else None,
-            )
-            edges.extend(outgoing_edges)
-
-        if direction in ["in", "both"]:
-            # Find incoming edges (where this node is the target)
-            edge_cls = edge_filter if isinstance(edge_filter, type) else EdgeClass
-            query = {"target": self.id}
+        # Optimization: Use single combined query for bidirectional traversal
+        if direction == "both":
+            # Build combined query for both directions
+            edge_query: Dict[str, Any] = {
+                "$or": [{"source": self.id}, {"target": self.id}]
+            }
             if isinstance(edge_filter, type):
-                query["name"] = edge_filter.__name__
+                edge_query["name"] = edge_filter.__name__
 
-            edge_results = await context.database.find("edge", query)
+            edge_results = await context.database.find("edge", edge_query)
             for edge_data in edge_results:
                 try:
                     edge_obj: Optional["Edge"] = await context._deserialize_entity(
@@ -456,8 +473,40 @@ class Node(Object):
                     )
                     if edge_obj:
                         edges.append(edge_obj)
-                except Exception:
+                except Exception as e:
+                    logger.debug(
+                        f"Skipping invalid edge during bidirectional traversal: {e}"
+                    )
                     continue
+        else:
+            # Single direction queries
+            if direction == "out":
+                # Find outgoing edges
+                outgoing_edges = await context.find_edges_between(
+                    source_id=self.id,
+                    edge_class=edge_filter if isinstance(edge_filter, type) else None,
+                )
+                edges.extend(outgoing_edges)
+
+            elif direction == "in":
+                # Find incoming edges (where this node is the target)
+                query: Dict[str, Any] = {"target": self.id}
+                if isinstance(edge_filter, type):
+                    query["name"] = edge_filter.__name__
+
+                edge_results = await context.database.find("edge", query)
+                for edge_data in edge_results:
+                    try:
+                        edge_obj = await context._deserialize_entity(
+                            edge_cls, edge_data
+                        )
+                        if edge_obj:
+                            edges.append(edge_obj)
+                    except Exception as e:
+                        logger.debug(
+                            f"Skipping invalid incoming edge during traversal: {e}"
+                        )
+                        continue
 
         # Get unique connected node IDs
         connected_node_ids = set()
@@ -467,19 +516,12 @@ class Node(Object):
             if direction in ["in", "both"] and hasattr(edge, "source"):
                 connected_node_ids.add(edge.source)
 
-        # Find the actual nodes
-        connected_nodes = []
-        for node_id in connected_node_ids:
-            try:
-                # Try to get the node from the database
-                node_data = await context.database.get("node", node_id)
-                if node_data:
-                    # Deserialize the node
-                    node_obj = await context._deserialize_entity(Node, node_data)
-                    if node_obj:
-                        connected_nodes.append(node_obj)
-            except Exception:
-                continue  # Skip invalid nodes
+        # Find the actual nodes using batch retrieval for efficiency
+        # This uses context.get_batch() which handles caching and batch queries
+        if connected_node_ids:
+            connected_nodes = await context.get_batch(Node, list(connected_node_ids))
+        else:
+            connected_nodes = []
 
         # Apply node type filtering
         if node_filter is not None:

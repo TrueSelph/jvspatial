@@ -25,10 +25,21 @@ Example:
 
 from .base import FileStorageInterface
 from .local import LocalFileInterface
-from .s3 import S3FileInterface
 
-__all__ = [
-    "FileStorageInterface",
-    "LocalFileInterface",
-    "S3FileInterface",
-]
+# Conditional import for S3 (boto3 is optional)
+try:
+    from .s3 import S3FileInterface
+
+    __all__ = [
+        "FileStorageInterface",
+        "LocalFileInterface",
+        "S3FileInterface",
+    ]
+except ImportError:
+    # boto3 not available, S3FileInterface not importable
+    S3FileInterface = None  # type: ignore
+
+    __all__ = [
+        "FileStorageInterface",
+        "LocalFileInterface",
+    ]

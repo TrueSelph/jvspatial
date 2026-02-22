@@ -291,8 +291,13 @@ async def process_webhook_payload(request: Request) -> Tuple[bytes, str]:
         HTTPException: If payload cannot be processed
     """
     try:
-        # Read raw body
-        raw_body = request.body()
+        # Check if body was already read and stored in request.state
+        if hasattr(request.state, "raw_body") and request.state.raw_body:
+            raw_body = request.state.raw_body
+        else:
+            # Read raw body - in Starlette/FastAPI, body() is async and must be awaited
+            raw_body = await request.body()
+
         content_type = (
             request.headers.get("content-type", "application/json")
             .split(";")[0]

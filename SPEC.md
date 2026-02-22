@@ -680,10 +680,10 @@ if __name__ == "__main__":
 
 ### Basic Webhook Handler
 ```python
-from jvspatial.api.webhook.decorators import webhook_endpoint
+from jvspatial.api import endpoint
 from fastapi import Request
 
-@webhook_endpoint("/webhook/{service}/{auth_token}", methods=["POST"])
+@endpoint("/webhook/{service}/{auth_token}", methods=["POST"], webhook=True)
 async def webhook_handler(request: Request) -> Dict[str, Any]:
     """Process webhooks with automatic payload parsing."""
     raw_body = request.state.raw_body
@@ -836,13 +836,13 @@ Webhooks in jvspatial are designed for:
 
 ```python path=null start=null
 from fastapi import Request
-from jvspatial.api.webhook.decorators import webhook_endpoint
+from jvspatial.api import endpoint
 from jvspatial.api.auth.middleware import get_current_user
 from typing import Dict, Any
 import json
 
 # Basic webhook handler function
-@webhook_endpoint("/webhook/{route}/{auth_token}", methods=["POST"])
+@endpoint("/webhook/{route}/{auth_token}", methods=["POST"], webhook=True)
 async def generic_webhook_handler(request: Request) -> Dict[str, Any]:
     """Generic webhook handler for multiple services.
 
@@ -883,7 +883,7 @@ async def generic_webhook_handler(request: Request) -> Dict[str, Any]:
         }
 
 # Service-specific webhook handlers
-@webhook_endpoint("/webhook/stripe/{auth_token}", methods=["POST"])
+@endpoint("/webhook/stripe/{auth_token}", methods=["POST"], webhook=True)
 async def stripe_webhook_handler(request: Request) -> Dict[str, Any]:
     """Dedicated Stripe webhook handler with event processing."""
     raw_body = request.state.raw_body
@@ -948,9 +948,10 @@ Webhook endpoints require authentication tokens in the URL path and support addi
 
 ```python path=null start=null
 # Webhook with permission requirements
-@webhook_endpoint(
+@endpoint(
     "/webhook/admin/{route}/{auth_token}",
     methods=["POST"],
+    webhook=True,
     permissions=["process_webhooks", "admin_access"],
     roles=["admin", "webhook_manager"]
 )
@@ -967,7 +968,7 @@ async def admin_webhook_handler(request: Request) -> Dict[str, Any]:
     }
 
 # HMAC signature verification (handled by middleware)
-@webhook_endpoint("/webhook/secure/{service}/{auth_token}", methods=["POST"])
+@endpoint("/webhook/secure/{service}/{auth_token}", methods=["POST"], webhook=True)
 async def secure_webhook_handler(request: Request) -> Dict[str, Any]:
     """Webhook with HMAC signature verification.
 
@@ -996,7 +997,7 @@ The architecture supports webhook processing through graph traversal using Walke
 # from jvspatial.core import Walker, Node
 # from jvspatial.core.entities import on_visit
 
-# @webhook_endpoint("/webhook/process/{route}/{auth_token}", methods=["POST"])
+# @endpoint("/webhook/process/{route}/{auth_token}", methods=["POST"])
 # class WebhookProcessingWalker(Walker):
 #     """Walker-based webhook processing with graph traversal."""
 #
@@ -1033,7 +1034,7 @@ The architecture supports webhook processing through graph traversal using Walke
 Webhooks support idempotency keys to handle duplicate deliveries:
 
 ```python path=null start=null
-@webhook_endpoint("/webhook/idempotent/{auth_token}", methods=["POST"])
+@endpoint("/webhook/idempotent/{auth_token}", methods=["POST"], webhook=True)
 async def idempotent_webhook_handler(request: Request) -> Dict[str, Any]:
     """Webhook handler with built-in idempotency support.
 
@@ -1168,7 +1169,7 @@ async def test_webhook_processing(test_webhook_request):
 
 ```python path=null start=null
 # Good: Always return 200 status for webhooks
-@webhook_endpoint("/webhook/service/{auth_token}")
+@endpoint("/webhook/service/{auth_token}", webhook=True)
 async def proper_webhook_handler(request: Request) -> Dict[str, Any]:
     try:
         # Process webhook
@@ -1180,7 +1181,7 @@ async def proper_webhook_handler(request: Request) -> Dict[str, Any]:
         return {"status": "received", "error": "logged"}
 
 # Good: Use route-based dispatch for multiple services
-@webhook_endpoint("/webhook/{route}/{auth_token}")
+@endpoint("/webhook/{route}/{auth_token}", webhook=True)
 async def multi_service_webhook(request: Request) -> Dict[str, Any]:
     route = getattr(request.state, "webhook_route", "unknown")
 
@@ -1194,7 +1195,7 @@ async def multi_service_webhook(request: Request) -> Dict[str, Any]:
     return await handler(request)
 
 # Good: Validate authentication token format
-@webhook_endpoint("/webhook/{service}/{auth_token}")
+@endpoint("/webhook/{service}/{auth_token}", webhook=True)
 async def secure_webhook_handler(request: Request) -> Dict[str, Any]:
     # Token validation is handled by middleware
     current_user = get_current_user(request)
@@ -1208,7 +1209,7 @@ async def secure_webhook_handler(request: Request) -> Dict[str, Any]:
 
 ```python path=null start=null
 # Bad: Returning non-200 status codes
-@webhook_endpoint("/webhook/bad/{auth_token}")
+@endpoint("/webhook/bad/{auth_token}", webhook=True)
 async def bad_webhook_handler(request: Request) -> Dict[str, Any]:
     try:
         process_webhook(request.state.raw_body)
@@ -1217,14 +1218,14 @@ async def bad_webhook_handler(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail="Processing failed")
 
 # Bad: Not handling authentication properly
-@webhook_endpoint("/webhook/unsecure/{auth_token}")
+@endpoint("/webhook/unsecure/{auth_token}", webhook=True)
 async def unsecure_webhook_handler(request: Request) -> Dict[str, Any]:
     # Don't bypass authentication checks
     # Always use get_current_user() or require auth in decorator
     return {"status": "processed"}
 
 # Bad: Not using middleware-processed data
-@webhook_endpoint("/webhook/manual/{auth_token}")
+@endpoint("/webhook/manual/{auth_token}", webhook=True)
 async def manual_webhook_handler(request: Request) -> Dict[str, Any]:
     # Don't manually read request body - use request.state.raw_body
     # raw_body = await request.body()  # Wrong - middleware already processed
@@ -1243,11 +1244,11 @@ JVspatial provides an advanced webhook system for handling external service inte
 ### Quick Webhook Setup
 
 ```python path=null start=null
-from jvspatial.api.webhook.decorators import webhook_endpoint
+from jvspatial.api import endpoint
 from jvspatial.api import Server
 
 # Simple webhook handler
-@webhook_endpoint("/webhook/payment")
+@endpoint("/webhook/payment", webhook=True)
 async def payment_webhook(payload: dict, endpoint):
     """Process payment webhooks with automatic JSON parsing."""
     payment_id = payload.get("payment_id")
@@ -1272,8 +1273,9 @@ server.run()  # Webhooks ready at /webhook/* paths
 
 ```python path=null start=null
 # Webhook with full security features
-@webhook_endpoint(
+@endpoint(
     "/webhook/stripe/{key}",
+    webhook=True,
     path_key_auth=True,                    # API key in URL path
     hmac_secret="stripe-webhook-secret",   # HMAC signature verification
     idempotency_ttl_hours=48,              # Duplicate handling for 48h
@@ -1299,7 +1301,7 @@ async def secure_stripe_webhook(raw_body: bytes, content_type: str, endpoint):
     return endpoint.response(content={"status": "received"})
 
 # Multi-service webhook dispatcher
-@webhook_endpoint("/webhook/{service}")
+@endpoint("/webhook/{service}", webhook=True)
 async def multi_service_webhook(payload: dict, service: str, endpoint):
     """Route webhooks based on service parameter."""
     handlers = {
@@ -1409,7 +1411,7 @@ curl -X POST "http://localhost:8000/webhook/payment" \
 
 ```python path=null start=null
 # Good: Always return 200 for webhook endpoints
-@webhook_endpoint("/webhook/service")
+@endpoint("/webhook/service", webhook=True)
 async def proper_webhook(payload: dict, endpoint):
     try:
         result = await process_webhook_data(payload)
@@ -1420,7 +1422,7 @@ async def proper_webhook(payload: dict, endpoint):
         return endpoint.response(content={"status": "received", "error": "logged"})
 
 # Good: Use route-based dispatch for multiple services
-@webhook_endpoint("/webhook/{service}")
+@endpoint("/webhook/{service}", webhook=True)
 async def multi_service_webhook(payload: dict, service: str, endpoint):
     handlers = {
         "stripe": process_stripe,
@@ -1431,7 +1433,7 @@ async def multi_service_webhook(payload: dict, service: str, endpoint):
     return await handler(payload, endpoint)
 
 # Good: Validate webhook signatures when available
-@webhook_endpoint("/webhook/secure", hmac_secret="webhook-secret")
+@endpoint("/webhook/secure", webhook=True, hmac_secret="webhook-secret")
 async def secure_webhook(raw_body: bytes, endpoint):
     # HMAC verification is automatic when secret is provided
     return endpoint.response(content={"status": "verified"})
@@ -1441,21 +1443,21 @@ async def secure_webhook(raw_body: bytes, endpoint):
 
 ```python path=null start=null
 # Bad: Returning non-200 status codes
-@webhook_endpoint("/webhook/bad")
+@endpoint("/webhook/bad", webhook=True)
 async def bad_webhook(payload: dict, endpoint):
     if payload.get("invalid"):
         # Don't do this - breaks webhook retry logic
         raise HTTPException(status_code=400, detail="Invalid payload")
 
 # Bad: Not handling errors gracefully
-@webhook_endpoint("/webhook/risky")
+@endpoint("/webhook/risky", webhook=True)
 async def risky_webhook(payload: dict, endpoint):
     # Unhandled exceptions will return 500 - webhooks will retry
     result = dangerous_operation(payload)  # Might throw
     return endpoint.response(content={"result": result})
 
 # Bad: Bypassing security features
-@webhook_endpoint("/webhook/insecure")
+@endpoint("/webhook/insecure", webhook=True)
 async def insecure_webhook(request: Request, endpoint):
     # Don't manually read request body - use automatic payload injection
     raw_body = await request.body()  # Wrong - middleware already processed
@@ -1715,16 +1717,15 @@ See [File Storage Documentation](docs/md/file-storage-usage.md) for advanced usa
 
 ## 🔀 Router Decorators
 
-jvspatial provides four standard router decorators for API endpoints:
+jvspatial provides a unified `@endpoint` decorator for all API endpoints:
 
-1. `@endpoint` - For endpoints (both functions and Walker classes)
-2. `@auth_endpoint` - For authenticated endpoints (both functions and Walker classes)
-3. `@webhook_endpoint` - For webhook endpoints (both functions and Walker classes)
-4. `@admin_endpoint` - For admin-only endpoints (convenience wrapper for `@auth_endpoint` with `roles=["admin"]`)
+1. `@endpoint` - For public endpoints (both functions and Walker classes)
+2. `@endpoint(..., auth=True)` - For authenticated endpoints (both functions and Walker classes)
+3. `@endpoint(..., webhook=True)` - For webhook endpoints (both functions and Walker classes)
+4. `@endpoint(..., auth=True, roles=["admin"])` - For admin-only endpoints
 
 ```python
 from jvspatial.api import endpoint
-from jvspatial.api.auth import auth_endpoint, admin_endpoint
 
 # Function endpoint
 @endpoint("/api/users", methods=["GET"])
@@ -1738,17 +1739,17 @@ class GraphTraversal(Walker):
     pass
 
 # Authenticated function endpoint
-@auth_endpoint("/api/admin/stats", methods=["GET"], roles=["admin"])
+@endpoint("/api/admin/stats", auth=True, methods=["GET"], roles=["admin"])
 async def get_admin_stats() -> Dict[str, Any]:
     return {"stats": "admin only"}
 
 # Authenticated walker endpoint (uses same decorator)
-@auth_endpoint("/api/secure/process", methods=["POST"], permissions=["process_data"])
+@endpoint("/api/secure/process", auth=True, methods=["POST"], permissions=["process_data"])
 class SecureProcessor(Walker):
     pass
 
-# Admin-only endpoint (convenience wrapper)
-@admin_endpoint("/api/admin/users", methods=["GET"])
+# Admin-only endpoint
+@endpoint("/api/admin/users", auth=True, roles=["admin"], methods=["GET"])
 async def manage_users() -> Dict[str, Any]:
     return {"users": "admin access"}
 ```
@@ -1758,7 +1759,8 @@ async def manage_users() -> Dict[str, Any]:
 - `@server.route`
 - `@server.walker`
 - `@walker_endpoint` (deprecated - use `@endpoint` instead)
-- `@auth_walker_endpoint` (deprecated - use `@auth_endpoint` instead)
+- `@auth_endpoint` (deprecated - use `@endpoint(..., auth=True)` instead)
+- `@admin_endpoint` (deprecated - use `@endpoint(..., auth=True, roles=["admin"])` instead)
 
 These are internal or deprecated.
 
@@ -2676,9 +2678,9 @@ async def log_requests(request, call_next):
 
 jvspatial provides four standard router decorators for API endpoints. These are the ONLY decorators that should be used for routing:
 
-1. `@endpoint` - For endpoints (both functions and Walker classes)
-2. `@auth_endpoint` - For authenticated endpoints (both functions and Walker classes)
-3. `@webhook_endpoint` - For webhook endpoints (both functions and Walker classes)
+1. `@endpoint` - For public endpoints (both functions and Walker classes)
+2. `@endpoint(..., auth=True)` - For authenticated endpoints (both functions and Walker classes)
+3. `@endpoint(..., webhook=True)` - For webhook endpoints (both functions and Walker classes)
 
 ```python
 # Function endpoint
@@ -2693,12 +2695,12 @@ class GraphTraversal(Walker):
     pass
 
 # Authenticated function endpoint
-@auth_endpoint("/api/admin/stats", methods=["GET"], roles=["admin"])
+@endpoint("/api/admin/stats", auth=True, methods=["GET"], roles=["admin"])
 async def get_admin_stats() -> Dict[str, Any]:
     return {"stats": "admin only"}
 
 # Authenticated walker endpoint (uses same decorator)
-@auth_endpoint("/api/secure/process", methods=["POST"], permissions=["process_data"])
+@endpoint("/api/secure/process", auth=True, methods=["POST"], permissions=["process_data"])
 class SecureProcessor(Walker):
     pass
 ```

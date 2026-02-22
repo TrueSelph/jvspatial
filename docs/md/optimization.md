@@ -169,6 +169,134 @@ class MemoryEfficientWalker(Walker):
             del item
 ```
 
+## Deferred Saves
+
+### Overview
+
+The `DeferredSaveMixin` provides a pattern for batching multiple database writes into a single operation. This is particularly useful for entities that experience rapid, sequential updates during a single operation (e.g., metadata updates during request processing).
+
+### When to Use
+
+Use deferred saves when:
+- An entity receives multiple updates in quick succession
+- Updates happen during a single logical operation
+- You want to minimize database I/O for better performance
+
+### Basic Usage
+
+```python
+from jvspatial.core import Node
+from jvspatial.core.mixins import DeferredSaveMixin
+
+class MyEntity(DeferredSaveMixin, Node):
+    counter: int = 0
+    status: str = "pending"
+    metadata: dict = {}
+```
+
+**Important**: Place `DeferredSaveMixin` before `Node` in the inheritance list to ensure proper method resolution order (MRO).
+
+### API Reference
+
+```python
+# Enable deferred saves - subsequent save() calls mark entity as dirty
+entity.enable_deferred_saves()
+
+# Multiple updates - no database writes yet
+entity.counter += 1
+await entity.save()  # Only marks dirty, no DB write
+entity.status = "processing"
+await entity.save()  # Still just marks dirty
+entity.metadata["key"] = "value"
+await entity.save()  # Still just marks dirty
+
+# Single database write when you're done
+await entity.flush()  # Performs actual DB write
+
+# Disable deferred saves (returns to normal save behavior)
+entity.disable_deferred_saves()
+```
+
+### Properties
+
+```python
+# Check if entity has pending changes
+if entity.is_dirty:
+    await entity.flush()
+
+# Check if deferred mode is enabled
+if entity.deferred_saves_enabled:
+    print("Deferred saves are active")
+```
+
+### Environment Variable
+
+Control deferred saves globally via environment variable:
+
+```bash
+# Enable deferred saves (default)
+JVSPATIAL_ENABLE_DEFERRED_SAVES=true
+
+# Disable deferred saves (all save() calls write immediately)
+JVSPATIAL_ENABLE_DEFERRED_SAVES=false
+```
+
+When disabled globally, `save()` always writes immediately even if `enable_deferred_saves()` was called.
+
+### Complete Example
+
+```python
+from jvspatial.core import Node
+from jvspatial.core.mixins import DeferredSaveMixin, ENABLE_DEFERRED_SAVES
+
+class Conversation(DeferredSaveMixin, Node):
+    interaction_count: int = 0
+    last_interaction_at: datetime = None
+    metadata: dict = {}
+
+async def process_interaction(conversation: Conversation, data: dict):
+    # Enable deferred saves for this processing session
+    if ENABLE_DEFERRED_SAVES:
+        conversation.enable_deferred_saves()
+
+    try:
+        # Multiple updates during processing
+        conversation.interaction_count += 1
+        await conversation.save()  # Deferred
+
+        conversation.last_interaction_at = datetime.now()
+        await conversation.save()  # Deferred
+
+        conversation.metadata["last_input"] = data.get("input")
+        await conversation.save()  # Deferred
+
+        # ... more processing ...
+
+    finally:
+        # Single database write at the end
+        conversation.disable_deferred_saves()
+        await conversation.flush()  # One DB write for all changes
+```
+
+### Performance Impact
+
+Without deferred saves:
+- 3 updates = 3 database writes
+- Higher I/O overhead
+- More latency per operation
+
+With deferred saves:
+- 3 updates = 1 database write
+- Reduced I/O overhead
+- Lower latency for multi-update operations
+
+### Best Practices
+
+1. **Always call `flush()` in a finally block** to ensure changes are persisted
+2. **Use with entities that have predictable update patterns** where you know multiple saves will occur
+3. **Check `is_dirty` before flushing** if you want to avoid unnecessary writes
+4. **Disable deferred saves before flushing** to ensure the flush actually writes
+
 ## Advanced Optimizations
 
 ### Declarative Database Indexing
@@ -274,6 +402,7 @@ configure_pool(
 11. Use connection pooling
 12. Profile your application regularly
 13. Implement monitoring and alerting
+14. **Use `DeferredSaveMixin`** for entities with multiple rapid updates to batch writes
 
 ## See Also
 

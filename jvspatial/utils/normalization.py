@@ -53,14 +53,14 @@ def normalize_text_to_ascii(text: str) -> str:
         # Quotation marks
         "\u2018": "'",  # Left single quotation mark
         "\u2019": "'",  # Right single quotation mark (apostrophe)
-        "\u201A": "'",  # Single low-9 quotation mark
-        "\u201B": "'",  # Single high-reversed-9 quotation mark
+        "\u201a": "'",  # Single low-9 quotation mark
+        "\u201b": "'",  # Single high-reversed-9 quotation mark
         "\u2032": "'",  # Prime (minutes, feet)
         "\u2035": "'",  # Reversed prime
-        "\u201C": '"',  # Left double quotation mark
-        "\u201D": '"',  # Right double quotation mark
-        "\u201E": '"',  # Double low-9 quotation mark
-        "\u201F": '"',  # Double high-reversed-9 quotation mark
+        "\u201c": '"',  # Left double quotation mark
+        "\u201d": '"',  # Right double quotation mark
+        "\u201e": '"',  # Double low-9 quotation mark
+        "\u201f": '"',  # Double high-reversed-9 quotation mark
         "\u2033": '"',  # Double prime (seconds, inches)
         "\u2036": '"',  # Reversed double prime
         # Dashes and hyphens
@@ -68,12 +68,12 @@ def normalize_text_to_ascii(text: str) -> str:
         "\u2014": "-",  # Em dash
         "\u2015": "-",  # Horizontal bar
         "\u2212": "-",  # Minus sign
-        "\uFE58": "-",  # Small em dash
-        "\uFE63": "-",  # Small hyphen-minus
+        "\ufe58": "-",  # Small em dash
+        "\ufe63": "-",  # Small hyphen-minus
         # Ellipsis
         "\u2026": "...",  # Horizontal ellipsis
         # Spaces (various Unicode spaces to regular space)
-        "\u00A0": " ",  # Non-breaking space
+        "\u00a0": " ",  # Non-breaking space
         "\u2000": " ",  # En quad
         "\u2001": " ",  # Em quad
         "\u2002": " ",  # En space
@@ -84,22 +84,22 @@ def normalize_text_to_ascii(text: str) -> str:
         "\u2007": " ",  # Figure space
         "\u2008": " ",  # Punctuation space
         "\u2009": " ",  # Thin space
-        "\u200A": " ",  # Hair space
-        "\u202F": " ",  # Narrow no-break space
-        "\u205F": " ",  # Medium mathematical space
+        "\u200a": " ",  # Hair space
+        "\u202f": " ",  # Narrow no-break space
+        "\u205f": " ",  # Medium mathematical space
         "\u3000": " ",  # Ideographic space
         # Other common punctuation
         "\u2022": "*",  # Bullet
         "\u2020": "+",  # Dagger
         "\u2021": "++",  # Double dagger
         "\u2039": "<",  # Single left-pointing angle quotation mark
-        "\u203A": ">",  # Single right-pointing angle quotation mark
-        "\u00AD": "",  # Soft hyphen (remove)
-        "\u200B": "",  # Zero-width space (remove)
-        "\u200C": "",  # Zero-width non-joiner (remove)
-        "\u200D": "",  # Zero-width joiner (remove)
+        "\u203a": ">",  # Single right-pointing angle quotation mark
+        "\u00ad": "",  # Soft hyphen (remove)
+        "\u200b": "",  # Zero-width space (remove)
+        "\u200c": "",  # Zero-width non-joiner (remove)
+        "\u200d": "",  # Zero-width joiner (remove)
         "\u2060": "",  # Word joiner (remove)
-        "\uFEFF": "",  # Zero-width no-break space (remove)
+        "\ufeff": "",  # Zero-width no-break space (remove)
     }
 
     # Apply replacements first (before encoding)

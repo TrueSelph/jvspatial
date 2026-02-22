@@ -229,6 +229,25 @@ class EndpointRegistryService:
             is_dynamic=is_dynamic,
         )
 
+        # Set endpoint config on function for middleware to read
+        # Extract auth_required from kwargs or route_config
+        route_config = kwargs.get("route_config", {})
+        auth_required = kwargs.get("auth_required", False) or route_config.get(
+            "auth_required", False
+        )
+
+        if not hasattr(func, "_jvspatial_endpoint_config"):
+            func._jvspatial_endpoint_config = {}  # type: ignore[attr-defined]
+        func._jvspatial_endpoint_config["auth_required"] = auth_required  # type: ignore[attr-defined]
+
+        # Also set permissions and roles if provided
+        permissions = kwargs.get("permissions") or route_config.get("permissions")
+        if permissions:
+            func._jvspatial_endpoint_config["permissions"] = permissions  # type: ignore[attr-defined]
+        roles = kwargs.get("roles") or route_config.get("roles")
+        if roles:
+            func._jvspatial_endpoint_config["roles"] = roles  # type: ignore[attr-defined]
+
         # Register function
         self._function_registry[func] = endpoint_info
         self._add_to_path_index(path, endpoint_info)

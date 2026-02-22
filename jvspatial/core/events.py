@@ -28,9 +28,9 @@ class EventHandlerProtocol(Protocol):
 class EventBus:
     """Simple event bus for walker and node communication."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._handlers: Dict[str, List[Callable]] = {}
-        self._active_entities: weakref.WeakValueDictionary = (
+        self._active_entities: weakref.WeakValueDictionary[str, Any] = (
             weakref.WeakValueDictionary()
         )
         self._lock = asyncio.Lock()

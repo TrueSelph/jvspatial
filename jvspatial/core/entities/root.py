@@ -1,7 +1,7 @@
 """Root node class for jvspatial graph."""
 
 import asyncio
-from typing import ClassVar, Optional, Type
+from typing import Any, ClassVar, Optional, Type
 
 from typing_extensions import override
 
@@ -17,6 +17,16 @@ class Root(Node):
 
     id: str = "n.Root.root"
     _lock: ClassVar[asyncio.Lock] = asyncio.Lock()
+
+    def __init__(self, **kwargs: Any) -> None:
+        """Initialize Root with fixed ID.
+
+        Args:
+            **kwargs: Node attributes (id will be overridden)
+        """
+        # Always use the fixed ID for Root, ignore any passed ID
+        kwargs["id"] = "n.Root.root"
+        super().__init__(**kwargs)
 
     @override
     @classmethod
@@ -59,3 +69,33 @@ class Root(Node):
             if existing and existing.get("id") != node.id:
                 raise RuntimeError("Root node singleton violation detected")
             return node
+
+    @override
+    @classmethod
+    async def create(cls: Type["Root"], **kwargs: Any) -> "Root":
+        """Create root node - delegates to get() to ensure singleton.
+
+        This method ensures Root nodes always use the fixed ID 'n.Root.root'
+        and prevents duplicate root nodes from being created.
+
+        Args:
+            **kwargs: Ignored - Root always uses fixed ID
+
+        Returns:
+            Root instance (singleton)
+        """
+        # Ignore any ID passed in kwargs - Root must always use fixed ID
+        kwargs.pop("id", None)
+        return await cls.get()
+
+    @override
+    async def save(self: "Root") -> "Root":
+        """Save root node, ensuring ID is never changed.
+
+        Returns:
+            Saved Root instance
+        """
+        # Ensure ID is always the fixed value
+        if self.id != "n.Root.root":
+            object.__setattr__(self, "id", "n.Root.root")
+        return await super().save()

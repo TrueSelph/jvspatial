@@ -340,7 +340,7 @@ async def public_info():
         "timestamp": datetime.now().isoformat()
     }
 
-@auth_endpoint("/protected/data", methods=["GET"])
+@endpoint("/protected/data", auth=True, methods=["GET"])
 async def protected_data(request: Request):
     """Protected endpoint requiring authentication."""
     current_user = get_current_user(request)
@@ -356,7 +356,7 @@ async def protected_data(request: Request):
         "timestamp": datetime.now().isoformat()
     }
 
-@admin_endpoint("/admin/users", methods=["GET"])
+@endpoint("/admin/users", auth=True, roles=["admin"], methods=["GET"])
 async def admin_list_users(request: Request):
     """Admin endpoint to list all users."""
     current_user = get_current_user(request)
@@ -375,8 +375,9 @@ async def admin_list_users(request: Request):
 
 **Spatial Access Control in Walker Endpoints**:
 ```python path=examples/auth_demo.py start=483
-@auth_endpoint(
+@endpoint(
     "/protected/spatial-query",
+    auth=True,
     methods=["POST"],
     permissions=["read_spatial_data"]
 )

@@ -6,14 +6,14 @@ for optimal performance, following the new standard implementation approach.
 
 import logging
 import re
-from typing import Any, List, Optional, Pattern
+from typing import Any, Dict, List, Optional, Pattern
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from jvspatial.api.auth.config import AuthConfig
 from jvspatial.api.constants import APIRoutes
-from jvspatial.config import Config
 
 
 class PathMatcher:
@@ -48,6 +48,8 @@ class PathMatcher:
 
         expanded: List[str] = []
         for path in exempt_paths:
+            if path is None or not isinstance(path, str):
+                continue
             # normalize path to start with "/"
             normalized = path if path.startswith("/") else f"/{path}"
             expanded.append(normalized)
@@ -100,25 +102,37 @@ class PathMatcher:
 
 
 class AuthenticationMiddleware(BaseHTTPMiddleware):
-    """Streamlined authentication middleware with optimized performance.
+    """Authentication middleware with multi-method support.
 
-    This middleware provides efficient authentication with pre-compiled patterns
-    and streamlined request processing, following the new standard implementation.
+    This middleware attempts authentication in the following order:
+    1. JWT Bearer token (Authorization: Bearer <token>)
+    2. API key (X-API-Key or custom header configured in api_key_header)
+    3. Session cookie (if configured)
+
+    All authentication methods are always available when auth_enabled=True.
+    Configuration flags (api_key_management_enabled, etc.) control endpoint
+    registration and documentation, not whether authentication methods are checked.
+
+    The middleware uses pre-compiled patterns for optimal performance and
+    follows a "deny by default" security model - endpoints not explicitly
+    registered with auth=False will require authentication.
     """
 
-    def __init__(self, app, auth_config: Config, server=None):
+    def __init__(self, app, auth_config: AuthConfig, server):
         """Initialize the authentication middleware.
 
         Args:
             app: FastAPI application instance
             auth_config: Authentication configuration
-            server: Optional server instance (for test compatibility)
+            server: Server instance (required for endpoint auth checking)
         """
         super().__init__(app)
         self.auth_config = auth_config
         self.path_matcher = PathMatcher(auth_config.exempt_paths)
         self._logger = logging.getLogger(__name__)
-        self._server = server  # Store server reference for test compatibility
+        if server is None:
+            raise ValueError("AuthenticationMiddleware requires a server instance")
+        self._server = server  # Store server reference - always use this, not context
 
     async def dispatch(self, request: Request, call_next):
         """Optimized request processing with streamlined authentication logic.
@@ -133,20 +147,30 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         # Always allow OPTIONS requests (CORS preflight) to pass through
         # CORS middleware will handle these requests
         if request.method == "OPTIONS":
-            self._logger.debug(
-                f"Auth middleware: Allowing OPTIONS preflight for {request.url.path}"
-            )
             return await call_next(request)
 
         # Check if path is exempt from authentication
-        if self.path_matcher.is_exempt(request.url.path):
+        is_exempt = self.path_matcher.is_exempt(request.url.path)
+        if is_exempt:
             return await call_next(request)
 
         # Check if this endpoint requires authentication
-        if not self._endpoint_requires_auth(request):
+        auth_required = self._endpoint_requires_auth(request)
+        has_fastapi_auth = self._endpoint_has_fastapi_auth(request)
+
+        if not auth_required:
             return await call_next(request)
 
-        # Streamlined authentication logic
+        # If the route has FastAPI auth dependencies (like Depends(security)),
+        # let FastAPI handle authentication via its dependency injection system
+        # The middleware should not interfere with FastAPI's auth dependencies
+        if has_fastapi_auth:
+            self._logger.debug(
+                f"Route {request.url.path} has FastAPI auth dependencies, allowing through"
+            )
+            return await call_next(request)
+
+        # Streamlined authentication logic for routes without FastAPI auth dependencies
         user = await self._authenticate_request(request)
         if not user:
             return JSONResponse(
@@ -187,102 +211,305 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
         return bool(re.match(regex_pattern, path))
 
+    def _safe_serialize_endpoint_config(
+        self, endpoint_config: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Safely serialize endpoint config for logging, excluding non-serializable objects.
+
+        Args:
+            endpoint_config: The endpoint config dictionary
+
+        Returns:
+            A dictionary with only serializable values, or None if config is None
+        """
+        if endpoint_config is None:
+            return None
+
+        # Only include keys that are JSON-serializable
+        # Skip 'response' key which may contain ResponseSchema objects
+        safe_config = {}
+        for key in ["auth_required", "permissions", "roles", "tags"]:
+            if key in endpoint_config:
+                safe_config[key] = endpoint_config[key]
+
+        return safe_config if safe_config else None
+
     def _endpoint_requires_auth(self, request: Request) -> bool:
-        """Check if the current endpoint requires authentication.
+        """Check if endpoint requires authentication using registry only.
+
+        SECURITY: This method defaults to requiring authentication unless the endpoint
+        is explicitly registered with auth=False. This "deny by default" approach
+        ensures that path matching failures don't create security vulnerabilities.
 
         Args:
             request: Incoming request
 
         Returns:
-            True if endpoint requires authentication, False otherwise
+            True if authentication is required (default), False only if endpoint
+            is explicitly registered with auth=False
         """
         try:
-            # Get the current server from context
-            from jvspatial.api.context import get_current_server
-
-            server = get_current_server()
+            # Always use stored server reference - it's required during initialization
+            server = self._server
 
             if not server:
-                return False
+                self._logger.error(
+                    "_endpoint_requires_auth: No server found - DENYING access"
+                )
+                return True  # SECURITY: Deny by default
 
             # Check if any endpoints in the registry require auth for this path
             registry = server._endpoint_registry
             request_path = request.url.path
 
-            # Check function endpoints
-            for func_info in registry.list_functions():
-                # Handle both dict and other formats
-                if isinstance(func_info, dict):
-                    func_path = func_info.get("path")
-                    func = func_info.get("func")
-                else:
-                    # If func_info is not a dict, skip or handle differently
-                    continue
+            # Normalize request path by removing API prefix for registry comparison
+            # Registry stores paths without prefix (router adds it when including routes)
+            # Requests include prefix (e.g., "/api/agents/123")
+            api_prefix = APIRoutes.PREFIX
+            normalized_path = request_path
 
-                # Match exact path or check if request path matches the route pattern
-                if func_path == request_path or self._path_matches(
-                    func_path, request_path
+            if api_prefix and request_path.startswith(api_prefix):
+                # Remove prefix: "/api/agents/123" -> "/agents/123"
+                normalized_path = request_path[len(api_prefix) :]
+                # Handle edge case: "/api" -> "" should become "/"
+                if not normalized_path:
+                    normalized_path = "/"
+
+            # Log path normalization for debugging (at debug level)
+            if normalized_path != request_path:
+                self._logger.debug(
+                    f"Path normalized: {request_path} -> {normalized_path}"
+                )
+
+            # Check function endpoints by accessing internal registry directly
+            # This gives us access to both the handler and the EndpointInfo
+            for func, endpoint_info in registry._function_registry.items():
+                func_path = endpoint_info.path
+
+                # Match using normalized path (for paths registered without prefix)
+                # Also check original request path for backward compatibility
+                # Try both with and without /api prefix for flexibility
+                paths_to_check = [
+                    normalized_path,
+                    request_path,
+                    (
+                        request_path[len(api_prefix) :]
+                        if api_prefix and request_path.startswith(api_prefix)
+                        else None
+                    ),
+                ]
+                paths_to_check = [p for p in paths_to_check if p is not None]
+
+                if func_path in paths_to_check or any(
+                    self._path_matches(func_path, p) for p in paths_to_check
                 ):
                     endpoint_config = getattr(func, "_jvspatial_endpoint_config", None)
-                    if endpoint_config is not None:
-                        # Found the endpoint - return its auth_required setting
-                        return endpoint_config.get("auth_required", False)
+                    if endpoint_config is None:
+                        # SECURITY: Endpoint found but no config - deny access
+                        self._logger.warning(
+                            f"Endpoint found in registry but missing config: {normalized_path} - DENYING access"
+                        )
+                        return True
 
-            # Check walker endpoints
-            for walker_info in registry.list_walkers():
-                # Handle both dict and other formats
-                if isinstance(walker_info, dict):
-                    walker_path = walker_info.get("path")
-                    walker_class = walker_info.get("walker_class")
-                else:
-                    # If walker_info is not a dict, skip or handle differently
-                    continue
+                    auth_required = endpoint_config.get("auth_required", False)
+                    self._logger.debug(
+                        f"Function endpoint {normalized_path}: auth_required={auth_required}"
+                    )
+                    return auth_required
 
-                # Match exact path or check if request path matches the route pattern
-                if walker_path == request_path or self._path_matches(
-                    walker_path, request_path
+            # Check walker endpoints by accessing internal registry directly
+            for walker_class, endpoint_info in registry._walker_registry.items():
+                walker_path = endpoint_info.path
+
+                # Match using normalized path (for paths registered without prefix)
+                # Also check original request path for backward compatibility
+                # Try both with and without /api prefix for flexibility
+                paths_to_check = [
+                    normalized_path,
+                    request_path,
+                    (
+                        request_path[len(api_prefix) :]
+                        if api_prefix and request_path.startswith(api_prefix)
+                        else None
+                    ),
+                ]
+                paths_to_check = [p for p in paths_to_check if p is not None]
+
+                if walker_path in paths_to_check or any(
+                    self._path_matches(walker_path, p) for p in paths_to_check
                 ):
                     endpoint_config = getattr(
                         walker_class, "_jvspatial_endpoint_config", None
                     )
-                    if endpoint_config is not None:
-                        # Found the endpoint - return its auth_required setting
-                        return endpoint_config.get("auth_required", False)
+                    if endpoint_config is None:
+                        # SECURITY: Endpoint found but no config - deny access
+                        self._logger.warning(
+                            f"Walker endpoint found in registry but missing config: {normalized_path} - DENYING access"
+                        )
+                        return True
 
-            # Check manually registered endpoints by inspecting the FastAPI app routes
-            # This is needed because manually registered endpoints bypass the registry
-            try:
-                app = server.get_app()
-                for route in app.routes:
-                    if hasattr(route, "path") and hasattr(route, "endpoint"):
+                    auth_required = endpoint_config.get("auth_required", False)
+                    self._logger.debug(
+                        f"Walker endpoint {normalized_path}: auth_required={auth_required}"
+                    )
+                    return auth_required
+
+            # Endpoint not in registry - check if it's a valid FastAPI route
+            # Router endpoints (like auth endpoints) may not be in the registry
+            # but are still valid FastAPI routes that should be handled
+            # SECURITY: Only allow routes through without auth if they're from registered routers
+            # Direct app routes not in registry should still require auth
+            if hasattr(server, "app") and server.app:
+                from fastapi.routing import APIRoute
+
+                # Check if this is a valid FastAPI route
+                for route in server.app.routes:
+                    if isinstance(route, APIRoute):
+                        # Check if path matches (accounting for path parameters)
                         route_path = route.path
-                        # Match exact path or check if request path matches the route pattern
-                        if route_path == request_path or self._path_matches(
-                            route_path, request_path
+                        if (
+                            route_path in (request_path, normalized_path)
+                            or self._path_matches(route_path, request_path)
+                            or self._path_matches(route_path, normalized_path)
                         ):
-                            endpoint_config = getattr(
-                                route.endpoint, "_jvspatial_endpoint_config", None
-                            )
-                            if endpoint_config is not None:
-                                # Found the endpoint - return its auth_required setting
-                                return endpoint_config.get("auth_required", False)
-            except Exception as e:
-                self._logger.debug(f"Could not check FastAPI routes: {e}")
+                            # Check if method matches (if request has method attribute)
+                            request_method = getattr(request, "method", None)
+                            if (
+                                request_method is None
+                                or request_method in route.methods
+                            ):
+                                # Check if route has auth dependencies
+                                if route.dependencies:
+                                    # Check for security/authentication dependencies
+                                    for dep in route.dependencies:
+                                        dep_str = str(dep).lower()
+                                        if (
+                                            "security" in dep_str
+                                            or "bearer" in dep_str
+                                            or "auth" in dep_str
+                                        ):
+                                            self._logger.debug(
+                                                f"Router endpoint {request_path} has FastAPI auth dependency"
+                                            )
+                                            # Route has FastAPI auth - require auth but let FastAPI handle it
+                                            return True
 
-            # Fallback: Apply auth to all /api/* endpoints except exempt ones
-            # This ensures manually registered endpoints are protected
-            # Only use fallback if we didn't find the endpoint above
-            if request_path.startswith("/api/"):
-                return True
+                                # Route exists and method matches
+                                # For /auth/ endpoints (except exempt ones), require auth
+                                # Use path_matcher instead of direct list check for consistency
+                                if "/auth/" in request_path:
+                                    is_auth_exempt = self.path_matcher.is_exempt(
+                                        request_path
+                                    )
+                                    if not is_auth_exempt:
+                                        # Auth endpoints require authentication unless explicitly exempt
+                                        self._logger.debug(
+                                            f"Auth router endpoint {request_path} requires auth"
+                                        )
+                                        return True
 
-            return False
+                                # Check endpoint's _jvspatial_endpoint_config if available
+                                # This allows add_route() to set auth=False even if not in registry
+                                endpoint_func = route.endpoint
+                                if hasattr(endpoint_func, "_jvspatial_endpoint_config"):
+                                    endpoint_config = endpoint_func._jvspatial_endpoint_config  # type: ignore[attr-defined]
+                                    if "auth_required" in endpoint_config:
+                                        auth_required = endpoint_config.get(
+                                            "auth_required", True
+                                        )
+                                        self._logger.debug(
+                                            f"FastAPI route {request_path} has endpoint config: auth_required={auth_required}"
+                                        )
+                                        return auth_required
+
+                                # SECURITY: For routes not in registry and not under /auth/,
+                                # require authentication by default (deny by default)
+                                # Only routes explicitly registered with auth=False should be allowed
+                                # Unregistered route - require auth by default
+                                self._logger.debug(
+                                    f"Unregistered route {request_path} found, requiring auth (deny by default)"
+                                )
+                                return True
+
+            # SECURITY: Endpoint not found in registry or FastAPI routes - DENY by default
+            # This is a critical security decision: we require authentication for any
+            # endpoint that isn't explicitly registered, preventing bypass via path manipulation
+            self._logger.debug(
+                f"Endpoint not found in registry or routes: {normalized_path} (original: {request_path}) - DENYING access"
+            )
+            return True  # SECURITY: Deny by default
 
         except Exception as e:
-            self._logger.warning(f"Error checking endpoint auth requirements: {e}")
+            # SECURITY: On any error, deny access to prevent bypasses
+            self._logger.error(
+                f"Error checking endpoint auth requirements for {request.url.path}: {e} - DENYING access",
+                exc_info=True,
+            )
+            return True  # SECURITY: Deny on error
+
+    def _endpoint_has_fastapi_auth(self, request: Request) -> bool:
+        """Check if endpoint has FastAPI authentication dependencies.
+
+        This method checks if a route has FastAPI auth dependencies (like Depends(security))
+        that should be handled by FastAPI's dependency injection system rather than the middleware.
+
+        Args:
+            request: Incoming request
+
+        Returns:
+            True if the route has FastAPI auth dependencies, False otherwise
+        """
+        try:
+            server = self._server
+            if not server or not hasattr(server, "app") or not server.app:
+                return False
+
+            from fastapi.routing import APIRoute
+
+            request_path = request.url.path
+            api_prefix = APIRoutes.PREFIX
+            normalized_path = request_path
+
+            if api_prefix and request_path.startswith(api_prefix):
+                normalized_path = request_path[len(api_prefix) :]
+                if not normalized_path:
+                    normalized_path = "/"
+
+            # Check FastAPI routes for auth dependencies
+            for route in server.app.routes:
+                if isinstance(route, APIRoute):
+                    route_path = route.path
+                    if (
+                        route_path in (request_path, normalized_path)
+                        or self._path_matches(route_path, request_path)
+                        or self._path_matches(route_path, normalized_path)
+                    ):
+                        request_method = getattr(request, "method", None)
+                        if (
+                            request_method is None or request_method in route.methods
+                        ) and route.dependencies:
+                            # Check for security/authentication dependencies
+                            for dep in route.dependencies:
+                                dep_str = str(dep).lower()
+                                if (
+                                    "security" in dep_str
+                                    or "bearer" in dep_str
+                                    or "auth" in dep_str
+                                ):
+                                    return True
+            return False
+        except Exception:
             return False
 
     async def _authenticate_request(self, request: Request) -> Optional[Any]:
-        """Authenticate the incoming request.
+        """Authenticate the incoming request using multiple methods.
+
+        Attempts authentication in priority order:
+        1. JWT Bearer token (if Authorization header present)
+        2. API key (if X-API-Key or configured header present)
+        3. Session cookie (if session cookie present)
+
+        Returns the first successful authentication result.
 
         Args:
             request: Incoming request
@@ -319,21 +546,24 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             User object if JWT is valid, None otherwise
         """
         try:
-            # Try to get server from stored reference first (for test compatibility)
-            # Then fall back to context variable
+            # Always use stored server reference - it's required during initialization
             server = self._server
-            if not server:
-                from jvspatial.api.context import get_current_server
-
-                server = get_current_server()
 
             if not server:
+                self._logger.error(
+                    "_authenticate_jwt: No server found (this should never happen)"
+                )
                 return None
 
-            # Initialize authentication service
+            # Initialize authentication service with JWT config from auth_config
             from jvspatial.api.auth.service import AuthenticationService
 
-            auth_service = AuthenticationService(server._graph_context)
+            auth_service = AuthenticationService(
+                server._graph_context,
+                jwt_secret=self.auth_config.jwt_secret,
+                jwt_algorithm=self.auth_config.jwt_algorithm,
+                jwt_expire_minutes=self.auth_config.jwt_expire_minutes,
+            )
 
             # Extract token from Authorization header
             auth_header = request.headers.get("authorization", "")
@@ -363,19 +593,67 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             User object if API key is valid, None otherwise
         """
         try:
-            # Placeholder API key authentication implementation
-            api_key = request.headers.get("x-api-key", "")
+            # Get API key from header
+            api_key_header = self.auth_config.api_key_header or "x-api-key"
+            api_key = request.headers.get(api_key_header, "")
             if not api_key:
                 return None
 
-            # Simple API key validation (replace with actual verification)
-            if api_key and len(api_key) > 5:
-                return {"user_id": "api_user", "api_key": api_key}
+            # Use API key service for validation
+            from jvspatial.api.auth.api_key_service import APIKeyService
+            from jvspatial.core.context import GraphContext
+            from jvspatial.db import get_prime_database
 
-            return None
+            # API key service should use prime database, not server's graph context
+            prime_ctx = GraphContext(database=get_prime_database())
+            service = APIKeyService(prime_ctx)
+
+            # Validate the API key
+            api_key_entity = await service.validate_key(api_key)
+            if not api_key_entity:
+                return None
+
+            # Check IP restrictions
+            client_ip = request.client.host if request.client else None
+            if (
+                api_key_entity.allowed_ips
+                and client_ip
+                and client_ip not in api_key_entity.allowed_ips
+            ):
+                self._logger.debug(
+                    f"API key {api_key_entity.id} rejected: IP {client_ip} not in whitelist"
+                )
+                return None
+
+            # Check endpoint restrictions
+            if api_key_entity.allowed_endpoints:
+                request_path = request.url.path
+                if not any(
+                    request_path.startswith(ep)
+                    for ep in api_key_entity.allowed_endpoints
+                ):
+                    self._logger.debug(
+                        f"API key {api_key_entity.id} rejected: endpoint {request_path} not in whitelist"
+                    )
+                    return None
+
+            # Update last used timestamp (fire and forget)
+            try:
+                await service.update_key_usage(api_key_entity)
+            except Exception as e:
+                # Log but don't fail authentication if update fails
+                self._logger.warning(f"Failed to update API key usage timestamp: {e}")
+
+            # Return user-like object for consistency with JWT authentication
+            return {
+                "user_id": api_key_entity.user_id,
+                "api_key_id": api_key_entity.id,
+                "permissions": api_key_entity.permissions,
+                "rate_limit_override": api_key_entity.rate_limit_override,
+            }
 
         except Exception as e:
-            self._logger.error(f"API key authentication error: {e}")
+            self._logger.error(f"API key authentication error: {e}", exc_info=True)
             return None
 
     async def _authenticate_session(self, request: Request) -> Optional[Any]:

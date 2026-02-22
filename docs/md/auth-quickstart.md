@@ -48,8 +48,7 @@ if __name__ == "__main__":
 ## Step 2: Create Protected Endpoints (1 minute)
 
 ```python
-from jvspatial.api import endpoint  # Public endpoints
-from jvspatial.api.auth import auth_endpoint, admin_endpoint  # Protected endpoints
+from jvspatial.api import endpoint
 
 # Public endpoint - no authentication
 @endpoint("/public/info")
@@ -57,12 +56,12 @@ async def public_info():
     return {"message": "Anyone can access this"}
 
 # Protected endpoint - requires login
-@auth_endpoint("/protected/data")
+@endpoint("/protected/data", auth=True)
 async def protected_data():
     return {"message": "Must be logged in to see this"}
 
 # Admin-only endpoint - requires admin role
-@admin_endpoint("/admin/users")
+@endpoint("/admin/users", auth=True, roles=["admin"])
 async def admin_users():
     return {"message": "Only admins can access this"}
 ```
@@ -138,7 +137,7 @@ Here's a complete 20-line authenticated server:
 
 ```python
 from jvspatial.api import create_server, endpoint
-from jvspatial.api.auth import configure_auth, AuthenticationMiddleware, auth_endpoint, admin_endpoint, User
+from jvspatial.api.auth import configure_auth, AuthenticationMiddleware, User
 
 # Configure authentication
 configure_auth(jwt_secret_key="demo-secret-key")
@@ -150,10 +149,10 @@ server.app.add_middleware(AuthenticationMiddleware)
 @endpoint("/public")
 async def public(): return {"message": "Public data"}
 
-@auth_endpoint("/protected")
+@endpoint("/protected", auth=True)
 async def protected(): return {"message": "Protected data"}
 
-@admin_endpoint("/admin")
+@endpoint("/admin", auth=True, roles=["admin"])
 async def admin(): return {"message": "Admin only"}
 
 @server.on_startup
@@ -174,20 +173,20 @@ Visit: http://localhost:8000/docs
 ### Role-Based Access Control
 
 ```python
-from jvspatial.api.auth import auth_endpoint
+from jvspatial.api import endpoint
 
 # Require specific permissions
-@auth_endpoint("/reports", permissions=["read_reports"])
+@endpoint("/reports", auth=True, permissions=["read_reports"])
 async def get_reports():
     return {"reports": ["Monthly", "Weekly"]}
 
 # Require specific roles
-@auth_endpoint("/analyze", roles=["analyst", "admin"])
+@endpoint("/analyze", auth=True, roles=["analyst", "admin"])
 async def analyze_data():
     return {"analysis": "Complex analysis results"}
 
 # Multiple requirements
-@auth_endpoint("/advanced", permissions=["advanced_ops"], roles=["admin"])
+@endpoint("/advanced", auth=True, permissions=["advanced_ops"], roles=["admin"])
 async def advanced_ops():
     return {"message": "Advanced operations"}
 ```
@@ -195,10 +194,11 @@ async def advanced_ops():
 ### Spatial Permissions
 
 ```python
-from jvspatial.api.auth import auth_endpoint, get_current_user
+from jvspatial.api import endpoint
+from jvspatial.api.auth import get_current_user
 from jvspatial.core.entities import Walker, Node, on_visit
 
-@auth_endpoint("/spatial/query", permissions=["read_spatial"])
+@endpoint("/spatial/query", auth=True, permissions=["read_spatial"])
 class SpatialQuery(Walker):
     region: str = "north_america"
 
@@ -219,7 +219,7 @@ class SpatialQuery(Walker):
 
 ```python
 # Create API key for a user
-@auth_endpoint("/create-api-key", methods=["POST"])
+@endpoint("/create-api-key", auth=True, methods=["POST"])
 async def create_key(request: Request):
     from jvspatial.api.auth import APIKey, get_current_user
 
@@ -273,6 +273,8 @@ export JVSPATIAL_RATE_LIMIT_ENABLED=true
 ### "Invalid token" errors
 - Check that `jwt_secret_key` is consistent between token creation and validation
 - Ensure tokens haven't expired (default 24 hours)
+- Enable debug logging to see detailed token validation information
+- Token validation decodes tokens first, then checks blacklist - expired tokens are rejected during decode
 
 ### Rate limiting too strict
 - Adjust `default_rate_limit_per_hour` in `configure_auth()`
@@ -280,7 +282,9 @@ export JVSPATIAL_RATE_LIMIT_ENABLED=true
 
 ### Authentication not working
 - Ensure `AuthenticationMiddleware` is added to your server
-- Check that endpoints use `@auth_endpoint` not `@endpoint` for protection
+- Check that protected endpoints use `@endpoint(..., auth=True)` instead of just `@endpoint(...)`
+- Enable debug logging to trace token validation flow and identify where validation fails
+- Login succeeds even if refresh token generation fails - check access token, not just refresh token
 
 ---
 

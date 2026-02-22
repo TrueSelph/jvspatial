@@ -1,6 +1,7 @@
 """GraphContext for managing database dependencies."""
 
 import logging
+import os
 import time
 from contextlib import asynccontextmanager, contextmanager
 from typing import (
@@ -35,12 +36,17 @@ _ensured_indexes: Set[str] = set()
 class PerformanceMonitor:
     """Enhanced performance monitoring for database operations and general operations."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.db_operations: List[Dict[str, Any]] = []
         self.hook_executions: List[Dict[str, Any]] = []
         self.db_errors: List[Dict[str, Any]] = []
         self.general_operations: List[Dict[str, Any]] = []
         self.general_errors: List[Dict[str, Any]] = []
+        self.io_operations: List[Dict[str, Any]] = []  # Track file I/O operations
+        self.cache_stats: Dict[str, int] = {
+            "hits": 0,
+            "misses": 0,
+        }  # Track cache hit/miss ratios
 
     async def record_db_operation(
         self,
@@ -125,24 +131,93 @@ class PerformanceMonitor:
             }
         )
 
+    async def record_io_operation(
+        self,
+        operation_type: str,
+        duration: float,
+        file_path: Optional[str] = None,
+        bytes_read: Optional[int] = None,
+        bytes_written: Optional[int] = None,
+        **kwargs: Any,
+    ):
+        """Record an I/O operation (file read/write).
+
+        Args:
+            operation_type: Type of I/O operation (e.g., "read", "write", "delete")
+            duration: Duration in seconds
+            file_path: Optional file path for the operation
+            bytes_read: Optional number of bytes read
+            bytes_written: Optional number of bytes written
+            **kwargs: Additional operation metadata
+        """
+        self.io_operations.append(
+            {
+                "operation_type": operation_type,
+                "duration": duration,
+                "file_path": file_path,
+                "bytes_read": bytes_read,
+                "bytes_written": bytes_written,
+                "timestamp": time.time(),
+                **kwargs,
+            }
+        )
+
+    def record_cache_hit(self) -> None:
+        """Record a cache hit."""
+        self.cache_stats["hits"] += 1
+
+    def record_cache_miss(self) -> None:
+        """Record a cache miss."""
+        self.cache_stats["misses"] += 1
+
+    def get_cache_hit_ratio(self) -> float:
+        """Get cache hit ratio (0.0 to 1.0).
+
+        Returns:
+            Cache hit ratio, or 0.0 if no cache operations recorded
+        """
+        total = self.cache_stats["hits"] + self.cache_stats["misses"]
+        if total == 0:
+            return 0.0
+        return self.cache_stats["hits"] / total
+
     async def get_stats(self) -> Dict[str, Any]:
         """Get comprehensive performance statistics."""
         total_db_ops = len(self.db_operations)
         total_general_ops = len(self.general_operations)
-        total_ops = total_db_ops + total_general_ops
+        total_io_ops = len(self.io_operations)
+        total_ops = total_db_ops + total_general_ops + total_io_ops
 
         if total_ops == 0:
-            return {"total_operations": 0}
+            return {
+                "total_operations": 0,
+                "cache_hit_ratio": 0.0,
+                "cache_hits": 0,
+                "cache_misses": 0,
+            }
 
         # Calculate database operation statistics
         db_stats = {}
         if total_db_ops > 0:
-            avg_db_duration = (
-                sum(op["duration"] for op in self.db_operations) / total_db_ops
-            )
+            durations = [op["duration"] for op in self.db_operations]
+            avg_db_duration = sum(durations) / total_db_ops
+            # Calculate percentiles for database operations
+            sorted_durations = sorted(durations)
+            p50_idx = int(len(sorted_durations) * 0.5)
+            p95_idx = int(len(sorted_durations) * 0.95)
+            p99_idx = int(len(sorted_durations) * 0.99)
             db_stats = {
                 "db_operations": total_db_ops,
                 "avg_db_duration": avg_db_duration,
+                "p50_db_duration": (
+                    sorted_durations[p50_idx] if sorted_durations else 0.0
+                ),
+                "p95_db_duration": (
+                    sorted_durations[p95_idx] if sorted_durations else 0.0
+                ),
+                "p99_db_duration": (
+                    sorted_durations[p99_idx] if sorted_durations else 0.0
+                ),
                 "db_errors": len(self.db_errors),
             }
 
@@ -159,11 +234,50 @@ class PerformanceMonitor:
                 "general_errors": len(self.general_errors),
             }
 
+        # Calculate I/O operation statistics
+        io_stats = {}
+        if total_io_ops > 0:
+            durations = [op["duration"] for op in self.io_operations]
+            avg_io_duration = sum(durations) / total_io_ops
+            sorted_io_durations = sorted(durations)
+            p50_idx = int(len(sorted_io_durations) * 0.5)
+            p95_idx = int(len(sorted_io_durations) * 0.95)
+            p99_idx = int(len(sorted_io_durations) * 0.99)
+            total_bytes_read = sum(op.get("bytes_read", 0) for op in self.io_operations)
+            total_bytes_written = sum(
+                op.get("bytes_written", 0) for op in self.io_operations
+            )
+            io_stats = {
+                "io_operations": total_io_ops,
+                "avg_io_duration": avg_io_duration,
+                "p50_io_duration": (
+                    sorted_io_durations[p50_idx] if sorted_io_durations else 0.0
+                ),
+                "p95_io_duration": (
+                    sorted_io_durations[p95_idx] if sorted_io_durations else 0.0
+                ),
+                "p99_io_duration": (
+                    sorted_io_durations[p99_idx] if sorted_io_durations else 0.0
+                ),
+                "total_bytes_read": total_bytes_read,
+                "total_bytes_written": total_bytes_written,
+            }
+
+        # Calculate cache statistics
+        cache_hit_ratio = self.get_cache_hit_ratio()
+        cache_stats = {
+            "cache_hit_ratio": cache_hit_ratio,
+            "cache_hits": self.cache_stats["hits"],
+            "cache_misses": self.cache_stats["misses"],
+        }
+
         return {
             "total_operations": total_ops,
             "hook_executions": len(self.hook_executions),
             **db_stats,
             **general_stats,
+            **io_stats,
+            **cache_stats,
         }
 
 
@@ -243,10 +357,58 @@ class GraphContext:
         if self._database is None:
             # Use current database from manager if available
             try:
+                from jvspatial.db.manager import DatabaseManager
+
+                # Check if DatabaseManager exists and was auto-created (not initialized by Server)
+                # If it was auto-created, it uses default 'jvdb' path which we want to avoid
+                if (
+                    DatabaseManager._instance is not None
+                    and DatabaseManager._instance._auto_created
+                ):
+                    # DatabaseManager was auto-created with default 'jvdb' path
+                    # Don't use it - require explicit database configuration
+                    raise RuntimeError(
+                        "Database not configured. GraphContext requires a database to be set "
+                        "explicitly or DatabaseManager to be initialized by Server first."
+                    )
+
                 self._database = get_current_database()
+            except RuntimeError as e:
+                # Re-raise our explicit error
+                if "Database not configured" in str(e):
+                    raise
+                # For other RuntimeErrors (e.g., prime database not initialized),
+                # fall back to creating default database only if DatabaseManager exists and wasn't auto-created
+                from jvspatial.db.manager import DatabaseManager
+
+                if (
+                    DatabaseManager._instance is not None
+                    and not DatabaseManager._instance._auto_created
+                ):
+                    # DatabaseManager exists and was explicitly initialized, create default
+                    self._database = create_database()
+                else:
+                    # DatabaseManager doesn't exist or was auto-created - don't create default database
+                    raise RuntimeError(
+                        "Database not configured. GraphContext requires a database to be set "
+                        "explicitly or DatabaseManager to be initialized by Server first."
+                    )
             except Exception:
-                # Create default database if current database unavailable
-                self._database = create_database()
+                # For other exceptions, only create default if DatabaseManager exists and wasn't auto-created
+                from jvspatial.db.manager import DatabaseManager
+
+                if (
+                    DatabaseManager._instance is not None
+                    and not DatabaseManager._instance._auto_created
+                ):
+                    # DatabaseManager exists and was explicitly initialized, create default database
+                    self._database = create_database()
+                else:
+                    # DatabaseManager doesn't exist or was auto-created - don't create default database
+                    raise RuntimeError(
+                        "Database not configured. GraphContext requires a database to be set "
+                        "explicitly or DatabaseManager to be initialized by Server first."
+                    )
         return self._database
 
     async def set_database(self, database: Database) -> None:
@@ -297,7 +459,14 @@ class GraphContext:
 
     async def _get_from_cache(self, entity_id: str) -> Optional[Any]:
         """Get entity from cache if available."""
-        return await self._cache.get(entity_id)
+        result = await self._cache.get(entity_id)
+        # Track cache hit/miss
+        if self._perf_monitoring_enabled and self._perf_monitor:
+            if result is not None:
+                self._perf_monitor.record_cache_hit()
+            else:
+                self._perf_monitor.record_cache_miss()
+        return result
 
     async def _add_to_cache(self, entity_id: str, entity: Any) -> None:
         """Add entity to cache."""
@@ -377,6 +546,19 @@ class GraphContext:
         Returns:
             Created and saved entity instance
         """
+        # Check if the entity class has overridden create() method
+        # If so, delegate to it (e.g., Root.create() enforces singleton)
+        if hasattr(entity_class, "create"):
+            # Check if create() is actually overridden (not inherited from Object)
+            from .entities.object import Object
+
+            if entity_class.create is not Object.create:
+                # Use the overridden create() method
+                entity = await entity_class.create(**kwargs)
+                entity._graph_context = self
+                return entity
+
+        # Default behavior: instantiate and save
         entity = entity_class(**kwargs)
         entity._graph_context = self
         await self.save(entity)
@@ -754,9 +936,21 @@ class GraphContext:
         This method retrieves index definitions from the entity class and creates
         them in the database if they don't already exist. Index creation is idempotent.
 
+        By default, automatic index creation is disabled. To enable it, set the
+        environment variable:
+            JVSPATIAL_AUTO_CREATE_INDEXES=true
+
         Args:
             entity_class: Entity class to ensure indexes for
         """
+        # Check if automatic index creation is enabled
+        # Default is False - indexes must be created explicitly
+        auto_create = (
+            os.getenv("JVSPATIAL_AUTO_CREATE_INDEXES", "false").lower() == "true"
+        )
+        if not auto_create:
+            return  # Automatic index creation is disabled
+
         if not hasattr(entity_class, "get_indexes"):
             return  # Class doesn't support indexes
 
@@ -970,18 +1164,49 @@ class GraphContext:
 
             # Save all records of this type
             db = self.database
-            for i, record in enumerate(records):
+
+            # Use batch_write if available (e.g., DynamoDB), otherwise fall back to sequential saves
+            if hasattr(db, "batch_write"):
                 try:
-                    await db.save(collection, record)
-                    # Update cache with latest version
-                    await self._add_to_cache(record["id"], type_entities[i])
-                    saved_entities.append(type_entities[i])
+                    # Use batch write for efficiency
+                    await db.batch_write(collection, records)
+                    # Update cache with latest versions
+                    for i, record in enumerate(records):
+                        await self._add_to_cache(record["id"], type_entities[i])
+                        saved_entities.append(type_entities[i])
                 except Exception as e:
-                    # Log error but continue with other entities
-                    print(
-                        f"Failed to save entity {type_entities[i].get('id', 'unknown')}: {e}"
+                    # If batch write fails, fall back to sequential saves
+                    logger.warning(
+                        f"Batch write failed for collection '{collection}', falling back to sequential saves: {e}"
                     )
-                    continue
+                    for i, record in enumerate(records):
+                        try:
+                            await db.save(collection, record)
+                            # Update cache with latest version
+                            await self._add_to_cache(record["id"], type_entities[i])
+                            saved_entities.append(type_entities[i])
+                        except Exception as save_error:
+                            # Log error but continue with other entities
+                            logger.error(
+                                f"Failed to save entity {type_entities[i].get('id', 'unknown')}: {save_error}",
+                                exc_info=True,
+                            )
+                            continue
+            else:
+                # Fall back to sequential saves for databases without batch support
+                for i, record in enumerate(records):
+                    try:
+                        await db.save(collection, record)
+                        # Update cache with latest version
+                        await self._add_to_cache(record["id"], type_entities[i])
+                        saved_entities.append(type_entities[i])
+                    except Exception as e:
+                        # Log error but continue with other entities
+                        logger.error(
+                            f"Failed to save entity {type_entities[i].get('id', 'unknown')}: {e}",
+                            exc_info=True,
+                        )
+                        continue
 
         return saved_entities
 
@@ -1011,7 +1236,8 @@ class GraphContext:
 
         # Fetch uncached entities from database
         if uncached_ids:
-            collection = self._get_collection_name(entity_class.type_code)
+            type_code = self._get_entity_type_code(entity_class)
+            collection = self._get_collection_name(type_code)
             db = self.database
 
             # Use database batch query if available
@@ -1076,7 +1302,8 @@ class GraphContext:
         if query is None:
             query = {}
 
-        collection = self._get_collection_name(node_class.type_code)
+        type_code = self._get_entity_type_code(node_class)
+        collection = self._get_collection_name(type_code)
         db = self.database
 
         # Use database cursor if available, otherwise use find
@@ -1108,7 +1335,8 @@ class GraphContext:
         if query is None:
             query = {}
 
-        collection = self._get_collection_name(edge_class.type_code)
+        type_code = self._get_entity_type_code(edge_class)
+        collection = self._get_collection_name(type_code)
         db = self.database
 
         # Use database cursor if available, otherwise use find
@@ -1134,6 +1362,21 @@ def get_default_context() -> GraphContext:
     """Get the default global context."""
     global _default_context
     if _default_context is None:
+        # Check if DatabaseManager was auto-created (not initialized by Server)
+        # If so, don't create a default GraphContext yet - wait for Server to initialize
+        from jvspatial.db.manager import DatabaseManager
+
+        if (
+            DatabaseManager._instance is not None
+            and DatabaseManager._instance._auto_created
+        ):
+            # DatabaseManager was auto-created with default 'jvdb' path
+            # Don't create default context - Server should initialize it
+            raise RuntimeError(
+                "Default GraphContext not initialized. Server must initialize the database "
+                "before accessing the default context. Ensure Server is initialized before "
+                "calling Root.get() or other operations that require a database."
+            )
         _default_context = GraphContext()
     return _default_context
 

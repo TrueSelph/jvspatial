@@ -11,6 +11,14 @@ from jvspatial.db.query import QueryEngine
 
 logger = logging.getLogger(__name__)
 
+# Try to import aiofiles for async file operations, fallback to asyncio.to_thread
+try:
+    import aiofiles  # type: ignore[import-untyped]
+
+    HAS_AIOFILES = True
+except ImportError:
+    HAS_AIOFILES = False
+
 
 class JsonDB(Database):
     """Simplified JSON file-based database implementation."""
@@ -22,7 +30,9 @@ class JsonDB(Database):
             base_path: Base directory for JSON files
         """
         self.base_path = Path(base_path).resolve()
-        self.base_path.mkdir(parents=True, exist_ok=True)
+        # Don't create directory immediately - create it lazily on first use
+        # This prevents 'jvdb' from being created when DatabaseManager is auto-created
+        # before Server initializes with the correct database path
         self._lock: Optional[asyncio.Lock] = None
 
     def _ensure_lock(self) -> asyncio.Lock:
@@ -38,6 +48,10 @@ class JsonDB(Database):
 
     def _get_collection_dir(self, collection: str) -> Path:
         """Get the directory path for a collection."""
+        # Create base directory lazily (only when actually used)
+        # This prevents 'jvdb' from being created when DatabaseManager is auto-created
+        # before Server initializes with the correct database path
+        self.base_path.mkdir(parents=True, exist_ok=True)
         collection_dir = self.base_path / collection
         collection_dir.mkdir(parents=True, exist_ok=True)
         return collection_dir
@@ -51,6 +65,59 @@ class JsonDB(Database):
         collection_dir = self._get_collection_dir(collection)
         return collection_dir / f"{record_id}.json"
 
+    async def _async_write_json(self, path: Path, data: Dict[str, Any]) -> None:
+        """Write JSON data to file asynchronously.
+
+        Uses aiofiles if available, otherwise falls back to asyncio.to_thread.
+        """
+        json_str = json.dumps(data, indent=2)
+        if HAS_AIOFILES:
+            async with aiofiles.open(path, "w") as f:
+                await f.write(json_str)
+        else:
+            # Fallback to thread pool for async execution
+            def _sync_write(path: Path, content: str) -> None:
+                path.write_text(content)
+
+            await asyncio.to_thread(_sync_write, path, json_str)
+
+    async def _async_read_json(self, path: Path) -> Optional[Dict[str, Any]]:
+        """Read JSON data from file asynchronously.
+
+        Uses aiofiles if available, otherwise falls back to asyncio.to_thread.
+        Returns None if file doesn't exist or is invalid.
+        """
+        if not path.exists():
+            return None
+
+        try:
+            if HAS_AIOFILES:
+                async with aiofiles.open(path, "r") as f:
+                    content = await f.read()
+                    return json.loads(content)
+            else:
+                # Fallback to thread pool for async execution
+                def _sync_read(path: Path) -> Optional[Dict[str, Any]]:
+                    try:
+                        with open(path, "r") as f:
+                            return json.load(f)
+                    except (json.JSONDecodeError, OSError):
+                        return None
+
+                return await asyncio.to_thread(_sync_read, path)
+        except (json.JSONDecodeError, OSError):
+            return None
+
+    async def _async_load_record(self, json_file: Path) -> Optional[Dict[str, Any]]:
+        """Load a single record from a JSON file asynchronously.
+
+        Returns None if the file is invalid or cannot be read.
+        """
+        try:
+            return await self._async_read_json(json_file)
+        except Exception:
+            return None
+
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Save a record to the database.
 
@@ -60,23 +127,13 @@ class JsonDB(Database):
         async with self._ensure_lock():
             # Save the record to its own file
             record_path = self._get_record_path(collection, data["id"])
-            with open(record_path, "w") as f:
-                json.dump(data, f, indent=2)
-
+            await self._async_write_json(record_path, data)
             return data
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a record by ID."""
         record_path = self._get_record_path(collection, id)
-
-        if not record_path.exists():
-            return None
-
-        try:
-            with open(record_path, "r") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError):
-            return None
+        return await self._async_read_json(record_path)
 
     async def delete(self, collection: str, id: str) -> None:
         """Delete a record by ID."""
@@ -84,31 +141,46 @@ class JsonDB(Database):
             record_path = self._get_record_path(collection, id)
 
             if record_path.exists():
-                record_path.unlink()
+                # Use asyncio.to_thread for file deletion to avoid blocking
+                await asyncio.to_thread(record_path.unlink)
 
     async def find(
         self, collection: str, query: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
-        """Find records matching a query."""
+        """Find records matching a query.
+
+        Uses parallel file reads for improved performance under concurrent load.
+        """
         collection_dir = self._get_collection_dir(collection)
 
         if not collection_dir.exists():
             return []
 
-        results = []
+        # Get all JSON files in the collection directory
+        json_files = list(collection_dir.glob("*.json"))
 
-        # Iterate through all JSON files in the collection directory
-        for json_file in collection_dir.glob("*.json"):
-            try:
-                with open(json_file, "r") as f:
-                    record = json.load(f)
+        if not json_files:
+            return []
 
-                # Check if record matches query using QueryEngine for proper operator support
-                if not query or QueryEngine.match(record, query):
-                    results.append(record)
+        # Parallel file reads using asyncio.gather
+        tasks = [self._async_load_record(json_file) for json_file in json_files]
+        records = await asyncio.gather(*tasks, return_exceptions=True)
 
-            except (json.JSONDecodeError, IOError):
-                continue  # Skip invalid files
+        # Filter results and handle exceptions
+        results: List[Dict[str, Any]] = []
+        for record in records:
+            if isinstance(record, Exception):
+                # Log but continue processing other files
+                logger.debug(f"Error loading record: {record}")
+                continue
+            if record is None:
+                continue
+            # Type check: record should be Dict[str, Any] at this point
+            # Check if record matches query using QueryEngine for proper operator support
+            if isinstance(record, dict) and (
+                not query or QueryEngine.match(record, query)
+            ):
+                results.append(record)
 
         return results
 

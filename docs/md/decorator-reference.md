@@ -130,13 +130,27 @@ async def send_completion_notification(walker):
 **Parameters**:
 - `path` (str): URL path for the endpoint
 - `methods` (List[str], optional): HTTP methods (default: `["GET"]` for functions, `["POST"]` for Walkers)
-- `auth` (bool, optional): Require authentication (default: `False`)
+- `auth` (bool, optional): **Require authentication** (default: `False`)
+  - **Important**: This parameter is the primary way to control endpoint authentication
+  - `auth=True`: Endpoint requires valid JWT token or API key
+  - `auth=False`: Endpoint is public and accessible without authentication
+  - The authentication middleware uses the endpoint registry to check this setting
 - `roles` (List[str], optional): Required user roles (e.g., `["admin"]`)
 - `permissions` (List[str], optional): Required permissions (e.g., `["read:users"]`)
 - `webhook` (bool, optional): Configure as webhook endpoint (default: `False`)
 - `signature_required` (bool, optional): Require webhook signature verification (default: `False`)
+- `webhook_auth` (str | bool, optional): API key authentication mode for webhooks
+    - `"api_key"`: Authenticate via query parameter or header (default for webhooks)
+    - `"api_key_path"`: Authenticate via API key in URL path
+    - `False`/`None`: No API key authentication
 - `response` (ResponseSchema, optional): Response schema definition (see [Response Schema Definition](rest-api.md#response-schema-definition))
 - `**kwargs`: Additional FastAPI route parameters (tags, summary, description, etc.)
+
+**Authentication Behavior**:
+- All endpoints registered with `@endpoint` are tracked in the endpoint registry
+- The authentication middleware checks the registry to determine if an endpoint requires authentication
+- **Only endpoints with `auth=True` require authentication** - all others are public by default
+- This ensures consistent authentication behavior across all registered endpoints, including dynamically registered ones from extended applications
 
 **Examples**:
 
@@ -219,6 +233,45 @@ async def get_users():
 async def github_webhook():
     """Handle GitHub webhook events."""
     return {"status": "ok"}
+```
+
+**Webhook with API Key Authentication**:
+```python
+# API key via query parameter or header (for third-party services)
+@endpoint(
+    "/webhook/third-party",
+    methods=["POST"],
+    webhook=True,
+    webhook_auth="api_key"  # Enables API key auth
+)
+async def third_party_webhook(payload: dict):
+    """Webhook that accepts API key in query parameter or header."""
+    # Authentication handled automatically
+    # request.state.user contains authenticated user info
+    return {"status": "received"}
+
+# Usage:
+# curl -X POST "https://api.example.com/webhook/third-party?api_key=sk_live_abc123"
+# OR
+# curl -X POST "https://api.example.com/webhook/third-party" -H "X-API-Key: sk_live_abc123"
+```
+
+**Webhook with Path-Based API Key**:
+```python
+# API key embedded in URL path
+@endpoint(
+    "/webhook/{api_key}/trigger",
+    methods=["POST"],
+    webhook=True,
+    webhook_auth="api_key_path"  # API key must be in URL path
+)
+async def path_authenticated_webhook(api_key: str, payload: dict):
+    """Webhook with API key embedded in path."""
+    # api_key parameter is automatically extracted and validated
+    return {"status": "triggered"}
+
+# Usage:
+# curl -X POST "https://api.example.com/webhook/sk_live_abc123/trigger"
 ```
 
 For detailed information on response schemas, see the [Response Schema Definition](rest-api.md#response-schema-definition) section in the REST API documentation.

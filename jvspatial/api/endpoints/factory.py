@@ -95,11 +95,9 @@ class ParameterModelFactory:
             # Build field config - use endpoint config if available, otherwise create default
             if endpoint_config:
                 param_name = endpoint_config.get("endpoint_name") or name
-                field_tuple = cls._build_field(name, field_info, endpoint_config)
             else:
-                # Create default field configuration for public properties
                 param_name = name
-                field_tuple = cls._build_default_field(name, field_info)
+            field_tuple = cls._build_field(name, field_info, endpoint_config)
 
             # Handle field grouping
             group = endpoint_config.get("endpoint_group") if endpoint_config else None
@@ -156,6 +154,19 @@ class ParameterModelFactory:
             name: param for name, param in params.items() if name not in path_params
         }
 
+        # Check if this is a webhook endpoint
+        endpoint_config = getattr(func, "_jvspatial_endpoint_config", None)
+        is_webhook = endpoint_config and endpoint_config.get("webhook", False)
+
+        # Webhook-specific parameters that should be excluded (injected by webhook middleware)
+        webhook_params = {
+            "payload",
+            "raw_body",
+            "content_type",
+            "endpoint",
+            "webhook_data",
+        }
+
         # Exclude Request type parameters - FastAPI will inject them directly
         # Check if parameter type is Request (from fastapi or starlette)
         try:
@@ -183,6 +194,7 @@ class ParameterModelFactory:
             name: param
             for name, param in params.items()
             if not is_request_type(type_hints.get(name, Any))
+            and not (is_webhook and name in webhook_params)  # Exclude webhook params
         }
 
         # If no parameters remain (or none to begin with), return None
@@ -198,11 +210,11 @@ class ParameterModelFactory:
 
             # Check if default is a FieldInfo (from EndpointField)
             field_info: Optional[FieldInfo] = None
-            endpoint_config: Dict[str, Any] = {}
+            field_endpoint_config: Dict[str, Any] = {}
             if has_default and isinstance(param.default, FieldInfo):
                 # Extract metadata from FieldInfo
                 field_info = param.default
-                endpoint_config = extract_field_metadata(field_info)
+                field_endpoint_config = extract_field_metadata(field_info)
                 # Determine actual default value from FieldInfo
                 if (
                     field_info.default is not PydanticUndefined
@@ -230,7 +242,7 @@ class ParameterModelFactory:
             # Create field configuration
             if field_info:
                 # Use configuration from FieldInfo
-                field_config = build_field_config(field_info, endpoint_config)
+                field_config = build_field_config(field_info, field_endpoint_config)
             else:
                 # Create default field configuration
                 field_config = {
@@ -269,9 +281,9 @@ class ParameterModelFactory:
                     else:
                         field_config["examples"] = [{}]
 
-            # Handle endpoint_required override from endpoint_config
-            if endpoint_config.get("endpoint_required") is not None:
-                if endpoint_config["endpoint_required"]:
+            # Handle endpoint_required override from field_endpoint_config
+            if field_endpoint_config.get("endpoint_required") is not None:
+                if field_endpoint_config["endpoint_required"]:
                     # Make required - use Ellipsis
                     if not cls._is_optional(param_type):
                         default = ...
@@ -404,88 +416,21 @@ class ParameterModelFactory:
         return model
 
     @classmethod
-    def _build_default_field(
-        cls: Type["ParameterModelFactory"],
-        name: str,
-        field_info: FieldInfo,
-    ) -> Tuple[Type, FieldInfo]:
-        """Build a default field configuration for public properties.
-
-        Args:
-            name: Field name
-            field_info: Original field info
-
-        Returns:
-            Tuple of (field_type, field_info)
-        """
-        # Get original type and default
-        field_type = field_info.annotation
-        default = field_info.default
-
-        # Make field optional if it has a default value
-        if default is not None and default != PydanticUndefined and default is not ...:
-            if not cls._is_optional(field_type):
-                field_type = Optional[field_type]
-        elif default is PydanticUndefined or default is ...:
-            # Required field - make it optional with None default for API flexibility
-            # Convert PydanticUndefined to None for OpenAPI compatibility
-            if not cls._is_optional(field_type):
-                field_type = Optional[field_type]
-            default = None
-
-        # Create basic field configuration
-        field_config: Dict[str, Any] = {
-            "description": f"{name.replace('_', ' ').title()} parameter",
-            "title": name.replace("_", " ").title(),
-        }
-
-        # Add examples based on type
-        if field_type == str:
-            field_config["examples"] = ["example"]
-        elif field_type == int:
-            field_config["examples"] = [1]
-        elif field_type == bool:
-            field_config["examples"] = [True]
-        elif field_type == list:
-            field_config["examples"] = [[]]
-        elif field_type == dict:
-            field_config["examples"] = [{}]
-        elif hasattr(field_type, "__origin__") and field_type.__origin__ is Union:
-            # Handle Union types
-            args = getattr(field_type, "__args__", ())
-            if str in args:
-                field_config["examples"] = ["example"]
-            elif int in args:
-                field_config["examples"] = [1]
-            elif bool in args:
-                field_config["examples"] = [True]
-            elif list in args:
-                field_config["examples"] = [[]]
-            elif dict in args:
-                field_config["examples"] = [{}]
-
-        # Ensure default is never PydanticUndefined or Ellipsis (convert to None for OpenAPI compatibility)
-        if default is PydanticUndefined or default is ...:
-            # For required fields, omit default from Field (makes it required in Pydantic)
-            # But for API endpoints, we make it optional with None default for flexibility
-            if not cls._is_optional(field_type):
-                field_type = Optional[field_type]
-            return (field_type, Field(default=None, **field_config))
-        return (field_type, Field(default=default, **field_config))
-
-    @classmethod
     def _build_field(
         cls: Type["ParameterModelFactory"],
         name: str,
         field_info: FieldInfo,
-        endpoint_config: Dict[str, Any],
+        endpoint_config: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Type, FieldInfo]:
-        """Build a parameter field.
+        """Build a parameter field (unified method for all field creation).
+
+        This method consolidates field creation logic, handling both default
+        fields (no endpoint_config) and configured fields (with endpoint_config).
 
         Args:
-            name: Original field name
+            name: Field name
             field_info: Original field info
-            endpoint_config: Endpoint configuration
+            endpoint_config: Optional endpoint configuration
 
         Returns:
             Tuple of (field_type, field_info)
@@ -495,32 +440,75 @@ class ParameterModelFactory:
         default = field_info.default
 
         # Handle endpoint-specific required override
-        if endpoint_config.get("endpoint_required") is not None:
+        if endpoint_config and endpoint_config.get("endpoint_required") is not None:
             if endpoint_config["endpoint_required"]:
-                # For required fields, use Ellipsis but only if we really need it
-                # Otherwise, prefer None for API flexibility
-                if default is None or default is PydanticUndefined:
-                    # Use ... for truly required fields (but this might cause serialization issues)
-                    # Better to make optional with None for API endpoints
+                # Make required - ensure it's not optional
+                if default is None or default is PydanticUndefined or default is ...:
                     default = None
                     if not cls._is_optional(field_type):
                         field_type = Optional[field_type]
             else:
+                # Make optional
                 if not cls._is_optional(field_type):
                     field_type = Optional[field_type]
                 if default is PydanticUndefined or default is ...:
                     default = None
 
-        # Build field config
-        config = build_field_config(field_info, endpoint_config)
+        # Build field config - use endpoint config if available, otherwise create default
+        if endpoint_config:
+            field_config = build_field_config(field_info, endpoint_config)
+        else:
+            # Create basic field configuration
+            field_config = {
+                "description": f"{name.replace('_', ' ').title()} parameter",
+                "title": name.replace("_", " ").title(),
+            }
+            # Add examples based on type
+            cls._add_type_examples(field_type, field_config)
+
         # Always convert PydanticUndefined or Ellipsis to None for OpenAPI compatibility
-        # (PydanticUndefined and Ellipsis can't be serialized in OpenAPI schemas)
         if default is PydanticUndefined or default is ...:
-            # Make field optional with None default for API flexibility
             if not cls._is_optional(field_type):
                 field_type = Optional[field_type]
             default = None
-        return (field_type, Field(default=default, **config))
+
+        return (field_type, Field(default=default, **field_config))
+
+    @classmethod
+    def _add_type_examples(
+        cls: Type["ParameterModelFactory"],
+        field_type: Type,
+        config: Dict[str, Any],
+    ) -> None:
+        """Add example values to config based on field type.
+
+        Args:
+            field_type: Field type to generate examples for
+            config: Configuration dict to update
+        """
+        if field_type == str:
+            config["examples"] = ["example"]
+        elif field_type == int:
+            config["examples"] = [1]
+        elif field_type == bool:
+            config["examples"] = [True]
+        elif field_type == list:
+            config["examples"] = [[]]
+        elif field_type == dict:
+            config["examples"] = [{}]
+        elif hasattr(field_type, "__origin__") and field_type.__origin__ is Union:
+            # Handle Union types
+            args = getattr(field_type, "__args__", ())
+            if str in args:
+                config["examples"] = ["example"]
+            elif int in args:
+                config["examples"] = [1]
+            elif bool in args:
+                config["examples"] = [True]
+            elif list in args:
+                config["examples"] = [[]]
+            elif dict in args:
+                config["examples"] = [{}]
 
     @classmethod
     def _create_group_model(

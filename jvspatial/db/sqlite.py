@@ -34,6 +34,12 @@ class SQLiteDB(Database):
 
     Stores records in a single table and keeps payloads as JSON to mirror the
     structure used by other database backends.
+
+    Index Creation Behavior:
+        SQLite index creation is synchronous and blocks until the index is built.
+        For typical use cases with small to medium datasets, index creation is very fast
+        (milliseconds to seconds). For very large databases, index creation may take longer
+        but is generally much faster than DynamoDB GSI creation.
     """
 
     def __init__(
@@ -266,6 +272,10 @@ class SQLiteDB(Database):
 
         Returns:
             Record data if found, None otherwise
+
+        Note:
+            Read operations don't require the write lock since SQLite WAL mode
+            allows concurrent reads. Only write operations are serialized.
         """
         connection = await self._get_connection()
         cursor = await connection.execute(
@@ -304,6 +314,10 @@ class SQLiteDB(Database):
 
         Returns:
             List of matching records
+
+        Note:
+            Read operations don't require the write lock since SQLite WAL mode
+            allows concurrent reads. Only write operations are serialized.
         """
         connection = await self._get_connection()
         cursor = await connection.execute(

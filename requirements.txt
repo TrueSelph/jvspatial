@@ -13,6 +13,7 @@ typing-extensions>=4.6.0  # For @override decorator and enhanced typing
 motor>=3.1.1  # Async MongoDB driver
 pymongo>=4.3.3  # MongoDB support
 aiosqlite>=0.19.0  # SQLite database backend
+aioboto3>=15.5.0  # DynamoDB support
 
 # Authentication
 PyJWT>=2.7.0  # JWT token handling
@@ -21,3 +22,6 @@ email-validator>=2.0.0  # Email validation for pydantic
 
 # Task management
 schedule>=1.2.2  # Job scheduling
+
+# Async file operations
+aiofiles>=23.0.0  # Async file operations for JsonDB

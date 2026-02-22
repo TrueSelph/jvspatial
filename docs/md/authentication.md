@@ -22,7 +22,7 @@ The jvspatial authentication system provides comprehensive user management, JWT-
 Set up authentication in minutes:
 
 ```python
-from jvspatial.api import create_server, endpoint, auth_endpoint, admin_endpoint
+from jvspatial.api import create_server, endpoint
 from jvspatial.api.auth import configure_auth, AuthenticationMiddleware
 
 # Configure authentication
@@ -46,16 +46,16 @@ server.app.add_middleware(AuthenticationMiddleware)
 async def public_info():
     return {"message": "This is public"}
 
-@auth_endpoint("/protected/data", permissions=["read_data"])
+@endpoint("/protected/data", auth=True, permissions=["read_data"])
 async def protected_data():
     return {"message": "This requires authentication and read_data permission"}
 
-@admin_endpoint("/admin/users")
+@endpoint("/admin/users", auth=True, roles=["admin"])
 async def admin_users():
     return {"message": "Admin only"}
 
 # Unified decorators work with Walker classes too
-@admin_endpoint("/admin/process")
+@endpoint("/admin/process", auth=True, roles=["admin"])
 class AdminProcessor(Walker):
     pass
 
@@ -255,7 +255,7 @@ headers = {
 # Server automatically validates and extracts user context
 from jvspatial.api.auth import get_current_user
 
-@auth_endpoint("/protected/data")
+@endpoint("/protected/data", auth=True)
 async def get_data(request: Request):
     current_user = get_current_user(request)
     return {"user": current_user.email, "data": "protected content"}
@@ -273,48 +273,143 @@ async def refresh_token(request: TokenRefreshRequest):
     pass
 ```
 
+### Token Validation Behavior
+
+The authentication system validates JWT tokens using a decode-first approach:
+
+**Validation Order:**
+- Tokens are decoded first using `jwt.decode()`, which automatically handles expiration validation
+- Only successfully decoded, non-expired tokens are checked against the blacklist
+- This prevents false positives where expired tokens might be incorrectly flagged
+
+**Expiration Handling:**
+- Token expiration is handled by the `jwt.decode()` function, not manual timestamp checks
+- Expired tokens are rejected during decode, before any blacklist checks occur
+- This ensures consistent expiration validation across all token types
+
+**Debug Logging:**
+- Detailed debug logging is available for troubleshooting authentication issues
+- Logs include: token decode results, blacklist check outcomes, user lookup results, and validation failures
+- Enable debug logging to trace authentication flow and diagnose 401 errors
+
+**Performance Optimization:**
+- Blacklist checks use an in-memory cache to reduce database queries
+- Cache entries have configurable TTL (time-to-live) for optimal performance
+- Cache misses trigger database lookups and update the cache
+
+### Refresh Token Generation
+
+The system generates refresh tokens with resilience and reliability:
+
+**Resilient Generation:**
+- Login succeeds even if refresh token generation or storage fails
+- Access tokens work independently of refresh tokens
+- If refresh token generation fails, login returns `refresh_token=None` but the access token is still valid
+
+**Automatic Index Management:**
+- Indexes are automatically created before saving refresh tokens
+- This ensures optimal database performance for token lookups
+- The `ensure_indexes()` call happens transparently during token storage
+
+**Token Storage:**
+- Refresh tokens are hashed before storage using secure hashing algorithms (bcrypt, argon2, or passlib)
+- Plaintext tokens are never stored in the database
+- Token verification uses secure hash comparison
+
+### API Endpoint Organization
+
+Endpoints are organized by tags in OpenAPI documentation:
+
+**Tag Organization:**
+- Authentication endpoints (`/api/auth/*`) are tagged as **"Auth"** in OpenAPI docs
+- Application endpoints (`/api/graph`, `/api/logs`) are tagged as **"App"**
+- Tags help organize and filter endpoints in Swagger UI
+
+**Benefits:**
+- Clear separation between authentication and application endpoints
+- Easier navigation in API documentation
+- Better organization for API consumers
+
 ## API Key Authentication
+
+### Quick Start
+
+```python
+from jvspatial.api import Server
+
+server = Server(
+    title="My API",
+    auth_enabled=True,  # Master switch - enables both JWT and API key auth
+    api_key_management_enabled=True,  # Enable API key management endpoints (/auth/api-keys)
+    db_type="json"
+)
+```
+
+**Configuration Flags:**
+- `auth_enabled`: Master switch that enables authentication middleware. When `True`:
+  - JWT authentication is always available (via `Authorization: Bearer <token>` header)
+  - API key authentication is always available (via `X-API-Key` header)
+  - Both methods appear in Swagger/OpenAPI documentation
+- `api_key_management_enabled`: Controls whether API key management endpoints (`/auth/api-keys`) are registered. Does NOT control whether API key authentication works - that's always available when `auth_enabled=True`.
 
 ### Creating API Keys
 
-```python
-@auth_endpoint("/auth/api-keys", methods=["POST"])
-async def create_api_key(request: APIKeyCreateRequest):
-    # Built-in endpoint creates API key with:
-    # - Unique key ID and secret
-    # - Endpoint restrictions
-    # - Rate limits
-    # - Expiration dates
-    pass
+API keys are created through authenticated endpoints. First login to get a JWT token, then create keys:
+
+```bash
+# Login
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@example.com", "password": "password123"}'
+
+# Create API key
+curl -X POST http://localhost:8000/auth/api-keys \
+  -H "Authorization: Bearer <jwt_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Production Key",
+    "permissions": ["read", "write"],
+    "rate_limit_override": 1000,
+    "expires_in_days": 90
+  }'
+```
+
+**Response (shown ONCE only):**
+```json
+{
+  "key": "sk_live_abc123...xyz789",
+  "key_id": "k:APIKey:uuid",
+  "key_prefix": "sk_live_abc12345",
+  "name": "Production Key",
+  "message": "Store this key securely. It won't be shown again."
+}
 ```
 
 ### Using API Keys
 
+Include the API key in the `X-API-Key` header:
+
 ```python
-# Method 1: Header-based
-headers = {
-    "X-API-Key": "your-api-key-secret"
-}
+import requests
 
-# Method 2: Query parameter
-url = "https://api.example.com/data?api_key=your-api-key-secret"
-
-# Server validates API key automatically
+headers = {"X-API-Key": "sk_live_abc123...xyz789"}
+response = requests.get("http://localhost:8000/api/data", headers=headers)
 ```
 
 ### API Key Management
 
-```python
-# List user's API keys
-@auth_endpoint("/auth/api-keys", methods=["GET"])
-async def list_api_keys():
-    pass
+- **List Keys**: `GET /auth/api-keys` (requires JWT authentication)
+- **Revoke Key**: `DELETE /auth/api-keys/{key_id}` (requires JWT authentication)
 
-# Revoke API key
-@auth_endpoint("/auth/api-keys/revoke", methods=["POST"])
-async def revoke_api_key(request: APIKeyRevokeRequest):
-    pass
-```
+### Security Features
+
+- **Hashed Storage**: Keys are hashed (SHA-256) before storage, never stored in plaintext
+- **IP Restrictions**: Whitelist specific IP addresses
+- **Endpoint Restrictions**: Limit keys to specific API endpoints
+- **Expiration**: Optional expiration dates
+- **Per-Key Rate Limits**: Custom rate limits per key
+
+📖 **[Complete API Keys Guide →](api-keys.md)**
 
 ## Role-Based Access Control
 
@@ -373,7 +468,7 @@ admin_user = await User.create(
 user.allowed_regions = ["north_america", "europe"]
 
 # In spatial queries, check region access
-@auth_endpoint("/spatial/query", permissions=["read_spatial_data"])
+@endpoint("/spatial/query", auth=True, permissions=["read_spatial_data"])
 class SpatialQuery(Walker):
     region: str = EndpointField(description="Target region")
 
@@ -394,7 +489,7 @@ class SpatialQuery(Walker):
 user.allowed_node_types = ["City", "Highway", "POI"]
 
 # Validate node type access in walkers
-@auth_endpoint("/nodes/process")
+@endpoint("/nodes/process", auth=True)
 class ProcessNodes(Walker):
     @on_visit(Node)
     async def process(self, here: Node):
@@ -411,7 +506,7 @@ class ProcessNodes(Walker):
 
 ```python
 # Limit graph traversal depth for users
-@auth_endpoint("/graph/traverse")
+@endpoint("/graph/traverse", auth=True)
 class GraphTraversal(Walker):
     max_depth: int = EndpointField(default=5)
 
@@ -440,34 +535,34 @@ class PublicSearch(Walker):
     pass
 
 # 2. Authenticated endpoints (login required, auto-detects functions/walkers)
-@auth_endpoint("/user/profile")
+@endpoint("/user/profile", auth=True)
 async def user_profile():
     return {"message": "Must be logged in"}
 
-@auth_endpoint("/user/data")
+@endpoint("/user/data", auth=True)
 class UserData(Walker):
     pass
 
 # 3. Permission-based endpoints (auto-detects functions/walkers)
-@auth_endpoint("/reports/generate", permissions=["generate_reports"])
+@endpoint("/reports/generate", auth=True, permissions=["generate_reports"])
 async def generate_report():
     return {"message": "Must have generate_reports permission"}
 
-@auth_endpoint("/spatial/analysis", permissions=["analyze_spatial_data"])
+@endpoint("/spatial/analysis", auth=True, permissions=["analyze_spatial_data"])
 class SpatialAnalysis(Walker):
     pass
 
 # 4. Role-based endpoints (auto-detects functions/walkers)
-@auth_endpoint("/admin/settings", roles=["admin"])
+@endpoint("/admin/settings", auth=True, roles=["admin"])
 async def admin_settings():
     return {"message": "Must be admin"}
 
-# 5. Admin-only endpoints (shortcut, auto-detects functions/walkers)
-@admin_endpoint("/admin/users")
+# 5. Admin-only endpoints (auto-detects functions/walkers)
+@endpoint("/admin/users", auth=True, roles=["admin"])
 async def manage_users():
     return {"message": "Admin access required"}
 
-@admin_endpoint("/admin/process")
+@endpoint("/admin/process", auth=True, roles=["admin"])
 class AdminProcessor(Walker):
     pass
 ```
@@ -476,8 +571,9 @@ class AdminProcessor(Walker):
 
 ```python
 # Require specific permissions AND roles
-@auth_endpoint(
+@endpoint(
     "/advanced/operation",
+    auth=True,
     permissions=["advanced_operations", "write_data"],
     roles=["analyst", "admin"]
 )
@@ -491,7 +587,7 @@ async def advanced_operation():
 ```python
 from jvspatial.api.auth import get_current_user
 
-@auth_endpoint("/user/dashboard")
+@endpoint("/user/dashboard", auth=True)
 async def user_dashboard(request: Request):
     current_user = get_current_user(request)
 
@@ -503,7 +599,7 @@ async def user_dashboard(request: Request):
         }
     }
 
-@auth_endpoint("/user/spatial-data")
+@endpoint("/user/spatial-data", auth=True)
 class UserSpatialData(Walker):
     @on_visit(Node)
     async def process(self, here: Node):
@@ -541,6 +637,44 @@ The `AuthenticationMiddleware` automatically:
 - **Handles authentication errors** with proper HTTP responses
 - **Exempts public endpoints** from authentication
 
+### Registry-Based Authentication
+
+The authentication middleware uses the **endpoint registry** as the single source of truth for authentication decisions:
+
+1. **Registered Endpoints**: All endpoints registered via the `@endpoint` decorator are tracked in the endpoint registry
+2. **Auth Settings**: The `auth` parameter in `@endpoint` determines whether authentication is required:
+   - `auth=True`: Endpoint requires authentication
+   - `auth=False`: Endpoint is public (no authentication required)
+   - Default: `auth=False` (endpoints are public by default)
+3. **Unregistered Endpoints**: Endpoints not in the registry **require authentication by default** (deny by default security model)
+
+**Important**: Only endpoints explicitly registered with `auth=False` are public. This ensures that:
+- Dynamically registered endpoints (e.g., from extended applications) respect their `auth` settings
+- Public endpoints with `auth=False` are accessible without authentication
+- The authentication behavior is consistent across all registered endpoints
+- Unknown endpoints are protected by default, preventing security vulnerabilities
+
+### Security Model: Deny By Default
+
+The authentication middleware follows a **"deny by default"** security model:
+
+1. **Exempt Paths**: Only paths explicitly listed in `exempt_paths` bypass authentication
+2. **Registered Endpoints**: Endpoints in the registry with `auth=False` are public
+3. **Unknown Endpoints**: Endpoints not in the registry **require authentication**
+4. **Error Handling**: Any error during authentication checking **denies access**
+
+This approach ensures that:
+- Path matching failures don't create security vulnerabilities
+- New endpoints are protected by default until explicitly configured
+- Configuration errors fail securely (deny access rather than allow)
+- Bypass attempts via path manipulation are blocked
+
+**Important**: All non-authenticated endpoints must either:
+- Be listed in `exempt_paths` configuration, OR
+- Be registered with `@endpoint(..., auth=False)`
+
+Unregistered endpoints will require authentication regardless of intent.
+
 ### Configuring Exemptions
 
 ```python
@@ -558,6 +692,8 @@ exempted_paths = [
 
 # Custom exemption patterns can be added in middleware configuration
 ```
+
+**Note**: Exempt paths are checked **before** registry lookups, so they bypass authentication entirely. Use exempt paths for system routes like health checks and documentation.
 
 ## Security Best Practices
 
@@ -641,27 +777,25 @@ All authentication endpoints are automatically registered:
 ### Authentication Decorators
 
 ```python
-# Import decorators
-from jvspatial.api.auth import (
-    auth_endpoint,          # Unified authenticated endpoint (auto-detects functions/walkers)
-    admin_endpoint,         # Unified admin endpoint (auto-detects functions/walkers)
-    webhook_endpoint        # Unified webhook endpoint (auto-detects functions/walkers)
-)
+# Import decorator
+from jvspatial.api import endpoint
 
 # Usage patterns - work with both functions and Walker classes
-@auth_endpoint("/path", methods=["GET"], permissions=["perm"], roles=["role"])
+# Authenticated endpoint
+@endpoint("/path", auth=True, methods=["GET"], permissions=["perm"], roles=["role"])
 async def auth_function():
     pass
 
-@auth_endpoint("/path", permissions=["perm"], roles=["role"])
+@endpoint("/path", auth=True, permissions=["perm"], roles=["role"])
 class AuthWalker(Walker):
     pass
 
-@admin_endpoint("/admin/path", methods=["GET"])
+# Admin-only endpoint
+@endpoint("/admin/path", auth=True, roles=["admin"], methods=["GET"])
 async def admin_function():
     pass
 
-@admin_endpoint("/admin/path")
+@endpoint("/admin/path", auth=True, roles=["admin"])
 class AdminWalker(Walker):
     pass
 ```
@@ -703,7 +837,7 @@ async def get_data():
     return {"data": "anyone can access"}
 
 # Protected endpoint (requires authentication and permissions)
-@auth_endpoint("/data", permissions=["read_data"])
+@endpoint("/data", auth=True, permissions=["read_data"])
 async def get_data():
     return {"data": "authenticated users with read_data permission"}
 ```
@@ -717,10 +851,10 @@ configure_auth(jwt_secret_key="your-secret-key")
 # Step 2: Add middleware
 server.app.add_middleware(AuthenticationMiddleware)
 
-# Step 3: Update endpoint decorators as needed
-# Public endpoints: Keep @endpoint (works with both functions and walkers)
-# Protected endpoints: Change to @auth_endpoint (works with both functions and walkers)
-# Admin endpoints: Change to @admin_endpoint (works with both functions and walkers)
+# Step 3: Use endpoint decorators with auth parameters
+# Public endpoints: @endpoint("/path") - no auth required
+# Protected endpoints: @endpoint("/path", auth=True) - requires authentication
+# Admin endpoints: @endpoint("/path", auth=True, roles=["admin"]) - requires admin role
 ```
 
 ## See Also

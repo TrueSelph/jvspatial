@@ -48,6 +48,9 @@ class DatabaseManager:
     _prime_database: Optional[Database] = None
     _databases: Dict[str, Database] = {}
     _current_database_name: str = "prime"
+    _auto_created: bool = (
+        False  # Flag to track if manager was auto-created vs explicitly initialized
+    )
 
     def __init__(self, prime_database: Optional[Database] = None):
         """Initialize the database manager.
@@ -56,6 +59,9 @@ class DatabaseManager:
             prime_database: Optional prime database instance. If not provided,
                           a default database is created based on environment.
         """
+        # Initialize auto-created flag (will be set to True by get_instance if auto-created)
+        self._auto_created = False
+
         # Initialize prime database
         if prime_database is None:
             # Create default prime database (avoid circular import)
@@ -120,7 +126,9 @@ class DatabaseManager:
             DatabaseManager instance
         """
         if cls._instance is None:
-            cls._instance = cls()
+            instance = cls()
+            instance._auto_created = True  # Mark as auto-created
+            cls._instance = instance
         return cls._instance
 
     @classmethod
@@ -130,6 +138,7 @@ class DatabaseManager:
         Args:
             instance: DatabaseManager instance to set
         """
+        instance._auto_created = False  # Mark as explicitly set (by Server)
         cls._instance = instance
 
     def get_prime_database(self) -> Database:

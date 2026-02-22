@@ -118,7 +118,7 @@ async def test_server(server_config):
 @pytest.fixture
 async def test_app(test_server):
     """Create FastAPI app for testing."""
-    app = test_server._create_app()
+    app = test_server.get_app()
     return app
 
 
@@ -136,7 +136,7 @@ class TestServerInitialization:
         server = Server()
         assert server.config.title == "jvspatial API"
         assert server.config.port == 8000
-        assert server.config.cors_enabled is True
+        assert server.config.cors.cors_enabled is True
         assert isinstance(server.endpoint_router, EndpointRouter)
         # Test new components
         assert isinstance(server.app_builder, AppBuilder)
@@ -295,7 +295,7 @@ class TestParameterModels:
             )
 
         # Create the app to trigger parameter model generation
-        app = test_server._create_app()
+        app = test_server.get_app()
 
         # Verify parameters are extracted correctly
         # This would be checked through the generated OpenAPI schema
@@ -316,7 +316,7 @@ class TestParameterModels:
                 default_factory=list, description="List of strings"
             )
 
-        app = test_server._create_app()
+        app = test_server.get_app()
         assert app is not None
 
     async def test_parameter_with_pydantic_constraints(self, test_server):
@@ -332,7 +332,7 @@ class TestParameterModels:
                 ge=0.0, le=1.0, description="Score between 0 and 1"
             )
 
-        app = test_server._create_app()
+        app = test_server.get_app()
         assert app is not None
 
 
@@ -351,11 +351,11 @@ class TestAPIRoutes:
             async def process(self, here):
                 await self.report({"processed_message": self.message.upper()})
 
-        app = test_server._create_app()
+        app = test_server.get_app()
         client = TestClient(app)
 
         with patch(
-            "jvspatial.api.endpoints.router.get_default_context"
+            "jvspatial.api.endpoints.walker_executor.get_default_context"
         ) as mock_context:
             root_node = ApiTestNode(name="root")
             mock_context.return_value.get = AsyncMock(return_value=root_node)
@@ -383,11 +383,11 @@ class TestAPIRoutes:
             async def process(self, here):
                 await self.report({"param_received": self.param})
 
-        app = test_server._create_app()
+        app = test_server.get_app()
         client = TestClient(app)
 
         with patch(
-            "jvspatial.api.endpoints.router.get_default_context"
+            "jvspatial.api.endpoints.walker_executor.get_default_context"
         ) as mock_context:
             root_node = ApiTestNode(name="root")
             mock_context.return_value.get = AsyncMock(return_value=root_node)
@@ -409,7 +409,7 @@ class TestAPIRoutes:
             """Test function."""
             return {"greeting": f"Hello, {name}!"}
 
-        app = test_server._create_app()
+        app = test_server.get_app()
         client = TestClient(app)
 
         response = client.get("/api/test-function?name=test")
@@ -456,12 +456,12 @@ class TestAPIRoutes:
                 await self.report({"results": self.results})
                 await self.report({"count": len(self.results)})
 
-        app = test_server._create_app()
+        app = test_server.get_app()
         client = TestClient(app)
 
         # Mock node traversal
         with patch(
-            "jvspatial.api.endpoints.router.get_default_context"
+            "jvspatial.api.endpoints.walker_executor.get_default_context"
         ) as mock_context:
             root_node = ApiTestNode(name="root", category="test")
             mock_context.return_value.get = AsyncMock(return_value=root_node)
@@ -492,7 +492,7 @@ class TestAPIErrorHandling:
             required_param: str = EndpointField(description="Required parameter")
             positive_int: int = EndpointField(gt=0, description="Positive integer")
 
-        app = test_server._create_app()
+        app = test_server.get_app()
         client = TestClient(app)
 
         # Test missing required parameter
@@ -525,11 +525,11 @@ class TestAPIErrorHandling:
             async def debug_walker(self):
                 await self.report({"debug": "walker_created"})
 
-        app = test_server._create_app()
+        app = test_server.get_app()
         client = TestClient(app)
 
         with patch(
-            "jvspatial.api.endpoints.router.get_default_context"
+            "jvspatial.api.endpoints.walker_executor.get_default_context"
         ) as mock_context:
             root_node = ApiTestNode(name="root")
             mock_context.return_value.get = AsyncMock(return_value=root_node)
@@ -566,7 +566,7 @@ class TestAPIErrorHandling:
                 raise ValueError("Test function error")
             return {"status": "ok"}
 
-        app = test_server._create_app()
+        app = test_server.get_app()
         client = TestClient(app)
 
         # Test successful execution
@@ -579,7 +579,7 @@ class TestAPIErrorHandling:
 
     async def test_404_error_handling(self, test_server):
         """Test 404 error for non-existent endpoints."""
-        app = test_server._create_app()
+        app = test_server.get_app()
         client = TestClient(app)
 
         response = client.get("/non-existent-endpoint")
@@ -606,7 +606,7 @@ class TestLifecycleHooks:
         await test_server.on_startup(startup_hook2)
 
         # Simulate startup
-        app = test_server._create_app()
+        app = test_server.get_app()
 
         # Manually trigger startup events for testing using lifecycle manager
         for task in test_server.lifecycle_manager._startup_hooks:
@@ -680,7 +680,7 @@ class TestOpenAPIDocumentation:
             name: str = EndpointField(description="User name")
             age: int = EndpointField(ge=0, le=120, description="User age")
 
-        app = test_server._create_app()
+        app = test_server.get_app()
         client = TestClient(app)
 
         # Get OpenAPI schema
@@ -696,7 +696,7 @@ class TestOpenAPIDocumentation:
 
     async def test_swagger_ui_accessible(self, test_server):
         """Test Swagger UI is accessible."""
-        app = test_server._create_app()
+        app = test_server.get_app()
         client = TestClient(app)
 
         response = client.get("/docs")
@@ -705,7 +705,7 @@ class TestOpenAPIDocumentation:
 
     async def test_redoc_accessible(self, test_server):
         """Test ReDoc is accessible."""
-        app = test_server._create_app()
+        app = test_server.get_app()
         client = TestClient(app)
 
         response = client.get("/redoc")
@@ -729,7 +729,7 @@ class TestOpenAPIDocumentation:
                 default=10, ge=1, le=100, description="Result limit"
             )
 
-        app = test_server._create_app()
+        app = test_server.get_app()
         client = TestClient(app)
 
         schema_response = client.get("/openapi.json")
@@ -747,16 +747,18 @@ class TestServerConfiguration:
     async def test_cors_configuration(self):
         """Test CORS configuration."""
         config = ServerConfig(
-            cors_enabled=True,
-            cors_origins=["http://localhost:3000"],
-            cors_methods=["GET", "POST"],
-            cors_headers=["Content-Type"],
+            cors=dict(
+                cors_enabled=True,
+                cors_origins=["http://localhost:3000"],
+                cors_methods=["GET", "POST"],
+                cors_headers=["Content-Type"],
+            )
         )
         server = Server(config=config)
 
-        assert server.config.cors_enabled is True
-        assert server.config.cors_origins == ["http://localhost:3000"]
-        assert server.config.cors_methods == ["GET", "POST"]
+        assert server.config.cors.cors_enabled is True
+        assert server.config.cors.cors_origins == ["http://localhost:3000"]
+        assert server.config.cors.cors_methods == ["GET", "POST"]
 
     async def test_database_configuration(self):
         """Test database configuration."""
@@ -769,11 +771,13 @@ class TestServerConfiguration:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-        config = ServerConfig(db_type="json", db_path="./jvdb/tests")
+        config = ServerConfig()
+        config.database.db_type = "json"
+        config.database.db_path = "./jvdb/tests"
         server = Server(config=config)
 
-        assert server.config.db_type == "json"
-        assert server.config.db_path == "./jvdb/tests"
+        assert server.config.database.db_type == "json"
+        assert server.config.database.db_path == "./jvdb/tests"
 
     async def test_api_documentation_configuration(self):
         """Test API documentation configuration."""
@@ -805,7 +809,7 @@ class TestDynamicEndpointManagement:
         assert test_server.endpoint_manager.get_registry().has_walker(DynamicWalker)
 
         # Create app and test endpoint
-        app = test_server._create_app()
+        app = test_server.get_app()
         client = TestClient(app)
 
         # Verify endpoint exists in OpenAPI schema

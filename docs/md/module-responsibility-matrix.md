@@ -1,7 +1,7 @@
 # Module Responsibility Matrix
 
-**Date**: 2025-10-20
-**Version**: 0.0.1
+**Date**: 2025-02-22
+**Version**: 0.0.3
 
 This document provides a clear matrix of module responsibilities, helping developers understand where to find specific functionality.
 
@@ -26,20 +26,20 @@ This document provides a clear matrix of module responsibilities, helping develo
 
 | File/Directory | Purpose | Key Classes/Functions |
 |----------------|---------|----------------------|
-| `object.py` | Base entity | `Object` |
-| `node.py` | Graph nodes | `Node` |
-| `edge.py` | Graph edges | `Edge` |
-| `root.py` | Root node | `Root` |
-| `walker_class.py` | Walker pattern | `Walker` |
-| `walker/` | Walker support | Event system, protection, queues |
+| `entities/object.py` | Base entity | `Object` |
+| `entities/node.py` | Graph nodes | `Node` |
+| `entities/edge.py` | Graph edges | `Edge` |
+| `entities/root.py` | Root node | `Root` |
+| `entities/walker.py` | Walker pattern | `Walker` |
+| `entities/walker_components/` | Walker support | Event system, protection, queues |
 | `context.py` | Graph context | `GraphContext`, `PerformanceMonitor` |
 | `decorators.py` | Graph decorators | `@on_visit`, `@on_exit` |
 | `events.py` | Event system | Event handling |
-| `node_query.py` | Node queries | `NodeQuery` |
+| `entities/node_query.py` | Node queries | `NodeQuery` |
 | `annotations.py` | Annotations | `@attribute` |
 | `utils.py` | Core utilities | Serialization, helpers |
-| `pager.py` | Pagination | `Pager` |
-| `entities.py` | Entity re-exports | Central import point |
+| `pager.py` | Pagination | `ObjectPager` |
+| `entities/` | Entity re-exports | Central import point |
 
 **When to use**:
 - Creating graph entities (nodes, edges, walkers)
@@ -55,7 +55,7 @@ This document provides a clear matrix of module responsibilities, helping develo
 
 | Subdirectory | Purpose | Key Components |
 |--------------|---------|----------------|
-| `decorators/` | Route & field decorators | `@endpoint`, `@auth_endpoint`, `endpoint_field` |
+| `decorators/` | Route & field decorators | `@endpoint`, `endpoint_field` |
 | `endpoints/` | Endpoint management | `EndpointRouter`, `ResponseHelper`, `Registry` |
 | `integrations/` | External services | Webhooks, scheduler, storage |
 | `middleware/` | Request processing | `MiddlewareManager`, `ErrorMiddleware` |
@@ -83,8 +83,8 @@ This document provides a clear matrix of module responsibilities, helping develo
 | `database.py` | Base database | `Database` |
 | `jsondb.py` | JSON backend | `JsonDB` |
 | `mongodb.py` | MongoDB backend | `MongoDB` |
-| `factory.py` | Database factory | `get_database()`, registration |
-| `query.py` | Query builder | `QueryBuilder`, `query()` |
+| `factory.py` | Database factory | `create_database()`, `register_database_type()` |
+| `query.py` | Query engine | `QueryEngine` |
 
 **When to use**:
 - Storing/retrieving entities
@@ -104,7 +104,7 @@ This document provides a clear matrix of module responsibilities, helping develo
 | `memory.py` | In-memory cache | `MemoryCache` |
 | `redis.py` | Redis cache | `RedisCache` |
 | `layered.py` | Multi-tier cache | `LayeredCache` |
-| `factory.py` | Cache factory | `get_cache_backend()` |
+| `factory.py` | Cache factory | `create_cache()` |
 
 **When to use**:
 - Caching frequently accessed data
@@ -230,17 +230,17 @@ from jvspatial.core import GraphContext, on_visit, on_exit
 ### **API**
 ```python
 from jvspatial.api import Server, ServerConfig
-from jvspatial.api.decorators import endpoint, auth_endpoint, endpoint_field
+from jvspatial.api.decorators import endpoint, endpoint_field
 ```
 
 ### **Database**
 ```python
-from jvspatial.db import get_database, JsonDB, MongoDB, query
+from jvspatial.db import create_database, Database, JsonDB, get_database_manager
 ```
 
 ### **Cache**
 ```python
-from jvspatial.cache import get_cache_backend, MemoryCache, LayeredCache
+from jvspatial.cache import create_cache
 ```
 
 ### **Storage**
@@ -260,7 +260,7 @@ from jvspatial.utils import memoize, retry, NodeId, is_dict, to_dict
 ### **❌ Don't: Cross-layer violations**
 ```python
 # ❌ Bad: API importing from internal walker modules
-from jvspatial.core.walker.event_system import EventManager
+from jvspatial.core.entities.walker_components.event_system import EventManager
 
 # ✅ Good: Use public API
 from jvspatial.core import Walker
@@ -347,6 +347,6 @@ cache  (depends on: utils)
 
 ---
 
-**Last Updated**: 2025-10-20
-**Version**: 0.0.1
+**Last Updated**: 2025-02-22
+**Version**: 0.0.3
 **Maintainer**: JVspatial Team

@@ -226,29 +226,6 @@ def _is_error_logged(request: Request, status_code: int) -> bool:
         return False
 
 
-def _extract_agent_id_from_path(path: str) -> Optional[str]:
-    """Extract agent_id from request path.
-
-    Looks for patterns like /agents/{agent_id}/... in the path.
-
-    Args:
-        path: Request path string
-
-    Returns:
-        Agent ID if found, None otherwise
-    """
-    try:
-        import re
-
-        # Match patterns like /agents/{agent_id}/... or /logs/agents/{agent_id}/...
-        match = re.search(r"/agents/([^/]+)", path)
-        if match:
-            return match.group(1)
-    except Exception:
-        pass
-    return None
-
-
 async def _log_error_to_service(
     request: Request,
     status_code: int,
@@ -257,7 +234,11 @@ async def _log_error_to_service(
     details: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
     traceback_str: Optional[str] = None,
 ) -> None:
-    """Log error to error logging service asynchronously (fire-and-forget).
+    """Log error using the standard logger with details.
+
+    The DBLogHandler will automatically intercept ERROR level logs and
+    save them to the database. This simplifies error logging - just use
+    the logger with optional details in the extra parameter.
 
     Args:
         request: FastAPI request object
@@ -268,54 +249,43 @@ async def _log_error_to_service(
         traceback_str: Optional traceback string (for 5xx errors)
     """
     try:
-        # Import here to avoid circular dependencies
-        from jvagent.logging.service import get_logging_service
+        logger = logging.getLogger("jvspatial.api.components.error_handler")
 
-        # Extract agent_id from path
-        agent_id = _extract_agent_id_from_path(request.url.path)
-
-        # Extract user_id, session_id, interaction_id from request state if available
-        user_id = getattr(request.state, "user_id", None) or ""
-        session_id = getattr(request.state, "session_id", None) or ""
-        interaction_id = getattr(request.state, "interaction_id", None) or ""
-
-        # Build streamlined error data payload
-        # Only include error-specific details, not fields already in context
-        error_data: Dict[str, Any] = {
-            "message": message,
+        # Build extra dict with error details
+        extra: Dict[str, Any] = {
+            "status_code": status_code,
+            "error_code": error_code,
+            "path": request.url.path,
+            "method": request.method,
         }
 
+        # Add details if provided
         if details:
-            error_data["details"] = details
+            extra["details"] = details
 
-        # Include traceback for 5xx errors only
-        if traceback_str and status_code >= 500:
-            error_data["traceback"] = traceback_str
+        # Add any custom fields from request state
+        if hasattr(request.state, "user_id") and request.state.user_id:
+            extra["user_id"] = request.state.user_id
+        if hasattr(request.state, "session_id") and request.state.session_id:
+            extra["session_id"] = request.state.session_id
+        if hasattr(request.state, "interaction_id") and request.state.interaction_id:
+            extra["interaction_id"] = request.state.interaction_id
 
-        # Log error asynchronously (fire-and-forget)
-        logging_service = get_logging_service()
-        # Use asyncio.create_task to run in background without blocking
-        import asyncio
+        # Log the error - DBLogHandler will automatically save to database
+        # Include traceback in details if provided
+        if traceback_str:
+            error_details = details.copy() if isinstance(details, dict) else {}
+            if isinstance(details, list):
+                error_details["validation_errors"] = details
+            error_details["traceback"] = traceback_str
+            extra["details"] = error_details
 
-        asyncio.create_task(
-            logging_service.log_error(
-                error_data=error_data,
-                agent_id=agent_id,
-                status_code=status_code,
-                error_code=error_code,
-                path=request.url.path,
-                method=request.method,
-                user_id=user_id,
-                session_id=session_id,
-                interaction_id=interaction_id,
-            )
-        )
+        logger.error(message, extra=extra)
+
     except Exception as e:
         # Don't let error logging failures affect the error response
         logger = logging.getLogger("jvspatial.api.components.error_handler")
-        logger.warning(
-            f"Failed to log error to error logging service: {e}", exc_info=True
-        )
+        logger.warning(f"Error logging failed: {e}", exc_info=True)
 
 
 class APIErrorHandler:
@@ -323,6 +293,10 @@ class APIErrorHandler:
 
     This class provides centralized error handling with request context,
     following the new standard implementation approach.
+
+    Errors are automatically logged to the database via the DBLogHandler,
+    which intercepts ERROR level log records. No additional setup is required
+    beyond initializing the logging database.
     """
 
     def __init__(self):
@@ -836,6 +810,5 @@ __all__ = [
     "_get_request_identifier",
     "_mark_error_logged",
     "_is_error_logged",
-    "_extract_agent_id_from_path",
     "_log_error_to_service",
 ]

@@ -78,7 +78,7 @@ Organize the library into six top-level modules with distinct responsibilities:
 ### **Context**
 
 There were two types of decorators:
-1. Route-level decorators (`@endpoint`, `@auth_endpoint`)
+1. Route-level decorators (`@endpoint` with `auth=True` for authenticated endpoints)
 2. Field-level decorators (`endpoint_field`)
 
 Both were initially mixed, causing confusion about when to use each.

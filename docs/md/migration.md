@@ -588,9 +588,106 @@ async def get_nearby_cities(city_id: str):
    - Maintain data backups
    - Document rollback procedures
 
+## jvspatial Version Updates
+
+### Authentication Configuration Flags (v1.x → v2.x)
+
+**Breaking Change:** The authentication configuration flags have been renamed and clarified to better reflect their actual behavior.
+
+#### Old Configuration (Deprecated)
+
+```python
+server = Server(
+    auth_enabled=True,
+    api_key_auth_enabled=True,  # Deprecated
+    jwt_auth_enabled=True,  # Deprecated - has no effect
+    db_type="json"
+)
+```
+
+#### New Configuration (Recommended)
+
+```python
+server = Server(
+    auth_enabled=True,  # Master switch - enables both JWT and API key auth
+    api_key_management_enabled=True,  # Controls /auth/api-keys endpoints
+    db_type="json"
+)
+```
+
+#### Migration Steps
+
+1. **Update Flag Names**
+   ```python
+   # Old
+   api_key_auth_enabled=True
+
+   # New
+   api_key_management_enabled=True
+   ```
+
+2. **Remove Unused Flags**
+   ```python
+   # Remove these - they have no effect
+   jwt_auth_enabled=True  # JWT is always available when auth_enabled=True
+   session_auth_enabled=True  # Not fully implemented
+   ```
+
+3. **Backward Compatibility**
+   - The old `api_key_auth_enabled` flag still works but shows a deprecation warning
+   - It automatically maps to `api_key_management_enabled`
+   - Update your code to use the new flag name to avoid warnings
+
+#### What Changed
+
+- **`api_key_auth_enabled` → `api_key_management_enabled`**:
+  - Old name was misleading - it only controlled endpoint registration, not auth availability
+  - New name clearly indicates it controls API key management endpoints (`/auth/api-keys`)
+  - API key authentication itself is always available when `auth_enabled=True`
+
+- **`jwt_auth_enabled`**:
+  - Deprecated - JWT authentication is always available when `auth_enabled=True`
+  - This flag has no effect and will be removed in a future version
+
+- **`session_auth_enabled`**:
+  - Deprecated - Session authentication is not fully implemented
+  - This flag has no effect
+
+#### Important Notes
+
+- **API key authentication is always available** when `auth_enabled=True` (middleware checks for `X-API-Key` header)
+- **JWT authentication is always available** when `auth_enabled=True` (middleware checks for `Authorization: Bearer` header)
+- Both methods appear in Swagger/OpenAPI docs when `auth_enabled=True`
+- The `api_key_management_enabled` flag only controls whether the `/auth/api-keys` endpoints are registered
+
+#### Example Migration
+
+```python
+# Before
+server = Server(
+    title="My API",
+    auth_enabled=True,
+    api_key_auth_enabled=True,
+    jwt_auth_enabled=True,  # Unnecessary
+    jwt_secret="my-secret",
+    db_type="json"
+)
+
+# After
+server = Server(
+    title="My API",
+    auth_enabled=True,
+    api_key_management_enabled=True,  # Renamed
+    jwt_secret="my-secret",  # Still required
+    db_type="json"
+)
+```
+
 ## See Also
 
 - [Design Decisions](design-decisions.md)
 - [Core Concepts](core-concepts.md)
 - [API Reference](rest-api.md)
 - [Best Practices](best-practices.md)
+- [Authentication Guide](authentication.md)
+- [API Keys Guide](api-keys.md)

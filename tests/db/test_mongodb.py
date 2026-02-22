@@ -273,7 +273,11 @@ class TestMongoDBConnection:
             # Connection should now be established
             assert db._client is not None
             assert db._db is not None
-            mock_client_class.assert_called_once_with("mongodb://localhost:27017/test")
+            mock_client_class.assert_called_once_with(
+                "mongodb://localhost:27017/test",
+                maxPoolSize=100,
+                minPoolSize=10,
+            )
             assert result is not None
 
     @pytest.mark.asyncio
