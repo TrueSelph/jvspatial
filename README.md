@@ -6,7 +6,7 @@ An async-first Python library for building graph-based spatial applications with
 [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/TrueSelph/jvspatial/test-jvspatial.yaml)](https://github.com/TrueSelph/jvspatial/actions)
 [![GitHub issues](https://img.shields.io/github/issues/TrueSelph/jvspatial)](https://github.com/TrueSelph/jvspatial/issues)
 [![GitHub pull requests](https://img.shields.io/github/issues-pr/TrueSelph/jvspatial)](https://github.com/TrueSelph/jvspatial/pulls)
-[![GitHub](https://img.shields.io/github/license/TrueSelph/jvspatial)](LICENSE)
+[![GitHub](https://img.shields.io/github/license/TrueSelph/jvspatial)](https://github.com/TrueSelph/jvspatial/blob/main/LICENSE)
 
 ## Table of Contents
 
@@ -84,9 +84,9 @@ pip install jvspatial
 
 ## Quick Start
 
-> **💡 Standard Examples**: For production-ready API implementations, see:
-> - **Authenticated API**: [`examples/api/authenticated_endpoints_example.py`](examples/api/authenticated_endpoints_example.py) - Complete CRUD with authentication
-> - **Unauthenticated API**: [`examples/api/unauthenticated_endpoints_example.py`](examples/api/unauthenticated_endpoints_example.py) - Public read-only API
+> **Standard Examples**: For production-ready API implementations, see:
+> - **Authenticated API**: [examples/api/authenticated_endpoints_example.py](https://github.com/TrueSelph/jvspatial/blob/main/examples/api/authenticated_endpoints_example.py) - Complete CRUD with authentication
+> - **Unauthenticated API**: [examples/api/unauthenticated_endpoints_example.py](https://github.com/TrueSelph/jvspatial/blob/main/examples/api/unauthenticated_endpoints_example.py) - Public read-only API
 
 ### Basic Example
 
@@ -243,23 +243,23 @@ server = Server(
 ## Documentation
 
 ### Getting Started
-- [Quick Start Guide](docs/md/quick-start-guide.md) - Get started in 5 minutes
-- [Examples](docs/md/examples.md) - **Standard implementation examples** ⭐
-  - [Authenticated API Example](examples/api/authenticated_endpoints_example.py) - Complete CRUD with authentication
-  - [Unauthenticated API Example](examples/api/unauthenticated_endpoints_example.py) - Public read-only API
+- [Quick Start Guide](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/quick-start-guide.md) - Get started in 5 minutes
+- [Examples](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/examples.md) - Standard implementation examples
+  - [Authenticated API Example](https://github.com/TrueSelph/jvspatial/blob/main/examples/api/authenticated_endpoints_example.py) - Complete CRUD with authentication
+  - [Unauthenticated API Example](https://github.com/TrueSelph/jvspatial/blob/main/examples/api/unauthenticated_endpoints_example.py) - Public read-only API
 
 ### API Development
-- [REST API Guide](docs/md/rest-api.md) - API design patterns
-- [Server API Guide](docs/md/server-api.md) - Server configuration
-- [Authentication Guide](docs/md/authentication.md) - Authentication patterns
-- [Entity Reference](docs/md/entity-reference.md) - Node, Edge, Walker classes
+- [REST API Guide](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/rest-api.md) - API design patterns
+- [Server API Guide](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/server-api.md) - Server configuration
+- [Authentication Guide](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/authentication.md) - Authentication patterns
+- [Entity Reference](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/entity-reference.md) - Node, Edge, Walker classes
 
 ### Advanced Topics
-- [API Architecture](docs/md/api-architecture.md) - System architecture
-- [Graph Context Guide](docs/md/graph-context.md) - Context management and multi-database support
-- [Custom Database Guide](docs/md/custom-database-guide.md) - Implementing custom database backends
-- [Graph Visualization](docs/md/graph-visualization.md) - Export graphs in DOT/Mermaid formats
-- [Pagination](docs/md/pagination.md) - ObjectPager usage
+- [API Architecture](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/api-architecture.md) - System architecture
+- [Graph Context Guide](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/graph-context.md) - Context management and multi-database support
+- [Custom Database Guide](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/custom-database-guide.md) - Implementing custom database backends
+- [Graph Visualization](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/graph-visualization.md) - Export graphs in DOT/Mermaid formats
+- [Pagination](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/pagination.md) - ObjectPager usage
 
 ## Contributors
 
@@ -271,8 +271,8 @@ server = Server(
 
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guide](docs/md/contributing.md) for details.
+We welcome contributions! Please see our [Contributing Guide](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/contributing.md) for details.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](https://github.com/TrueSelph/jvspatial/blob/main/LICENSE) file for details.
