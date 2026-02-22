@@ -247,7 +247,6 @@ server = Server(
 - [Examples](docs/md/examples.md) - **Standard implementation examples** ⭐
   - [Authenticated API Example](examples/api/authenticated_endpoints_example.py) - Complete CRUD with authentication
   - [Unauthenticated API Example](examples/api/unauthenticated_endpoints_example.py) - Public read-only API
-- [API Implementation Standards](docs/md/API_IMPLEMENTATION_STANDARDS.md) - Standard patterns and best practices
 
 ### API Development
 - [REST API Guide](docs/md/rest-api.md) - API design patterns

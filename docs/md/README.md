@@ -1,7 +1,7 @@
 # JVspatial Documentation
 
-**Version**: 0.0.1
-**Last Updated**: 2025-10-20
+**Version**: 0.0.3
+**Last Updated**: 2025-02-22
 
 Welcome to the jvspatial documentation! This guide will help you understand and use the jvspatial library effectively.
 
@@ -288,7 +288,7 @@ from jvspatial.api import Server, ServerConfig, endpoint
 from jvspatial.db import create_database, Database
 
 # Cache
-from jvspatial.cache import get_cache_backend
+from jvspatial.cache import create_cache
 
 # Storage
 from jvspatial.storage.interfaces import LocalFileInterface
@@ -303,8 +303,9 @@ from jvspatial.utils import memoize, retry, NodeId
 
 | Version | Date | Changes |
 |---------|------|---------|
-| **0.2.0** | 2025-10-20 | Major reorganization, utils module, new docs |
-| **0.1.x** | 2025-09-xx | Initial release |
+| **0.0.3** | 2025-02-22 | Documentation updates, DynamoDB support |
+| **0.0.2** | 2025-xx-xx | Bug fixes and improvements |
+| **0.0.1** | 2025-xx-xx | Initial release |
 
 ---
 
@@ -332,6 +333,6 @@ See [License](license.md) for details.
 
 ---
 
-**Last Updated**: 2025-10-20
-**Version**: 0.0.1
+**Last Updated**: 2025-02-22
+**Version**: 0.0.3
 **Maintainer**: JVspatial Team

@@ -128,7 +128,7 @@ Override environment variables programmatically:
 
 ```python
 import os
-from jvspatial.db.factory import get_database
+from jvspatial.db import create_database
 
 # Set environment variable at runtime
 os.environ['JVSPATIAL_DB_TYPE'] = 'mongodb'
@@ -298,7 +298,7 @@ Environment variables are resolved in the following order (highest to lowest pri
 
 ```python
 import os
-from jvspatial.db.factory import get_database
+from jvspatial.db import create_database
 
 # 1. System/shell environment (lowest priority)
 # export JVSPATIAL_DB_TYPE=json
@@ -307,7 +307,7 @@ from jvspatial.db.factory import get_database
 os.environ['JVSPATIAL_DB_TYPE'] = 'mongodb'
 
 # Result: Uses 'mongodb' (runtime override wins)
-db = get_database()
+db = create_database(os.getenv("JVSPATIAL_DB_TYPE", "json"))
 ```
 
 ## Troubleshooting
@@ -368,7 +368,7 @@ Enable debug logging to troubleshoot configuration issues:
 ```python
 import logging
 import os
-from jvspatial.db.factory import get_database
+from jvspatial.db import create_database
 
 # Enable debug logging
 logging.basicConfig(level=logging.DEBUG)
@@ -380,7 +380,7 @@ print(f"JSONDB_PATH: {os.getenv('JVSPATIAL_JSONDB_PATH', 'not set')}")
 
 # Test database connection
 try:
-    db = get_database()
+    db = create_database(os.getenv("JVSPATIAL_DB_TYPE", "json"))
     print(f"Successfully created database: {db.__class__.__name__}")
 except Exception as e:
     print(f"Database creation failed: {e}")
@@ -425,7 +425,7 @@ except Exception as e:
 ```python
 # production_config.py
 import os
-from jvspatial.db.factory import get_database, set_default_database
+from jvspatial.db import create_database, set_default_database
 from jvspatial.core import GraphContext
 
 def configure_production():
@@ -446,7 +446,7 @@ def configure_production():
 
     # Test database connection
     try:
-        db = get_database()
+        db = create_database()  # Uses env vars (JVSPATIAL_DB_TYPE, etc.)
         # Perform a simple test operation
         test_ctx = GraphContext(database=db)
 print("Production database configuration successful")
