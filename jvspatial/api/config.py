@@ -4,9 +4,9 @@ This module provides configuration models for server setup, including
 database, CORS, file storage, and other server-related settings.
 """
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .config_groups import (
     AuthConfig,
@@ -75,3 +75,23 @@ class ServerConfig(BaseModel):
     graph_endpoint_enabled: bool = Field(
         default=True, description="Enable /api/graph endpoint for graph visualization"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _map_flat_db_config(cls, data: Any) -> Any:
+        """Map flat db_type/db_path kwargs into database config for Server(**kwargs)."""
+        if not isinstance(data, dict):
+            return data
+        db_type = data.get("db_type")
+        db_path = data.get("db_path")
+        if db_type is None and db_path is None:
+            return data
+        result = {k: v for k, v in data.items() if k not in ("db_type", "db_path")}
+        db = result.get("database") or {}
+        if isinstance(db, dict):
+            if db_type is not None:
+                db = {**db, "db_type": db_type}
+            if db_path is not None:
+                db = {**db, "db_path": db_path}
+            result["database"] = db
+        return result

@@ -9,12 +9,41 @@ from jvspatial.core.entities.object import Object
 
 
 class UserCreate(BaseModel):
-    """Model for creating a new user."""
+    """Model for creating a new user (public registration)."""
 
     email: EmailStr = Field(..., description="User email address")
     password: str = Field(
         ..., min_length=6, description="User password (min 6 characters)"
     )
+
+
+class UserCreateAdmin(BaseModel):
+    """Model for admin creating a user with roles and permissions."""
+
+    email: EmailStr = Field(..., description="User email address")
+    password: str = Field(
+        ..., min_length=6, description="User password (min 6 characters)"
+    )
+    roles: List[str] = Field(
+        default_factory=lambda: ["user"],
+        description="Roles to assign to the user",
+    )
+    permissions: Optional[List[str]] = Field(
+        default=None,
+        description="Direct permissions to assign (optional)",
+    )
+
+
+class UserRolesUpdate(BaseModel):
+    """Model for updating user roles."""
+
+    roles: List[str] = Field(..., description="New roles for the user")
+
+
+class UserPermissionsUpdate(BaseModel):
+    """Model for updating user direct permissions."""
+
+    permissions: List[str] = Field(..., description="New direct permissions")
 
 
 class UserLogin(BaseModel):
@@ -32,6 +61,14 @@ class UserResponse(BaseModel):
     name: str = Field(..., description="User name")
     created_at: datetime = Field(..., description="User creation timestamp")
     is_active: bool = Field(default=True, description="Whether user is active")
+    roles: List[str] = Field(
+        default_factory=lambda: ["user"],
+        description="User roles",
+    )
+    permissions: List[str] = Field(
+        default_factory=list,
+        description="Effective permissions (roles + direct)",
+    )
 
 
 class TokenResponse(BaseModel):
@@ -74,6 +111,14 @@ class User(Object):
     )
     last_accessed: Optional[datetime] = Field(
         default=None, description="Last time the user authenticated on the platform"
+    )
+    roles: List[str] = Field(
+        default_factory=lambda: ["user"],
+        description="User roles",
+    )
+    permissions: List[str] = Field(
+        default_factory=list,
+        description="Direct permissions (union with role-derived at runtime)",
     )
 
     @classmethod

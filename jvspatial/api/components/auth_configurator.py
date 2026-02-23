@@ -7,7 +7,7 @@ extracted from the Server class for better separation of concerns.
 import logging
 from typing import Any, List, Optional, cast
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from jvspatial.api.auth.api_key_service import APIKeyService
@@ -19,10 +19,14 @@ from jvspatial.api.auth.models import (
     TokenRefreshRequest,
     TokenResponse,
     UserCreate,
+    UserCreateAdmin,
     UserLogin,
+    UserPermissionsUpdate,
     UserResponse,
+    UserRolesUpdate,
 )
 from jvspatial.api.auth.service import AuthenticationService
+from jvspatial.api.exceptions import RegistrationDisabledError
 from jvspatial.core.context import GraphContext
 from jvspatial.db import get_prime_database
 
@@ -102,6 +106,19 @@ class AuthConfigurator:
             auth_config_kwargs["session_expire_minutes"] = (
                 self.config.auth.session_expire_minutes
             )
+        # RBAC config
+        if hasattr(self.config.auth, "rbac_enabled"):
+            auth_config_kwargs["rbac_enabled"] = self.config.auth.rbac_enabled
+        if hasattr(self.config.auth, "default_role"):
+            auth_config_kwargs["default_role"] = self.config.auth.default_role
+        if hasattr(self.config.auth, "admin_role"):
+            auth_config_kwargs["admin_role"] = self.config.auth.admin_role
+        if hasattr(self.config.auth, "registration_open"):
+            auth_config_kwargs["registration_open"] = self.config.auth.registration_open
+        if hasattr(self.config.auth, "role_permission_mapping"):
+            auth_config_kwargs["role_permission_mapping"] = (
+                self.config.auth.role_permission_mapping
+            )
 
         self._auth_config = AuthConfig(**auth_config_kwargs)
 
@@ -116,6 +133,11 @@ class AuthConfigurator:
         self._blacklist_cache_ttl_seconds = getattr(
             self._auth_config, "blacklist_cache_ttl_seconds", 3600
         )
+        self._role_permission_mapping = getattr(
+            self._auth_config, "role_permission_mapping", {"admin": ["*"], "user": []}
+        )
+        self._admin_role = getattr(self._auth_config, "admin_role", "admin")
+        self._default_role = getattr(self._auth_config, "default_role", "user")
 
         # Register authentication endpoints
         self._register_auth_endpoints()
@@ -143,6 +165,9 @@ class AuthConfigurator:
         refresh_expire_days = self._refresh_expire_days
         refresh_token_rotation = self._refresh_token_rotation
         blacklist_cache_ttl_seconds = self._blacklist_cache_ttl_seconds
+        role_permission_mapping = self._role_permission_mapping
+        admin_role = self._admin_role
+        default_role = self._default_role
 
         def get_auth_service():
             """Get authentication service using prime database for core persistence.
@@ -150,7 +175,6 @@ class AuthConfigurator:
             Authentication and session management always use the prime database
             regardless of the current database context.
             """
-            # Create context with prime database for auth operations
             prime_ctx = GraphContext(database=get_prime_database())
             return AuthenticationService(
                 prime_ctx,
@@ -160,6 +184,9 @@ class AuthConfigurator:
                 refresh_expire_days=refresh_expire_days,
                 refresh_token_rotation=refresh_token_rotation,
                 blacklist_cache_ttl_seconds=blacklist_cache_ttl_seconds,
+                role_permission_mapping=role_permission_mapping,
+                admin_role=admin_role,
+                default_role=default_role,
             )
 
         # Create auth router
@@ -168,30 +195,13 @@ class AuthConfigurator:
         # Create custom security scheme for BearerAuth compatibility
         security = HTTPBearer(scheme_name="BearerAuth")
 
-        # Helper function to get current user from token
-        # Note: Header(None) is required by FastAPI for optional headers
-        _default_header = Header(None)  # noqa: B008
-
+        # Helper function to get current user from token.
+        # Uses HTTPBearer dependency so auth is handled via security scheme (no redundant param).
         async def get_current_user(
-            authorization: Optional[str] = _default_header,  # type: ignore[assignment]
+            credentials: HTTPAuthorizationCredentials = Depends(security),  # noqa: B008
         ) -> UserResponse:
             """Get current user from Authorization header."""
-            if not authorization:
-                raise HTTPException(
-                    status_code=401, detail="Authorization header required"
-                )
-
-            # Extract token from "Bearer <token>" format
-            try:
-                scheme, token = authorization.split(" ", 1)
-                if scheme.lower() != "bearer":
-                    raise HTTPException(
-                        status_code=401, detail="Invalid authentication scheme"
-                    )
-            except ValueError:
-                raise HTTPException(
-                    status_code=401, detail="Invalid authorization header format"
-                )
+            token = credentials.credentials
 
             # Initialize authentication service and validate token
             auth_service = get_auth_service()
@@ -200,6 +210,17 @@ class AuthConfigurator:
                 raise HTTPException(status_code=401, detail="Invalid or expired token")
 
             return user
+
+        async def require_admin(
+            current_user: UserResponse = Depends(get_current_user),  # noqa: B008
+        ) -> UserResponse:
+            """Require admin role. Raises 403 if user is not admin."""
+            if admin_role not in (current_user.roles or []):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Admin access required",
+                )
+            return current_user
 
         # Register endpoint
         @auth_router.post("/register", response_model=UserResponse)
@@ -210,10 +231,11 @@ class AuthConfigurator:
             which ensures proper email format before this function is called.
             """
             try:
-                # Initialize authentication service with current context
                 auth_service = get_auth_service()
                 user = await auth_service.register_user(user_data)
                 return user
+            except RegistrationDisabledError:
+                raise
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
             except Exception as e:
@@ -396,6 +418,91 @@ class AuthConfigurator:
                 except Exception as e:
                     self._logger.error(f"API key revocation error: {e}")
                     raise HTTPException(status_code=500, detail="Internal server error")
+
+        # Admin user management endpoints (require admin role)
+        @auth_router.post(
+            "/admin/users",
+            response_model=UserResponse,
+            dependencies=[Depends(security)],
+        )
+        async def create_user_admin(
+            user_data: UserCreateAdmin,
+            _: UserResponse = Depends(require_admin),  # noqa: B008
+        ):
+            """Create a user with specified roles and permissions (admin only)."""
+            try:
+                auth_service = get_auth_service()
+                return await auth_service.create_user_with_roles(user_data)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                self._logger.error(f"Admin user creation error: {e}")
+                raise HTTPException(status_code=500, detail="Internal server error")
+
+        @auth_router.patch(
+            "/admin/users/{user_id}/roles",
+            response_model=UserResponse,
+            dependencies=[Depends(security)],
+        )
+        async def update_user_roles_admin(
+            user_id: str,
+            roles_update: UserRolesUpdate,
+            _: UserResponse = Depends(require_admin),  # noqa: B008
+        ):
+            """Update user roles (admin only)."""
+            try:
+                auth_service = get_auth_service()
+                result = await auth_service.update_user_roles(user_id, roles_update)
+                if not result:
+                    raise HTTPException(status_code=404, detail="User not found")
+                return result
+            except HTTPException:
+                raise
+            except Exception as e:
+                self._logger.error(f"Admin role update error: {e}")
+                raise HTTPException(status_code=500, detail="Internal server error")
+
+        @auth_router.patch(
+            "/admin/users/{user_id}/permissions",
+            response_model=UserResponse,
+            dependencies=[Depends(security)],
+        )
+        async def update_user_permissions_admin(
+            user_id: str,
+            permissions_update: UserPermissionsUpdate,
+            _: UserResponse = Depends(require_admin),  # noqa: B008
+        ):
+            """Update user direct permissions (admin only)."""
+            try:
+                auth_service = get_auth_service()
+                result = await auth_service.update_user_permissions(
+                    user_id, permissions_update
+                )
+                if not result:
+                    raise HTTPException(status_code=404, detail="User not found")
+                return result
+            except HTTPException:
+                raise
+            except Exception as e:
+                self._logger.error(f"Admin permissions update error: {e}")
+                raise HTTPException(status_code=500, detail="Internal server error")
+
+        @auth_router.get(
+            "/admin/users",
+            response_model=List[UserResponse],
+            dependencies=[Depends(security)],
+        )
+        async def list_users_admin(
+            _: UserResponse = Depends(require_admin),  # noqa: B008
+        ):
+            """List all users with roles and permissions (admin only)."""
+            try:
+                auth_service = get_auth_service()
+                users = await auth_service.list_users()
+                return users
+            except Exception as e:
+                self._logger.error(f"Admin user list error: {e}")
+                raise HTTPException(status_code=500, detail="Internal server error")
 
         # Store auth router
         self._auth_router = auth_router

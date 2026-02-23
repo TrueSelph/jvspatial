@@ -23,6 +23,7 @@ try:
         InvalidCredentialsError,
         JVSpatialAPIException,
         RateLimitError,
+        RegistrationDisabledError,
     )
 except ImportError:
     # Fallback if API module is not available - use type: ignore for mypy
@@ -32,6 +33,7 @@ except ImportError:
     InvalidCredentialsError = None  # type: ignore[assignment,misc]
     JVSpatialAPIException = None  # type: ignore[assignment,misc]
     RateLimitError = None  # type: ignore[assignment,misc]
+    RegistrationDisabledError = None  # type: ignore[assignment,misc]
 
 # =============================================================================
 # BASE EXCEPTIONS - Defined here to avoid circular imports
@@ -461,6 +463,7 @@ __all__ = [
     "AuthorizationError",
     "RateLimitError",
     "InvalidCredentialsError",
+    "RegistrationDisabledError",
     # Note: UserNotFoundError, SessionExpiredError, APIKeyInvalidError
     # are not currently defined - removed from exports
     # Security exceptions

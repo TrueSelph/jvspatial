@@ -6,7 +6,7 @@ import secrets
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import jwt
 
@@ -40,9 +40,14 @@ from jvspatial.api.auth.models import (
     TokenResponse,
     User,
     UserCreate,
+    UserCreateAdmin,
     UserLogin,
+    UserPermissionsUpdate,
     UserResponse,
+    UserRolesUpdate,
 )
+from jvspatial.api.auth.rbac import get_effective_permissions
+from jvspatial.api.exceptions import RegistrationDisabledError
 from jvspatial.core.context import GraphContext
 from jvspatial.db import get_prime_database
 
@@ -63,6 +68,9 @@ class AuthenticationService:
         refresh_expire_days: Optional[int] = None,
         refresh_token_rotation: Optional[bool] = None,
         blacklist_cache_ttl_seconds: Optional[int] = None,
+        role_permission_mapping: Optional[Dict[str, List[str]]] = None,
+        admin_role: str = "admin",
+        default_role: str = "user",
     ):
         """Initialize the authentication service.
 
@@ -91,10 +99,43 @@ class AuthenticationService:
         self.refresh_expire_days = refresh_expire_days or 7
         self.refresh_token_rotation = refresh_token_rotation or False
         self.blacklist_cache_ttl_seconds = blacklist_cache_ttl_seconds or 3600
+        self.role_permission_mapping = role_permission_mapping or {
+            "admin": ["*"],
+            "user": [],
+        }
+        self.admin_role = admin_role
+        self.default_role = default_role
 
         # In-memory cache for blacklist checks: {jti: (is_blacklisted, timestamp)}
         self._blacklist_cache: Dict[str, Tuple[bool, float]] = {}
         self._logger = logging.getLogger(__name__)
+
+    def _get_user_roles(self, user: User) -> List[str]:
+        """Get user roles with backward compatibility for existing users."""
+        roles = getattr(user, "roles", None)
+        if roles is None or not isinstance(roles, list):
+            return [self.default_role]
+        return roles if roles else [self.default_role]
+
+    def _get_user_permissions(self, user: User) -> List[str]:
+        """Get user direct permissions with backward compatibility."""
+        perms = getattr(user, "permissions", None)
+        if perms is None or not isinstance(perms, list):
+            return []
+        return perms
+
+    def _get_effective_permissions_for_user(self, user: User) -> List[str]:
+        """Compute effective permissions for a user (roles + direct)."""
+        roles = self._get_user_roles(user)
+        direct = self._get_user_permissions(user)
+        return list(
+            get_effective_permissions(roles, direct, self.role_permission_mapping)
+        )
+
+    async def _user_count(self) -> int:
+        """Count users in the prime database using service context."""
+        collection, final_query = await User._build_database_query(self.context, {}, {})
+        return await self.context.database.count(collection, final_query)
 
     def _hash_password(self, password: str) -> str:
         """Hash a password using SHA-256 with salt.
@@ -196,12 +237,20 @@ class AuthenticationService:
         else:
             return hashlib.sha256(token.encode()).hexdigest() == hashed
 
-    def _generate_jwt_token(self, user_id: str, email: str) -> Tuple[str, datetime]:
+    def _generate_jwt_token(
+        self,
+        user_id: str,
+        email: str,
+        roles: Optional[List[str]] = None,
+        permissions: Optional[List[str]] = None,
+    ) -> Tuple[str, datetime]:
         """Generate a JWT token for a user.
 
         Args:
             user_id: User ID
             email: User email
+            roles: User roles (included in payload)
+            permissions: Effective permissions (included in payload)
 
         Returns:
             Tuple of (token_string, expiration_datetime)
@@ -216,6 +265,10 @@ class AuthenticationService:
             "exp": expires_at,
             "jti": str(uuid.uuid4()),  # JWT ID for token tracking
         }
+        if roles is not None:
+            payload["roles"] = roles
+        if permissions is not None:
+            payload["permissions"] = list(permissions)
 
         token = jwt.encode(payload, self.jwt_secret, algorithm=self.jwt_algorithm)
         return token, expires_at
@@ -541,9 +594,15 @@ class AuthenticationService:
         if existing_user:
             raise ValueError("User with this email already exists")
 
-        # Create new user - User.create() also uses get_default_context(),
-        # so we need to create it manually using our context
-        # Generate ID in correct format: type_code.ClassName.hex_id (e.g., o.User.abc123)
+        # Public registration only when no users exist (bootstrap)
+        user_count = await self._user_count()
+        if user_count > 0:
+            raise RegistrationDisabledError()
+
+        # First-user admin bootstrap: assign admin role when no users exist
+        initial_roles = [self.admin_role]
+
+        # Create new user
         from jvspatial.core.utils import generate_id
 
         user_id = generate_id("o", "User")
@@ -554,15 +613,14 @@ class AuthenticationService:
             name="",  # No name required
             is_active=True,
             created_at=datetime.now(timezone.utc),
+            roles=initial_roles,
+            permissions=[],
         )
-        # Set the context on the user object so save() uses it
         user._graph_context = self.context
-        # Save using our context directly to ensure it's saved to the right database
-        # Note: context.save() may modify the user's ID if it doesn't match expected format
         await self.context.save(user)
 
-        # Use the user's ID after save (in case it was modified)
         final_user_id = user.id
+        effective_perms = self._get_effective_permissions_for_user(user)
 
         return UserResponse(
             id=final_user_id,
@@ -570,6 +628,8 @@ class AuthenticationService:
             name=user.name,
             created_at=user.created_at,
             is_active=user.is_active,
+            roles=user.roles,
+            permissions=effective_perms,
         )
 
     async def login_user(
@@ -611,8 +671,13 @@ class AuthenticationService:
         user.last_accessed = datetime.now(timezone.utc)
         await user.save()
 
-        # Generate JWT access token
-        access_token, access_expires_at = self._generate_jwt_token(user.id, user.email)
+        user_roles = self._get_user_roles(user)
+        effective_perms = self._get_effective_permissions_for_user(user)
+
+        # Generate JWT access token with roles and permissions
+        access_token, access_expires_at = self._generate_jwt_token(
+            user.id, user.email, roles=user_roles, permissions=effective_perms
+        )
         access_token_jti = (
             self._decode_jwt_token(access_token).get("jti") if access_token else None
         )
@@ -648,6 +713,8 @@ class AuthenticationService:
                 name=user.name,
                 created_at=user.created_at,
                 is_active=user.is_active,
+                roles=user_roles,
+                permissions=effective_perms,
             ),
         )
 
@@ -710,11 +777,16 @@ class AuthenticationService:
             self._logger.debug(f"Token validation failed: user {user_id} is inactive")
             return None
 
+        # Use roles/permissions from JWT payload if present, else compute from user
+        roles = payload.get("roles")
+        permissions = payload.get("permissions")
+        if roles is None or permissions is None:
+            roles = self._get_user_roles(user)
+            permissions = self._get_effective_permissions_for_user(user)
+
         # Update last_accessed timestamp on token validation (user is authenticating)
-        # Ensure context is set before saving
         user._graph_context = self.context
         user.last_accessed = datetime.now(timezone.utc)
-        # Use context.save() directly to ensure it uses the correct context
         await self.context.save(user)
 
         self._logger.debug(f"Token validation successful for user {user_id}")
@@ -724,6 +796,8 @@ class AuthenticationService:
             name=user.name,
             created_at=user.created_at,
             is_active=user.is_active,
+            roles=roles or [self.default_role],
+            permissions=list(permissions) if permissions else [],
         )
 
     async def get_user_by_id(self, user_id: str) -> Optional[UserResponse]:
@@ -740,12 +814,17 @@ class AuthenticationService:
         if not user:
             return None
 
+        roles = self._get_user_roles(user)
+        permissions = self._get_effective_permissions_for_user(user)
+
         return UserResponse(
             id=user.id,
             email=user.email,
             name=user.name,
             created_at=user.created_at,
             is_active=user.is_active,
+            roles=roles,
+            permissions=permissions,
         )
 
     async def refresh_access_token(
@@ -777,8 +856,13 @@ class AuthenticationService:
         if not user or not user.is_active:
             raise ValueError("User not found or inactive")
 
-        # Generate new access token
-        access_token, access_expires_at = self._generate_jwt_token(user.id, user.email)
+        user_roles = self._get_user_roles(user)
+        effective_perms = self._get_effective_permissions_for_user(user)
+
+        # Generate new access token with roles and permissions
+        access_token, access_expires_at = self._generate_jwt_token(
+            user.id, user.email, roles=user_roles, permissions=effective_perms
+        )
         access_token_jti = (
             self._decode_jwt_token(access_token).get("jti") if access_token else None
         )
@@ -815,6 +899,8 @@ class AuthenticationService:
                 name=user.name,
                 created_at=user.created_at,
                 is_active=user.is_active,
+                roles=user_roles,
+                permissions=effective_perms,
             ),
         )
 
@@ -929,3 +1015,126 @@ class AuthenticationService:
                 pass
 
         return revoked_count
+
+    async def create_user_with_roles(self, user_data: UserCreateAdmin) -> UserResponse:
+        """Create a user with specified roles and permissions (admin-only).
+
+        Args:
+            user_data: User creation data with roles and optional permissions
+
+        Returns:
+            UserResponse with user information
+
+        Raises:
+            ValueError: If user already exists or validation fails
+        """
+        existing_user = await self._find_user_by_email(user_data.email)
+        if existing_user:
+            raise ValueError("User with this email already exists")
+
+        from jvspatial.core.utils import generate_id
+
+        user_id = generate_id("o", "User")
+        roles = user_data.roles if user_data.roles else [self.default_role]
+        permissions = user_data.permissions or []
+
+        user = User(
+            id=user_id,
+            email=user_data.email,
+            password_hash=self._hash_password(user_data.password),
+            name="",
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+            roles=roles,
+            permissions=permissions,
+        )
+        user._graph_context = self.context
+        await self.context.save(user)
+
+        effective_perms = self._get_effective_permissions_for_user(user)
+
+        return UserResponse(
+            id=user.id,
+            email=user.email,
+            name=user.name,
+            created_at=user.created_at,
+            is_active=user.is_active,
+            roles=user.roles,
+            permissions=effective_perms,
+        )
+
+    async def update_user_roles(
+        self, user_id: str, roles_update: UserRolesUpdate
+    ) -> Optional[UserResponse]:
+        """Update a user's roles (admin-only).
+
+        Args:
+            user_id: User ID
+            roles_update: New roles
+
+        Returns:
+            UserResponse if user exists, None otherwise
+        """
+        user = await self._get_user_by_id(user_id)
+        if not user:
+            return None
+
+        user.roles = roles_update.roles
+        user._graph_context = self.context
+        await self.context.save(user)
+
+        return await self.get_user_by_id(user_id)
+
+    async def update_user_permissions(
+        self, user_id: str, permissions_update: UserPermissionsUpdate
+    ) -> Optional[UserResponse]:
+        """Update a user's direct permissions (admin-only).
+
+        Args:
+            user_id: User ID
+            permissions_update: New direct permissions
+
+        Returns:
+            UserResponse if user exists, None otherwise
+        """
+        user = await self._get_user_by_id(user_id)
+        if not user:
+            return None
+
+        user.permissions = permissions_update.permissions
+        user._graph_context = self.context
+        await self.context.save(user)
+
+        return await self.get_user_by_id(user_id)
+
+    async def list_users(self) -> List[UserResponse]:
+        """List all users with roles and permissions (admin-only).
+
+        Returns:
+            List of UserResponse
+        """
+        await self.context.ensure_indexes(User)
+        collection, final_query = await User._build_database_query(self.context, {}, {})
+        results = await self.context.database.find(collection, final_query)
+        users = []
+        for data in results:
+            try:
+                user = await self.context._deserialize_entity(User, data)
+                if user:
+                    user._graph_context = self.context
+                    roles = self._get_user_roles(user)
+                    permissions = self._get_effective_permissions_for_user(user)
+                    users.append(
+                        UserResponse(
+                            id=user.id,
+                            email=user.email,
+                            name=user.name,
+                            created_at=user.created_at,
+                            is_active=user.is_active,
+                            roles=roles,
+                            permissions=permissions,
+                        )
+                    )
+            except Exception:
+                continue
+        return users

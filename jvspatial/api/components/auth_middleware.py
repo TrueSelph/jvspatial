@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from jvspatial.api.auth.config import AuthConfig
+from jvspatial.api.auth.rbac import has_required_permissions, has_required_roles
 from jvspatial.api.constants import APIRoutes
 
 
@@ -182,6 +183,17 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 },
             )
 
+        # Normalize user to have roles and permissions
+        user = await self._normalize_user(user)
+
+        # RBAC: check roles and permissions if endpoint requires them
+        rbac_enabled = getattr(self.auth_config, "rbac_enabled", True)
+        if rbac_enabled:
+            endpoint_config = self._get_endpoint_config(request)
+            rbac_error = self._check_rbac(user, endpoint_config)
+            if rbac_error:
+                return rbac_error
+
         # Set user in request state for downstream handlers
         request.state.user = user
         return await call_next(request)
@@ -210,6 +222,168 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         regex_pattern = f"^{regex_pattern}$"
 
         return bool(re.match(regex_pattern, path))
+
+    def _get_endpoint_config(self, request: Request) -> Optional[Dict[str, Any]]:
+        """Get endpoint config for the current request path.
+
+        Uses same logic as _endpoint_requires_auth to find the matching endpoint.
+        """
+        try:
+            server = self._server
+            if not server:
+                return None
+
+            registry = server._endpoint_registry
+            request_path = request.url.path
+            api_prefix = APIRoutes.PREFIX
+            normalized_path = request_path
+            if api_prefix and request_path.startswith(api_prefix):
+                normalized_path = request_path[len(api_prefix) :] or "/"
+
+            paths_to_check = [
+                normalized_path,
+                request_path,
+                (
+                    request_path[len(api_prefix) :]
+                    if api_prefix and request_path.startswith(api_prefix)
+                    else None
+                ),
+            ]
+            paths_to_check = [p for p in paths_to_check if p is not None]
+
+            for func, endpoint_info in registry._function_registry.items():
+                func_path = endpoint_info.path
+                if func_path in paths_to_check or any(
+                    self._path_matches(func_path, p) for p in paths_to_check
+                ):
+                    return getattr(func, "_jvspatial_endpoint_config", None)
+
+            for walker_class, endpoint_info in registry._walker_registry.items():
+                walker_path = endpoint_info.path
+                if walker_path in paths_to_check or any(
+                    self._path_matches(walker_path, p) for p in paths_to_check
+                ):
+                    return getattr(walker_class, "_jvspatial_endpoint_config", None)
+
+            # Check FastAPI routes
+            if hasattr(server, "app") and server.app:
+                from fastapi.routing import APIRoute
+
+                for route in server.app.routes:
+                    if isinstance(route, APIRoute):
+                        route_path = route.path
+                        if (
+                            route_path in (request_path, normalized_path)
+                            or self._path_matches(route_path, request_path)
+                            or self._path_matches(route_path, normalized_path)
+                        ):
+                            endpoint_func = route.endpoint
+                            if hasattr(endpoint_func, "_jvspatial_endpoint_config"):
+                                return endpoint_func._jvspatial_endpoint_config  # type: ignore[attr-defined]
+            return None
+        except Exception:
+            return None
+
+    def _check_rbac(
+        self, user: Any, endpoint_config: Optional[Dict[str, Any]]
+    ) -> Optional[JSONResponse]:
+        """Check if user has required roles and permissions. Returns 403 response if not."""
+        if not endpoint_config:
+            return None
+
+        required_roles = endpoint_config.get("roles") or []
+        required_permissions = endpoint_config.get("permissions") or []
+
+        if not required_roles and not required_permissions:
+            return None
+
+        user_roles: list[str] = []
+        user_permissions: set[str] = set()
+        if hasattr(user, "roles"):
+            user_roles = list(user.roles) if user.roles else []
+        elif isinstance(user, dict):
+            user_roles = list(user.get("roles") or [])
+
+        if hasattr(user, "permissions"):
+            user_permissions = set(user.permissions) if user.permissions else set()
+        elif isinstance(user, dict):
+            user_permissions = set(user.get("permissions") or [])
+
+        if required_roles and not has_required_roles(user_roles, required_roles):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error_code": "insufficient_roles",
+                    "message": "Insufficient privileges",
+                    "required_roles": required_roles,
+                },
+            )
+
+        if required_permissions and not has_required_permissions(
+            user_permissions, required_permissions
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error_code": "insufficient_permissions",
+                    "message": "Insufficient privileges",
+                    "required_permissions": required_permissions,
+                },
+            )
+
+        return None
+
+    async def _normalize_user(self, user: Any) -> Any:
+        """Ensure user has roles and permissions. For API key auth, fetch User."""
+        if hasattr(user, "roles") and hasattr(user, "permissions"):
+            # Already has roles and permissions (UserResponse from JWT)
+            return user
+
+        if isinstance(user, dict):
+            user_id = user.get("user_id") or user.get("id")
+            if user_id and ("roles" not in user or "permissions" not in user):
+                # API key auth - fetch full user
+                from jvspatial.api.auth.service import AuthenticationService
+                from jvspatial.core.context import GraphContext
+                from jvspatial.db import get_prime_database
+
+                prime_ctx = GraphContext(database=get_prime_database())
+                auth_service = AuthenticationService(
+                    prime_ctx,
+                    jwt_secret=self.auth_config.jwt_secret,
+                    jwt_algorithm=self.auth_config.jwt_algorithm,
+                    jwt_expire_minutes=self.auth_config.jwt_expire_minutes,
+                    role_permission_mapping=getattr(
+                        self.auth_config, "role_permission_mapping", None
+                    ),
+                )
+                full_user = await auth_service.get_user_by_id(user_id)
+                if full_user:
+                    # Apply API key permission restriction if non-empty
+                    api_key_perms = user.get("permissions") or []
+                    if api_key_perms:
+                        effective = set(full_user.permissions)
+                        restricted = effective & set(api_key_perms)
+                        return {
+                            "id": full_user.id,
+                            "user_id": full_user.id,
+                            "email": full_user.email,
+                            "roles": full_user.roles,
+                            "permissions": list(restricted),
+                        }
+                    return {
+                        "id": full_user.id,
+                        "user_id": full_user.id,
+                        "email": full_user.email,
+                        "roles": full_user.roles,
+                        "permissions": full_user.permissions,
+                    }
+            # Fallback: ensure dict has roles and permissions
+            default_role = getattr(self.auth_config, "default_role", "user")
+            user.setdefault("roles", [default_role])
+            user.setdefault("permissions", [])
+
+        return user
 
     def _safe_serialize_endpoint_config(
         self, endpoint_config: Optional[Dict[str, Any]]

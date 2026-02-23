@@ -28,10 +28,11 @@ server = Server(
     version="1.0.0",
     db_type="json",
     db_path="myapp_db",
-    auth_enabled=True,  # Enables authentication and registers auth endpoints
-    jwt_auth_enabled=True,
-    jwt_secret="your-super-secret-key-change-in-production",
-    jwt_expire_minutes=1440  # 24 hours
+    auth=dict(
+        auth_enabled=True,
+        jwt_secret="your-super-secret-key-change-in-production",
+        jwt_expire_minutes=1440,  # 24 hours
+    ),
 )
 
 if __name__ == "__main__":
@@ -39,9 +40,9 @@ if __name__ == "__main__":
 ```
 
 **That's it!** Your server now has full authentication with:
-- User registration (`POST /auth/register`)
-- User login (`POST /auth/login`)
-- JWT token validation
+- User registration (`POST /api/auth/register`) — first user becomes admin (bootstrap)
+- User login (`POST /api/auth/login`)
+- JWT token validation and RBAC (roles and permissions)
 - Rate limiting
 - Automatic API documentation at `/docs`
 
@@ -60,60 +61,60 @@ async def public_info():
 async def protected_data():
     return {"message": "Must be logged in to see this"}
 
-# Admin-only endpoint - requires admin role
+# Admin-only endpoint - requires admin role (require_any: user needs one of the listed roles)
 @endpoint("/admin/users", auth=True, roles=["admin"])
 async def admin_users():
     return {"message": "Only admins can access this"}
+
+# Permission-based endpoint - requires specific permission (require_all)
+@endpoint("/reports", auth=True, permissions=["reports:read"])
+async def get_reports():
+    return {"reports": ["Monthly", "Weekly"]}
+
+# Both roles and permissions - both must pass
+@endpoint("/advanced", auth=True, roles=["admin"], permissions=["advanced:write"])
+async def advanced_ops():
+    return {"message": "Admin with advanced:write permission"}
 ```
 
 ## Step 3: Create Your First User (1 minute)
 
-### Option A: Via API (Recommended)
+### First-user bootstrap (automatic)
 
-Start your server and use the built-in registration:
+When no users exist, `POST /api/auth/register` creates the first user and assigns the `admin` role. This is the recommended way to bootstrap your application.
+
+### Option A: Via API (Recommended)
 
 ```bash
 # Start your server
 python auth_server.py
 
-# Register a user
-curl -X POST "http://localhost:8000/auth/register" \
+# Register first user (becomes admin automatically)
+curl -X POST "http://localhost:8000/api/auth/register" \
   -H "Content-Type: application/json" \
-  -d '{
-    "username": "admin",
-    "email": "admin@example.com",
-    "password": "admin123",
-    "confirm_password": "admin123"
-  }'
+  -d '{"email": "admin@example.com", "password": "admin123"}'
 
 # Login to get token
-curl -X POST "http://localhost:8000/auth/login" \
+curl -X POST "http://localhost:8000/api/auth/login" \
   -H "Content-Type: application/json" \
-  -d '{
-    "username": "admin",
-    "password": "admin123"
-  }'
+  -d '{"email": "admin@example.com", "password": "admin123"}'
 ```
 
-### Option B: Programmatically
+### Option B: Admin creates users (after bootstrap)
 
-```python
-# Add this to your server startup
-@server.on_startup
-async def create_admin():
-    from jvspatial.api.auth import User
+Once users exist, public registration is disabled. Admins create users via:
 
-    # Check if admin exists
-    admin = await User.find_by_username("admin")
-    if not admin:
-        # Create admin user
-        admin = await User.create(
-            username="admin",
-            email="admin@example.com",
-            password_hash=User.hash_password("admin123"),
-            is_admin=True  # Make them admin
-        )
-        print(f"Created admin user: {admin.username}")
+```bash
+# Admin creates a new user with roles
+curl -X POST "http://localhost:8000/api/auth/admin/users" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "user123",
+    "roles": ["user"],
+    "permissions": []
+  }'
 ```
 
 ## Step 4: Test Authentication (1 minute)
@@ -124,72 +125,79 @@ TOKEN="your-jwt-token-here"
 
 # Access protected endpoint
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8000/protected/data"
+  "http://localhost:8000/api/protected/data"
 
-# Access admin endpoint (if you're admin)
+# Access admin endpoint (requires admin role)
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8000/admin/users"
+  "http://localhost:8000/api/admin/users"
 ```
 
 ## Complete Working Example
 
-Here's a complete 20-line authenticated server:
-
 ```python
-from jvspatial.api import create_server, endpoint
-from jvspatial.api.auth import configure_auth, AuthenticationMiddleware, User
+from jvspatial.api import Server, endpoint
 
-# Configure authentication
-configure_auth(jwt_secret_key="demo-secret-key")
-
-# Create server with middleware
-server = create_server(title="Quick Auth Demo")
-server.app.add_middleware(AuthenticationMiddleware)
+server = Server(
+    title="Quick Auth Demo",
+    db_type="json",
+    db_path="quick_auth_db",
+    auth=dict(auth_enabled=True, jwt_secret="demo-secret-key"),
+)
 
 @endpoint("/public")
-async def public(): return {"message": "Public data"}
+async def public():
+    return {"message": "Public data"}
 
 @endpoint("/protected", auth=True)
-async def protected(): return {"message": "Protected data"}
+async def protected():
+    return {"message": "Protected data"}
 
 @endpoint("/admin", auth=True, roles=["admin"])
-async def admin(): return {"message": "Admin only"}
+async def admin():
+    return {"message": "Admin only"}
 
-@server.on_startup
-async def setup():
-    if not await User.find_by_username("admin"):
-        await User.create(username="admin", email="admin@test.com",
-                         password_hash=User.hash_password("admin123"), is_admin=True)
-
-server.run() if __name__ == "__main__" else None
+if __name__ == "__main__":
+    server.run()
 ```
 
-Run it: `python quickstart.py`
-
-Visit: http://localhost:8000/docs
+Run it: `python quickstart.py`. Register the first user via `POST /api/auth/register` — they become admin automatically. Visit: http://localhost:8000/docs
 
 ## Advanced Features (Optional)
 
-### Role-Based Access Control
+### Role-Based Access Control (RBAC)
+
+- **Roles**: `require_any` — user needs one of the listed roles
+- **Permissions**: `require_all` — user must have all listed permissions
+- **Both**: When both `roles` and `permissions` are specified, both checks must pass
+- **Admin**: The `admin` role has `*` (all permissions) by default
 
 ```python
 from jvspatial.api import endpoint
 
-# Require specific permissions
-@endpoint("/reports", auth=True, permissions=["read_reports"])
+# Require specific permission (user must have reports:read)
+@endpoint("/reports", auth=True, permissions=["reports:read"])
 async def get_reports():
     return {"reports": ["Monthly", "Weekly"]}
 
-# Require specific roles
+# Require one of the listed roles (analyst or admin)
 @endpoint("/analyze", auth=True, roles=["analyst", "admin"])
 async def analyze_data():
     return {"analysis": "Complex analysis results"}
 
-# Multiple requirements
-@endpoint("/advanced", auth=True, permissions=["advanced_ops"], roles=["admin"])
+# Both roles and permissions required
+@endpoint("/advanced", auth=True, roles=["admin"], permissions=["advanced:write"])
 async def advanced_ops():
-    return {"message": "Advanced operations"}
+    return {"message": "Admin with advanced:write permission"}
 ```
+
+### Admin user management endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/auth/admin/users` | POST | Create user with roles and permissions |
+| `/api/auth/admin/users` | GET | List users (admin-only) |
+| `/api/auth/admin/users/{user_id}/roles` | PATCH | Update user roles |
+| `/api/auth/admin/users/{user_id}/permissions` | PATCH | Update user direct permissions |
 
 ### Spatial Permissions
 

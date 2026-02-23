@@ -390,13 +390,13 @@ class TestRefreshTokenEndpoint:
         )
         client = TestClient(server.get_app())
 
-        # Register and login
+        # Register and login (first user gets admin via bootstrap)
         email = f"test_{test_id}@example.com"
         register_response = client.post(
             "/api/auth/register",
             json={"email": email, "password": "password123"},
         )
-        assert register_response.status_code == 200
+        assert register_response.status_code == 200, register_response.text
 
         login_response = client.post(
             "/api/auth/login",
@@ -457,7 +457,7 @@ class TestRefreshTokenEndpoint:
         )
         client = TestClient(server.get_app())
 
-        # Register and login
+        # Register and login (first user gets admin via bootstrap)
         email = f"test_{test_id}@example.com"
         register_response = client.post(
             "/api/auth/register",
