@@ -1,7 +1,7 @@
 """Tests for refresh token authentication."""
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -80,8 +80,8 @@ class TestRefreshTokenGeneration:
         )
 
         assert len(plaintext_token) > 50
-        assert expires_at > datetime.utcnow()
-        assert (expires_at - datetime.utcnow()).days <= 7
+        assert expires_at > datetime.now(timezone.utc)
+        assert (expires_at - datetime.now(timezone.utc)).days <= 7
         auth_service.context.save.assert_called_once()
 
     @pytest.mark.asyncio
@@ -93,7 +93,7 @@ class TestRefreshTokenGeneration:
         mock_user.email = "test@example.com"
         mock_user.name = "Test User"
         mock_user.is_active = True
-        mock_user.created_at = datetime.utcnow()
+        mock_user.created_at = datetime.now(timezone.utc)
         mock_user.password_hash = auth_service._hash_password("password123")
         mock_user.save = AsyncMock()
 
@@ -124,7 +124,7 @@ class TestRefreshTokenValidation:
         mock_refresh_token = MagicMock()
         mock_refresh_token.token_hash = token_hash
         mock_refresh_token.is_active = True
-        mock_refresh_token.expires_at = datetime.utcnow() + timedelta(days=7)
+        mock_refresh_token.expires_at = datetime.now(timezone.utc) + timedelta(days=7)
         mock_refresh_token.user_id = "user123"
         mock_refresh_token.last_used_at = None
         mock_refresh_token._graph_context = auth_service.context
@@ -159,7 +159,9 @@ class TestRefreshTokenValidation:
         mock_refresh_token = MagicMock()
         mock_refresh_token.token_hash = token_hash
         mock_refresh_token.is_active = True
-        mock_refresh_token.expires_at = datetime.utcnow() - timedelta(days=1)  # Expired
+        mock_refresh_token.expires_at = datetime.now(timezone.utc) - timedelta(
+            days=1
+        )  # Expired
         mock_refresh_token._graph_context = auth_service.context
 
         # Mock context methods
@@ -185,7 +187,7 @@ class TestRefreshTokenValidation:
         mock_refresh_token = MagicMock()
         mock_refresh_token.token_hash = token_hash
         mock_refresh_token.is_active = False  # Inactive
-        mock_refresh_token.expires_at = datetime.utcnow() + timedelta(days=7)
+        mock_refresh_token.expires_at = datetime.now(timezone.utc) + timedelta(days=7)
         mock_refresh_token._graph_context = auth_service.context
 
         # Mock context methods - inactive tokens won't be in results
@@ -210,7 +212,7 @@ class TestRefreshAccessToken:
         mock_refresh_token = MagicMock()
         mock_refresh_token.token_hash = token_hash
         mock_refresh_token.is_active = True
-        mock_refresh_token.expires_at = datetime.utcnow() + timedelta(days=7)
+        mock_refresh_token.expires_at = datetime.now(timezone.utc) + timedelta(days=7)
         mock_refresh_token.user_id = "user123"
         mock_refresh_token.last_used_at = None
         mock_refresh_token._graph_context = auth_service.context
@@ -222,7 +224,7 @@ class TestRefreshAccessToken:
         mock_user.email = "test@example.com"
         mock_user.name = "Test User"
         mock_user.is_active = True
-        mock_user.created_at = datetime.utcnow()
+        mock_user.created_at = datetime.now(timezone.utc)
 
         # Mock context methods
         auth_service.context.ensure_indexes = AsyncMock()
@@ -253,7 +255,7 @@ class TestRefreshAccessToken:
         mock_refresh_token = MagicMock()
         mock_refresh_token.token_hash = token_hash
         mock_refresh_token.is_active = True
-        mock_refresh_token.expires_at = datetime.utcnow() + timedelta(days=7)
+        mock_refresh_token.expires_at = datetime.now(timezone.utc) + timedelta(days=7)
         mock_refresh_token.user_id = "user123"
         mock_refresh_token.last_used_at = None
         mock_refresh_token._graph_context = auth_service.context
@@ -265,7 +267,7 @@ class TestRefreshAccessToken:
         mock_user.email = "test@example.com"
         mock_user.name = "Test User"
         mock_user.is_active = True
-        mock_user.created_at = datetime.utcnow()
+        mock_user.created_at = datetime.now(timezone.utc)
 
         # Mock context methods
         auth_service.context.ensure_indexes = AsyncMock()
@@ -308,7 +310,7 @@ class TestRefreshTokenRevocation:
         mock_refresh_token = MagicMock()
         mock_refresh_token.token_hash = token_hash
         mock_refresh_token.is_active = True
-        mock_refresh_token.expires_at = datetime.utcnow() + timedelta(days=7)
+        mock_refresh_token.expires_at = datetime.now(timezone.utc) + timedelta(days=7)
         mock_refresh_token.user_id = "user123"
         mock_refresh_token.access_token_jti = "jti123"
         mock_refresh_token._graph_context = auth_service.context
@@ -500,7 +502,7 @@ class TestResilientRefreshTokenGeneration:
         mock_user.email = "test@example.com"
         mock_user.name = "Test User"
         mock_user.is_active = True
-        mock_user.created_at = datetime.utcnow()
+        mock_user.created_at = datetime.now(timezone.utc)
         mock_user.password_hash = auth_service._hash_password("password123")
         mock_user.save = AsyncMock()
         mock_user._graph_context = auth_service.context
@@ -546,7 +548,7 @@ class TestResilientRefreshTokenGeneration:
         mock_user.email = "test@example.com"
         mock_user.name = "Test User"
         mock_user.is_active = True
-        mock_user.created_at = datetime.utcnow()
+        mock_user.created_at = datetime.now(timezone.utc)
         mock_user.password_hash = auth_service._hash_password("password123")
         mock_user.save = AsyncMock()
         mock_user._graph_context = auth_service.context
@@ -578,7 +580,7 @@ class TestResilientRefreshTokenGeneration:
         mock_user.email = "test@example.com"
         mock_user.name = "Test User"
         mock_user.is_active = True
-        mock_user.created_at = datetime.utcnow()
+        mock_user.created_at = datetime.now(timezone.utc)
         mock_user.password_hash = auth_service._hash_password("password123")
         mock_user.save = AsyncMock()
         mock_user._graph_context = auth_service.context

@@ -5,7 +5,7 @@ import logging
 import secrets
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
 import jwt
@@ -206,7 +206,7 @@ class AuthenticationService:
         Returns:
             Tuple of (token_string, expiration_datetime)
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires_at = now + timedelta(minutes=self.jwt_expire_minutes)
 
         payload = {
@@ -406,7 +406,9 @@ class AuthenticationService:
         token_hash = self._hash_refresh_token(plaintext_token)
 
         # Calculate expiration
-        expires_at = datetime.utcnow() + timedelta(days=self.refresh_expire_days)
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            days=self.refresh_expire_days
+        )
 
         # Ensure indexes exist before saving
         await self.context.ensure_indexes(RefreshToken)
@@ -424,7 +426,7 @@ class AuthenticationService:
             device_info=device_info,
             ip_address=ip_address,
             is_active=True,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
 
         # Set context and save
@@ -464,13 +466,13 @@ class AuthenticationService:
                 refresh_token_entity._graph_context = self.context
 
                 # Check expiration
-                if refresh_token_entity.expires_at < datetime.utcnow():
+                if refresh_token_entity.expires_at < datetime.now(timezone.utc):
                     continue
 
                 # Verify the token against the stored hash
                 if self._verify_refresh_token(token, refresh_token_entity.token_hash):
                     # Update last_used_at
-                    refresh_token_entity.last_used_at = datetime.utcnow()
+                    refresh_token_entity.last_used_at = datetime.now(timezone.utc)
                     await self.context.save(refresh_token_entity)
                     return refresh_token_entity
             except Exception:
@@ -551,7 +553,7 @@ class AuthenticationService:
             password_hash=self._hash_password(user_data.password),
             name="",  # No name required
             is_active=True,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
         # Set the context on the user object so save() uses it
         user._graph_context = self.context
@@ -606,7 +608,7 @@ class AuthenticationService:
         # Update last_accessed timestamp
         # Set the context on the user object so save() uses it
         user._graph_context = self.context
-        user.last_accessed = datetime.utcnow()
+        user.last_accessed = datetime.now(timezone.utc)
         await user.save()
 
         # Generate JWT access token
@@ -625,7 +627,7 @@ class AuthenticationService:
                 )
             )
             refresh_expires_in = int(
-                (refresh_expires_at - datetime.utcnow()).total_seconds()
+                (refresh_expires_at - datetime.now(timezone.utc)).total_seconds()
             )
         except Exception as e:
             # Log warning but don't fail login if refresh token generation fails
@@ -711,7 +713,7 @@ class AuthenticationService:
         # Update last_accessed timestamp on token validation (user is authenticating)
         # Ensure context is set before saving
         user._graph_context = self.context
-        user.last_accessed = datetime.utcnow()
+        user.last_accessed = datetime.now(timezone.utc)
         # Use context.save() directly to ensure it uses the correct context
         await self.context.save(user)
 
@@ -798,7 +800,7 @@ class AuthenticationService:
                 )
             )
             refresh_expires_in = int(
-                (refresh_expires_at - datetime.utcnow()).total_seconds()
+                (refresh_expires_at - datetime.now(timezone.utc)).total_seconds()
             )
 
         return TokenResponse(
@@ -843,7 +845,7 @@ class AuthenticationService:
             blacklist_id = generate_id("o", "TokenBlacklist")
             # Estimate expiration (access tokens expire in minutes, refresh in days)
             # Use a reasonable default expiration
-            estimated_expires_at = datetime.utcnow() + timedelta(
+            estimated_expires_at = datetime.now(timezone.utc) + timedelta(
                 minutes=self.jwt_expire_minutes
             )
 
@@ -903,7 +905,7 @@ class AuthenticationService:
         # Blacklist all associated access tokens
         from jvspatial.core.utils import generate_id
 
-        estimated_expires_at = datetime.utcnow() + timedelta(
+        estimated_expires_at = datetime.now(timezone.utc) + timedelta(
             minutes=self.jwt_expire_minutes
         )
 

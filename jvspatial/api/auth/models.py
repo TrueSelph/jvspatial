@@ -1,6 +1,6 @@
 """Authentication models for user management and JWT tokens."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 from pydantic import BaseModel, EmailStr, Field
@@ -69,7 +69,8 @@ class User(Object):
     name: str = Field(default="", description="User full name (optional)")
     is_active: bool = Field(default=True, description="Whether user is active")
     created_at: datetime = Field(
-        default_factory=datetime.utcnow, description="User creation timestamp"
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="User creation timestamp",
     )
     last_accessed: Optional[datetime] = Field(
         default=None, description="Last time the user authenticated on the platform"
@@ -122,7 +123,8 @@ class TokenBlacklist(Object):
     user_id: str = Field(..., description="User ID who owns the token")
     expires_at: datetime = Field(..., description="Token expiration time")
     blacklisted_at: datetime = Field(
-        default_factory=datetime.utcnow, description="When token was blacklisted"
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="When token was blacklisted",
     )
 
 
@@ -201,7 +203,8 @@ class APIKey(Object):
 
     is_active: bool = Field(default=True, description="Whether key is active")
     created_at: datetime = Field(
-        default_factory=datetime.utcnow, description="Creation timestamp"
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Creation timestamp",
     )
     last_used_at: Optional[datetime] = Field(None, description="Last usage timestamp")
     expires_at: Optional[datetime] = Field(None, description="Expiration timestamp")
@@ -232,7 +235,8 @@ class RefreshToken(Object):
     expires_at: datetime = Field(..., description="Token expiration timestamp")
     is_active: bool = Field(default=True, description="Whether token is active")
     created_at: datetime = Field(
-        default_factory=datetime.utcnow, description="Creation timestamp"
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Creation timestamp",
     )
     last_used_at: Optional[datetime] = Field(None, description="Last usage timestamp")
     device_info: Optional[str] = Field(None, description="Optional device identifier")

@@ -1,6 +1,6 @@
 """Tests for token cleanup service."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,7 +27,7 @@ class TestTokenCleanupService:
     @pytest.mark.asyncio
     async def test_cleanup_expired_blacklist_entries(self, cleanup_service):
         """Test cleaning up expired blacklist entries."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expired_time = now - timedelta(days=1)
 
         # Mock expired blacklist entry
@@ -64,7 +64,7 @@ class TestTokenCleanupService:
     @pytest.mark.asyncio
     async def test_cleanup_expired_refresh_tokens(self, cleanup_service):
         """Test cleaning up expired refresh tokens."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expired_time = now - timedelta(days=1)
 
         # Mock expired refresh token

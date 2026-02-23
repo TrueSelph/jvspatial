@@ -2,7 +2,7 @@
 
 import logging
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
 from jvspatial.api.auth.models import APIKey
@@ -196,7 +196,7 @@ class APIKeyService:
         # Calculate expiration
         expires_at = None
         if expires_in_days is not None and expires_in_days > 0:
-            expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
+            expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
 
         # Create API key entity using service's context
         # APIKey.create() uses get_default_context(), so we create it manually
@@ -215,7 +215,7 @@ class APIKeyService:
             allowed_ips=allowed_ips or [],
             allowed_endpoints=allowed_endpoints or [],
             is_active=True,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
         # Set context and save using service's context
         api_key._graph_context = self.context
@@ -266,7 +266,9 @@ class APIKeyService:
             # Verify the plaintext key against the stored hash
             if self._verify_key(plaintext_key, api_key.key_hash):
                 # Check expiration
-                if api_key.expires_at and api_key.expires_at < datetime.utcnow():
+                if api_key.expires_at and api_key.expires_at < datetime.now(
+                    timezone.utc
+                ):
                     self._logger.debug(f"API key {api_key.id} has expired")
                     continue
 
@@ -345,7 +347,7 @@ class APIKeyService:
         Args:
             api_key: APIKey entity to update
         """
-        api_key.last_used_at = datetime.utcnow()
+        api_key.last_used_at = datetime.now(timezone.utc)
         # Ensure context is set before saving
         if not api_key._graph_context:
             api_key._graph_context = self.context

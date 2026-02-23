@@ -4,7 +4,7 @@ This module defines the minimal data models needed by the jvspatial scheduler.
 These are lightweight Pydantic models for configuration and execution tracking.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -46,7 +46,7 @@ class ExecutionRecord(BaseModel):
         default_factory=lambda: f"exec_{int(datetime.now().timestamp())}"
     )
     task_id: str
-    started_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: Optional[datetime] = None
     success: Optional[bool] = None
     error_message: Optional[str] = None

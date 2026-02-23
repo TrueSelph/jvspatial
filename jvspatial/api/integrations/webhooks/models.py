@@ -4,7 +4,7 @@ This module provides Entity classes for webhook event tracking, idempotency mana
 and response caching using the JVspatial GraphContext system.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from pydantic import Field
@@ -86,10 +86,12 @@ class WebhookEvent(Object):
         default_factory=dict, description="Endpoint configuration"
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow, description="When event was created"
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="When event was created",
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow, description="When event was last updated"
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="When event was last updated",
     )
     expires_at: Optional[datetime] = Field(
         None, description="When event expires (for cleanup)"
@@ -140,10 +142,12 @@ class WebhookIdempotencyKey(Object):
 
     # Timestamps
     first_seen_at: datetime = Field(
-        default_factory=datetime.utcnow, description="When first seen"
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="When first seen",
     )
     last_accessed_at: datetime = Field(
-        default_factory=datetime.utcnow, description="When last accessed"
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="When last accessed",
     )
     expires_at: datetime = Field(..., description="When key expires")
 
@@ -191,10 +195,11 @@ class WebhookRetryRecord(Object):
 
     # Timestamps
     created_at: datetime = Field(
-        default_factory=datetime.utcnow, description="When created"
+        default_factory=lambda: datetime.now(timezone.utc), description="When created"
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow, description="When last updated"
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="When last updated",
     )
 
     class Meta:
@@ -240,7 +245,7 @@ async def create_webhook_event(
     Returns:
         Created WebhookEvent entity
     """
-    expires_at = datetime.utcnow() + timedelta(hours=ttl_hours)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
 
     # Create event with concrete status code defaults for typing
     event = WebhookEvent(
@@ -259,7 +264,7 @@ async def create_webhook_event(
         source="external",
         http_method="POST",
         status="pending",
-        processing_started_at=datetime.utcnow(),
+        processing_started_at=datetime.now(timezone.utc),
         processing_completed_at=None,
         processing_duration_ms=0,
         api_key_id=None,
@@ -303,12 +308,12 @@ async def get_or_create_idempotency_key(
 
     if existing:
         # Update last accessed time
-        existing.last_accessed_at = datetime.utcnow()
+        existing.last_accessed_at = datetime.now(timezone.utc)
         await existing.save()
         return existing, False
 
     # Create new key
-    expires_at = datetime.utcnow() + timedelta(hours=ttl_hours)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
 
     key_record = WebhookIdempotencyKey(
         idempotency_key=idempotency_key,
@@ -362,7 +367,7 @@ async def mark_idempotency_key_processed(
     key_record.cached_response = response_data
     key_record.response_status_code = status_code
     key_record.webhook_event_id = webhook_event_id
-    key_record.last_accessed_at = datetime.utcnow()
+    key_record.last_accessed_at = datetime.now(timezone.utc)
 
     await key_record.save()
     return key_record
@@ -374,7 +379,7 @@ async def cleanup_expired_webhook_data() -> Dict[str, int]:
     Returns:
         Dictionary with counts of cleaned up records
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Clean up expired webhook events
     expired_events = await WebhookEvent.find({"expires_at": {"$lt": now}})

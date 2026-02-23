@@ -9,4 +9,4 @@ The GitHub Actions workflow will automatically create a git tag and publish to P
 # - MAJOR: Breaking changes
 # - MINOR: New features, backward compatible
 # - PATCH: Bug fixes, backward compatible
-__version__ = "0.0.3"
+__version__ = "0.0.4"

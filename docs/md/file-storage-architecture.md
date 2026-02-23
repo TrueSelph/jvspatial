@@ -486,7 +486,7 @@ class PathSanitizer:
 
 import secrets
 import string
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from jvspatial.core.entities import Object
 from jvspatial.core.context import GraphContext
@@ -541,7 +541,7 @@ class URLProxyManager:
             Generated short code
         """
         code = self._generate_code()
-        created_at = datetime.utcnow()
+        created_at = datetime.now(timezone.utc)
 
         # Calculate expiration
         expires_at = None
@@ -590,7 +590,7 @@ class URLProxyManager:
         # Check expiration
         if proxy.expires_at:
             expires = datetime.fromisoformat(proxy.expires_at)
-            if datetime.utcnow() > expires:
+            if datetime.now(timezone.utc) > expires:
                 # Expired - delete proxy
                 await self.context.delete(proxy)
                 return None
@@ -636,7 +636,7 @@ class URLProxyManager:
         Returns:
             Number of proxies deleted
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         # Find all expired proxies
         all_proxies = await self.context.find_nodes(

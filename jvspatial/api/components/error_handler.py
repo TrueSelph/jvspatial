@@ -8,7 +8,7 @@ import contextvars
 import logging
 import traceback
 from contextlib import suppress
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Union
 
 from fastapi import Request
@@ -384,7 +384,7 @@ class APIErrorHandler:
                 )
 
             response_data = await exc.to_dict()
-            response_data["timestamp"] = datetime.utcnow().isoformat()
+            response_data["timestamp"] = datetime.now(timezone.utc).isoformat()
             response_data["path"] = request.url.path
             response_data = _add_request_id_to_content(request, response_data)
             return JSONResponse(status_code=exc.status_code, content=response_data)
@@ -440,7 +440,7 @@ class APIErrorHandler:
                 "error_code": "validation_error",
                 "message": error_message,
                 "details": error_details if error_details else None,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "path": request.url.path,
             }
             content = _add_request_id_to_content(request, content)
@@ -539,7 +539,7 @@ class APIErrorHandler:
                 content = {
                     "error_code": error_code,
                     "message": error_message,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "path": request.url.path,
                 }
                 content = _add_request_id_to_content(request, content)
@@ -627,7 +627,7 @@ class APIErrorHandler:
             content = {
                 "error_code": error_code,
                 "message": error_message,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "path": request.url.path,
             }
             content = _add_request_id_to_content(request, content)
@@ -666,7 +666,7 @@ class APIErrorHandler:
                 content = {
                     "error_code": "gateway_timeout",
                     "message": "External service request timed out. Please try again.",
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "path": request.url.path,
                 }
                 content = _add_request_id_to_content(request, content)
@@ -699,7 +699,7 @@ class APIErrorHandler:
                 content = {
                     "error_code": "bad_gateway",
                     "message": "Unable to connect to external service. Please try again.",
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "path": request.url.path,
                 }
                 content = _add_request_id_to_content(request, content)
@@ -746,7 +746,7 @@ class APIErrorHandler:
             content = {
                 "error_code": "internal_error",
                 "message": f"An unexpected error occurred: {str(exc)}",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "path": request.url.path,
             }
             content = _add_request_id_to_content(request, content)
@@ -759,7 +759,7 @@ class APIErrorHandler:
             content = {
                 "error_code": "internal_error",
                 "message": "An unexpected error occurred. Please contact support if this persists.",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "path": getattr(request, "url", None) and request.url.path or "/",
             }
             content = _add_request_id_to_content(request, content)
@@ -788,7 +788,7 @@ class APIErrorHandler:
         response_data = {
             "error_code": error_code,
             "message": message,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "status_code": status_code,
         }
 
