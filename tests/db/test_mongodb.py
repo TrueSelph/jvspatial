@@ -275,8 +275,9 @@ class TestMongoDBConnection:
             assert db._db is not None
             mock_client_class.assert_called_once_with(
                 "mongodb://localhost:27017/test",
-                maxPoolSize=100,
-                minPoolSize=10,
+                maxPoolSize=10,
+                minPoolSize=0,
+                maxIdleTimeMS=60000,
             )
             assert result is not None
 

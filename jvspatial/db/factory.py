@@ -185,6 +185,14 @@ def create_database(
             )
         if "db_name" not in kwargs:
             kwargs["db_name"] = os.getenv("JVSPATIAL_MONGODB_DB_NAME", "jvdb")
+        if "max_pool_size" not in kwargs:
+            max_pool = os.getenv("JVSPATIAL_MONGODB_MAX_POOL_SIZE")
+            if max_pool is not None:
+                kwargs["max_pool_size"] = int(max_pool)
+        if "min_pool_size" not in kwargs:
+            min_pool = os.getenv("JVSPATIAL_MONGODB_MIN_POOL_SIZE")
+            if min_pool is not None:
+                kwargs["min_pool_size"] = int(min_pool)
 
         db = MongoDB(**kwargs)
 
