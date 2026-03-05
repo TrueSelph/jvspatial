@@ -12,7 +12,8 @@ This guide explains how to implement your own database backend for jvspatial usi
 4. [Registering Custom Databases](#registering-custom-databases)
 5. [Complete Example](#complete-example)
 6. [Best Practices](#best-practices)
-7. [Advanced Topics](#advanced-topics)
+7. [Atomic Operations: find_one_and_delete and find_one_and_update](#atomic-operations-find_one_and_delete-and-find_one_and_update)
+8. [Advanced Topics](#advanced-topics)
 
 ---
 
@@ -103,6 +104,26 @@ class Database(ABC):
         """Find the first record matching a query."""
         results = await self.find(collection, query)
         return results[0] if results else None
+
+    async def find_one_and_delete(
+        self, collection: str, query: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically find and delete the first record matching a query.
+        Returns deleted doc or None. Default: find_one + delete (not atomic).
+        MongoDB overrides with native find_one_and_delete."""
+        pass
+
+    async def find_one_and_update(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        update: Dict[str, Any],
+        upsert: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically find and update the first record matching a query.
+        Returns updated doc or None. Default raises NotImplementedError.
+        MongoDB implements with native find_one_and_update ($push, $set, etc.)."""
+        pass
 
     async def create_index(
         self,
@@ -664,6 +685,53 @@ class MyDatabase(Database):
             # Thread-safe operation
             pass
 ```
+
+---
+
+## Atomic Operations: find_one_and_delete and find_one_and_update
+
+The Database interface provides two optional methods for atomic, concurrent-safe operations. These are useful for batch processing, work claiming, and append-only updates.
+
+### find_one_and_delete
+
+Atomically finds and deletes the first record matching a query. Returns the deleted document if found, `None` otherwise. Useful for claiming work in a concurrent-safe way (e.g., processing items from a queue).
+
+**Default implementation** (base `Database`): Uses `find_one` + `delete` — not atomic. Safe for single-writer scenarios.
+
+**MongoDB**: Overrides with native `find_one_and_delete` for true atomicity.
+
+```python
+# Claim and process a batch (concurrent-safe with MongoDB)
+deleted = await db.find_one_and_delete("media_batches", {"_id": sender_id})
+if deleted:
+    await process_batch(deleted)
+```
+
+### find_one_and_update
+
+Atomically finds and updates the first record matching a query. Returns the updated document (or the newly created document when `upsert=True`). Uses MongoDB-style update operators: `$push`, `$set`, `$setOnInsert`, etc.
+
+**Default implementation** (base `Database`): Raises `NotImplementedError`. Databases without native support should implement a fallback or leave unimplemented.
+
+**MongoDB**: Implements with native `find_one_and_update` and `ReturnDocument.AFTER`.
+
+```python
+# Atomic append to array (avoids read-modify-write races)
+update = {
+    "$push": {"media_items": {"url": url, "utterance": text}},
+    "$set": {"updated_at": time.time()},
+    "$setOnInsert": {"agent_id": agent_id, "created_at": time.time()},
+}
+result = await db.find_one_and_update(
+    "media_batches",
+    {"_id": sender_id},
+    update,
+    upsert=True,
+)
+# result is the updated document with the new media_items
+```
+
+**When to implement**: Implement `find_one_and_update` if your database supports atomic updates (e.g., MongoDB, DynamoDB). For file-based or simple key-value stores, the default `NotImplementedError` is appropriate — callers can use `find_one` + `save` with application-level locking if needed.
 
 ---
 

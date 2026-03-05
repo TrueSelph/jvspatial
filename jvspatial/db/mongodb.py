@@ -373,6 +373,126 @@ class MongoDB(Database):
                 return await cursor.to_list(length=None)
             raise DatabaseError(f"MongoDB find error: {e}") from e
 
+    async def find_one_and_delete(
+        self, collection: str, query: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically find and delete the first record matching a query.
+
+        Uses MongoDB native find_one_and_delete for atomicity. Returns the
+        deleted document if found, None otherwise. Useful for work claiming
+        (e.g., batch processing) where only one consumer should succeed.
+        """
+        await self._ensure_connected()
+
+        if self._db is None:
+            raise DatabaseError("MongoDB database connection not established")
+
+        try:
+            collection_obj = self._db[collection]
+            return await collection_obj.find_one_and_delete(query)
+        except RuntimeError as e:
+            if "Event loop is closed" in str(e) or "closed" in str(e).lower():
+                logger.debug(
+                    "Event loop closed during operation, recreating MongoDB connection"
+                )
+                self._client = None
+                self._db = None
+                await self._ensure_connected()
+                if self._db is None:
+                    raise DatabaseError(
+                        "Failed to establish MongoDB connection after retry"
+                    )
+                collection_obj = self._db[collection]
+                return await collection_obj.find_one_and_delete(query)
+            raise DatabaseError(f"MongoDB find_one_and_delete error: {e}") from e
+        except PyMongoError as e:
+            if _is_connection_error(e):
+                logger.debug(
+                    "MongoDB connection error during find_one_and_delete, recreating and retrying: %s",
+                    e,
+                )
+                self._client = None
+                self._db = None
+                await self._ensure_connected()
+                if self._db is None:
+                    raise DatabaseError(
+                        "Failed to establish MongoDB connection after retry"
+                    )
+                collection_obj = self._db[collection]
+                return await collection_obj.find_one_and_delete(query)
+            raise DatabaseError(f"MongoDB find_one_and_delete error: {e}") from e
+
+    async def find_one_and_update(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        update: Dict[str, Any],
+        upsert: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically find and update the first record matching a query.
+
+        Uses MongoDB native find_one_and_update with ReturnDocument.AFTER.
+        Supports update operators: $push, $set, $setOnInsert, etc. Returns the
+        updated document (or the newly created document when upsert=True).
+        """
+        from pymongo import ReturnDocument
+
+        await self._ensure_connected()
+
+        if self._db is None:
+            raise DatabaseError("MongoDB database connection not established")
+
+        try:
+            collection_obj = self._db[collection]
+            return await collection_obj.find_one_and_update(
+                query,
+                update,
+                upsert=upsert,
+                return_document=ReturnDocument.AFTER,
+            )
+        except RuntimeError as e:
+            if "Event loop is closed" in str(e) or "closed" in str(e).lower():
+                logger.debug(
+                    "Event loop closed during operation, recreating MongoDB connection"
+                )
+                self._client = None
+                self._db = None
+                await self._ensure_connected()
+                if self._db is None:
+                    raise DatabaseError(
+                        "Failed to establish MongoDB connection after retry"
+                    )
+                collection_obj = self._db[collection]
+                return await collection_obj.find_one_and_update(
+                    query,
+                    update,
+                    upsert=upsert,
+                    return_document=ReturnDocument.AFTER,
+                )
+            raise DatabaseError(f"MongoDB find_one_and_update error: {e}") from e
+        except PyMongoError as e:
+            if _is_connection_error(e):
+                logger.debug(
+                    "MongoDB connection error during find_one_and_update, "
+                    "recreating and retrying: %s",
+                    e,
+                )
+                self._client = None
+                self._db = None
+                await self._ensure_connected()
+                if self._db is None:
+                    raise DatabaseError(
+                        "Failed to establish MongoDB connection after retry"
+                    )
+                collection_obj = self._db[collection]
+                return await collection_obj.find_one_and_update(
+                    query,
+                    update,
+                    upsert=upsert,
+                    return_document=ReturnDocument.AFTER,
+                )
+            raise DatabaseError(f"MongoDB find_one_and_update error: {e}") from e
+
     async def create_index(
         self,
         collection: str,

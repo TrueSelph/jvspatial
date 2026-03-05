@@ -254,6 +254,46 @@ class TestSQLiteBasicOperations:
         assert count_filtered == 2
 
     @pytest.mark.asyncio
+    async def test_find_one_and_update(self, sqlite_db):
+        """Test find_one_and_update returns updated doc and persists changes."""
+        await sqlite_db.save(
+            "batch",
+            {"id": "sender_1", "_id": "sender_1", "items": [], "updated_at": 1.0},
+        )
+        result = await sqlite_db.find_one_and_update(
+            "batch",
+            {"_id": "sender_1"},
+            {"$set": {"updated_at": 2.0}, "$push": {"items": "a"}},
+        )
+        assert result is not None
+        assert result["updated_at"] == 2.0
+        assert result["items"] == ["a"]
+        assert (await sqlite_db.get("batch", "sender_1"))["items"] == ["a"]
+
+    @pytest.mark.asyncio
+    async def test_find_one_and_update_returns_none_when_not_found(self, sqlite_db):
+        """Test find_one_and_update returns None when no document matches."""
+        result = await sqlite_db.find_one_and_update(
+            "batch", {"_id": "nonexistent"}, {"$set": {"x": 1}}
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_find_one_and_update_upsert(self, sqlite_db):
+        """Test find_one_and_update with upsert=True creates document."""
+        result = await sqlite_db.find_one_and_update(
+            "batch",
+            {"_id": "new_sender"},
+            {"$setOnInsert": {"items": []}, "$set": {"updated_at": 1.0}},
+            upsert=True,
+        )
+        assert result is not None
+        assert result["_id"] == "new_sender"
+        assert result["items"] == []
+        assert result["updated_at"] == 1.0
+        assert await sqlite_db.get("batch", "new_sender") is not None
+
+    @pytest.mark.asyncio
     async def test_update_record(self, sqlite_db):
         """Test updating records by saving again."""
         # Create a record
