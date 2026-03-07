@@ -315,6 +315,20 @@ class APIKeyService:
         self._logger.info(f"Revoked API key {key_id} for user {user_id}")
         return True
 
+    async def get_key(self, key_id: str) -> Optional[APIKey]:
+        """Get API key by ID.
+
+        Args:
+            key_id: API key ID to retrieve
+
+        Returns:
+            APIKey entity if found, None otherwise
+        """
+        api_key = await self.context.get(APIKey, key_id)
+        if api_key:
+            api_key._graph_context = self.context
+        return api_key
+
     async def get_user_keys(self, user_id: str) -> List[APIKey]:
         """Get all API keys for a user.
 
