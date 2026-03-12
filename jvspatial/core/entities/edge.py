@@ -222,6 +222,19 @@ class Edge(Object):
         }
 
     @classmethod
+    def get_indexes(cls: Type["Edge"]) -> List[Dict[str, Any]]:
+        """Get index definitions including unique compound index on (source, target, entity)."""
+        indexes = super().get_indexes()
+        indexes.append(
+            {
+                "fields": [("source", 1), ("target", 1), ("entity", 1)],
+                "unique": True,
+                "name": "idx_source_target_entity_unique",
+            }
+        )
+        return indexes
+
+    @classmethod
     async def get(cls: Type["Edge"], id: str) -> Optional["Edge"]:
         """Retrieve an edge from the database by ID.
 
@@ -240,7 +253,12 @@ class Edge(Object):
 
     @classmethod
     async def create(cls: Type["Edge"], **kwargs: Any) -> "Edge":
-        """Create and save a new edge instance, updating connected nodes.
+        """Create and save a new edge instance.
+
+        Node ``edge_ids`` updates are handled by ``Node.connect()``, which is
+        the canonical entry-point for creating edges between nodes.  Callers
+        that create edges directly must update ``edge_ids`` themselves (or use
+        ``GraphContext.atomic_add_edge_id``).
 
         Args:
             **kwargs: Edge attributes including 'left' and 'right' nodes
@@ -250,33 +268,6 @@ class Edge(Object):
         """
         edge = cls(**kwargs)
         await edge.save()
-
-        # Update connected nodes - use context to retrieve nodes
-        from typing import cast
-
-        from ..context import get_default_context
-
-        # Lazy import to avoid circular dependency
-        from .node import Node
-
-        context = get_default_context()
-        source_node = cast(
-            Optional[Node],
-            await context.get(Node, edge.source) if edge.source else None,
-        )
-        target_node = cast(
-            Optional[Node],
-            await context.get(Node, edge.target) if edge.target else None,
-        )
-
-        if source_node and edge.id not in source_node.edge_ids:
-            source_node.edge_ids.append(edge.id)
-            await source_node.save()
-
-        if target_node and edge.id not in target_node.edge_ids:
-            target_node.edge_ids.append(edge.id)
-            await target_node.save()
-
         return edge
 
     async def save(self: "Edge") -> "Edge":

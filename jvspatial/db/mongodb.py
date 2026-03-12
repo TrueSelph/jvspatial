@@ -574,6 +574,42 @@ class MongoDB(Database):
         except PyMongoError as e:
             raise DatabaseError(f"MongoDB index creation error: {e}") from e
 
+    async def begin_transaction(self):
+        """Start a MongoDB transaction (requires replica set).
+
+        Returns a ``MongoDBTransaction`` whose session is bound to a
+        ``start_transaction`` call.  If the deployment does not support
+        transactions (standalone / DocumentDB without transactions), the
+        returned object will be ``None`` and callers should fall back to
+        non-transactional writes.
+        """
+        from jvspatial.db.transaction import MongoDBTransaction
+
+        await self._ensure_connected()
+        if self._client is None or self._db is None:
+            return None
+        try:
+            import uuid
+
+            session = await self._client.start_session()
+            session.start_transaction()
+            return MongoDBTransaction(str(uuid.uuid4()), session, self._db)
+        except Exception:
+            logger.debug("Transactions not available on this deployment", exc_info=True)
+            return None
+
+    async def commit_transaction(self, txn) -> None:
+        """Commit the given transaction and end its session."""
+        if txn is not None:
+            await txn.commit()
+            txn.session.end_session()
+
+    async def rollback_transaction(self, txn) -> None:
+        """Roll back the given transaction and end its session."""
+        if txn is not None:
+            await txn.rollback()
+            txn.session.end_session()
+
     async def close(self) -> None:
         """Close the database connection."""
         if self._client:

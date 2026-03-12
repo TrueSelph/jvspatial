@@ -3,7 +3,7 @@
 import logging
 import os
 import time
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager, suppress
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -457,6 +457,16 @@ class GraphContext:
                 return default_value
         return "o"
 
+    @staticmethod
+    def _is_mongodb(db: Database) -> bool:
+        """Check if the database is a MongoDB instance without a hard import."""
+        try:
+            from jvspatial.db.mongodb import MongoDB
+
+            return isinstance(db, MongoDB)
+        except ImportError:
+            return False
+
     async def _get_from_cache(self, entity_id: str) -> Optional[Any]:
         """Get entity from cache if available."""
         result = await self._cache.get(entity_id)
@@ -735,11 +745,28 @@ class GraphContext:
                 await entity.delete(cascade=cascade)
             return
 
-        # For Object entities (including Edge), perform simple deletion
+        # For Edge entities, clean up edge_ids on source/target nodes before deletion
+        from .entities.edge import Edge
+
+        if isinstance(entity, Edge):
+            source_id = getattr(entity, "source", None)
+            target_id = getattr(entity, "target", None)
+            for node_id in (source_id, target_id):
+                if not node_id:
+                    continue
+                try:
+                    await self.atomic_remove_edge_id(node_id, entity.id)
+                except Exception:
+                    logger.warning(
+                        "Failed to remove edge %s from node %s edge_ids",
+                        entity.id,
+                        node_id,
+                        exc_info=True,
+                    )
+
         collection = self._get_collection_name(entity.type_code)
         db = self.database
         await db.delete(collection, entity.id)
-        # Remove from cache
         await self._cache.delete(entity.id)
 
     async def export_graph(
@@ -893,6 +920,132 @@ class GraphContext:
             return True
         except Exception:
             return False
+
+    async def atomic_add_edge_id(self, node_id: str, edge_id: str) -> bool:
+        """Atomically add *edge_id* to a node's ``edges`` list using $addToSet.
+
+        Falls back to read-modify-write when the database does not support
+        atomic updates or when the document is not found.
+
+        Returns True on success, False on failure.
+        """
+        db = self.database
+        if self._is_mongodb(db):
+            try:
+                result = await db.find_one_and_update(
+                    "node",
+                    {"_id": node_id},
+                    {"$addToSet": {"edges": edge_id}},
+                )
+                if result is not None:
+                    cached = await self._get_from_cache(node_id)
+                    if (
+                        cached
+                        and hasattr(cached, "edge_ids")
+                        and edge_id not in cached.edge_ids
+                    ):
+                        cached.edge_ids.append(edge_id)
+                    return True
+            except Exception:
+                logger.warning(
+                    "atomic_add_edge_id failed for node %s edge %s, falling back",
+                    node_id,
+                    edge_id,
+                    exc_info=True,
+                )
+
+        # Fallback: read-modify-write (used for JsonDB, SQLite, etc.)
+        from .entities.node import Node
+
+        node = await self.get(Node, node_id)
+        if node and edge_id not in node.edge_ids:
+            node.edge_ids.append(edge_id)
+            await self.save(node)
+        return node is not None
+
+    async def atomic_remove_edge_id(self, node_id: str, edge_id: str) -> bool:
+        """Atomically remove *edge_id* from a node's ``edges`` list using $pull.
+
+        Falls back to read-modify-write when the database does not support
+        atomic updates or when the document is not found.
+
+        Returns True on success, False on failure.
+        """
+        db = self.database
+        if self._is_mongodb(db):
+            try:
+                result = await db.find_one_and_update(
+                    "node",
+                    {"_id": node_id},
+                    {"$pull": {"edges": edge_id}},
+                )
+                if result is not None:
+                    cached = await self._get_from_cache(node_id)
+                    if cached and hasattr(cached, "edge_ids"):
+                        with suppress(ValueError):
+                            cached.edge_ids.remove(edge_id)
+                    return True
+            except Exception:
+                logger.warning(
+                    "atomic_remove_edge_id failed for node %s edge %s, falling back",
+                    node_id,
+                    edge_id,
+                    exc_info=True,
+                )
+
+        # Fallback: read-modify-write
+        from .entities.node import Node
+
+        node = await self.get(Node, node_id)
+        if node and edge_id in node.edge_ids:
+            node.edge_ids.remove(edge_id)
+            await self.save(node)
+        return node is not None
+
+    async def atomic_increment(self, node_id: str, field: str, amount: int = 1) -> bool:
+        """Atomically increment a numeric field on a node using $inc.
+
+        Falls back to read-modify-write when the database does not support
+        atomic updates or when the document is not found.
+
+        Args:
+            node_id: Node document ID
+            field: Context field name (e.g. ``total_users``)
+            amount: Increment value (can be negative for decrement)
+
+        Returns True on success, False on failure.
+        """
+        db = self.database
+        if self._is_mongodb(db):
+            try:
+                result = await db.find_one_and_update(
+                    "node",
+                    {"_id": node_id},
+                    {"$inc": {f"context.{field}": amount}},
+                )
+                if result is not None:
+                    cached = await self._get_from_cache(node_id)
+                    if cached and hasattr(cached, field):
+                        current = getattr(cached, field, 0) or 0
+                        object.__setattr__(cached, field, current + amount)
+                    return True
+            except Exception:
+                logger.warning(
+                    "atomic_increment failed for node %s field %s",
+                    node_id,
+                    field,
+                    exc_info=True,
+                )
+
+        # Fallback: read-modify-write
+        from .entities.node import Node
+
+        node = await self.get(Node, node_id)
+        if node and hasattr(node, field):
+            current = getattr(node, field, 0) or 0
+            setattr(node, field, current + amount)
+            await self.save(node)
+        return node is not None
 
     # Advanced query operations for performance optimization
     async def find_nodes(
@@ -1159,7 +1312,10 @@ class GraphContext:
             # Export all entities of this type
             records = []
             for entity in type_entities:
-                record = await entity.export()
+                if getattr(entity, "type_code", "") == "n":
+                    record = await entity.export(include_edges=True)
+                else:
+                    record = await entity.export()
                 records.append(record)
 
             # Save all records of this type
@@ -1278,12 +1434,19 @@ class GraphContext:
             db = self.database
             for entity in type_entities:
                 try:
-                    await db.delete(collection, entity["id"])
-                    # Remove from cache
-                    await self._cache.delete(entity["id"])
+                    entity_id = entity.id if hasattr(entity, "id") else entity["id"]
+                    await db.delete(collection, entity_id)
+                    await self._cache.delete(entity_id)
                 except Exception as e:
-                    # Log error but continue with other entities
-                    print(f"Failed to delete entity {entity.get('id', 'unknown')}: {e}")
+                    entity_id = (
+                        getattr(entity, "id", None) or entity.get("id", "unknown")
+                        if hasattr(entity, "get")
+                        else "unknown"
+                    )
+                    logger.error(
+                        f"Failed to delete entity {entity_id}: {e}",
+                        exc_info=True,
+                    )
                     continue
 
     # Async iterators for large datasets

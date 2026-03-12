@@ -93,52 +93,67 @@ class Transaction(ABC):
 
 
 class MongoDBTransaction(Transaction):
-    """MongoDB-specific transaction implementation."""
+    """MongoDB transaction backed by a Motor client session.
 
-    def __init__(self, transaction_id: str, session):
+    Requires a MongoDB replica set (even a single-node replica set).
+    """
+
+    def __init__(self, transaction_id: str, session, db):
         """Initialize MongoDB transaction.
 
         Args:
             transaction_id: Unique identifier for this transaction
-            session: MongoDB session object
+            session: Motor ``AsyncIOMotorClientSession``
+            db: Motor ``AsyncIOMotorDatabase``
         """
         super().__init__(transaction_id)
         self.session = session
+        self._db = db
         self.is_active = True
 
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Save a record within this MongoDB transaction."""
-        # Implementation would use self.session for transactional operations
-        raise NotImplementedError("MongoDB transaction save not implemented")
+        if "_id" not in data and "id" in data:
+            data["_id"] = data["id"]
+        coll = self._db[collection]
+        await coll.replace_one(
+            {"_id": data["_id"]},
+            data,
+            upsert=True,
+            session=self.session,
+        )
+        return data
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a record by ID within this MongoDB transaction."""
-        # Implementation would use self.session for transactional operations
-        raise NotImplementedError("MongoDB transaction get not implemented")
+        coll = self._db[collection]
+        return await coll.find_one({"_id": id}, session=self.session)
 
     async def delete(self, collection: str, id: str) -> bool:
         """Delete a record within this MongoDB transaction."""
-        # Implementation would use self.session for transactional operations
-        raise NotImplementedError("MongoDB transaction delete not implemented")
+        coll = self._db[collection]
+        result = await coll.delete_one({"_id": id}, session=self.session)
+        return result.deleted_count > 0
 
     async def find(
         self, collection: str, query: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         """Find records matching query within this MongoDB transaction."""
-        # Implementation would use self.session for transactional operations
-        raise NotImplementedError("MongoDB transaction find not implemented")
+        coll = self._db[collection]
+        cursor = coll.find(query, session=self.session)
+        return await cursor.to_list(length=None)
 
     async def commit(self) -> None:
         """Commit this MongoDB transaction."""
         if self.is_active and not self.is_committed and not self.is_rolled_back:
-            # Implementation would commit the MongoDB session
+            await self.session.commit_transaction()
             self.is_active = False
             self.is_committed = True
 
     async def rollback(self) -> None:
-        """Rollback this MongoDB transaction."""
+        """Roll back this MongoDB transaction."""
         if self.is_active and not self.is_committed and not self.is_rolled_back:
-            # Implementation would abort the MongoDB session
+            await self.session.abort_transaction()
             self.is_active = False
             self.is_rolled_back = True
 
@@ -246,19 +261,25 @@ class JSONTransaction(Transaction):
 async def transaction_context(database, transaction_id: Optional[str] = None):
     """Context manager for database transactions.
 
+    Yields a ``Transaction`` when the database supports it, or ``None``
+    when transactions are unavailable (callers should fall back to
+    non-transactional writes).
+
     Args:
         database: Database instance
         transaction_id: Optional transaction ID
 
     Yields:
-        Transaction object
+        Transaction object or None
     """
-    import uuid
-
-    if transaction_id is None:
-        transaction_id = str(uuid.uuid4())
+    if not hasattr(database, "begin_transaction"):
+        yield None
+        return
 
     transaction = await database.begin_transaction()
+    if transaction is None:
+        yield None
+        return
 
     try:
         yield transaction
