@@ -40,6 +40,10 @@ DEBUG=true python your_script.py
 - Verify node ID exists in database
 - Check database connection settings
 
+**Removing nodes whose class is no longer imported (ghost nodes)**
+
+If you have records whose entity class module was removed (e.g. an action removed from agent configuration), use `Node.get(id)` followed by `node.delete(cascade=True)`. jvspatial falls back to returning a base `Node` instance for such records so you can delete them through the standard interface, ensuring edges and dependent nodes are properly cleaned up. See [Entity Reference - Class-Aware Retrieval](entity-reference.md#class-aware-retrieval-and-ghost-node-fallback).
+
 **"Invalid edge direction"**
 - Use only 'in', 'out', or 'both'
 - Verify edge creation parameters

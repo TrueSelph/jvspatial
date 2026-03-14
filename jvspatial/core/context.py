@@ -605,12 +605,45 @@ class GraphContext:
         # This ensures class-aware get() - e.g., Agent.get() won't return an Action
         stored_entity = data.get("entity")
         if stored_entity:
-
             # Only proceed if stored entity is the requested class or a subclass of it
             target_class = find_subclass_by_name(entity_class, stored_entity)
             if target_class is None:
-                # Stored entity is not the requested class or its subclass - return None
-                return None
+                # The stored entity name is not a known subclass of entity_class.
+                # There are two distinct reasons this can happen:
+                #
+                # (a) Cross-hierarchy call: the record belongs to a sibling hierarchy
+                #     that IS imported (e.g. Agent.get() called on an Action id, or
+                #     User.get() called on a Config id).
+                #     find_subclass_by_name applied to the common root (Node or Object)
+                #     would find the class, confirming the mismatch.
+                #     Correct behaviour: return None.
+                #
+                # (b) Ghost node: the record's concrete class module is simply not
+                #     imported, so __subclasses__() doesn't know about it at any level.
+                #     Correct behaviour: fall back to entity_class so that callers like
+                #     Node.get(ghost_id) get a usable base-class instance rather than
+                #     None.  The isinstance check below remains as a safety backstop.
+                #
+                # We distinguish the two by searching from the common root of the
+                # relevant hierarchy.  If the name is found there but not under
+                # entity_class, it is a cross-hierarchy call (reject).  If it is
+                # found nowhere at all, the class is unknown / unimported (fall through).
+                from .entities.node import Node as _Node
+                from .entities.object import Object as _Object
+
+                # Walk up to the appropriate hierarchy root
+                if issubclass(entity_class, _Node):
+                    hierarchy_root = _Node
+                elif issubclass(entity_class, _Object):
+                    hierarchy_root = _Object
+                else:
+                    hierarchy_root = entity_class
+
+                if find_subclass_by_name(hierarchy_root, stored_entity) is not None:
+                    # Class is known in the hierarchy but not under entity_class — reject
+                    return None
+                # Completely unknown (ghost / unimported): fall through to
+                # _deserialize_entity which falls back to entity_class itself
 
         # Deserialize the entity
         entity = await self._deserialize_entity(entity_class, data)
