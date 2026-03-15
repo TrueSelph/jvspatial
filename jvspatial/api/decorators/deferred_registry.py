@@ -275,10 +275,30 @@ def clear_deferred_endpoints() -> None:
         _logger.debug(f"Cleared {count} deferred endpoint(s) from registry")
 
 
+def sync_endpoint_modules(server: "Server") -> int:
+    """Register endpoints from all known decorated modules with the server.
+
+    Walks _endpoint_modules (populated by @endpoint at import time) and
+    calls discover_in_module for each module still in sys.modules.
+    Already-registered endpoints are skipped automatically.
+    """
+    import sys
+
+    from jvspatial.api.decorators.route import get_endpoint_modules
+
+    count = 0
+    for mod_name in get_endpoint_modules():
+        module = sys.modules.get(mod_name)
+        if module is not None:
+            count += server.discovery_service.discover_in_module(module)
+    return count
+
+
 __all__ = [
     "register_deferred_endpoint",
     "flush_deferred_endpoints",
     "get_deferred_endpoint_count",
     "clear_deferred_endpoints",
+    "sync_endpoint_modules",
     "DeferredEndpoint",
 ]

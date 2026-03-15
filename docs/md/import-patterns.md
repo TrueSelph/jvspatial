@@ -91,6 +91,21 @@ from jvspatial.core.annotations import attribute
 from jvspatial import on_visit  # Not available at top level
 ```
 
+### **Endpoint Module Imports**
+
+For `@endpoint`-decorated functions and Walkers to register automatically, their modules must be imported before the server builds the app. See the [Endpoint Registration Guide](endpoint-registration-guide.md) for full details.
+
+```python
+# ✅ Best: Import API package in main before Server()
+import app.api  # noqa: F401
+
+server = Server(title="My API", ...)
+
+# ✅ Also good: Import submodules in package __init__
+# app/api/__init__.py
+from app.api import users, process, feed
+```
+
 ---
 
 ## 💾 **Database Patterns**

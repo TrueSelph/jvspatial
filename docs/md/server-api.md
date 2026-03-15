@@ -5,18 +5,19 @@ The jvspatial Server class provides a powerful, object-oriented abstraction for 
 ## Table of Contents
 
 1. [Quick Start](#quick-start)
-2. [Server Class Overview](#server-class-overview)
-3. [Configuration](#configuration)
-4. [Walker Endpoints](#walker-endpoints)
-5. [Dynamic Registration](#dynamic-registration)
-6. [Package Development](#package-development)
-7. [Custom Routes](#custom-routes)
-8. [Middleware](#middleware)
-9. [Lifecycle Hooks](#lifecycle-hooks)
-10. [Exception Handling](#exception-handling)
-11. [Database Configuration](#database-configuration)
-12. [Examples](#examples)
-13. [API Reference](#api-reference)
+2. [Recommended Entrypoint and Endpoint Registration](#recommended-entrypoint-and-endpoint-registration)
+3. [Server Class Overview](#server-class-overview)
+4. [Configuration](#configuration)
+5. [Walker Endpoints](#walker-endpoints)
+6. [Dynamic Registration](#dynamic-registration)
+7. [Package Development](#package-development)
+8. [Custom Routes](#custom-routes)
+9. [Middleware](#middleware)
+10. [Lifecycle Hooks](#lifecycle-hooks)
+11. [Exception Handling](#exception-handling)
+12. [Database Configuration](#database-configuration)
+13. [Examples](#examples)
+14. [API Reference](#api-reference)
 
 ## 🎯 **Standard Implementation Examples**
 
@@ -67,7 +68,6 @@ Here's a minimal example to get started quickly. For production-ready implementa
 
 ```python
 from jvspatial.api import Server, endpoint
-from jvspatial.api import Server, endpoint
 from jvspatial.api.decorators import EndpointField
 from jvspatial.core import Walker, Node, on_visit
 
@@ -96,6 +96,32 @@ class ProcessData(Walker):
 if __name__ == "__main__":
     server.run()
 ```
+
+## Recommended Entrypoint and Endpoint Registration
+
+**Recommended pattern**: Import your API modules before creating the server. Endpoints decorated with `@endpoint` register automatically—no `packages=` or `register_package()` needed.
+
+```python
+# app/main.py
+from jvspatial.api import Server
+
+import app.api  # noqa: F401  # Import so @endpoint decorators run
+
+server = Server(
+    title="My API",
+    description="API description",
+    version="1.0.0",
+    database={"db_type": "json", "db_path": "./jvdb"},
+)
+app = server.get_app()
+```
+
+See the [Endpoint Registration Guide](endpoint-registration-guide.md) for:
+
+- Minimal entrypoint setup
+- How "decorate + import" auto-registration works
+- Conditional imports (e.g., optional logging endpoints)
+- Migration from deprecated `packages=` and `register_package()`
 
 ## Server Class Overview
 

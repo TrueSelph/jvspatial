@@ -34,6 +34,7 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 | [REST API](rest-api.md) | API design and endpoints | All levels |
 | [API Architecture](api-architecture.md) | Server architecture | Advanced |
 | [Server API](server-api.md) | Server configuration | Intermediate |
+| [Endpoint Registration Guide](endpoint-registration-guide.md) | Recommended entrypoint and auto-registration | Intermediate |
 | [Examples](examples.md) | **Standard implementation examples** | ⭐ **Start Here** |
 | [Decorator Reference](decorator-reference.md) | All decorators explained | All levels |
 
@@ -121,9 +122,10 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 1. ✅ [Quick Start Guide](quick-start-guide.md)
 2. ✅ [REST API](rest-api.md)
 3. ✅ [Decorator Reference](decorator-reference.md)
-4. ✅ [Authentication](authentication.md)
-5. ✅ [Server API](server-api.md)
-6. ✅ [Webhooks Quickstart](webhooks-quickstart.md)
+4. ✅ [Endpoint Registration Guide](endpoint-registration-guide.md)
+5. ✅ [Authentication](authentication.md)
+6. ✅ [Server API](server-api.md)
+7. ✅ [Webhooks Quickstart](webhooks-quickstart.md)
 
 ### **Path 3: Advanced Architecture**
 
@@ -144,6 +146,7 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 |------|----------|---------|
 | Create a node | [Quick Start](quick-start-guide.md) | Pattern 1 |
 | Define an endpoint | [Quick Start](quick-start-guide.md) | Step 3 |
+| Setup endpoint registration | [Endpoint Registration Guide](endpoint-registration-guide.md) | Recommended Entrypoint |
 | Build a walker | [Graph Traversal](graph-traversal.md) | Basic Walker |
 | Visualize graph | [Graph Visualization](graph-visualization.md) | Quick Start |
 | Query database | [MongoDB Query](mongodb-query-interface.md) | Query Builder |
@@ -217,6 +220,7 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 - REST API
 - API Architecture
 - Server API
+- Endpoint Registration Guide
 - Decorator Reference
 - Error Handling
 
@@ -303,6 +307,7 @@ from jvspatial.utils import memoize, retry, NodeId
 
 | Version | Date | Changes |
 |---------|------|---------|
+| **0.0.4** | 2025-03-14 | Auto-registration for endpoints, Endpoint Registration Guide |
 | **0.0.3** | 2025-02-22 | Documentation updates, DynamoDB support |
 | **0.0.2** | 2025-xx-xx | Bug fixes and improvements |
 | **0.0.1** | 2025-xx-xx | Initial release |

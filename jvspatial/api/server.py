@@ -8,6 +8,7 @@ setup, lifecycle management, and endpoint routing.
 
 import contextlib
 import logging
+import warnings
 from typing import (
     Any,
     Callable,
@@ -99,13 +100,26 @@ class Server:
     def __init__(
         self: "Server",
         config: Optional[Union[ServerConfig, Dict[str, Any]]] = None,
+        packages: Optional[List[str]] = None,
+        node_types: Optional[List[Type[Node]]] = None,
+        on_startup: Optional[List[Callable]] = None,
+        on_shutdown: Optional[List[Callable]] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the Server.
 
         Args:
             config: Server configuration as ServerConfig or dict
-            **kwargs: Additional configuration parameters
+            packages: Package strings to import for endpoint registration.  Each
+                package is imported (with module-cache eviction for reload safety)
+                inside ``_create_app_instance()``, before endpoint discovery runs.
+                This replaces the manual ``import app.api`` + ``sys.modules``
+                eviction pattern.  Example: ``packages=["app.api"]``.
+            node_types: Node subclasses to register with the server in bulk.
+                Equivalent to calling ``server.add_node_type()`` for each class.
+            on_startup: Async or sync callables added as startup lifecycle hooks.
+            on_shutdown: Async or sync callables added as shutdown lifecycle hooks.
+            **kwargs: Additional configuration parameters forwarded to ServerConfig
         """
         # Initialize configuration using clean merging
         merged_config = self._merge_config(config, kwargs)
@@ -146,6 +160,30 @@ class Server:
         # Authentication configuration
         self._auth_config: Optional[Any] = None
         self._auth_endpoints_registered = False
+
+        # Declarative node type registration
+        if node_types:
+            for node_cls in node_types:
+                self.add_node_type(node_cls)
+
+        # Declarative lifecycle hooks
+        if on_startup:
+            for hook in on_startup:
+                self.lifecycle_manager.add_startup_hook(hook)
+        if on_shutdown:
+            for hook in on_shutdown:
+                self.lifecycle_manager.add_shutdown_hook(hook)
+
+        # Store packages for lazy import in _create_app_instance() (with eviction)
+        # packages is deprecated: use import app.api and sync_endpoint_modules instead
+        self._registered_packages: List[str] = list(packages or [])
+        if packages:
+            warnings.warn(
+                "packages= is deprecated; import your API modules directly (e.g. import app.api) "
+                "and endpoints will auto-register. packages= will be removed in a future release.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
         # Automatically set this server as the current server in context
         # The most recently instantiated Server becomes the current one
@@ -482,6 +520,23 @@ class Server:
 
         # Register core routes using AppBuilder
         self.app_builder.register_core_routes(app, self._graph_context, server=self)
+
+        # Sync endpoints from modules decorated with @endpoint (handles uvicorn reload)
+        from jvspatial.api.decorators.deferred_registry import sync_endpoint_modules
+
+        if self._registered_packages:
+            # Backward compat: packages= was provided, run legacy register_package loop
+            for pkg in self._registered_packages:
+                try:
+                    self.register_package(pkg)
+                except ImportError as exc:
+                    self._logger.warning(
+                        f"Could not import registered package '{pkg}': {exc}"
+                    )
+        else:
+            synced = sync_endpoint_modules(self)
+            if synced > 0:
+                self._logger.info(f"Synced {synced} endpoint(s) from module tracker")
 
         # Discover and register endpoints from pre-loaded modules BEFORE including routers
         # This ensures all @endpoint decorated functions/classes are registered with the
@@ -1153,6 +1208,7 @@ class Server:
         host: Optional[str] = None,
         port: Optional[int] = None,
         reload: Optional[bool] = None,
+        app_path: Optional[str] = None,
         **uvicorn_kwargs: Any,
     ) -> None:
         """Run the server using uvicorn.
@@ -1161,6 +1217,11 @@ class Server:
             host: Override host address
             port: Override port number
             reload: Enable auto-reload for development
+            app_path: Import string for the ASGI app, e.g. ``"app.main:app"``.
+                Required when ``reload=True`` so uvicorn can re-import the
+                module in each reload worker.  When omitted and reload is
+                enabled a warning is logged and the app object is used
+                directly (reload will not work correctly).
             **uvicorn_kwargs: Additional uvicorn parameters
         """
         # Set up standard logging (colorized level names, consistent format)
@@ -1181,9 +1242,6 @@ class Server:
         if self.config.docs_url:
             server_info += f" | docs: {self.config.docs_url}"
         self._logger.info(f"🔧 Server: {server_info}")
-
-        # Get the app
-        app = self.get_app()
 
         # Configure uvicorn parameters with aligned logging format
         formatter = _LevelColorFormatter(
@@ -1234,8 +1292,20 @@ class Server:
             **uvicorn_kwargs,
         }
 
-        # Run the server
-        uvicorn.run(app, **uvicorn_config)
+        # When reloading, uvicorn must receive an import string, not an app object.
+        # If app_path is provided and reload is active, pass the string so workers
+        # can re-import the module and re-register endpoints correctly.
+        if run_reload and app_path:
+            uvicorn.run(app_path, **uvicorn_config)
+        else:
+            if run_reload and not app_path:
+                self._logger.warning(
+                    "reload=True but no app_path provided; reload workers will "
+                    "not re-register endpoints correctly.  Pass "
+                    'app_path="module:app" to run() to fix this.'
+                )
+            app = self.get_app()
+            uvicorn.run(app, **uvicorn_config)
 
     async def run_async(
         self: "Server",
@@ -1314,6 +1384,43 @@ class Server:
         # This is mainly for documentation/organization purposes
         # The actual registration happens automatically in jvspatial
         self._logger.info(f"Registered node type: {node_class.__name__}")
+
+    def register_package(self: "Server", package: str) -> None:
+        """Import a package so its ``@endpoint`` decorators register with this server.
+
+        .. deprecated::
+            Import your API modules directly (e.g. ``import app.api``) and endpoints
+            will auto-register via the module tracker. This method will be removed
+            in a future release.
+
+        Any previously cached copy of the package (and its submodules) is evicted
+        from ``sys.modules`` before importing, ensuring decorators always re-run
+        against the current server instance.  This makes the method safe to call
+        under uvicorn ``--reload``, where modules may have been cached by a previous
+        worker load.
+
+        Args:
+            package: Dotted package name to import, e.g. ``"app.api"``.
+        """
+        warnings.warn(
+            "register_package() is deprecated; import your API modules directly "
+            "and endpoints will auto-register. It will be removed in a future release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        import importlib
+
+        from jvspatial.api.utils.reload import evict_package
+
+        evicted = evict_package(package)
+        if evicted:
+            self._logger.debug(
+                f"Evicted cached modules for '{package}' (reload worker)"
+            )
+        importlib.import_module(package)
+        self._logger.debug(f"Registered package '{package}'")
+        if package not in self._registered_packages:
+            self._registered_packages.append(package)
 
     def configure_database(self: "Server", db_type: str, **db_config: Any) -> None:
         """Configure database settings using GraphContext.
