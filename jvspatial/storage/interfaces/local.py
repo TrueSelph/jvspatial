@@ -9,7 +9,7 @@ import hashlib
 import logging
 import os
 from asyncio import to_thread
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, cast
 
@@ -146,13 +146,10 @@ class LocalFileInterface(FileStorageInterface):
             Version identifier
         """
         import uuid
-        from datetime import datetime
 
         # Generate version if not provided
         if version is None:
-            version = (
-                f"v{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
-            )
+            version = f"v{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
         # Create version directory (use .versions suffix to avoid conflicts)
         version_dir = self.root_dir / f"{file_path}.versions"
@@ -165,7 +162,7 @@ class LocalFileInterface(FileStorageInterface):
         # Save version metadata
         version_metadata = {
             "version": version,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "size": len(content),
             "checksum": hashlib.sha256(content).hexdigest(),
             "metadata": metadata or {},

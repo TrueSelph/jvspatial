@@ -69,6 +69,12 @@ class Node(Object):
 - **`node()`**: Returns a single connected node (first match) or None - convenience method when you expect only one result
 - **`delete(cascade=True)`**: Deletes the node and cascades deletion of all connected edges and dependent nodes
 
+#### Class-Aware Retrieval and Ghost Node Fallback
+
+`Node.get(id)` and `Object.get(id)` are class-aware: they only return instances of the requested class or its subclasses. For example, `Agent.get(action_id)` returns `None` when the record is an Action (cross-hierarchy call).
+
+When the stored entity's concrete class module is not imported (e.g. an action removed from an agent's configuration), the record is a "ghost node." In this case, `Node.get(ghost_id)` falls back to returning a base `Node` instance rather than `None`, so callers can still call `node.delete(cascade=True)` through the standard interface. This ensures proper edge cleanup and cascade deletion without raw database manipulation. Subclass-specific getters (e.g. `Action.get(ghost_id)`) continue to return `None` when the concrete class is unknown.
+
 #### `Edge(Object)`
 Represents connections between nodes.
 

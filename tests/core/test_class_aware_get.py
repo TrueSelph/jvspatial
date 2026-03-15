@@ -145,3 +145,130 @@ class TestClassAwareGet:
         result = await DerivedNode.get(derived.id)
         assert result is not None, "DerivedNode.get() should return DerivedNode"
         assert isinstance(result, DerivedNode), "Should return DerivedNode instance"
+
+    # -------------------------------------------------------------------------
+    # Ghost node tests — entity class module not imported
+    # -------------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_node_get_returns_base_instance_for_ghost_node(self, temp_context):
+        """Node.get() returns a Node base instance when the stored entity class is unknown.
+
+        A ghost node is a record whose 'entity' field names a class that is not
+        currently imported (e.g. an action whose module was removed).
+        Node.get() should return a Node base-class instance so that callers
+        can call node.delete(cascade=True) through the standard interface.
+        """
+        from jvspatial.core.context import get_default_context
+        from jvspatial.core.entities.node import Node as _Node
+
+        context = get_default_context()
+        type_code = context._get_entity_type_code(_Node)
+        collection = context._get_collection_name(type_code)
+
+        ghost_id = "ghost-node-test-id"
+        ghost_record = {
+            "id": ghost_id,
+            "entity": "NeverImportedClass",
+            "context": {
+                "name": "ghost",
+                "enabled": True,
+            },
+            "edges": [],
+        }
+        await context.database.save(collection, ghost_record)
+
+        result = await _Node.get(ghost_id)
+        assert result is not None, (
+            "Node.get() must return a Node instance for a ghost record "
+            "(entity class not imported), not None"
+        )
+        assert isinstance(result, _Node), f"Expected Node instance, got {type(result)}"
+        assert result.id == ghost_id
+
+    @pytest.mark.asyncio
+    async def test_node_get_still_rejects_cross_hierarchy_ids(self, temp_context):
+        """Node subclass.get() still returns None for a sibling-hierarchy id.
+
+        Agent.get(action_id) must return None even after the ghost-node fallback
+        is in place, because the Action class IS imported and is not a subclass
+        of Agent.
+        """
+
+        class AgentNode(Node):
+            name: str = ""
+
+        class ActionNode(Node):
+            name: str = ""
+
+        agent = await AgentNode.create(name="agent")
+        action = await ActionNode.create(name="action")
+
+        # Cross-hierarchy: AgentNode.get() on an ActionNode id
+        result = await AgentNode.get(action.id)
+        assert result is None, (
+            "AgentNode.get() must return None for an ActionNode id "
+            "(cross-hierarchy call must still be rejected)"
+        )
+
+        # Cross-hierarchy: ActionNode.get() on an AgentNode id
+        result = await ActionNode.get(agent.id)
+        assert result is None, "ActionNode.get() must return None for an AgentNode id"
+
+    @pytest.mark.asyncio
+    async def test_ghost_node_delete_removes_node_and_edges(self, temp_context):
+        """Node.get() + node.delete(cascade=True) fully removes a ghost node and its edges.
+
+        This is the end-to-end path used by jvagent to remove actions whose
+        class module is no longer imported.  After deletion both the node record
+        and any edge pointing to it must be absent from the database.
+        """
+        from jvspatial.core.context import get_default_context
+        from jvspatial.core.entities.node import Node as _Node
+
+        context = get_default_context()
+        type_code = context._get_entity_type_code(_Node)
+        collection = context._get_collection_name(type_code)
+
+        # Create a real manager node that will hold an edge to the ghost
+        class ManagerNode(Node):
+            name: str = ""
+
+        manager = await ManagerNode.create(name="manager")
+
+        ghost_id = "ghost-delete-test-id"
+        ghost_record = {
+            "id": ghost_id,
+            "entity": "AnotherNeverImportedClass",
+            "context": {
+                "name": "ghost",
+                "agent_id": "test-agent",
+            },
+            "edges": [],
+        }
+        await context.database.save(collection, ghost_record)
+
+        # Inject an edge from manager → ghost (as would exist in jvagent)
+        edge_record = {
+            "id": "ghost-delete-edge-id",
+            "entity": "Edge",
+            "source": manager.id,
+            "target": ghost_id,
+            "context": {},
+        }
+        await context.database.save("edge", edge_record)
+
+        # Standard interface: get + delete
+        ghost_node = await _Node.get(ghost_id)
+        assert ghost_node is not None, "Node.get() must find the ghost node"
+        await ghost_node.delete(cascade=True)
+
+        # Node record must be gone
+        raw_nodes = await context.database.find(collection, {"id": ghost_id})
+        assert len(raw_nodes) == 0, "Ghost node record must be removed after delete"
+
+        # Edge pointing to the ghost must be gone
+        raw_edges = await context.database.find("edge", {"target": ghost_id})
+        assert (
+            len(raw_edges) == 0
+        ), "Edge pointing to ghost node must be removed — no remnant edges"

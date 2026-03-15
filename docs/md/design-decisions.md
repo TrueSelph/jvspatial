@@ -215,6 +215,17 @@ Benefits:
 3. Graph traversal capabilities
 4. Built-in documentation
 
+### Class-Aware Get and Ghost Node Fallback
+
+`Entity.get(id)` is class-aware: it only returns instances of the requested class or its subclasses. This prevents cross-hierarchy confusion (e.g. `Agent.get(action_id)` returns `None` when the record is an Action).
+
+When a record's concrete class module is not imported (a "ghost node"), `find_subclass_by_name` returns `None` because the class is unknown to Python's `__subclasses__()`. Rather than rejecting all such records, `context.get()` distinguishes two cases:
+
+1. **Cross-hierarchy**: The stored entity name is a known subclass of a sibling hierarchy (e.g. calling `Agent.get()` on an Action id). Reject — return `None`.
+2. **Ghost node**: The stored entity name is completely unknown (module not imported). Fall back to the base `entity_class` so that `Node.get(ghost_id)` returns a usable `Node` instance.
+
+This allows callers to use `node.delete(cascade=True)` through the standard interface for ghost nodes, ensuring proper edge cleanup and cascade deletion without raw database manipulation. See [Entity Reference - Class-Aware Retrieval](entity-reference.md#class-aware-retrieval-and-ghost-node-fallback).
+
 ## Migration Considerations
 
 ### From Traditional ORM

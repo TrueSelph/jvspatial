@@ -10,15 +10,28 @@ Index Creation Behavior:
 
 import contextlib
 import logging
+import os
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
-from pymongo.errors import PyMongoError
+from pymongo.errors import (
+    ConnectionFailure,
+    PyMongoError,
+    ServerSelectionTimeoutError,
+)
 
 from jvspatial.db.database import Database
 from jvspatial.exceptions import DatabaseError
 
 logger = logging.getLogger(__name__)
+
+
+def _is_connection_error(exc: BaseException) -> bool:
+    """Return True if the exception indicates a connection/network error worth retrying."""
+    if isinstance(exc, (ConnectionFailure, ServerSelectionTimeoutError)):
+        return True
+    msg = str(exc).lower()
+    return "connection closed" in msg or "connection refused" in msg
 
 
 class MongoDB(Database):
@@ -28,21 +41,29 @@ class MongoDB(Database):
         self,
         uri: str = "mongodb://localhost:27017",
         db_name: str = "jvdb",
-        max_pool_size: int = 100,
-        min_pool_size: int = 10,
+        max_pool_size: Optional[int] = None,
+        min_pool_size: Optional[int] = None,
     ) -> None:
         """Initialize MongoDB database.
 
         Args:
             uri: MongoDB connection URI
             db_name: Database name
-            max_pool_size: Maximum number of connections in the connection pool (default: 100)
-            min_pool_size: Minimum number of connections in the connection pool (default: 10)
+            max_pool_size: Maximum connections in pool (default: 10, Lambda-friendly)
+            min_pool_size: Minimum connections in pool (default: 0, Lambda-friendly)
         """
         self.uri = uri
         self.db_name = db_name
-        self.max_pool_size = max_pool_size
-        self.min_pool_size = min_pool_size
+        self.max_pool_size = (
+            max_pool_size
+            if max_pool_size is not None
+            else int(os.getenv("JVSPATIAL_MONGODB_MAX_POOL_SIZE", "10"))
+        )
+        self.min_pool_size = (
+            min_pool_size
+            if min_pool_size is not None
+            else int(os.getenv("JVSPATIAL_MONGODB_MIN_POOL_SIZE", "0"))
+        )
         self._client: Optional[AsyncIOMotorClient] = None
         self._db: Optional[AsyncIOMotorDatabase] = None
         self._created_indexes: Dict[str, Set[str]] = (
@@ -132,6 +153,7 @@ class MongoDB(Database):
                 self.uri,
                 maxPoolSize=self.max_pool_size,
                 minPoolSize=self.min_pool_size,
+                maxIdleTimeMS=60000,  # Close idle connections before DocumentDB timeout
             )
             self._db = self._client[self.db_name]
 
@@ -189,6 +211,23 @@ class MongoDB(Database):
                 return data
             raise DatabaseError(f"MongoDB save error: {e}") from e
         except PyMongoError as e:
+            if _is_connection_error(e):
+                logger.debug(
+                    "MongoDB connection error during save, recreating and retrying: %s",
+                    e,
+                )
+                self._client = None
+                self._db = None
+                await self._ensure_connected()
+                if self._db is None:
+                    raise DatabaseError(
+                        "Failed to establish MongoDB connection after retry"
+                    )
+                collection_obj = self._db[collection]
+                await collection_obj.replace_one(
+                    {"_id": data["_id"]}, data, upsert=True
+                )
+                return data
             raise DatabaseError(f"MongoDB save error: {e}") from e
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
@@ -221,6 +260,20 @@ class MongoDB(Database):
                 return result
             raise DatabaseError(f"MongoDB get error: {e}") from e
         except PyMongoError as e:
+            if _is_connection_error(e):
+                logger.debug(
+                    "MongoDB connection error during get, recreating and retrying: %s",
+                    e,
+                )
+                self._client = None
+                self._db = None
+                await self._ensure_connected()
+                if self._db is None:
+                    raise DatabaseError(
+                        "Failed to establish MongoDB connection after retry"
+                    )
+                collection_obj = self._db[collection]
+                return await collection_obj.find_one({"_id": id})
             raise DatabaseError(f"MongoDB get error: {e}") from e
 
     async def delete(self, collection: str, id: str) -> None:
@@ -252,6 +305,21 @@ class MongoDB(Database):
                 return
             raise DatabaseError(f"MongoDB delete error: {e}") from e
         except PyMongoError as e:
+            if _is_connection_error(e):
+                logger.debug(
+                    "MongoDB connection error during delete, recreating and retrying: %s",
+                    e,
+                )
+                self._client = None
+                self._db = None
+                await self._ensure_connected()
+                if self._db is None:
+                    raise DatabaseError(
+                        "Failed to establish MongoDB connection after retry"
+                    )
+                collection_obj = self._db[collection]
+                await collection_obj.delete_one({"_id": id})
+                return
             raise DatabaseError(f"MongoDB delete error: {e}") from e
 
     async def find(
@@ -288,7 +356,142 @@ class MongoDB(Database):
                 return results
             raise DatabaseError(f"MongoDB find error: {e}") from e
         except PyMongoError as e:
+            if _is_connection_error(e):
+                logger.debug(
+                    "MongoDB connection error during find, recreating and retrying: %s",
+                    e,
+                )
+                self._client = None
+                self._db = None
+                await self._ensure_connected()
+                if self._db is None:
+                    raise DatabaseError(
+                        "Failed to establish MongoDB connection after retry"
+                    )
+                collection_obj = self._db[collection]
+                cursor = collection_obj.find(query)
+                return await cursor.to_list(length=None)
             raise DatabaseError(f"MongoDB find error: {e}") from e
+
+    async def find_one_and_delete(
+        self, collection: str, query: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically find and delete the first record matching a query.
+
+        Uses MongoDB native find_one_and_delete for atomicity. Returns the
+        deleted document if found, None otherwise. Useful for work claiming
+        (e.g., batch processing) where only one consumer should succeed.
+        """
+        await self._ensure_connected()
+
+        if self._db is None:
+            raise DatabaseError("MongoDB database connection not established")
+
+        try:
+            collection_obj = self._db[collection]
+            return await collection_obj.find_one_and_delete(query)
+        except RuntimeError as e:
+            if "Event loop is closed" in str(e) or "closed" in str(e).lower():
+                logger.debug(
+                    "Event loop closed during operation, recreating MongoDB connection"
+                )
+                self._client = None
+                self._db = None
+                await self._ensure_connected()
+                if self._db is None:
+                    raise DatabaseError(
+                        "Failed to establish MongoDB connection after retry"
+                    )
+                collection_obj = self._db[collection]
+                return await collection_obj.find_one_and_delete(query)
+            raise DatabaseError(f"MongoDB find_one_and_delete error: {e}") from e
+        except PyMongoError as e:
+            if _is_connection_error(e):
+                logger.debug(
+                    "MongoDB connection error during find_one_and_delete, recreating and retrying: %s",
+                    e,
+                )
+                self._client = None
+                self._db = None
+                await self._ensure_connected()
+                if self._db is None:
+                    raise DatabaseError(
+                        "Failed to establish MongoDB connection after retry"
+                    )
+                collection_obj = self._db[collection]
+                return await collection_obj.find_one_and_delete(query)
+            raise DatabaseError(f"MongoDB find_one_and_delete error: {e}") from e
+
+    async def find_one_and_update(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        update: Dict[str, Any],
+        upsert: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically find and update the first record matching a query.
+
+        Uses MongoDB native find_one_and_update with ReturnDocument.AFTER.
+        Supports update operators: $push, $set, $setOnInsert, etc. Returns the
+        updated document (or the newly created document when upsert=True).
+        """
+        from pymongo import ReturnDocument
+
+        await self._ensure_connected()
+
+        if self._db is None:
+            raise DatabaseError("MongoDB database connection not established")
+
+        try:
+            collection_obj = self._db[collection]
+            return await collection_obj.find_one_and_update(
+                query,
+                update,
+                upsert=upsert,
+                return_document=ReturnDocument.AFTER,
+            )
+        except RuntimeError as e:
+            if "Event loop is closed" in str(e) or "closed" in str(e).lower():
+                logger.debug(
+                    "Event loop closed during operation, recreating MongoDB connection"
+                )
+                self._client = None
+                self._db = None
+                await self._ensure_connected()
+                if self._db is None:
+                    raise DatabaseError(
+                        "Failed to establish MongoDB connection after retry"
+                    )
+                collection_obj = self._db[collection]
+                return await collection_obj.find_one_and_update(
+                    query,
+                    update,
+                    upsert=upsert,
+                    return_document=ReturnDocument.AFTER,
+                )
+            raise DatabaseError(f"MongoDB find_one_and_update error: {e}") from e
+        except PyMongoError as e:
+            if _is_connection_error(e):
+                logger.debug(
+                    "MongoDB connection error during find_one_and_update, "
+                    "recreating and retrying: %s",
+                    e,
+                )
+                self._client = None
+                self._db = None
+                await self._ensure_connected()
+                if self._db is None:
+                    raise DatabaseError(
+                        "Failed to establish MongoDB connection after retry"
+                    )
+                collection_obj = self._db[collection]
+                return await collection_obj.find_one_and_update(
+                    query,
+                    update,
+                    upsert=upsert,
+                    return_document=ReturnDocument.AFTER,
+                )
+            raise DatabaseError(f"MongoDB find_one_and_update error: {e}") from e
 
     async def create_index(
         self,
@@ -370,6 +573,42 @@ class MongoDB(Database):
 
         except PyMongoError as e:
             raise DatabaseError(f"MongoDB index creation error: {e}") from e
+
+    async def begin_transaction(self):
+        """Start a MongoDB transaction (requires replica set).
+
+        Returns a ``MongoDBTransaction`` whose session is bound to a
+        ``start_transaction`` call.  If the deployment does not support
+        transactions (standalone / DocumentDB without transactions), the
+        returned object will be ``None`` and callers should fall back to
+        non-transactional writes.
+        """
+        from jvspatial.db.transaction import MongoDBTransaction
+
+        await self._ensure_connected()
+        if self._client is None or self._db is None:
+            return None
+        try:
+            import uuid
+
+            session = await self._client.start_session()
+            session.start_transaction()
+            return MongoDBTransaction(str(uuid.uuid4()), session, self._db)
+        except Exception:
+            logger.debug("Transactions not available on this deployment", exc_info=True)
+            return None
+
+    async def commit_transaction(self, txn) -> None:
+        """Commit the given transaction and end its session."""
+        if txn is not None:
+            await txn.commit()
+            txn.session.end_session()
+
+    async def rollback_transaction(self, txn) -> None:
+        """Roll back the given transaction and end its session."""
+        if txn is not None:
+            await txn.rollback()
+            txn.session.end_session()
 
     async def close(self) -> None:
         """Close the database connection."""

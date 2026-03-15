@@ -1,7 +1,7 @@
 """Token cleanup service for removing expired tokens and blacklist entries."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from jvspatial.api.auth.models import RefreshToken, TokenBlacklist
@@ -40,7 +40,7 @@ class TokenCleanupService:
         """
         try:
             await self.context.ensure_indexes(TokenBlacklist)
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
 
             # Get all blacklist entries and filter expired ones
             # This approach works across all database backends
@@ -82,7 +82,7 @@ class TokenCleanupService:
         """
         try:
             await self.context.ensure_indexes(RefreshToken)
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
 
             # Get all refresh tokens and filter expired ones
             # This approach works across all database backends

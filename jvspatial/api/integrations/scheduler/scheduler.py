@@ -12,7 +12,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 import schedule
@@ -112,7 +112,7 @@ class SchedulerService:
             interval = self.config.interval
 
         self._event = threading.Event()
-        self.start_time = datetime.utcnow()
+        self.start_time = datetime.now(timezone.utc)
 
         class SchedulerThread(threading.Thread):
             def __init__(self, scheduler_service: "SchedulerService"):
@@ -502,7 +502,7 @@ class SchedulerService:
             self.logger.error(f"Failed to submit task {task.task_id}: {e}")
             execution_record.success = False
             execution_record.error_message = str(e)
-            execution_record.completed_at = datetime.utcnow()
+            execution_record.completed_at = datetime.now(timezone.utc)
             self._update_execution_stats(execution_record)
 
     def _execute_task(self, task_id: str, func: Callable, **kwargs: Any) -> None:
@@ -544,7 +544,7 @@ class SchedulerService:
             self.logger.error(f"Failed to submit task {task_id}: {e}")
             execution_record.success = False
             execution_record.error_message = str(e)
-            execution_record.completed_at = datetime.utcnow()
+            execution_record.completed_at = datetime.now(timezone.utc)
             self._update_execution_stats(execution_record)
 
     def _run_task_with_timeout(
@@ -588,7 +588,7 @@ class SchedulerService:
             self.logger.error(f"Task {task_id} failed: {e}")
 
         finally:
-            execution_record.completed_at = datetime.utcnow()
+            execution_record.completed_at = datetime.now(timezone.utc)
             if execution_record.started_at and execution_record.completed_at:
                 duration = execution_record.completed_at - execution_record.started_at
                 execution_record.duration_seconds = duration.total_seconds()
@@ -676,7 +676,9 @@ class SchedulerService:
         """
         uptime_seconds: float = 0.0
         if self.start_time:
-            uptime_seconds = (datetime.utcnow() - self.start_time).total_seconds()
+            uptime_seconds = (
+                datetime.now(timezone.utc) - self.start_time
+            ).total_seconds()
 
         return {
             "is_running": self.is_running,

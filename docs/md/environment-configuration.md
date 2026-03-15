@@ -50,6 +50,8 @@ jvspatial uses environment variables to configure database connections, file pat
 |----------|------|---------|-------------|
 | `JVSPATIAL_MONGODB_URI` | string | `mongodb://localhost:27017` | MongoDB connection URI |
 | `JVSPATIAL_MONGODB_DB_NAME` | string | `jvdb` | MongoDB database name |
+| `JVSPATIAL_MONGODB_MAX_POOL_SIZE` | integer | `10` | Maximum connections in pool (Lambda-friendly default) |
+| `JVSPATIAL_MONGODB_MIN_POOL_SIZE` | integer | `0` | Minimum connections in pool (Lambda-friendly default) |
 
 ### Performance & Caching Configuration
 
@@ -220,6 +222,28 @@ JVSPATIAL_MONGODB_URI=mongodb://host1:27017,host2:27017,host3:27017/?replicaSet=
 ```env
 JVSPATIAL_MONGODB_URI=mongodb://localhost:27017/?maxPoolSize=20&minPoolSize=5&connectTimeoutMS=30000
 ```
+
+#### Lambda / DocumentDB
+
+For AWS Lambda with Amazon DocumentDB, use connection settings that avoid stale connections after idle periods. The MongoDB layer retries once on connection errors and uses Lambda-friendly pool defaults.
+
+**Recommended environment variables:**
+
+```env
+JVSPATIAL_DB_TYPE=mongodb
+JVSPATIAL_MONGODB_URI=mongodb://docdb-host:27017/?tls=true&tlsCAFile=global-bundle.pem&maxIdleTimeMS=60000&connectTimeoutMS=20000&serverSelectionTimeoutMS=20000
+JVSPATIAL_MONGODB_DB_NAME=your_db
+JVSPATIAL_MONGODB_MIN_POOL_SIZE=0
+JVSPATIAL_MONGODB_MAX_POOL_SIZE=10
+```
+
+**URI options:**
+- `maxIdleTimeMS=60000` – Close idle connections before DocumentDB timeout
+- `connectTimeoutMS=20000` – Connection establishment timeout
+- `serverSelectionTimeoutMS=20000` – Server selection timeout
+- `tls=true` and `tlsCAFile` – Required for DocumentDB
+
+**Pool settings:** `minPoolSize=0` avoids maintaining idle connections; `maxPoolSize=10` keeps the pool small for serverless.
 
 ## Deployment Scenarios
 

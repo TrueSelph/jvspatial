@@ -401,13 +401,17 @@ class QueryEngine:
 
     @staticmethod
     def apply_update(
-        document: Dict[str, Any], update: Dict[str, Any]
+        document: Dict[str, Any],
+        update: Dict[str, Any],
+        apply_set_on_insert: bool = False,
     ) -> Dict[str, Any]:
         """Apply update operations to a document.
 
         Args:
             document: Document to update
-            update: Update operations to apply
+            update: Update operations to apply (MongoDB-style: $set, $push, etc.)
+            apply_set_on_insert: If True, apply $setOnInsert; if False, skip it.
+                Use True when the document was just created (upsert).
 
         Returns:
             Updated document
@@ -415,7 +419,12 @@ class QueryEngine:
         if not update:
             return document
         for op, payload in update.items():
-            if op == "$set":
+            if op == "$setOnInsert":
+                if apply_set_on_insert:
+                    for field, value in payload.items():
+                        QueryEngine.set_field_value(document, field, value)
+                continue
+            elif op == "$set":
                 for field, value in payload.items():
                     QueryEngine.set_field_value(document, field, value)
             elif op == "$unset":

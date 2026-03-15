@@ -106,6 +106,58 @@ class Database(ABC):
         results = await self.find(collection, query)
         return results[0] if results else None
 
+    async def find_one_and_delete(
+        self, collection: str, query: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically find and delete the first record matching a query.
+
+        Returns the deleted document if found, None otherwise. Useful for
+        claiming work in a concurrent-safe way (e.g., batch processing).
+
+        Default implementation uses find_one + delete (not atomic).
+        MongoDB overrides with native find_one_and_delete for atomicity.
+
+        Args:
+            collection: Collection name
+            query: Query parameters (e.g., {"_id": "sender_id"})
+
+        Returns:
+            Deleted record or None if not found
+        """
+        doc = await self.find_one(collection, query)
+        if doc is None:
+            return None
+        record_id = doc.get("_id", doc.get("id"))
+        if record_id is not None:
+            await self.delete(collection, str(record_id))
+        return doc
+
+    async def find_one_and_update(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        update: Dict[str, Any],
+        upsert: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically find and update the first record matching a query.
+
+        Returns the updated document if found (or created when upsert=True).
+        MongoDB overrides with native find_one_and_update for atomicity.
+        Default raises NotImplementedError.
+
+        Args:
+            collection: Collection name
+            query: Query parameters (e.g., {"_id": "sender_id"})
+            update: MongoDB-style update operators (e.g., {"$push": {...}, "$set": {...}})
+            upsert: If True, create document when no match
+
+        Returns:
+            Updated record or None if not found and not upserted
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement find_one_and_update"
+        )
+
     async def create_index(
         self,
         collection: str,

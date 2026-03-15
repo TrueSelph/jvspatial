@@ -9,6 +9,8 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+_DEFAULT_ROLE_MAPPING: Dict[str, List[str]] = {"admin": ["*"], "user": []}
+
 
 class DatabaseConfig(BaseModel):
     """Database configuration group."""
@@ -118,6 +120,28 @@ class AuthConfig(BaseModel):
     )
     session_expire_minutes: int = Field(
         default=60, description="Session expiration time in minutes"
+    )
+
+    # RBAC Configuration
+    rbac_enabled: bool = Field(
+        default=True,
+        description="Enable role and permission enforcement",
+    )
+    default_role: str = Field(
+        default="user",
+        description="Role for new users (non-bootstrap)",
+    )
+    admin_role: str = Field(
+        default="admin",
+        description="Role name for bootstrap and admin-only checks",
+    )
+    registration_open: bool = Field(
+        default=True,
+        description="When False, disable public register even when no users",
+    )
+    role_permission_mapping: Dict[str, List[str]] = Field(
+        default_factory=lambda: dict(_DEFAULT_ROLE_MAPPING),
+        description="Maps each role to its permissions. Use '*' for admin-all.",
     )
 
     # Authentication Exempt Paths

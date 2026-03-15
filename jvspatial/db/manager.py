@@ -76,7 +76,14 @@ class DatabaseManager:
 
                 uri = os.getenv("JVSPATIAL_MONGODB_URI", "mongodb://localhost:27017")
                 db_name = os.getenv("JVSPATIAL_MONGODB_DB_NAME", "jvdb")
-                self._prime_database = MongoDB(uri=uri, db_name=db_name)
+                max_pool = os.getenv("JVSPATIAL_MONGODB_MAX_POOL_SIZE")
+                min_pool = os.getenv("JVSPATIAL_MONGODB_MIN_POOL_SIZE")
+                self._prime_database = MongoDB(
+                    uri=uri,
+                    db_name=db_name,
+                    max_pool_size=int(max_pool) if max_pool is not None else None,
+                    min_pool_size=int(min_pool) if min_pool is not None else None,
+                )
             elif db_type == "sqlite":
                 try:
                     from .sqlite import SQLiteDB

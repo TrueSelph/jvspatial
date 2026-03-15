@@ -135,6 +135,13 @@ class RoleRequiredError(AuthorizationError):
     default_message = "Required role not assigned"
 
 
+class RegistrationDisabledError(AuthorizationError):
+    """Public registration is disabled; use admin endpoint."""
+
+    error_code = "registration_disabled"
+    default_message = "Registration disabled; use admin endpoint"
+
+
 # ============================================================================
 # Resource Errors
 # ============================================================================

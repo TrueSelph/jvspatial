@@ -139,9 +139,13 @@ class EndpointDiscoveryService:
         # Scan only explicitly configured modules
         for pattern in scan_patterns:
             try:
-                # Import the module
+                # Import the module, evicting any cached copy first so that
+                # reload workers get a fresh load and re-register decorators.
                 import importlib
 
+                from jvspatial.api.utils.reload import evict_package
+
+                evict_package(pattern)
                 module = importlib.import_module(pattern)
 
                 # Discover endpoints in this module

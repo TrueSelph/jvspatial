@@ -4,9 +4,11 @@ This module provides authentication configuration models for the jvspatial API,
 including JWT, API key, and session-based authentication settings.
 """
 
-from typing import List
+from typing import Dict, List
 
 from pydantic import BaseModel, Field
+
+_DEFAULT_ROLE_MAPPING: Dict[str, List[str]] = {"admin": ["*"], "user": []}
 
 
 class AuthConfig(BaseModel):
@@ -87,6 +89,28 @@ class AuthConfig(BaseModel):
     )
     lockout_duration_minutes: int = Field(
         default=15, description="Lockout duration in minutes"
+    )
+
+    # RBAC Configuration
+    rbac_enabled: bool = Field(
+        default=True,
+        description="Enable role and permission enforcement",
+    )
+    default_role: str = Field(
+        default="user",
+        description="Role for new users (non-bootstrap)",
+    )
+    admin_role: str = Field(
+        default="admin",
+        description="Role name for bootstrap and admin-only checks",
+    )
+    registration_open: bool = Field(
+        default=True,
+        description="When False, disable public register even when no users",
+    )
+    role_permission_mapping: Dict[str, List[str]] = Field(
+        default_factory=lambda: dict(_DEFAULT_ROLE_MAPPING),
+        description="Maps each role to its permissions. Use '*' for admin-all.",
     )
 
 

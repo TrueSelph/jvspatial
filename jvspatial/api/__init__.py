@@ -15,6 +15,7 @@ from .decorators.deferred_registry import (
     flush_deferred_endpoints,
     get_deferred_endpoint_count,
     register_deferred_endpoint,
+    sync_endpoint_modules,
 )
 from .decorators.field import EndpointField, EndpointFieldInfo, endpoint_field
 from .decorators.route import endpoint
@@ -42,4 +43,5 @@ __all__ = [
     "flush_deferred_endpoints",
     "get_deferred_endpoint_count",
     "clear_deferred_endpoints",
+    "sync_endpoint_modules",
 ]

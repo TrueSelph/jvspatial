@@ -320,6 +320,8 @@ await node.save()                     # Uses node's context
 await node.delete()                   # Uses node's context, cascades by default
 ```
 
+**Ghost node fallback:** When a record's entity class is not currently imported (e.g. a removed action module), `Node.get(node_id)` returns a base `Node` instance rather than `None`, so you can call `node.delete(cascade=True)` to clean up edges and the node through the standard interface. See [Entity Reference - Class-Aware Retrieval](entity-reference.md#class-aware-retrieval-and-ghost-node-fallback).
+
 #### Edge Methods
 
 ```python

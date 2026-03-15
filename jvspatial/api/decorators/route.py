@@ -27,6 +27,14 @@ from pydantic import BaseModel
 _AUTH_INJECTED_PARAMS = frozenset(["user_id", "current_user_id"])
 _EXCLUDED_BODY_PARAMS = frozenset(["start_node"])
 
+# Module names containing @endpoint-decorated targets (persists across uvicorn reload)
+_endpoint_modules: set[str] = set()
+
+
+def get_endpoint_modules() -> frozenset[str]:
+    """Return module names that contain endpoint-decorated functions/classes."""
+    return frozenset(_endpoint_modules)
+
 
 def _extract_user_id_from_user_object(user: Any) -> Optional[str]:
     """Extract user_id from various user object formats.
@@ -289,6 +297,7 @@ def endpoint(
         }
 
         setattr(target, "_jvspatial_endpoint_config", config)  # noqa: B010
+        _endpoint_modules.add(target.__module__)
 
         # Register with current server if available
         try:

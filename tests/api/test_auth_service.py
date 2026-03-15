@@ -1,6 +1,6 @@
 """Tests for authentication service token validation."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import jwt
@@ -32,7 +32,7 @@ def mock_user():
     user.email = "test@example.com"
     user.name = "Test User"
     user.is_active = True
-    user.created_at = datetime.utcnow()
+    user.created_at = datetime.now(timezone.utc)
     return user
 
 
@@ -79,7 +79,7 @@ class TestTokenValidation:
     async def test_validate_token_expired_returns_none(self, auth_service):
         """Verify expired tokens return None without checking blacklist."""
         # Create an expired token
-        expired_time = datetime.utcnow() - timedelta(hours=1)
+        expired_time = datetime.now(timezone.utc) - timedelta(hours=1)
         payload = {
             "user_id": "user123",
             "email": "test@example.com",
@@ -198,8 +198,8 @@ class TestTokenValidation:
         payload = {
             "user_id": "user123",
             "email": "test@example.com",
-            "iat": datetime.utcnow(),
-            "exp": datetime.utcnow() + timedelta(minutes=30),
+            "iat": datetime.now(timezone.utc),
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=30),
             # No "jti" field
         }
         token = jwt.encode(

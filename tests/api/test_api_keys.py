@@ -1,6 +1,7 @@
 """Tests for API key authentication and management."""
 
-from datetime import datetime, timedelta
+import uuid
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -137,7 +138,7 @@ class TestAPIKeyService:
 
         mock_key = MagicMock()
         mock_key.is_active = True
-        mock_key.expires_at = datetime.utcnow() - timedelta(days=1)  # Expired
+        mock_key.expires_at = datetime.now(timezone.utc) - timedelta(days=1)  # Expired
         mock_key.key_hash = api_key_service._hash_key(test_key)
         mock_key._graph_context = api_key_service.context
 
@@ -228,8 +229,6 @@ class TestAPIKeyIntegration:
     @pytest.fixture
     def server(self, request):
         """Create test server with API key auth enabled."""
-        import uuid
-
         test_id = uuid.uuid4().hex[:8]
         return Server(
             title="Test API",
@@ -248,13 +247,9 @@ class TestAPIKeyIntegration:
         return TestClient(server.get_app())
 
     @pytest.fixture
-    def unique_email(self, request):
-        """Generate unique email for each test."""
-        import uuid
-
-        test_name = request.node.name
-        test_id = uuid.uuid4().hex[:8]
-        return f"test_{test_name}_{test_id}@example.com"
+    def unique_email(self):
+        """Generate unique email for each test (kept short for email validator limits)."""
+        return f"t{uuid.uuid4().hex[:24]}@example.com"
 
     def test_create_api_key_endpoint(self, server, client, unique_email):
         """Test API key creation endpoint."""
@@ -438,21 +433,35 @@ class TestAPIKeyIntegration:
         client = TestClient(server.get_app())
 
         # Register, login, and create a key
-        client.post(
+        register_response = client.post(
             "/api/auth/register",
             json={"email": unique_email, "password": "password123"},
         )
+        assert (
+            register_response.status_code == 200
+        ), f"Registration failed: {register_response.json()}"
+
         login_response = client.post(
             "/api/auth/login",
             json={"email": unique_email, "password": "password123"},
         )
-        token = login_response.json()["access_token"]
+        assert (
+            login_response.status_code == 200
+        ), f"Login failed: {login_response.json()}"
+        login_data = login_response.json()
+        assert (
+            "access_token" in login_data
+        ), f"Login response missing access_token: {login_data}"
+        token = login_data["access_token"]
 
         create_response = client.post(
             "/api/auth/api-keys",
             json={"name": "Test Key"},
             headers={"Authorization": f"Bearer {token}"},
         )
+        assert (
+            create_response.status_code == 200
+        ), f"API key creation failed: {create_response.json()}"
         api_key = create_response.json()["key"]
 
         # Test endpoint without auth - should fail

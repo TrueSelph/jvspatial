@@ -223,27 +223,41 @@ class Node(Object):
         if matching_edge:
             # Ensure edge IDs are in both nodes' edge_ids lists (in case they're missing)
             if matching_edge.id not in self.edge_ids:
-                self.edge_ids.append(matching_edge.id)
-                await self.save()
+                await context.atomic_add_edge_id(self.id, matching_edge.id)
+                if matching_edge.id not in self.edge_ids:
+                    self.edge_ids.append(matching_edge.id)
             if matching_edge.id not in other.edge_ids:
-                other.edge_ids.append(matching_edge.id)
-                await other.save()
+                await context.atomic_add_edge_id(other.id, matching_edge.id)
+                if matching_edge.id not in other.edge_ids:
+                    other.edge_ids.append(matching_edge.id)
             return matching_edge
 
         # No existing edge found, create a new one
-        connection = await edge.create(
-            source=self.id, target=other.id, direction=direction, **kwargs
-        )
+        try:
+            connection = await edge.create(
+                source=self.id, target=other.id, direction=direction, **kwargs
+            )
+        except Exception as e:
+            if "duplicate" in str(e).lower() or "E11000" in str(e):
+                # Concurrent connect() created the edge first; retrieve it
+                retry_edges = await context.find_edges_between(
+                    source_id=self.id,
+                    target_id=other.id,
+                    edge_class=edge,
+                )
+                if retry_edges:
+                    return retry_edges[0]
+            raise
 
-        # Update node edge lists preserving add order
+        # Atomically update both nodes' edge_ids
+        await context.atomic_add_edge_id(self.id, connection.id)
         if connection.id not in self.edge_ids:
             self.edge_ids.append(connection.id)
+
+        await context.atomic_add_edge_id(other.id, connection.id)
         if connection.id not in other.edge_ids:
             other.edge_ids.append(connection.id)
 
-        # Save both nodes to persist the edge_ids updates
-        await self.save()
-        await other.save()
         return connection
 
     async def edges(self: "Node", direction: str = "") -> List["Edge"]:
@@ -822,22 +836,31 @@ class Node(Object):
             context = await self.get_context()
             edges = await context.find_edges_between(self.id, other.id, edge_type)
 
-            for edge in edges:
-                # Remove edge from both nodes' edge_ids lists
-                if edge.id in self.edge_ids:
-                    self.edge_ids.remove(edge.id)
-                if edge.id in other.edge_ids:
-                    other.edge_ids.remove(edge.id)
+            for found_edge in edges:
+                # Atomically remove edge_id from both nodes, then delete the edge
+                await context.atomic_remove_edge_id(self.id, found_edge.id)
+                if found_edge.id in self.edge_ids:
+                    self.edge_ids.remove(found_edge.id)
 
-                # Delete the edge
-                await context.delete(edge)
+                await context.atomic_remove_edge_id(other.id, found_edge.id)
+                if found_edge.id in other.edge_ids:
+                    other.edge_ids.remove(found_edge.id)
 
-            # Save both nodes
-            await self.save()
-            await other.save()
+                # Delete the edge document (context.delete already handles
+                # edge_ids cleanup, but we already did it atomically above,
+                # so use a direct DB delete to avoid double work).
+                db = context.database
+                await db.delete("edge", found_edge.id)
+                await context._cache.delete(found_edge.id)
 
             return len(edges) > 0
         except Exception:
+            logger.warning(
+                "disconnect(%s, %s) failed",
+                self.id,
+                other.id,
+                exc_info=True,
+            )
             return False
 
     async def is_connected_to(
@@ -1120,42 +1143,30 @@ class Node(Object):
         # Delete incoming edges to this node
         for edge in incoming_edges:
             try:
-                # Remove edge from source node's edge_ids list
                 if edge.source != self.id:
-                    source_node = await Node.get(edge.source)
-                    if source_node and edge.id in source_node.edge_ids:  # type: ignore[attr-defined]
-                        source_node.edge_ids.remove(edge.id)  # type: ignore[attr-defined]
-                        await source_node.save()
+                    await context.atomic_remove_edge_id(edge.source, edge.id)
 
-                # Remove edge from this node's edge_ids list
                 if edge.id in self.edge_ids:
                     self.edge_ids.remove(edge.id)
 
-                # Delete the edge
-                await context.delete(edge, cascade=False)
+                # Direct DB delete (edge_ids already handled atomically above)
+                await context.database.delete("edge", edge.id)
+                await context._cache.delete(edge.id)
             except Exception:
-                # Continue even if edge deletion fails
                 continue
 
         # Clean up outgoing edges from this node
-        # Remove outgoing edges from target nodes' edge_ids and delete the edges
         for edge in outgoing_edges:
             try:
-                # Remove edge from target node's edge_ids list
                 if edge.target != self.id:
-                    target_node = await Node.get(edge.target)
-                    if target_node and edge.id in target_node.edge_ids:  # type: ignore[attr-defined]
-                        target_node.edge_ids.remove(edge.id)  # type: ignore[attr-defined]
-                        await target_node.save()
+                    await context.atomic_remove_edge_id(edge.target, edge.id)
 
-                # Remove edge from this node's edge_ids list (if not already removed)
                 if edge.id in self.edge_ids:
                     self.edge_ids.remove(edge.id)
 
-                # Delete the edge
-                await context.delete(edge, cascade=False)
+                await context.database.delete("edge", edge.id)
+                await context._cache.delete(edge.id)
             except Exception:
-                # Continue even if edge deletion fails
                 continue
 
         # If cascade is enabled, delete all dependent nodes

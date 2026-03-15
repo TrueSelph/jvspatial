@@ -153,6 +153,75 @@ class TestJsonDBBasicOperations:
         assert retrieved_data["value"] == 100
 
     @pytest.mark.asyncio
+    async def test_find_one_and_delete_returns_and_removes_doc(self, jsondb):
+        """Test find_one_and_delete returns deleted doc and removes it (base impl)."""
+        # JsonDB uses "id" for storage; include both for find query match
+        await jsondb.save(
+            "batch",
+            {"id": "sender_1", "_id": "sender_1", "items": [], "updated_at": 1.0},
+        )
+        await jsondb.save(
+            "batch",
+            {"id": "sender_2", "_id": "sender_2", "items": [1], "updated_at": 2.0},
+        )
+
+        deleted = await jsondb.find_one_and_delete("batch", {"_id": "sender_1"})
+
+        assert deleted is not None
+        assert deleted.get("_id") == "sender_1" or deleted.get("id") == "sender_1"
+        assert deleted["items"] == []
+        # Document should be removed
+        assert await jsondb.get("batch", "sender_1") is None
+        # Other doc unchanged
+        assert await jsondb.get("batch", "sender_2") is not None
+
+    @pytest.mark.asyncio
+    async def test_find_one_and_delete_returns_none_when_not_found(self, jsondb):
+        """Test find_one_and_delete returns None when no document matches."""
+        result = await jsondb.find_one_and_delete("batch", {"_id": "nonexistent"})
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_find_one_and_update_returns_updated_doc(self, jsondb):
+        """Test find_one_and_update returns updated doc and persists changes."""
+        await jsondb.save(
+            "batch",
+            {"id": "sender_1", "_id": "sender_1", "items": [], "updated_at": 1.0},
+        )
+        result = await jsondb.find_one_and_update(
+            "batch",
+            {"_id": "sender_1"},
+            {"$set": {"updated_at": 2.0}, "$push": {"items": "a"}},
+        )
+        assert result is not None
+        assert result["updated_at"] == 2.0
+        assert result["items"] == ["a"]
+        assert (await jsondb.get("batch", "sender_1"))["items"] == ["a"]
+
+    @pytest.mark.asyncio
+    async def test_find_one_and_update_returns_none_when_not_found(self, jsondb):
+        """Test find_one_and_update returns None when no document matches."""
+        result = await jsondb.find_one_and_update(
+            "batch", {"_id": "nonexistent"}, {"$set": {"x": 1}}
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_find_one_and_update_upsert_creates_doc(self, jsondb):
+        """Test find_one_and_update with upsert=True creates document."""
+        result = await jsondb.find_one_and_update(
+            "batch",
+            {"_id": "new_sender"},
+            {"$setOnInsert": {"items": []}, "$set": {"updated_at": 1.0}},
+            upsert=True,
+        )
+        assert result is not None
+        assert result["_id"] == "new_sender"
+        assert result["items"] == []
+        assert result["updated_at"] == 1.0
+        assert await jsondb.get("batch", "new_sender") is not None
+
+    @pytest.mark.asyncio
     async def test_delete_node(self, jsondb):
         """Test node deletion using Database interface."""
         # Create and save node data

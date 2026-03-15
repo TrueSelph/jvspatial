@@ -275,8 +275,9 @@ class TestMongoDBConnection:
             assert db._db is not None
             mock_client_class.assert_called_once_with(
                 "mongodb://localhost:27017/test",
-                maxPoolSize=100,
-                minPoolSize=10,
+                maxPoolSize=10,
+                minPoolSize=0,
+                maxIdleTimeMS=60000,
             )
             assert result is not None
 
@@ -415,3 +416,191 @@ class TestMongoDBIntegration:
         # Verify each collection was accessed correctly
         mock_collection1.replace_one.assert_called_once()
         mock_collection2.replace_one.assert_called_once()
+
+
+class TestMongoDBFindOneAndDelete:
+    """Test find_one_and_delete atomic operation."""
+
+    @pytest.fixture
+    def mongodb(self):
+        """Create MongoDB instance for testing."""
+        with patch("jvspatial.db.mongodb.AsyncIOMotorClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_db = MagicMock()
+            mock_client_class.return_value = mock_client
+            mock_client.__getitem__.return_value = mock_db
+
+            db = MongoDB(uri="mongodb://localhost:27017/test", db_name="test_db")
+            db._client = mock_client
+            db._db = mock_db
+            return db
+
+    @pytest.fixture
+    def mock_collection(self, mongodb):
+        """Create mock collection for testing."""
+        mock_collection = AsyncMock()
+        mongodb._db.__getitem__.return_value = mock_collection
+        return mock_collection
+
+    @pytest.mark.asyncio
+    async def test_find_one_and_delete_returns_deleted_doc(
+        self, mongodb, mock_collection
+    ):
+        """Test find_one_and_delete returns the deleted document."""
+        deleted_doc = {"_id": "sender_123", "media_items": [], "updated_at": 1234.5}
+        mock_collection.find_one_and_delete.return_value = deleted_doc
+
+        result = await mongodb.find_one_and_delete(
+            "media_batches", {"_id": "sender_123"}
+        )
+
+        assert result == deleted_doc
+        mock_collection.find_one_and_delete.assert_called_once_with(
+            {"_id": "sender_123"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_find_one_and_delete_returns_none_when_not_found(
+        self, mongodb, mock_collection
+    ):
+        """Test find_one_and_delete returns None when no document matches."""
+        mock_collection.find_one_and_delete.return_value = None
+
+        result = await mongodb.find_one_and_delete(
+            "media_batches", {"_id": "nonexistent"}
+        )
+
+        assert result is None
+        mock_collection.find_one_and_delete.assert_called_once_with(
+            {"_id": "nonexistent"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_find_one_and_delete_error_handling(self, mongodb):
+        """Test find_one_and_delete raises DatabaseError on failure."""
+        from pymongo.errors import PyMongoError
+
+        mock_collection = AsyncMock()
+        mock_collection.find_one_and_delete.side_effect = PyMongoError("Delete failed")
+        mongodb._db.__getitem__.return_value = mock_collection
+
+        with pytest.raises(DatabaseError) as exc_info:
+            await mongodb.find_one_and_delete("media_batches", {"_id": "sender_123"})
+
+        assert "find_one_and_delete" in str(exc_info.value)
+        assert "Delete failed" in str(exc_info.value)
+
+
+class TestMongoDBFindOneAndUpdate:
+    """Test find_one_and_update atomic operation."""
+
+    @pytest.fixture
+    def mongodb(self):
+        """Create MongoDB instance for testing."""
+        with patch("jvspatial.db.mongodb.AsyncIOMotorClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_db = MagicMock()
+            mock_client_class.return_value = mock_client
+            mock_client.__getitem__.return_value = mock_db
+
+            db = MongoDB(uri="mongodb://localhost:27017/test", db_name="test_db")
+            db._client = mock_client
+            db._db = mock_db
+            return db
+
+    @pytest.fixture
+    def mock_collection(self, mongodb):
+        """Create mock collection for testing."""
+        mock_collection = AsyncMock()
+        mongodb._db.__getitem__.return_value = mock_collection
+        return mock_collection
+
+    @pytest.mark.asyncio
+    async def test_find_one_and_update_returns_updated_doc(
+        self, mongodb, mock_collection
+    ):
+        """Test find_one_and_update returns the updated document (AFTER)."""
+        from pymongo import ReturnDocument
+
+        updated_doc = {
+            "_id": "sender_123",
+            "media_items": [{"url": "https://example.com/img.jpg", "utterance": None}],
+            "updated_at": 1234.5,
+        }
+        mock_collection.find_one_and_update.return_value = updated_doc
+
+        update = {
+            "$push": {"media_items": {"url": "https://example.com/img.jpg"}},
+            "$set": {"updated_at": 1234.5},
+        }
+        result = await mongodb.find_one_and_update(
+            "media_batches", {"_id": "sender_123"}, update, upsert=True
+        )
+
+        assert result == updated_doc
+        mock_collection.find_one_and_update.assert_called_once()
+        call_kwargs = mock_collection.find_one_and_update.call_args[1]
+        assert call_kwargs["upsert"] is True
+        assert call_kwargs["return_document"] == ReturnDocument.AFTER
+
+    @pytest.mark.asyncio
+    async def test_find_one_and_update_with_push_and_set(
+        self, mongodb, mock_collection
+    ):
+        """Test find_one_and_update with $push and $set operators."""
+        updated_doc = {
+            "_id": "sender_456",
+            "media_items": [{"url": "img1.jpg"}, {"url": "img2.jpg"}],
+            "updated_at": 5678.9,
+        }
+        mock_collection.find_one_and_update.return_value = updated_doc
+
+        update = {
+            "$push": {"media_items": {"url": "img2.jpg"}},
+            "$set": {"updated_at": 5678.9},
+            "$setOnInsert": {"agent_id": "agent_1", "created_at": 5678.9},
+        }
+        result = await mongodb.find_one_and_update(
+            "media_batches", {"_id": "sender_456"}, update, upsert=True
+        )
+
+        assert result == updated_doc
+        assert len(result["media_items"]) == 2
+        call_args = mock_collection.find_one_and_update.call_args[0]
+        assert call_args[0] == {"_id": "sender_456"}  # query
+        assert call_args[1] == update  # update
+
+    @pytest.mark.asyncio
+    async def test_find_one_and_update_returns_none_when_no_match_no_upsert(
+        self, mongodb, mock_collection
+    ):
+        """Test find_one_and_update returns None when no match and upsert=False."""
+        mock_collection.find_one_and_update.return_value = None
+
+        result = await mongodb.find_one_and_update(
+            "media_batches",
+            {"_id": "nonexistent"},
+            {"$set": {"updated_at": 1234.5}},
+            upsert=False,
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_find_one_and_update_error_handling(self, mongodb):
+        """Test find_one_and_update raises DatabaseError on failure."""
+        from pymongo.errors import PyMongoError
+
+        mock_collection = AsyncMock()
+        mock_collection.find_one_and_update.side_effect = PyMongoError("Update failed")
+        mongodb._db.__getitem__.return_value = mock_collection
+
+        with pytest.raises(DatabaseError) as exc_info:
+            await mongodb.find_one_and_update(
+                "media_batches",
+                {"_id": "sender_123"},
+                {"$set": {"updated_at": 1234.5}},
+            )
+
+        assert "find_one_and_update" in str(exc_info.value)
+        assert "Update failed" in str(exc_info.value)
