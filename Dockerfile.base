@@ -35,7 +35,7 @@ RUN set -eux && \
     /opt/venv/bin/pip install --no-cache-dir --only-binary=:all: -r ./jvagent/requirements-all.txt || \
     /opt/venv/bin/pip install --no-cache-dir -r ./jvagent/requirements-all.txt && \
     /opt/venv/bin/pip install --no-cache-dir --only-binary=:all: -e ./jvspatial || \
-    /opt/venv/bin/pip install --no-cache-dir -e './jvspatial[serverless]' && \
+    /opt/venv/bin/pip install --no-cache-dir -e ./jvspatial && \
     # Verify jvagent CLI is available (use the actual CLI command)
     echo "Checking jvagent CLI availability..." && \
     /opt/venv/bin/jvagent --help && \
