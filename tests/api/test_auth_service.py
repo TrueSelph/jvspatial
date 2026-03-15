@@ -36,6 +36,24 @@ def mock_user():
     return user
 
 
+class TestContextRespect:
+    """Regression: AuthenticationService must use passed-in context when provided."""
+
+    def test_uses_passed_context_instead_of_get_prime_database(self):
+        """Verify AuthenticationService uses the passed-in GraphContext directly.
+
+        Previously it ignored the context and always called get_prime_database(),
+        which could resolve to the wrong database under certain request conditions.
+        """
+        context = MagicMock(spec=GraphContext)
+        service = AuthenticationService(
+            context,
+            jwt_secret="test-secret-key",
+        )
+        # Service must use the exact context we passed, not a new one from get_prime_database
+        assert service.context is context
+
+
 class TestTokenValidation:
     """Test token validation behavior."""
 

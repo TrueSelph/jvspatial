@@ -29,6 +29,11 @@ def reset_database_manager():
 def auth_service():
     """Create authentication service instance."""
     context = MagicMock(spec=GraphContext)
+    # Mock context.database.find for DB operations (AuthenticationService now
+    # uses passed-in context; ensure_indexes and database.find must be awaitable)
+    context.ensure_indexes = AsyncMock()
+    context.database = MagicMock()
+    context.database.find = AsyncMock(return_value=[])
     return AuthenticationService(
         context,
         jwt_secret="test-secret-key",

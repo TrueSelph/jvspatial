@@ -85,14 +85,13 @@ class AuthenticationService:
             blacklist_cache_ttl_seconds: Cache TTL for blacklist checks (defaults to 3600)
         """
         if context is None:
-            # Always use prime database for authentication
+            # Fallback: use prime database for authentication
             prime_db = get_prime_database()
             self.context = GraphContext(database=prime_db)
         else:
-            # Ensure context uses prime database for auth operations
-            prime_db = get_prime_database()
-            # Create new context with prime database to ensure isolation
-            self.context = GraphContext(database=prime_db)
+            # Use the passed-in context (e.g. server._graph_context) to respect
+            # the configured database rather than calling get_prime_database()
+            self.context = context
         self.jwt_secret = jwt_secret or "jvspatial-secret-key-change-in-production"
         self.jwt_algorithm = jwt_algorithm or "HS256"
         self.jwt_expire_minutes = jwt_expire_minutes or 30
