@@ -171,8 +171,12 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             )
             return await call_next(request)
 
-        # Streamlined authentication logic for routes without FastAPI auth dependencies
-        user = await self._authenticate_request(request)
+        # Allow pre-set user (e.g. from test middleware that decodes token before ASGI)
+        user = getattr(request.state, "user", None)
+        if user is not None and hasattr(user, "id"):
+            pass  # Use pre-set user, skip _authenticate_request
+        else:
+            user = await self._authenticate_request(request)
         if not user:
             return JSONResponse(
                 status_code=401,
