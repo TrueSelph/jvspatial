@@ -219,7 +219,6 @@ server = Server(
 server = Server(
     title="Secure API",
     auth_enabled=True,  # Automatically registers /auth/register, /auth/login, /auth/logout
-    jwt_auth_enabled=True,
     jwt_secret="your-secret-key",
     jwt_expire_minutes=60,
     db_type="json",

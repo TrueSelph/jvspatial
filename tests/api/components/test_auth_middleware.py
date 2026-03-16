@@ -152,14 +152,14 @@ class TestAuthenticationMiddleware:
     def test_dynamic_endpoint_respects_auth_false(self, server):
         """Test that dynamically registered endpoints with auth=False are not protected.
 
-        This simulates the jvagent use case where endpoints are registered
-        dynamically with explicit auth=False settings.
+        This simulates an application that registers endpoints dynamically
+        with explicit auth=False settings.
         """
 
-        # Register endpoint dynamically (simulating jvagent pattern)
+        # Register endpoint dynamically (simulating dynamic registration pattern)
         # Without /api prefix - router adds it
-        @endpoint("/agents/{id}/interact", methods=["POST"], auth=False)
-        async def interact_endpoint(id: str):
+        @endpoint("/entities/{id}/process", methods=["POST"], auth=False)
+        async def process_endpoint(id: str):
             return {"id": id, "response": "interaction complete"}
 
         # Rebuild app to include new endpoint and create new client
@@ -169,7 +169,7 @@ class TestAuthenticationMiddleware:
         client = TestClient(server.app)
 
         # Try to access without auth - should succeed
-        response = client.post("/api/agents/test-agent/interact")
+        response = client.post("/api/entities/test-agent/process")
         assert response.status_code == 200
         assert response.json()["id"] == "test-agent"
 
@@ -356,8 +356,8 @@ class TestAuthenticationMiddleware:
     def test_path_normalization_with_parameters(self, server):
         """Test that path normalization works correctly with path parameters."""
 
-        @endpoint("/agents/{id}/interact", methods=["POST"], auth=False)
-        async def interact_endpoint(id: str):
+        @endpoint("/entities/{id}/process", methods=["POST"], auth=False)
+        async def process_endpoint(id: str):
             return {"id": id}
 
         server.app = server._create_app_instance()
@@ -372,7 +372,7 @@ class TestAuthenticationMiddleware:
                 self.url = type("url", (), {"path": path})()
 
         # Test with /api prefix and path parameter
-        request = MockRequest("/api/agents/test-agent-123/interact")
+        request = MockRequest("/api/entities/test-agent-123/process")
         result = middleware._auth_resolver.endpoint_requires_auth(request)
         assert (
             result is False

@@ -1,8 +1,8 @@
 # Core dependencies for jvspatial
 
 # Web framework and async server
-fastapi>=0.95.0  # Web framework
-uvicorn>=0.21.0  # ASGI server
+fastapi>=0.100.0  # Web framework
+uvicorn>=0.23.0  # ASGI server
 python-multipart>=0.0.6  # Form data parsing
 
 # Data validation and modeling
@@ -10,7 +10,7 @@ pydantic>=2.0  # Data validation and serialization
 typing-extensions>=4.6.0  # For @override decorator and enhanced typing
 
 # Database drivers
-motor>=3.1.1  # Async MongoDB driver
+motor>=3.0.0  # Async MongoDB driver
 pymongo>=4.3.3  # MongoDB support
 aiosqlite>=0.19.0  # SQLite database backend
 aioboto3>=15.5.0  # DynamoDB support

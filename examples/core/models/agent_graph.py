@@ -4,6 +4,11 @@ Demonstrates building a hierarchical agent system using jvspatial conventions.
 Shows entity-centric CRUD operations, MongoDB-style queries, proper walker patterns,
 and API endpoint integration following jvspatial best practices.
 
+Note: This is a domain example showing how to build agent-like systems. The
+"agent" terminology is domain modeling (e.g., autonomous processors, workflows),
+not coupling to any specific application framework. jvspatial is a reusable
+foundation upon which various applications may be built.
+
 This example builds an agent system: Root -> App -> Agents -> MyAgent -> Actions
 Follows jvspatial conventions for:
 - Entity-centric syntax (Agent.create(), Agent.find(), etc.)
@@ -20,7 +25,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import Field
 
-from jvspatial.api import Server, create_server, endpoint
+from jvspatial.api import Server, endpoint
 from jvspatial.api.decorators import EndpointField
 from jvspatial.core import Node, Root, Walker, on_exit, on_visit
 

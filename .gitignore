@@ -216,3 +216,4 @@ __marimo__/
 .test_files
 *.dot
 *.mermaid
+jvspatial_logs/
