@@ -2,6 +2,29 @@
 
 ## Common Issues
 
+### Authentication: 401 with valid token
+
+If you receive 401 Unauthorized when using a valid JWT or API key:
+
+- **Database context**: JWT and API key validation use the prime database (`get_prime_database()`), not `server._graph_context`. Ensure you use jvspatial 0.0.5+ which includes this fix. No PreAuth workaround is needed.
+- **Token validity**: Verify the token is not expired and the `jwt_secret` matches between login and validation.
+
+### Database path wrong or auth fails after changing cwd
+
+Relative `db_path` values (e.g. `"track75_db"`) resolve against the current working directory. When the app runs from different directories (project root vs backend dir), the path can point to the wrong location.
+
+**Solutions:**
+- Use an **absolute path** for `db_path` in production.
+- Or set `db_path_resolve="app"` so relative paths resolve against the directory of the module that created the Server:
+  ```python
+  server = Server(
+      db_type="json",
+      db_path="track75_db",
+      db_path_resolve="app",
+      auth=dict(auth_enabled=True, jwt_secret="..."),
+  )
+  ```
+
 ### Database Connection Errors
 ```bash
 # Verify MongoDB is running
@@ -55,12 +78,8 @@ If you have records whose entity class module was removed (e.g. an action remove
 4. Import data: `python -m jvspatial.db.import --file backup.json`
 
 ## Memory Management
-```python
-# Batch large operations
-async with database.batch_mode():
-    for item in large_dataset:
-        await process_item(item)
-```
+
+For large operations, process items in batches to avoid memory pressure. Use pagination or chunked iteration rather than loading the entire dataset at once.
 
 ## See Also
 

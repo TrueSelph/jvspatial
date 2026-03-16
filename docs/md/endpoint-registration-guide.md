@@ -1,6 +1,6 @@
 # Endpoint Registration Guide
 
-**Version**: 0.0.4
+**Version**: 0.0.5
 **Date**: 2025-03-14
 
 This guide explains how jvspatial's endpoint registration works and the recommended patterns for application entrypoints. With the auto-registration update, you can use a "set it and forget it" approach: decorate your functions and classes with `@endpoint`, import the modules, and endpoints register automatically.
@@ -52,6 +52,12 @@ if __name__ == "__main__":
 
 No other configuration is required.
 
+### Path Conventions
+
+- **Recommended**: Use paths **without** the `/api` prefix (e.g. `"/tracks"`, `"/auth/me"`). The router adds `APIRoutes.PREFIX` (default `/api`) at mount time.
+- **Avoid**: `"/api/tracks"` — paths are normalized to strip the prefix, but using unprefixed paths keeps intent clear.
+- Paths are normalized automatically: leading slash ensured, duplicate slashes collapsed, and API prefix stripped if present.
+
 ### Example: Function Endpoint
 
 ```python
@@ -65,6 +71,17 @@ async def get_user(user_id: str):
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return {"user": await user.export()}
+```
+
+### Example: user_id Injection for auth=True Endpoints
+
+For protected endpoints, add `user_id: str` as a parameter; it is injected from `request.state.user.id`:
+
+```python
+@endpoint("/me", methods=["GET"], auth=True)
+async def get_current_user_profile(user_id: str):
+    """Returns the profile of the authenticated user."""
+    return {"user_id": user_id, "message": "Your profile"}
 ```
 
 ### Example: Walker Endpoint
@@ -194,4 +211,4 @@ server = Server(
 ---
 
 **Last Updated**: 2025-03-14
-**Version**: 0.0.4
+**Version**: 0.0.5

@@ -119,13 +119,21 @@ class DBLogHandler(logging.Handler):
                     self._log_db = manager.get_database(self._database_name)
                     return self._log_db
                 else:
-                    logger.debug(
-                        f"DB log database '{self._database_name}' not found. "
-                        f"Registered databases: {registered_dbs}"
-                    )
+                    if not getattr(self, "_warned_db_not_found", False):
+                        self._warned_db_not_found = True
+                        logger.warning(
+                            "DBLogHandler: database '%s' not found in manager. "
+                            "Registered: %s. DB logs will not be persisted.",
+                            self._database_name,
+                            list(registered_dbs.keys()),
+                        )
                     return None
             except Exception as e:
-                logger.debug(f"Failed to get DB log database: {e}")
+                if not getattr(self, "_warned_db_not_found", False):
+                    self._warned_db_not_found = True
+                    logger.warning(
+                        "DBLogHandler: failed to get log database: %s", e, exc_info=True
+                    )
                 return None
         return self._log_db
 
@@ -295,7 +303,11 @@ class DBLogHandler(logging.Handler):
                     await log_entry.save()
                 except Exception as e:
                     # Log error but don't fail - logging should never break the main flow
-                    logger.debug(f"Failed to save log to database: {e}")
+                    logger.warning(
+                        "DBLogHandler: failed to save log to database: %s",
+                        e,
+                        exc_info=True,
+                    )
 
             # Create task for async save (fire-and-forget)
             try:
@@ -307,7 +319,7 @@ class DBLogHandler(logging.Handler):
                     # No event loop running, run synchronously
                     asyncio.run(save_log())
             except RuntimeError:
-                # No event loop available, try to create one
+                # No event loop running (e.g. sync context or different thread)
                 with contextlib.suppress(Exception):
                     asyncio.run(save_log())
 

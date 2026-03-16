@@ -521,11 +521,11 @@ class TestResilientRefreshTokenGeneration:
 
         auth_service._generate_and_store_refresh_token = failing_refresh_token
 
-        # Track logger warnings
+        # Track logger warnings (accept *args for %-style format calls)
         logger_warnings = []
 
-        def log_warning(msg):
-            logger_warnings.append(msg)
+        def log_warning(msg, *args):
+            logger_warnings.append(msg % args if args else msg)
 
         auth_service._logger.warning = log_warning
 
@@ -598,11 +598,11 @@ class TestResilientRefreshTokenGeneration:
             side_effect=Exception("Test error")
         )
 
-        # Track logger warnings
+        # Track logger warnings (accept *args for %-style format calls)
         logger_warnings = []
 
-        def log_warning(msg):
-            logger_warnings.append(msg)
+        def log_warning(msg, *args):
+            logger_warnings.append(msg % args if args else msg)
 
         auth_service._logger.warning = log_warning
 

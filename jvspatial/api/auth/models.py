@@ -24,6 +24,10 @@ class UserCreateAdmin(BaseModel):
     password: str = Field(
         ..., min_length=6, description="User password (min 6 characters)"
     )
+    name: str = Field(
+        default="",
+        description="User display name (defaults to email if empty)",
+    )
     roles: List[str] = Field(
         default_factory=lambda: ["user"],
         description="Roles to assign to the user",

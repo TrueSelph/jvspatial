@@ -114,7 +114,7 @@ class TestDatabaseFactory:
                     os.environ,
                     {
                         "JVSPATIAL_DB_TYPE": "sqlite",
-                        "JVSPATIAL_SQLITE_PATH": db_path,
+                        "JVSPATIAL_DB_PATH": db_path,
                     },
                     clear=False,
                 ):

@@ -4,6 +4,9 @@ This module tests the registry-based authentication checking behavior,
 ensuring that auth settings are properly respected for all registered endpoints.
 """
 
+import os
+import tempfile
+
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
@@ -21,14 +24,16 @@ class TestAuthenticationMiddleware:
 
     @pytest.fixture
     def server_config(self):
-        """Create test server config with auth enabled."""
+        """Create test server config with auth and database enabled."""
+        db_path = os.path.join(tempfile.mkdtemp(), "test_auth_middleware_db")
         return ServerConfig(
             auth=dict(
                 auth_enabled=True,
                 jwt_secret="test-secret-key-for-testing",
                 jwt_algorithm="HS256",
                 jwt_expire_minutes=30,
-            )
+            ),
+            database=dict(db_type="json", db_path=db_path),
         )
 
     @pytest.fixture
@@ -117,6 +122,8 @@ class TestAuthenticationMiddleware:
         from fastapi.testclient import TestClient
 
         client = TestClient(server.app)
+        # Trigger lifespan to ensure root node exists (required for walkers)
+        client.get("/health")
 
         # Try to access without auth - should succeed
         response = client.post("/api/test/walker-public", json={})
@@ -135,6 +142,7 @@ class TestAuthenticationMiddleware:
         from fastapi.testclient import TestClient
 
         client = TestClient(server.app)
+        client.get("/health")  # Trigger lifespan for root node
 
         # Try to access without auth - should fail
         response = client.post("/api/test/walker-protected", json={})
@@ -221,12 +229,13 @@ class TestAuthenticationMiddleware:
 
         # Create a mock request
         class MockRequest:
-            def __init__(self, path):
+            def __init__(self, path, method="GET"):
                 self.url = type("url", (), {"path": path})()
+                self.method = method
 
         # SECURITY TEST: Unregistered path - should return True (require auth)
         request = MockRequest("/api/test/unknown")
-        result = middleware._endpoint_requires_auth(request)
+        result = middleware._auth_resolver.endpoint_requires_auth(request)
         assert result is True, "Unregistered endpoint should require authentication"
 
         # Test with registered path that has auth=False
@@ -236,7 +245,7 @@ class TestAuthenticationMiddleware:
 
         server.app = server._create_app_instance()
         request2 = MockRequest("/api/test/registered-false")
-        result2 = middleware._endpoint_requires_auth(request2)
+        result2 = middleware._auth_resolver.endpoint_requires_auth(request2)
         assert result2 is False
 
         # Test with registered path that has auth=True
@@ -246,7 +255,7 @@ class TestAuthenticationMiddleware:
 
         server.app = server._create_app_instance()
         request3 = MockRequest("/api/test/registered-true")
-        result3 = middleware._endpoint_requires_auth(request3)
+        result3 = middleware._auth_resolver.endpoint_requires_auth(request3)
         assert result3 is True
 
     def test_unregistered_endpoint_requires_auth_direct(self, server):
@@ -258,12 +267,13 @@ class TestAuthenticationMiddleware:
         )
 
         class MockRequest:
-            def __init__(self, path):
+            def __init__(self, path, method="GET"):
                 self.url = type("url", (), {"path": path})()
+                self.method = method
 
         # Request to endpoint NOT in registry - should require auth
         request = MockRequest("/api/unknown/endpoint")
-        result = middleware._endpoint_requires_auth(request)
+        result = middleware._auth_resolver.endpoint_requires_auth(request)
 
         # SECURITY: Must return True (require auth) for unknown endpoints
         assert result is True, "Unregistered endpoint should require authentication"
@@ -285,7 +295,7 @@ class TestAuthenticationMiddleware:
         middleware._server = None
 
         request = MockRequest("/api/test/endpoint")
-        result = middleware._endpoint_requires_auth(request)
+        result = middleware._auth_resolver.endpoint_requires_auth(request)
 
         # SECURITY: Must return True (require auth) on error
         assert result is True, "Error during lookup should require authentication"
@@ -313,7 +323,7 @@ class TestAuthenticationMiddleware:
 
         # Test with /api prefix
         request = MockRequest("/api/test/normalized")
-        result = middleware._endpoint_requires_auth(request)
+        result = middleware._auth_resolver.endpoint_requires_auth(request)
         assert (
             result is False
         ), "Endpoint with auth=False should not require authentication"
@@ -338,7 +348,7 @@ class TestAuthenticationMiddleware:
 
         # Test without /api prefix
         request = MockRequest("/test/no-prefix")
-        result = middleware._endpoint_requires_auth(request)
+        result = middleware._auth_resolver.endpoint_requires_auth(request)
         assert (
             result is False
         ), "Endpoint with auth=False should not require authentication"
@@ -363,7 +373,7 @@ class TestAuthenticationMiddleware:
 
         # Test with /api prefix and path parameter
         request = MockRequest("/api/agents/test-agent-123/interact")
-        result = middleware._endpoint_requires_auth(request)
+        result = middleware._auth_resolver.endpoint_requires_auth(request)
         assert (
             result is False
         ), "Endpoint with auth=False should not require authentication"
@@ -553,7 +563,7 @@ class TestAuthenticationMiddleware:
 
         # Test that middleware correctly identifies auth requirement
         request = MockRequest("/api/test/config-check")
-        result = middleware._endpoint_requires_auth(request)
+        result = middleware._auth_resolver.endpoint_requires_auth(request)
         assert (
             result is True
         ), "Middleware must read auth_required from _jvspatial_endpoint_config"
@@ -766,42 +776,22 @@ class TestAuthenticationMiddleware:
         assert response.status_code == 401
 
     def test_middleware_handles_missing_endpoint_config_gracefully(self, server):
-        """Test that middleware handles missing _jvspatial_endpoint_config gracefully (security: deny by default)."""
+        """Test that middleware requires auth for unregistered paths (security: deny by default)."""
         middleware = AuthenticationMiddleware(
             app=server.get_app(),
             auth_config=server._auth_config,
             server=server,
         )
 
-        # Create endpoint without config (shouldn't happen in practice, but test for defense)
-        async def test_no_config_endpoint():
-            return {"message": "no-config"}
-
-        # Manually register without setting config (simulating edge case)
-        # This shouldn't happen in practice, but we test for defense in depth
-        server._endpoint_registry.register_function(
-            test_no_config_endpoint,
-            path="/api/test/no-config-edge",
-            methods=["GET"],
-        )
-
-        # Don't set _jvspatial_endpoint_config (edge case)
-        # In practice, register_function should set it, but test what happens if it doesn't
-
-        # Rebuild app
-        server.app = server._create_app_instance()
-
-        # Create mock request
+        # Truly unregistered path - should require auth
         class MockRequest:
             def __init__(self, path, method="GET"):
                 self.url = type("url", (), {"path": path})()
                 self.method = method
 
-        # Middleware should require auth if config is missing (security: deny by default)
-        request = MockRequest("/api/test/no-config-edge")
-        result = middleware._endpoint_requires_auth(request)
-        # If config is missing, middleware should default to requiring auth for security
-        # This depends on the middleware implementation, but security should be the default
+        request = MockRequest("/api/truly/unknown/path")
+        result = middleware._auth_resolver.endpoint_requires_auth(request)
+        assert result is True
 
 
 class TestJwtAuthUsesPrimeDatabase:

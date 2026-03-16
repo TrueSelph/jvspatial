@@ -71,6 +71,7 @@ class AuthenticationService:
         role_permission_mapping: Optional[Dict[str, List[str]]] = None,
         admin_role: str = "admin",
         default_role: str = "user",
+        registration_open: bool = True,
     ):
         """Initialize the authentication service.
 
@@ -104,6 +105,7 @@ class AuthenticationService:
         }
         self.admin_role = admin_role
         self.default_role = default_role
+        self.registration_open = registration_open
 
         # In-memory cache for blacklist checks: {jti: (is_blacklisted, timestamp)}
         self._blacklist_cache: Dict[str, Tuple[bool, float]] = {}
@@ -137,7 +139,10 @@ class AuthenticationService:
         return await self.context.database.count(collection, final_query)
 
     def _hash_password(self, password: str) -> str:
-        """Hash a password using SHA-256 with salt.
+        """Hash a password using bcrypt when available, else SHA-256 with salt.
+
+        Prefers bcrypt for security. Falls back to SHA-256 only when no hashing
+        library is available.
 
         Args:
             password: Plain text password
@@ -145,12 +150,27 @@ class AuthenticationService:
         Returns:
             Hashed password string
         """
+        if _HASHING_AVAILABLE and _HASHING_LIB == "bcrypt":
+            salt = bcrypt.gensalt()
+            hashed = bcrypt.hashpw(password.encode("utf-8"), salt)
+            return hashed.decode("utf-8")
+        if _HASHING_AVAILABLE and _HASHING_LIB == "argon2":
+            return _argon2_hasher.hash(password)
+        if _HASHING_AVAILABLE and _HASHING_LIB == "passlib":
+            return _passlib_context.hash(password)
+        # Fallback when no secure library available
+        self._logger.warning(
+            "No secure hashing library (bcrypt/argon2/passlib). "
+            "Using SHA-256 for passwords. Install bcrypt for production."
+        )
         salt = secrets.token_hex(16)
         password_hash = hashlib.sha256((password + salt).encode()).hexdigest()
         return f"{salt}:{password_hash}"
 
     def _verify_password(self, password: str, password_hash: str) -> bool:
         """Verify a password against its hash.
+
+        Supports bcrypt, argon2, passlib, and legacy SHA-256 (salt:hash) formats.
 
         Args:
             password: Plain text password
@@ -159,12 +179,40 @@ class AuthenticationService:
         Returns:
             True if password matches, False otherwise
         """
+        if not password_hash:
+            return False
         try:
+            # Bcrypt format: $2b$... or $2a$...
+            if password_hash.startswith(("$2b$", "$2a$")):
+                if _HASHING_AVAILABLE and _HASHING_LIB == "bcrypt":
+                    return bcrypt.checkpw(
+                        password.encode("utf-8"), password_hash.encode("utf-8")
+                    )
+                return False
+            # Argon2 format: $argon2...
+            if password_hash.startswith("$argon2"):
+                if _HASHING_AVAILABLE and _HASHING_LIB == "argon2":
+                    try:
+                        _argon2_hasher.verify(password_hash, password)
+                        return True
+                    except Exception:
+                        return False
+                return False
+            # Passlib/bcrypt format
+            if _HASHING_AVAILABLE and _HASHING_LIB == "passlib":
+                return _passlib_context.verify(password, password_hash)
+            # Legacy SHA-256 format: salt:hash
             salt, stored_hash = password_hash.split(":", 1)
             password_hash_check = hashlib.sha256((password + salt).encode()).hexdigest()
             return password_hash_check == stored_hash
-        except (ValueError, AttributeError):
+        except Exception:
             return False
+
+    def _is_legacy_password_hash(self, password_hash: str) -> bool:
+        """Check if hash is legacy SHA-256 format (salt:hex) and bcrypt upgrade is available."""
+        if not password_hash or not _HASHING_AVAILABLE or _HASHING_LIB != "bcrypt":
+            return False
+        return ":" in password_hash and not password_hash.startswith("$")
 
     def _hash_refresh_token(self, token: str) -> str:
         """Hash a refresh token using secure password hashing.
@@ -593,13 +641,13 @@ class AuthenticationService:
         if existing_user:
             raise ValueError("User with this email already exists")
 
-        # Public registration only when no users exist (bootstrap)
-        user_count = await self._user_count()
-        if user_count > 0:
+        # When registration_open is False, disable public registration entirely
+        if not self.registration_open:
             raise RegistrationDisabledError()
 
-        # First-user admin bootstrap: assign admin role when no users exist
-        initial_roles = [self.admin_role]
+        # Bootstrap: first user gets admin role; others get default role
+        user_count = await self._user_count()
+        initial_roles = [self.admin_role] if user_count == 0 else [self.default_role]
 
         # Create new user
         from jvspatial.core.utils import generate_id
@@ -623,6 +671,74 @@ class AuthenticationService:
 
         return UserResponse(
             id=final_user_id,
+            email=user.email,
+            name=user.name,
+            created_at=user.created_at,
+            is_active=user.is_active,
+            roles=user.roles,
+            permissions=effective_perms,
+        )
+
+    async def bootstrap_admin(
+        self,
+        email: str,
+        password: str,
+        name: str = "",
+    ) -> Optional[UserResponse]:
+        """Create an admin user if none exists.
+
+        Use at startup to ensure an admin exists. If a user with the given email
+        already exists, or any user has the admin role, no user is created.
+
+        Args:
+            email: Admin email address
+            password: Admin password (min 6 characters)
+            name: Optional display name (defaults to email)
+
+        Returns:
+            UserResponse if admin was created, None if admin already exists
+        """
+        if len(password) < 6:
+            raise ValueError("Password must be at least 6 characters")
+
+        existing = await self._find_user_by_email(email)
+        if existing:
+            return None
+
+        user_count = await self._user_count()
+        if user_count > 0:
+            # Check if any user has admin role
+            collection, final_query = await User._build_database_query(
+                self.context, {}, {}
+            )
+            results = await self.context.database.find(collection, final_query)
+            for data in results:
+                try:
+                    user = await self.context._deserialize_entity(User, data)
+                    if user and self.admin_role in (user.roles or []):
+                        return None
+                except Exception:
+                    continue
+
+        from jvspatial.core.utils import generate_id
+
+        user_id = generate_id("o", "User")
+        user = User(
+            id=user_id,
+            email=email,
+            password_hash=self._hash_password(password),
+            name=name or email,
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+            roles=[self.admin_role],
+            permissions=[],
+        )
+        user._graph_context = self.context
+        await self.context.save(user)
+
+        effective_perms = self._get_effective_permissions_for_user(user)
+        return UserResponse(
+            id=user.id,
             email=user.email,
             name=user.name,
             created_at=user.created_at,
@@ -660,12 +776,20 @@ class AuthenticationService:
         if not self._verify_password(login_data.password, user.password_hash):
             raise ValueError("Invalid email or password")
 
+        # Transparent migration: upgrade legacy SHA-256 hash to bcrypt on successful login
+        if self._is_legacy_password_hash(user.password_hash):
+            try:
+                user.password_hash = self._hash_password(login_data.password)
+            except Exception as e:
+                self._logger.warning(
+                    f"Failed to migrate password hash for user {user.id}: {e}"
+                )
+
         # Check if user is active
         if not user.is_active:
             raise ValueError("User account is deactivated")
 
-        # Update last_accessed timestamp
-        # Set the context on the user object so save() uses it
+        # Update last_accessed timestamp and save (includes password migration if applied)
         user._graph_context = self.context
         user.last_accessed = datetime.now(timezone.utc)
         await user.save()
@@ -740,40 +864,92 @@ class AuthenticationService:
         # Decode token first - jwt.decode() handles expiration validation
         payload = self._decode_jwt_token(token)
         if not payload:
-            self._logger.debug(
-                "Token validation failed: token decode failed (invalid or expired)"
+            self._logger.warning(
+                "[validate_token] failed: token decode failed (invalid or expired)"
             )
             return None
 
         # Get token ID for blacklist check
         token_id = payload.get("jti")
         if not token_id:
-            self._logger.debug("Token validation failed: token missing JTI")
+            self._logger.warning("[validate_token] failed: token missing JTI")
             return None
 
         # Check if token is blacklisted (only for valid, non-expired tokens)
         if await self._is_token_blacklisted_by_jti(token_id):
-            self._logger.debug(
-                f"Token validation failed: token {token_id} is blacklisted"
+            self._logger.warning(
+                "[validate_token] failed: token %s is blacklisted", token_id
             )
             return None
 
         # Get user information
         user_id = payload.get("user_id")
         if not user_id:
-            self._logger.debug("Token validation failed: token missing user_id")
+            self._logger.warning("[validate_token] failed: token missing user_id")
             return None
 
         # Find user by ID using service's context
-        user = await self._get_user_by_id(user_id)
+        user = None
+        got_db_error = False
+        try:
+            user = await self._get_user_by_id(user_id)
+        except Exception as e:
+            got_db_error = True
+            self._logger.warning("[validate_token] _get_user_by_id error: %s", e)
+
+        # Fallback: lookup by email when get-by-id fails (e.g. context/db path mismatch).
+        if not user:
+            email = payload.get("email")
+            if email:
+                try:
+                    user = await self._find_user_by_email(email)
+                    if user and user.id != user_id:
+                        user = None
+                except Exception:
+                    pass
+
+        # Fallback: direct db.find by id (bypasses context.get which may fail)
+        if not user:
+            try:
+                db = self.context.database
+                if hasattr(db, "find"):
+                    results = await db.find("object", {"id": user_id})
+                    if results:
+                        user = await self.context._deserialize_entity(User, results[0])
+                        if user:
+                            user._graph_context = self.context
+            except Exception:
+                pass
+
+        # Fallback: build UserResponse from payload only when DB raised an error (e.g. path
+        # mismatch). When user simply doesn't exist (None), return None for security.
+        if not user and user_id and got_db_error:
+            return UserResponse(
+                id=user_id,
+                email=payload.get("email", ""),
+                name=payload.get("name", ""),
+                created_at=datetime.now(timezone.utc),
+                is_active=True,
+                roles=payload.get("roles") or [self.default_role],
+                permissions=list(payload.get("permissions") or []),
+            )
 
         if not user:
-            self._logger.debug(f"Token validation failed: user {user_id} not found")
+            db_path = getattr(
+                getattr(self.context, "database", None), "base_path", None
+            )
+            self._logger.warning(
+                "[validate_token] failed: user %s not found in database (db_path=%s)",
+                user_id,
+                db_path,
+            )
             return None
 
         # Check if user is still active
         if not user.is_active:
-            self._logger.debug(f"Token validation failed: user {user_id} is inactive")
+            self._logger.warning(
+                "[validate_token] failed: user %s is inactive", user_id
+            )
             return None
 
         # Use roles/permissions from JWT payload if present, else compute from user
@@ -783,10 +959,14 @@ class AuthenticationService:
             roles = self._get_user_roles(user)
             permissions = self._get_effective_permissions_for_user(user)
 
-        # Update last_accessed timestamp on token validation (user is authenticating)
-        user._graph_context = self.context
-        user.last_accessed = datetime.now(timezone.utc)
-        await self.context.save(user)
+        # Update last_accessed timestamp on token validation (user is authenticating).
+        # Non-blocking: do not fail auth if save fails (e.g. SQLite lock under concurrent load).
+        try:
+            user._graph_context = self.context
+            user.last_accessed = datetime.now(timezone.utc)
+            await self.context.save(user)
+        except Exception as e:
+            self._logger.debug("last_accessed update skipped: %s", e)
 
         self._logger.debug(f"Token validation successful for user {user_id}")
         return UserResponse(
@@ -1041,7 +1221,7 @@ class AuthenticationService:
             id=user_id,
             email=user_data.email,
             password_hash=self._hash_password(user_data.password),
-            name="",
+            name=user_data.name or user_data.email,
             is_active=True,
             created_at=datetime.now(timezone.utc),
             roles=roles,

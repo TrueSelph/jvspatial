@@ -596,11 +596,22 @@ class APIErrorHandler:
                             "method": request.method,
                         },
                     )
+                elif exc.status_code == 401:
+                    # 401 Unauthorized: DEBUG — expected when unauthenticated clients hit protected endpoints
+                    logger.debug(
+                        f"HTTP 401: {error_message}",
+                        extra={
+                            "status_code": exc.status_code,
+                            "error_code": error_code,
+                            "path": request.url.path,
+                            "method": request.method,
+                        },
+                    )
                 else:
-                    # Client errors (4xx): ERROR level without stack trace
-                    logger.error(
+                    # Other client errors (4xx): WARNING level
+                    logger.warning(
                         f"HTTP Error [{exc.status_code}]: {error_message}",
-                        exc_info=False,  # No stack trace for client errors
+                        exc_info=False,
                         extra={
                             "status_code": exc.status_code,
                             "error_code": error_code,
@@ -611,18 +622,19 @@ class APIErrorHandler:
                 # Mark this error response as logged to prevent duplicate access logs
                 _mark_error_logged(request, exc.status_code)
 
-                # Log to error logging service
-                traceback_str = None
-                if exc.status_code >= 500:
-                    traceback_str = _format_clean_traceback(exc)
-                await _log_error_to_service(
-                    request=request,
-                    status_code=exc.status_code,
-                    error_code=error_code,
-                    message=error_message,
-                    details=None,
-                    traceback_str=traceback_str,
-                )
+                # Log to error logging service (skip 401, 400 — expected client responses)
+                if exc.status_code not in (400, 401):
+                    traceback_str = None
+                    if exc.status_code >= 500:
+                        traceback_str = _format_clean_traceback(exc)
+                    await _log_error_to_service(
+                        request=request,
+                        status_code=exc.status_code,
+                        error_code=error_code,
+                        message=error_message,
+                        details=None,
+                        traceback_str=traceback_str,
+                    )
 
             content = {
                 "error_code": error_code,

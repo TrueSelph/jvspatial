@@ -30,7 +30,7 @@ class TestEndpointDecorator:
 
         assert hasattr(test_endpoint, "_jvspatial_endpoint_config")
         config = test_endpoint._jvspatial_endpoint_config
-        assert config["path"] == "/api/test"
+        assert config["path"] == "/test"
         assert config["methods"] == ["GET"]
         assert config["auth_required"] == False
 
@@ -42,7 +42,7 @@ class TestEndpointDecorator:
             return {"users": []}
 
         config = users_endpoint._jvspatial_endpoint_config
-        assert config["path"] == "/api/users"
+        assert config["path"] == "/users"
         assert config["methods"] == ["GET", "POST"]
 
     def test_endpoint_with_auth(self):
@@ -53,7 +53,7 @@ class TestEndpointDecorator:
             return {"admin": "data"}
 
         config = admin_endpoint._jvspatial_endpoint_config
-        assert config["path"] == "/api/admin"
+        assert config["path"] == "/admin"
         assert config["auth_required"] == True
 
     def test_endpoint_with_roles(self):
@@ -64,7 +64,7 @@ class TestEndpointDecorator:
             return {"super_admin": "data"}
 
         config = super_admin_endpoint._jvspatial_endpoint_config
-        assert config["path"] == "/api/super-admin"
+        assert config["path"] == "/super-admin"
         assert config["auth_required"] == True
         assert config["roles"] == ["admin", "super_admin"]
 
@@ -76,7 +76,7 @@ class TestEndpointDecorator:
             return {"sensitive": "data"}
 
         config = sensitive_endpoint._jvspatial_endpoint_config
-        assert config["path"] == "/api/sensitive"
+        assert config["path"] == "/sensitive"
         assert config["auth_required"] == True
         assert config["permissions"] == ["read:sensitive"]
 
@@ -111,7 +111,7 @@ class TestEndpointDecorator:
             return {"users": []}
 
         config = users_endpoint._jvspatial_endpoint_config
-        assert config["path"] == "/api/users"
+        assert config["path"] == "/users"
         assert config["tags"] == ["users", "management"]
 
     def test_endpoint_with_summary(self):
@@ -122,7 +122,7 @@ class TestEndpointDecorator:
             return {"users": []}
 
         config = users_endpoint._jvspatial_endpoint_config
-        assert config["path"] == "/api/users"
+        assert config["path"] == "/users"
         assert config["summary"] == "Get all users"
 
     def test_endpoint_with_description(self):
@@ -133,7 +133,7 @@ class TestEndpointDecorator:
             return {"users": []}
 
         config = users_endpoint._jvspatial_endpoint_config
-        assert config["path"] == "/api/users"
+        assert config["path"] == "/users"
         assert config["description"] == "Retrieve a list of all users"
 
     def test_endpoint_with_responses(self):
@@ -149,7 +149,7 @@ class TestEndpointDecorator:
             return {"users": []}
 
         config = users_endpoint._jvspatial_endpoint_config
-        assert config["path"] == "/api/users"
+        assert config["path"] == "/users"
         assert config["responses"] == responses
 
     def test_endpoint_with_deprecated(self):
@@ -160,7 +160,7 @@ class TestEndpointDecorator:
             return {"message": "deprecated"}
 
         config = old_endpoint._jvspatial_endpoint_config
-        assert config["path"] == "/api/old"
+        assert config["path"] == "/old"
         assert config["deprecated"] == True
 
     def test_endpoint_complex_configuration(self):
@@ -185,7 +185,7 @@ class TestEndpointDecorator:
             return {"complex": "data"}
 
         config = complex_endpoint._jvspatial_endpoint_config
-        assert config["path"] == "/api/complex"
+        assert config["path"] == "/complex"
         assert config["methods"] == ["GET", "POST"]
         assert config["auth_required"] == True
         assert config["roles"] == ["admin"]
@@ -207,7 +207,7 @@ class TestEndpointDecorator:
 
         controller = TestController()
         config = controller.get_data._jvspatial_endpoint_config
-        assert config["path"] == "/api/controller"
+        assert config["path"] == "/controller"
         assert config["methods"] == ["GET"]
 
     def test_endpoint_static_method(self):
@@ -220,7 +220,7 @@ class TestEndpointDecorator:
                 return {"static": "data"}
 
         config = TestController.static_method._jvspatial_endpoint_config
-        assert config["path"] == "/api/static"
+        assert config["path"] == "/static"
         assert config["methods"] == ["POST"]
 
     def test_endpoint_inheritance(self):
@@ -243,7 +243,5 @@ class TestEndpointDecorator:
         assert hasattr(derived.base_method, "_jvspatial_endpoint_config")
         assert hasattr(derived.derived_method, "_jvspatial_endpoint_config")
 
-        assert base.base_method._jvspatial_endpoint_config["path"] == "/api/base"
-        assert (
-            derived.derived_method._jvspatial_endpoint_config["path"] == "/api/derived"
-        )
+        assert base.base_method._jvspatial_endpoint_config["path"] == "/base"
+        assert derived.derived_method._jvspatial_endpoint_config["path"] == "/derived"

@@ -4,10 +4,9 @@ This module provides logical configuration groups that compose into ServerConfig
 improving organization and maintainability.
 """
 
-import warnings
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 _DEFAULT_ROLE_MAPPING: Dict[str, List[str]] = {"admin": ["*"], "user": []}
 
@@ -17,6 +16,12 @@ class DatabaseConfig(BaseModel):
 
     db_type: Optional[str] = None
     db_path: Optional[str] = None
+    db_path_resolve: Optional[str] = Field(
+        default=None,
+        description="When set to 'app', resolve relative db_path against the directory "
+        "of the module that instantiated Server. Use when cwd varies (e.g. running from "
+        "project root vs backend dir).",
+    )
     db_connection_string: Optional[str] = None
     db_database_name: Optional[str] = None
 
@@ -60,18 +65,24 @@ class AuthConfig(BaseModel):
     """Authentication configuration group.
 
     Authentication behavior:
-    - auth_enabled: Master switch for authentication middleware. When True:
-      * JWT authentication is always available (via Authorization: Bearer header)
-      * API key authentication is always available (via X-API-Key header)
-      * Both appear in OpenAPI/Swagger documentation
-    - api_key_management_enabled: Controls whether API key management endpoints
-      (/auth/api-keys) are registered. Does NOT control whether API key auth works.
-    - jwt_auth_enabled: DEPRECATED - JWT is always available when auth_enabled=True
-    - session_auth_enabled: DEPRECATED - Session auth not fully implemented
+    - enabled/auth_enabled: Master switch for authentication middleware. When True:
     """
 
-    auth_enabled: bool = Field(
-        default=False, description="Enable authentication middleware (JWT + API key)"
+    model_config = ConfigDict(populate_by_name=True)
+
+    # Master switch (accept auth_enabled for backward compat)
+    enabled: bool = Field(
+        default=False,
+        description="Enable authentication middleware (JWT + API key)",
+        validation_alias="auth_enabled",
+    )
+
+    # Test mode: when True, honors request.state.user set by test fixtures for
+    # in-process ASGI testing (e.g. TestClient with ASGITransport)
+    test_mode: bool = Field(
+        default=False,
+        description="When True, use request.state.user if set (for testing). "
+        "See docs Request State Contract.",
     )
 
     # API key management endpoint control
@@ -81,28 +92,20 @@ class AuthConfig(BaseModel):
         "Does not affect API key authentication availability.",
     )
 
-    # Deprecated flags (kept for backward compatibility)
-    jwt_auth_enabled: bool = Field(
-        default=False,
-        description="DEPRECATED: JWT is always available when auth_enabled=True. "
-        "This flag has no effect.",
-    )
-    api_key_auth_enabled: bool = Field(
-        default=False,
-        description="DEPRECATED: Use api_key_management_enabled instead. "
-        "API key authentication is always available when auth_enabled=True.",
-    )
-    session_auth_enabled: bool = Field(
-        default=False,
-        description="DEPRECATED: Session authentication not fully implemented. "
-        "This flag has no effect.",
-    )
-
     # JWT Configuration
     jwt_secret: str = Field(default="your-secret-key", description="JWT secret key")
     jwt_algorithm: str = Field(default="HS256", description="JWT algorithm")
     jwt_expire_minutes: int = Field(
         default=30, description="JWT expiration time in minutes"
+    )
+    refresh_expire_days: int = Field(
+        default=7, description="Refresh token expiration time in days"
+    )
+    refresh_token_rotation: bool = Field(
+        default=False, description="Enable refresh token rotation on refresh"
+    )
+    blacklist_cache_ttl_seconds: int = Field(
+        default=3600, description="Cache TTL for blacklist checks in seconds"
     )
 
     # API Key Configuration
@@ -114,7 +117,7 @@ class AuthConfig(BaseModel):
         default="sk_", description="Key prefix (e.g., sk_live_, sk_test_)"
     )
 
-    # Session Configuration
+    # Session Configuration (cookie names; session auth not implemented)
     session_cookie_name: str = Field(
         default="session", description="Session cookie name"
     )
@@ -144,8 +147,23 @@ class AuthConfig(BaseModel):
         description="Maps each role to its permissions. Use '*' for admin-all.",
     )
 
-    # Authentication Exempt Paths
-    auth_exempt_paths: List[str] = Field(
+    # Bootstrap admin (create first admin from env on startup when set)
+    bootstrap_admin_email: Optional[str] = Field(
+        default=None,
+        description="Admin email for bootstrap. When set with bootstrap_admin_password, "
+        "creates an admin user on startup if none exists. Typically from ADMIN_EMAIL env.",
+    )
+    bootstrap_admin_password: Optional[str] = Field(
+        default=None,
+        description="Admin password for bootstrap. Min 6 chars. Typically from ADMIN_PASSWORD env.",
+    )
+    bootstrap_admin_name: Optional[str] = Field(
+        default=None,
+        description="Admin display name for bootstrap. Defaults to email. Typically from ADMIN_NAME env.",
+    )
+
+    # Authentication Exempt Paths (accept auth_exempt_paths for backward compat)
+    exempt_paths: List[str] = Field(
         default_factory=lambda: [
             "/health",
             "/docs",
@@ -161,43 +179,20 @@ class AuthConfig(BaseModel):
             "/auth/register",
             "/auth/refresh",
             "/auth/register",
-        ]
+        ],
+        validation_alias="auth_exempt_paths",
     )
 
-    @model_validator(mode="after")
-    def _handle_deprecated_flags(self) -> "AuthConfig":
-        """Handle deprecated flags for backward compatibility."""
-        # Map api_key_auth_enabled to api_key_management_enabled
-        if self.api_key_auth_enabled:
-            warnings.warn(
-                "api_key_auth_enabled is deprecated. "
-                "Use api_key_management_enabled instead. "
-                "API key authentication is always available when auth_enabled=True.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            # Set new flag if old flag is True
-            self.api_key_management_enabled = True
+    # Backward compatibility: allow access via auth_enabled/auth_exempt_paths
+    @property
+    def auth_enabled(self) -> bool:
+        """Return whether authentication is enabled (alias for enabled)."""
+        return self.enabled
 
-        # Warn about deprecated jwt_auth_enabled
-        if self.jwt_auth_enabled:
-            warnings.warn(
-                "jwt_auth_enabled is deprecated and has no effect. "
-                "JWT authentication is always available when auth_enabled=True.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-        # Warn about deprecated session_auth_enabled
-        if self.session_auth_enabled:
-            warnings.warn(
-                "session_auth_enabled is deprecated and has no effect. "
-                "Session authentication is not fully implemented.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-        return self
+    @property
+    def auth_exempt_paths(self) -> List[str]:
+        """Return paths exempt from authentication (alias for exempt_paths)."""
+        return self.exempt_paths
 
 
 class RateLimitConfig(BaseModel):

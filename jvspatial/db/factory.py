@@ -170,14 +170,24 @@ def create_database(
     # Check built-in types first
     db: Database
     if db_type == "json":
-        base_path = kwargs.get("base_path") or os.getenv(
-            "JVSPATIAL_JSONDB_PATH", "jvdb"
+        # Accept base_path or db_path
+        base_path = (
+            kwargs.get("base_path")
+            or kwargs.get("db_path")
+            or os.getenv("JVSPATIAL_JSONDB_PATH", "jvdb")
         )
         db = JsonDB(str(base_path))
 
     elif db_type == "mongodb":
         from .mongodb import MongoDB
 
+        # Normalize aliases: connection_string/db_connection_string -> uri, database_name -> db_name
+        if "uri" not in kwargs:
+            kwargs["uri"] = kwargs.pop("connection_string", None) or kwargs.pop(
+                "db_connection_string", None
+            )
+        if "db_name" not in kwargs:
+            kwargs["db_name"] = kwargs.pop("database_name", None)
         # Provide defaults from environment
         if "uri" not in kwargs:
             kwargs["uri"] = os.getenv(
@@ -206,7 +216,7 @@ def create_database(
         db_path = (
             sqlite_kwargs.pop("db_path", None)
             or sqlite_kwargs.pop("path", None)
-            or os.getenv("JVSPATIAL_SQLITE_PATH", "jvdb/sqlite/jvspatial.db")
+            or os.getenv("JVSPATIAL_DB_PATH", "jvdb/sqlite/jvspatial.db")
         )
         db = SQLiteDB(db_path=db_path, **sqlite_kwargs)
 

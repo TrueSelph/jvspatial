@@ -57,14 +57,14 @@ class TestServerConfigGroups:
     def test_config_auth_group(self):
         """Test Auth configuration group."""
         config = ServerConfig()
-        config.auth.auth_enabled = True
+        config.auth.enabled = True
         config.auth.jwt_secret = "secret-key"
         config.auth.jwt_algorithm = "HS256"
         config.auth.jwt_expire_minutes = 60
         config.auth.api_key_management_enabled = True
         config.auth.api_key_prefix = "sk_test_"
 
-        assert config.auth.auth_enabled is True
+        assert config.auth.enabled is True
         assert config.auth.jwt_secret == "secret-key"
         assert config.auth.jwt_algorithm == "HS256"
         assert config.auth.jwt_expire_minutes == 60
@@ -142,7 +142,7 @@ class TestServerConfigGroups:
         """Test that model_dump includes grouped configs."""
         config = ServerConfig()
         config.database.db_type = "json"
-        config.auth.auth_enabled = True
+        config.auth.enabled = True
 
         dumped = config.model_dump()
 

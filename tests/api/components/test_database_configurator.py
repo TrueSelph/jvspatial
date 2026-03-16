@@ -176,3 +176,53 @@ class TestDatabaseConfigurator:
 
         with pytest.raises(ValueError, match="JSON database does not support S3 paths"):
             configurator.initialize_graph_context()
+
+    @pytest.mark.asyncio
+    async def test_db_path_resolve_app_resolves_relative_path(self, configurator):
+        """Test that db_path_resolve='app' resolves relative db_path against app base dir."""
+        configurator.config.database.db_path_resolve = "app"
+        configurator.config.database.db_path = "track75_db"
+
+        with patch.object(
+            configurator, "_get_app_base_dir", return_value="/opt/backend"
+        ):
+            with patch(
+                "jvspatial.api.components.database_configurator.create_database"
+            ) as mock_create:
+                mock_db = MagicMock()
+                mock_create.return_value = mock_db
+
+                with patch(
+                    "jvspatial.api.components.database_configurator.get_database_manager"
+                ) as mock_get_manager:
+                    mock_get_manager.side_effect = RuntimeError()
+
+                    with patch(
+                        "jvspatial.api.components.database_configurator.set_database_manager"
+                    ):
+                        with patch(
+                            "jvspatial.api.components.database_configurator.GraphContext"
+                        ) as mock_context:
+                            mock_ctx_instance = MagicMock()
+                            mock_context.return_value = mock_ctx_instance
+
+                            with patch(
+                                "jvspatial.api.components.database_configurator.set_default_context"
+                            ):
+                                configurator.initialize_graph_context()
+
+                                mock_create.assert_called_once_with(
+                                    db_type="json",
+                                    base_path="/opt/backend/track75_db",
+                                )
+
+    def test_resolve_db_path_absolute_unchanged(self, configurator):
+        """Test that absolute paths are not modified."""
+        configurator.config.database.db_path_resolve = "app"
+        result = configurator._resolve_db_path("/absolute/path/to/db")
+        assert result == "/absolute/path/to/db"
+
+    def test_resolve_db_path_no_resolve_mode_unchanged(self, configurator):
+        """Test that relative path is unchanged when db_path_resolve is not set."""
+        result = configurator._resolve_db_path("relative/path")
+        assert result == "relative/path"

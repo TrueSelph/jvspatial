@@ -14,14 +14,15 @@ Get your jvspatial API secured in 5 minutes with comprehensive authentication in
 
 ### Create Your Authenticated Server
 
-> **Note**: When `auth_enabled=True`, the server **automatically registers** authentication endpoints (`/auth/register`, `/auth/login`, `/auth/logout`). When `auth_enabled=False`, these endpoints are **NOT registered**.
+> **Note**: When `auth_enabled=True`, the server **automatically registers** authentication endpoints (`/auth/register`, `/auth/login`, `/auth/logout`, `/auth/me`). When `auth_enabled=False`, these endpoints are **NOT registered**.
 
 ```python
 # auth_server.py
+import os
 from jvspatial.api import Server
 
 # Create server with authentication enabled
-# This automatically registers /auth/register, /auth/login, /auth/logout
+# This automatically registers /auth/register, /auth/login, /auth/logout, /auth/me
 server = Server(
     title="My Secure API",
     description="Authenticated spatial data API",
@@ -32,6 +33,10 @@ server = Server(
         auth_enabled=True,
         jwt_secret="your-super-secret-key-change-in-production",
         jwt_expire_minutes=1440,  # 24 hours
+        # Optional: bootstrap admin from env on first run
+        bootstrap_admin_email=os.getenv("ADMIN_EMAIL"),
+        bootstrap_admin_password=os.getenv("ADMIN_PASSWORD"),
+        bootstrap_admin_name=os.getenv("ADMIN_NAME"),
     ),
 )
 
@@ -41,6 +46,7 @@ if __name__ == "__main__":
 
 **That's it!** Your server now has full authentication with:
 - User registration (`POST /api/auth/register`) — first user becomes admin (bootstrap)
+- Current user (`GET /api/auth/me`) — returns authenticated user
 - User login (`POST /api/auth/login`)
 - JWT token validation and RBAC (roles and permissions)
 - Rate limiting
@@ -164,6 +170,44 @@ Run it: `python quickstart.py`. Register the first user via `POST /api/auth/regi
 
 ## Advanced Features (Optional)
 
+### Streamlined Integration (Callbacks and get_auth_service)
+
+Use callbacks to create domain entities without custom endpoints:
+
+```python
+import os
+from jvspatial.api import Server, get_auth_service
+
+async def on_user_registered(user_response, request_body):
+    """Create UserNode, Organization, etc. after registration."""
+    # request_body has email, password, name, organizationName, etc.
+    pass
+
+async def on_admin_bootstrapped(user_response):
+    """Create UserNode when admin is bootstrapped from env."""
+    pass
+
+async def enrich_me(user_response):
+    """Augment GET /auth/me response."""
+    return {"display_name": user_response.name, "extra": "..."}
+
+server = Server(
+    auth=dict(
+        auth_enabled=True,
+        jwt_secret="...",
+        bootstrap_admin_email=os.getenv("ADMIN_EMAIL"),
+        bootstrap_admin_password=os.getenv("ADMIN_PASSWORD"),
+    ),
+    on_user_registered=on_user_registered,
+    on_admin_bootstrapped=on_admin_bootstrapped,
+    on_enrich_current_user=enrich_me,
+)
+
+# In custom endpoints, use the shared auth service:
+auth_service = get_auth_service()
+user = await auth_service.validate_token(token)
+```
+
 ### Role-Based Access Control (RBAC)
 
 - **Roles**: `require_any` — user needs one of the listed roles
@@ -203,7 +247,6 @@ async def advanced_ops():
 
 ```python
 from jvspatial.api import endpoint
-from jvspatial.api.auth import get_current_user
 from jvspatial.core.entities import Walker, Node, on_visit
 
 @endpoint("/spatial/query", auth=True, permissions=["read_spatial"])
@@ -212,13 +255,7 @@ class SpatialQuery(Walker):
 
     @on_visit(Node)
     async def query(self, here: Node):
-        current_user = get_current_user(self.request)
-
-        # Check if user can access this region
-        if not current_user.can_access_region(self.region):
-            self.response = {"error": "Access denied to region"}
-            return
-
+        # current_user is injected when auth=True; add as class field if needed
         # Process spatial query...
         self.response = {"data": "spatial results"}
 ```
@@ -226,19 +263,19 @@ class SpatialQuery(Walker):
 ### API Key Authentication
 
 ```python
-# Create API key for a user
+# Use built-in POST /auth/api-keys when api_key_management_enabled=True
+# Or create custom endpoint:
 @endpoint("/create-api-key", auth=True, methods=["POST"])
-async def create_key(request: Request):
-    from jvspatial.api.auth import APIKey, get_current_user
+async def create_key(current_user):
+    from jvspatial.api.auth.api_key_service import APIKeyService
+    from jvspatial.db import get_prime_database
+    from jvspatial.core.context import GraphContext
 
-    user = get_current_user(request)
-    api_key = await APIKey.create(
-        name="My Service Key",
-        key_id="service-key-1",
-        key_hash=APIKey.hash_key("secret-key-123"),
-        user_id=user.id
+    service = APIKeyService(GraphContext(database=get_prime_database()))
+    plaintext_key, api_key = await service.generate_key(
+        user_id=current_user.id, name="My Service Key"
     )
-    return {"key_id": api_key.key_id, "secret": "secret-key-123"}
+    return {"key_id": api_key.id, "key": plaintext_key}
 
 # Use API key in requests
 # curl -H "X-API-Key: secret-key-123" http://localhost:8000/protected/data
@@ -249,47 +286,59 @@ async def create_key(request: Request):
 Before deploying to production:
 
 ```python
-configure_auth(
-    jwt_secret_key=os.getenv("JWT_SECRET_KEY"),  # From environment variable
-    jwt_expiration_hours=24,
-    rate_limit_enabled=True,
-    require_https=True,  # Enable HTTPS requirement
-    session_cookie_secure=True,  # Secure cookies
+server = Server(
+    db_type="json",
+    db_path="./data",
+    auth=dict(
+        auth_enabled=True,
+        jwt_secret=os.getenv("JWT_SECRET_KEY"),
+        jwt_expire_minutes=1440,
+    ),
 )
 ```
 
 Environment variables:
 ```bash
 export JWT_SECRET_KEY="your-256-bit-secret-generated-key"
-export JVSPATIAL_REQUIRE_HTTPS=true
-export JVSPATIAL_RATE_LIMIT_ENABLED=true
+export JVSPATIAL_DB_PATH="./data"
 ```
 
 ## Next Steps
 
 - **Full Documentation**: [Authentication Guide](authentication.md)
-- **Complete Example**: [examples/auth_demo.py](../examples/auth_demo.py)
+- **Complete Example**: [examples/api/authenticated_endpoints_example.py](../../examples/api/authenticated_endpoints_example.py)
 - **API Reference**: [REST API Docs](rest-api.md#authentication)
 - **Advanced Patterns**: [Server API Guide](server-api.md#authentication)
 
 ## Common Issues
 
 ### "No server instance available"
-- Make sure you call `configure_auth()` before creating decorators
+- Use `Server(auth={...})` and ensure your endpoint modules are imported so the server registers them
 - Use `server=your_server` parameter if using multiple servers
 
+### 401 with valid token
+- **Database context**: Auth always uses the prime database. Ensure you use jvspatial 0.0.5+ which fixes 401 when `server._graph_context` differs from the prime DB.
+
 ### "Invalid token" errors
-- Check that `jwt_secret_key` is consistent between token creation and validation
-- Ensure tokens haven't expired (default 24 hours)
+- Check that `jwt_secret` is consistent between token creation and validation
+- Ensure tokens haven't expired (default 30 minutes; set `jwt_expire_minutes` as needed)
 - Enable debug logging to see detailed token validation information
 - Token validation decodes tokens first, then checks blacklist - expired tokens are rejected during decode
 
-### Rate limiting too strict
-- Adjust `default_rate_limit_per_hour` in `configure_auth()`
-- Set `rate_limit_enabled=False` for development
+### Auth parameter injection in endpoints
+- For `@endpoint(..., auth=True)`, add `user_id: str` and/or `current_user` as parameters; they are injected from `request.state.user`. No manual `if not user_id` guard needed—401 is returned automatically when missing:
+  ```python
+  @endpoint("/me", auth=True)
+  async def get_me(user_id: str):
+      return {"user_id": user_id}
+
+  @endpoint("/tracks", methods=["GET"], auth=True)
+  async def list_tracks(current_user):
+      return {"tracks": [], "user": current_user.email}
+  ```
 
 ### Authentication not working
-- Ensure `AuthenticationMiddleware` is added to your server
+- Ensure `Server(auth=dict(auth_enabled=True, ...))` is set
 - Check that protected endpoints use `@endpoint(..., auth=True)` instead of just `@endpoint(...)`
 - Enable debug logging to trace token validation flow and identify where validation fails
 - Login succeeds even if refresh token generation fails - check access token, not just refresh token

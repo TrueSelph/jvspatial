@@ -157,6 +157,11 @@ class ParameterModelFactory:
         # Check if this is a webhook endpoint
         endpoint_config = getattr(func, "_jvspatial_endpoint_config", None)
         is_webhook = endpoint_config and endpoint_config.get("webhook", False)
+        auth_required = (
+            endpoint_config.get("auth_required", endpoint_config.get("auth", False))
+            if endpoint_config
+            else False
+        )
 
         # Webhook-specific parameters that should be excluded (injected by webhook middleware)
         webhook_params = {
@@ -166,6 +171,10 @@ class ParameterModelFactory:
             "endpoint",
             "webhook_data",
         }
+
+        # Auth-injected parameters (injected from request.state.user when auth=True)
+        # Only exclude when auth is required; when auth=False, these may be body params (e.g. user_id on interact)
+        auth_injected_params = {"user_id", "current_user_id", "current_user"}
 
         # Exclude Request type parameters - FastAPI will inject them directly
         # Check if parameter type is Request (from fastapi or starlette)
@@ -195,6 +204,9 @@ class ParameterModelFactory:
             for name, param in params.items()
             if not is_request_type(type_hints.get(name, Any))
             and not (is_webhook and name in webhook_params)  # Exclude webhook params
+            and not (
+                auth_required and name in auth_injected_params
+            )  # Exclude only when auth injects them
         }
 
         # If no parameters remain (or none to begin with), return None

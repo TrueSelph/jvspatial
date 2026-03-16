@@ -25,6 +25,9 @@ from pydantic import BaseModel
 
 # Constants for parameter names that are injected from authentication
 _AUTH_INJECTED_PARAMS = frozenset(["user_id", "current_user_id"])
+_AUTH_INJECTED_USER_PARAMS = frozenset(
+    ["current_user"]
+)  # Full user object from request.state.user
 _EXCLUDED_BODY_PARAMS = frozenset(["start_node"])
 
 # Module names containing @endpoint-decorated targets (persists across uvicorn reload)
@@ -159,6 +162,55 @@ def _inject_user_id_from_request(
             kwargs[param_name] = user_id
 
 
+def _inject_auth_params_from_request(
+    request_obj: Any,
+    data: dict[str, Any],
+    func_sig: inspect.Signature,
+) -> None:
+    """Inject user_id, current_user_id, and current_user from request.state.user.
+
+    Modifies data in-place. Only injects params that exist in func_sig.
+    """
+    if not request_obj or not hasattr(request_obj, "state"):
+        return
+    if not hasattr(request_obj.state, "user"):
+        return
+    user = request_obj.state.user
+    if not user:
+        return
+
+    user_id = _extract_user_id_from_user_object(user)
+    if user_id:
+        for param_name in _AUTH_INJECTED_PARAMS:
+            if param_name in func_sig.parameters and (
+                param_name not in data or data.get(param_name) is None
+            ):
+                data[param_name] = user_id
+
+    for param_name in _AUTH_INJECTED_USER_PARAMS:
+        if param_name in func_sig.parameters and (
+            param_name not in data or data.get(param_name) is None
+        ):
+            data[param_name] = user
+
+
+def _ensure_auth_injected_when_required(
+    data: dict[str, Any],
+    func_sig: inspect.Signature,
+    auth_required: bool,
+) -> None:
+    """When auth=True, ensure user_id/current_user_id is set or raise 401."""
+    if not auth_required:
+        return
+    for param_name in _AUTH_INJECTED_PARAMS:
+        if param_name in func_sig.parameters and (
+            data.get(param_name) is None or data.get(param_name) == ""
+        ):
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+
 def endpoint(
     path: str,
     methods: Optional[List[str]] = None,
@@ -239,7 +291,13 @@ def endpoint(
             return {"status": "received"}
     """
 
-    def decorator(target: Union[Callable, type]) -> Union[Callable, type]:
+    def decorator(
+        target: Union[Callable, type], _path: str = path
+    ) -> Union[Callable, type]:
+        from jvspatial.api.utils.path_utils import normalize_endpoint_path
+
+        path = normalize_endpoint_path(_path)
+
         # Determine if this is a function or class
         is_func = inspect.isfunction(target)
 
@@ -362,9 +420,18 @@ def endpoint(
                     param_model = ParameterModelFactory.create_model(func, path=path)
 
                     # Wrap function with parameter handling if needed
+                    func_sig = inspect.signature(func)
+                    needs_auth_injection = any(
+                        p in func_sig.parameters
+                        for p in (*_AUTH_INJECTED_PARAMS, *_AUTH_INJECTED_USER_PARAMS)
+                    )
                     if param_model is not None:
                         wrapped_func = _wrap_function_with_params(
                             func, param_model, methods or ["GET"], path=path
+                        )
+                    elif needs_auth_injection:
+                        wrapped_func = _wrap_function_auth_only(
+                            func, methods or ["GET"], path=path
                         )
                     else:
                         wrapped_func = func
@@ -442,6 +509,73 @@ def endpoint(
     return decorator
 
 
+def _wrap_function_auth_only(
+    func: Callable,
+    methods: Optional[List[str]] = None,
+    path: Optional[str] = None,
+) -> Callable:
+    """Wrap function to inject auth params (user_id, current_user) when no param model."""
+    from fastapi import Request as FastAPIRequest
+
+    func_sig = inspect.signature(func)
+    has_request, request_param_name = _find_request_parameter(func_sig)
+    auth_required = getattr(func, "_jvspatial_endpoint_config", {}).get(
+        "auth_required", False
+    )
+
+    if has_request:
+        # Function already has Request - extract from args/kwargs and inject
+        async def wrapped(*args: Any, **kwargs: Any) -> Any:
+            request_obj = _extract_request_from_call_args(args, kwargs)
+            if request_obj is None and has_request:
+                for arg in args:
+                    if hasattr(arg, "state") and hasattr(arg, "headers"):
+                        request_obj = arg
+                        break
+            _inject_auth_params_from_request(request_obj, kwargs, func_sig)
+            _ensure_auth_injected_when_required(kwargs, func_sig, auth_required)
+            return await func(*args, **kwargs)
+
+        wrapped.__signature__ = func_sig  # type: ignore[attr-defined]
+    else:
+        # Function doesn't have Request - add it so FastAPI injects it
+        async def wrapped(  # type: ignore[misc]
+            request: FastAPIRequest, **kwargs: Any
+        ) -> Any:
+            _inject_auth_params_from_request(request, kwargs, func_sig)
+            _ensure_auth_injected_when_required(kwargs, func_sig, auth_required)
+            return await func(**kwargs)
+
+        excluded = _AUTH_INJECTED_PARAMS | _AUTH_INJECTED_USER_PARAMS
+        new_params = [
+            inspect.Parameter(
+                "request",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                annotation=FastAPIRequest,
+            )
+        ] + [p for p in func_sig.parameters.values() if p.name not in excluded]
+        wrapped.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+            new_params, return_annotation=func_sig.return_annotation
+        )
+        wrapped.__annotations__ = {
+            "request": FastAPIRequest,
+            **{
+                k: v
+                for k, v in getattr(func, "__annotations__", {}).items()
+                if k not in excluded
+            },
+        }
+
+    wrapped.__name__ = func.__name__
+    wrapped.__doc__ = func.__doc__
+    wrapped.__module__ = func.__module__
+    if has_request:
+        wrapped.__annotations__ = getattr(func, "__annotations__", {})
+    if hasattr(func, "_jvspatial_endpoint_config"):
+        wrapped._jvspatial_endpoint_config = func._jvspatial_endpoint_config  # type: ignore[attr-defined]
+    return wrapped
+
+
 def _wrap_function_with_params(
     func: Callable,
     param_model: Type[BaseModel],
@@ -463,17 +597,25 @@ def _wrap_function_with_params(
 
     if is_get_request:
         # For GET requests, FastAPI automatically handles query parameters from function signature
-        # But we still need to inject user_id from request.state.user if function has user_id parameter
+        # But we still need to inject user_id/current_user from request.state.user if present
         func_sig = inspect.signature(func)
-        if "user_id" in func_sig.parameters:
+        needs_auth_injection = any(
+            p in func_sig.parameters
+            for p in (*_AUTH_INJECTED_PARAMS, *_AUTH_INJECTED_USER_PARAMS)
+        )
+        if needs_auth_injection:
             has_request, _ = _find_request_parameter(func_sig)
+            auth_required = getattr(func, "_jvspatial_endpoint_config", {}).get(
+                "auth_required", False
+            )
 
             if has_request:
-                # Function already has Request parameter - wrap to inject user_id
+                # Function already has Request parameter - wrap to inject auth params
                 async def wrapped_get_func(*args: Any, **kwargs: Any) -> Any:
-                    """Wrapped GET function with user_id injection."""
+                    """Wrapped GET function with auth param injection."""
                     request_obj = _extract_request_from_call_args(args, kwargs)
-                    _inject_user_id_from_request(request_obj, kwargs, ["user_id"])
+                    _inject_auth_params_from_request(request_obj, kwargs, func_sig)
+                    _ensure_auth_injected_when_required(kwargs, func_sig, auth_required)
                     return await func(*args, **kwargs)
 
             else:
@@ -481,27 +623,33 @@ def _wrap_function_with_params(
                 async def wrapped_get_func(  # type: ignore[misc]
                     request: FastAPIRequest, **kwargs: Any
                 ) -> Any:
-                    """Wrapped GET function with user_id injection."""
-                    _inject_user_id_from_request(request, kwargs, ["user_id"])
+                    """Wrapped GET function with auth param injection."""
+                    _inject_auth_params_from_request(request, kwargs, func_sig)
+                    _ensure_auth_injected_when_required(kwargs, func_sig, auth_required)
                     # Don't pass request to func since it doesn't expect it
                     return await func(**kwargs)
 
                 # Update signature to include Request parameter
-                # Exclude user_id from signature since it's injected from request.state.user
+                # Exclude auth-injected params from signature
+                excluded = _AUTH_INJECTED_PARAMS | _AUTH_INJECTED_USER_PARAMS
                 new_params = [
                     inspect.Parameter(
                         "request",
                         inspect.Parameter.POSITIONAL_OR_KEYWORD,
                         annotation=FastAPIRequest,
                     )
-                ] + [p for p in func_sig.parameters.values() if p.name != "user_id"]
+                ] + [p for p in func_sig.parameters.values() if p.name not in excluded]
                 new_sig = inspect.Signature(
                     new_params, return_annotation=func_sig.return_annotation
                 )
                 wrapped_get_func.__signature__ = new_sig  # type: ignore[attr-defined]
                 wrapped_get_func.__annotations__ = {
                     "request": FastAPIRequest,
-                    **{k: v for k, v in func.__annotations__.items() if k != "user_id"},
+                    **{
+                        k: v
+                        for k, v in func.__annotations__.items()
+                        if k not in (_AUTH_INJECTED_PARAMS | _AUTH_INJECTED_USER_PARAMS)
+                    },
                 }
 
             # Copy metadata
@@ -568,10 +716,10 @@ def _wrap_function_with_params(
         # Build parameters for the new signature
         new_params = []
 
-        # Add Request parameter first if function needs user_id or current_user_id injection
-        # (needed to access request.state.user)
-        needs_user_id_injection = (
-            "user_id" in func_sig.parameters or "current_user_id" in func_sig.parameters
+        # Add Request parameter if function needs auth param injection
+        needs_user_id_injection = any(
+            p in func_sig.parameters
+            for p in (*_AUTH_INJECTED_PARAMS, *_AUTH_INJECTED_USER_PARAMS)
         )
         if needs_user_id_injection and not has_request_param:
             # Add Request parameter for user_id injection
@@ -684,21 +832,17 @@ def _wrap_function_with_params(
             ):
                 combined[request_param_name] = request_obj
 
-            # Inject user_id / current_user_id from request.state.user if function has these parameters
-            # and they're not already provided (or are None)
-            for param_name in _AUTH_INJECTED_PARAMS:
-                if param_name in func_sig.parameters and (
-                    param_name not in combined or combined.get(param_name) is None
-                ):
-                    if request_obj is None:
-                        request_obj = _extract_request_from_call_args(args, {})
-
-                    if request_obj:
-                        user_id = _extract_user_id_from_user_object(
-                            getattr(getattr(request_obj, "state", None), "user", None)
-                        )
-                        if user_id:
-                            combined[param_name] = user_id
+            # Inject auth params (user_id, current_user_id, current_user) from request.state.user
+            if request_obj is None:
+                request_obj = _extract_request_from_call_args(args, {})
+            _inject_auth_params_from_request(request_obj, combined, func_sig)
+            _ensure_auth_injected_when_required(
+                combined,
+                func_sig,
+                getattr(func, "_jvspatial_endpoint_config", {}).get(
+                    "auth_required", False
+                ),
+            )
 
             # Filter out None values for required non-path fields
             # Skip validation for user_id and current_user_id if they're injected from auth
@@ -744,16 +888,23 @@ def _wrap_function_with_params(
 
     elif has_path_params and not has_body_params:
         # Only path parameters (and possibly Request) - FastAPI handles these directly
-        # But we still need to inject user_id from request.state.user if function has user_id parameter
-        if "user_id" in func_sig.parameters:
+        # But we still need to inject auth params from request.state.user
+        if any(
+            p in func_sig.parameters
+            for p in (*_AUTH_INJECTED_PARAMS, *_AUTH_INJECTED_USER_PARAMS)
+        ):
             has_request, _ = _find_request_parameter(func_sig)
+            auth_required = getattr(func, "_jvspatial_endpoint_config", {}).get(
+                "auth_required", False
+            )
 
             if has_request:
-                # Function already has Request parameter - wrap to inject user_id
+                # Function already has Request parameter - wrap to inject auth params
                 async def wrapped_path_func(*args: Any, **kwargs: Any) -> Any:
-                    """Wrapped function with user_id injection for path-only params."""
+                    """Wrapped function with auth param injection for path-only params."""
                     request_obj = _extract_request_from_call_args(args, kwargs)
-                    _inject_user_id_from_request(request_obj, kwargs, ["user_id"])
+                    _inject_auth_params_from_request(request_obj, kwargs, func_sig)
+                    _ensure_auth_injected_when_required(kwargs, func_sig, auth_required)
                     return await func(*args, **kwargs)
 
                 # Copy metadata
@@ -772,8 +923,9 @@ def _wrap_function_with_params(
                 async def wrapped_path_func(  # type: ignore[misc]
                     request: FastAPIRequest, **kwargs: Any
                 ) -> Any:
-                    """Wrapped function with user_id injection for path-only params."""
-                    _inject_user_id_from_request(request, kwargs, ["user_id"])
+                    """Wrapped function with auth param injection for path-only params."""
+                    _inject_auth_params_from_request(request, kwargs, func_sig)
+                    _ensure_auth_injected_when_required(kwargs, func_sig, auth_required)
                     # Don't pass request to func since it doesn't expect it
                     return await func(**kwargs)
 
@@ -824,10 +976,10 @@ def _wrap_function_with_params(
         # Build parameters for the new signature
         new_params = []
 
-        # Add Request parameter if function needs user_id or current_user_id injection
-        # (needed to access request.state.user)
-        needs_user_id_injection = (
-            "user_id" in func_sig.parameters or "current_user_id" in func_sig.parameters
+        # Add Request parameter if function needs auth param injection
+        needs_user_id_injection = any(
+            p in func_sig.parameters
+            for p in (*_AUTH_INJECTED_PARAMS, *_AUTH_INJECTED_USER_PARAMS)
         )
         if needs_user_id_injection and not has_request_param:
             # Add Request parameter for user_id injection
@@ -912,21 +1064,17 @@ def _wrap_function_with_params(
             ):
                 data[request_param_name] = request_obj
 
-            # Inject user_id / current_user_id from request.state.user if function has these parameters
-            # and they're not already provided (or are None)
-            for param_name in _AUTH_INJECTED_PARAMS:
-                if param_name in func_sig.parameters and (
-                    param_name not in data or data.get(param_name) is None
-                ):
-                    if request_obj is None:
-                        request_obj = _extract_request_from_call_args(args, {})
-
-                    if request_obj:
-                        user_id = _extract_user_id_from_user_object(
-                            getattr(getattr(request_obj, "state", None), "user", None)
-                        )
-                        if user_id:
-                            data[param_name] = user_id
+            # Inject auth params (user_id, current_user_id, current_user) from request.state.user
+            if request_obj is None:
+                request_obj = _extract_request_from_call_args(args, {})
+            _inject_auth_params_from_request(request_obj, data, func_sig)
+            _ensure_auth_injected_when_required(
+                data,
+                func_sig,
+                getattr(func, "_jvspatial_endpoint_config", {}).get(
+                    "auth_required", False
+                ),
+            )
 
             # Filter out None values for required fields - they should have been validated by Pydantic
             # But ensure we don't pass None for required fields

@@ -99,7 +99,7 @@ server = Server(
     title="My API",
     db_type="json",
     db_path="./jvdb",
-    auth_enabled=False  # Set to True to enable authentication
+    auth=dict(auth_enabled=False)  # Set auth_enabled=True for authentication
 )
 
 # Define entity

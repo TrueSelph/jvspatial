@@ -169,24 +169,24 @@ class TestTokenValidation:
 
     @pytest.mark.asyncio
     async def test_validate_token_logging_on_failure(self, auth_service):
-        """Verify debug logging occurs on validation failure."""
+        """Verify warning logging occurs on validation failure."""
         # Create an invalid token
         invalid_token = "invalid.token.here"
 
-        # Track logger calls
+        # Track logger calls (service uses warning for decode failure)
         logger_calls = []
 
-        def log_debug(msg):
-            logger_calls.append(msg)
+        def log_warning(msg, *args):
+            logger_calls.append(msg % args if args else msg)
 
-        auth_service._logger.debug = log_debug
+        auth_service._logger.warning = log_warning
 
         # Validate invalid token
         result = await auth_service.validate_token(invalid_token)
 
         # Verify logging occurred for failure
         assert len(logger_calls) > 0
-        assert any("Token validation failed" in call for call in logger_calls)
+        assert any("failed" in call and "decode" in call for call in logger_calls)
         assert result is None
 
     @pytest.mark.asyncio
@@ -224,13 +224,13 @@ class TestTokenValidation:
             payload, auth_service.jwt_secret, algorithm=auth_service.jwt_algorithm
         )
 
-        # Track logger calls
+        # Track logger calls (service uses warning for missing JTI)
         logger_calls = []
 
-        def log_debug(msg):
-            logger_calls.append(msg)
+        def log_warning(msg, *args):
+            logger_calls.append(msg % args if args else msg)
 
-        auth_service._logger.debug = log_debug
+        auth_service._logger.warning = log_warning
 
         # Validate token
         result = await auth_service.validate_token(token)
@@ -253,13 +253,13 @@ class TestTokenValidation:
         auth_service._is_token_blacklisted_by_jti = AsyncMock(return_value=False)
         auth_service._get_user_by_id = AsyncMock(return_value=None)
 
-        # Track logger calls
+        # Track logger calls (service uses warning for user not found)
         logger_calls = []
 
-        def log_debug(msg):
-            logger_calls.append(msg)
+        def log_warning(msg, *args):
+            logger_calls.append(msg % args if args else msg)
 
-        auth_service._logger.debug = log_debug
+        auth_service._logger.warning = log_warning
 
         # Validate token
         result = await auth_service.validate_token(token)
@@ -288,13 +288,13 @@ class TestTokenValidation:
         auth_service._is_token_blacklisted_by_jti = AsyncMock(return_value=False)
         auth_service._get_user_by_id = AsyncMock(return_value=mock_user)
 
-        # Track logger calls
+        # Track logger calls (service uses warning for inactive user)
         logger_calls = []
 
-        def log_debug(msg):
-            logger_calls.append(msg)
+        def log_warning(msg, *args):
+            logger_calls.append(msg % args if args else msg)
 
-        auth_service._logger.debug = log_debug
+        auth_service._logger.warning = log_warning
 
         # Validate token
         result = await auth_service.validate_token(token)
