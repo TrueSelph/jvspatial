@@ -1,7 +1,7 @@
 """Middleware management service for FastAPI applications.
 
 This module provides centralized middleware configuration and management,
-including CORS, webhook middleware, and custom middleware registration.
+including CORS, webhook middleware, security headers, and custom middleware registration.
 """
 
 import logging
@@ -9,11 +9,24 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from jvspatial.api.constants import LogIcons
 
 if TYPE_CHECKING:
     from jvspatial.api.server import Server
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Middleware that adds security headers to all responses."""
+
+    async def dispatch(self, request, call_next):
+        """Process request and add security headers to response."""
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        return response
 
 
 class MiddlewareManager:
@@ -59,22 +72,39 @@ class MiddlewareManager:
         """Configure all middleware on the FastAPI app.
 
         This orchestrator method applies middleware in the correct order:
-        1. CORS middleware (if enabled)
-        2. Authentication middleware (if authenticated endpoints exist)
-        3. Webhook middleware (if webhook endpoints exist)
-        4. File storage endpoints (if enabled)
-        5. Custom user-defined middleware
+        1. Security headers (if enabled)
+        2. CORS middleware (if enabled)
+        3. Authentication middleware (if authenticated endpoints exist)
+        4. Webhook middleware (if webhook endpoints exist)
+        5. File storage endpoints (if enabled)
+        6. Custom user-defined middleware
 
         Works in both sync and async contexts.
 
         Args:
             app: FastAPI application instance to configure
         """
+        self._configure_security_headers(app)
         self._configure_cors(app)
         self._configure_auth_middleware(app)
         self._configure_webhook_middleware(app)
         self._configure_file_storage(app)
         self._configure_custom_middleware(app)
+
+    def _configure_security_headers(self, app: FastAPI) -> None:
+        """Add security headers middleware if enabled.
+
+        Sets X-Content-Type-Options, X-Frame-Options, and X-XSS-Protection
+        to mitigate common web vulnerabilities.
+
+        Args:
+            app: FastAPI application instance
+        """
+        if not self.server.config.security.security_headers_enabled:
+            return
+
+        app.add_middleware(SecurityHeadersMiddleware)
+        self._logger.debug(f"{LogIcons.SUCCESS} Security headers middleware configured")
 
     def _configure_cors(self, app: FastAPI) -> None:
         """Configure CORS middleware if enabled.

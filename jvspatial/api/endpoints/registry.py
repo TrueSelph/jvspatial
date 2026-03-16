@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Type, Union
 
 from jvspatial.api.constants import HTTPMethods
 from jvspatial.api.exceptions import ResourceConflictError
+from jvspatial.api.utils.path_utils import normalize_request_path, path_matches
 
 
 class EndpointType(str, Enum):
@@ -456,6 +457,47 @@ class EndpointRegistryService:
             List of EndpointInfo objects
         """
         return self._path_index.get(path, [])
+
+    def get_webhook_endpoints_matching_path(
+        self, request_path: str, method: str
+    ) -> List[EndpointInfo]:
+        """Get webhook endpoints that match the request path and method.
+
+        Uses pattern matching to support path parameters (e.g. {agent_id}).
+        Normalizes the request path by stripping the API prefix before matching.
+
+        Args:
+            request_path: Raw request path (e.g. /api/integrations/foo/webhook/abc123)
+            method: HTTP method (e.g. POST)
+
+        Returns:
+            List of matching EndpointInfo objects with webhook=True
+        """
+        normalized = normalize_request_path(request_path)
+        method_upper = method.upper() if method else ""
+        results: List[EndpointInfo] = []
+
+        def _is_webhook_endpoint(handler: Union[Type, Callable]) -> bool:
+            cfg = getattr(handler, "_jvspatial_endpoint_config", None)
+            return cfg is not None and cfg.get("webhook") is True
+
+        for func, endpoint_info in self._function_registry.items():
+            if not _is_webhook_endpoint(func):
+                continue
+            if method_upper and method_upper not in endpoint_info.methods:
+                continue
+            if path_matches(endpoint_info.path, normalized):
+                results.append(endpoint_info)
+
+        for walker_class, endpoint_info in self._walker_registry.items():
+            if not _is_webhook_endpoint(walker_class):
+                continue
+            if method_upper and method_upper not in endpoint_info.methods:
+                continue
+            if path_matches(endpoint_info.path, normalized):
+                results.append(endpoint_info)
+
+        return results
 
     def has_walker(self, walker_class: Type) -> bool:
         """Check if a walker is registered.

@@ -10,6 +10,23 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import jwt
 
+from jvspatial.api.auth.models import (
+    RefreshToken,
+    TokenBlacklist,
+    TokenResponse,
+    User,
+    UserCreate,
+    UserCreateAdmin,
+    UserLogin,
+    UserPermissionsUpdate,
+    UserResponse,
+    UserRolesUpdate,
+)
+from jvspatial.api.auth.rbac import get_effective_permissions
+from jvspatial.api.exceptions import RegistrationDisabledError
+from jvspatial.core.context import GraphContext
+from jvspatial.db import get_prime_database
+
 # Try to import secure hashing libraries for refresh tokens
 try:
     import bcrypt
@@ -34,22 +51,14 @@ except ImportError:
             _HASHING_AVAILABLE = False
             _HASHING_LIB = None
 
-from jvspatial.api.auth.models import (
-    RefreshToken,
-    TokenBlacklist,
-    TokenResponse,
-    User,
-    UserCreate,
-    UserCreateAdmin,
-    UserLogin,
-    UserPermissionsUpdate,
-    UserResponse,
-    UserRolesUpdate,
+# Insecure default secrets - must not be used when auth is enabled
+_INSECURE_JWT_SECRETS = frozenset(
+    {
+        "",
+        "jvspatial-secret-key-change-in-production",
+        "your-secret-key",
+    }
 )
-from jvspatial.api.auth.rbac import get_effective_permissions
-from jvspatial.api.exceptions import RegistrationDisabledError
-from jvspatial.core.context import GraphContext
-from jvspatial.db import get_prime_database
 
 
 class AuthenticationService:
@@ -93,7 +102,16 @@ class AuthenticationService:
             # Use the passed-in context (e.g. server._graph_context) to respect
             # the configured database rather than calling get_prime_database()
             self.context = context
-        self.jwt_secret = jwt_secret or "jvspatial-secret-key-change-in-production"
+
+        resolved_secret = jwt_secret or "jvspatial-secret-key-change-in-production"
+        if resolved_secret in _INSECURE_JWT_SECRETS:
+            raise ValueError(
+                "JWT secret must be set explicitly when authentication is enabled. "
+                "Set JVSPATIAL_JWT_SECRET_KEY in your environment or pass jwt_secret "
+                "to Server(auth=dict(jwt_secret='your-secure-secret')). "
+                "Never use the default placeholder in production."
+            )
+        self.jwt_secret = resolved_secret
         self.jwt_algorithm = jwt_algorithm or "HS256"
         self.jwt_expire_minutes = jwt_expire_minutes or 30
         self.refresh_expire_days = refresh_expire_days or 7

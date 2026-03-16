@@ -36,6 +36,40 @@ def mock_user():
     return user
 
 
+class TestJWTSecretValidation:
+    """Test JWT secret validation - fail fast when insecure default used."""
+
+    def test_raises_when_jwt_secret_is_default_placeholder(self):
+        """AuthenticationService must raise when jwt_secret is insecure default."""
+        context = MagicMock(spec=GraphContext)
+        with pytest.raises(ValueError) as exc_info:
+            AuthenticationService(
+                context, jwt_secret="jvspatial-secret-key-change-in-production"
+            )
+        assert "JWT secret must be set explicitly" in str(exc_info.value)
+
+    def test_raises_when_jwt_secret_is_your_secret_key(self):
+        """AuthenticationService must raise when jwt_secret is config default."""
+        context = MagicMock(spec=GraphContext)
+        with pytest.raises(ValueError) as exc_info:
+            AuthenticationService(context, jwt_secret="your-secret-key")
+        assert "JWT secret must be set explicitly" in str(exc_info.value)
+
+    def test_raises_when_jwt_secret_is_empty(self):
+        """AuthenticationService must raise when jwt_secret is empty."""
+        context = MagicMock(spec=GraphContext)
+        with pytest.raises(ValueError):
+            AuthenticationService(context, jwt_secret="")
+
+    def test_accepts_valid_jwt_secret(self):
+        """AuthenticationService accepts explicit secure secret."""
+        context = MagicMock(spec=GraphContext)
+        service = AuthenticationService(
+            context, jwt_secret="secure-secret-32-chars-minimum"
+        )
+        assert service.jwt_secret == "secure-secret-32-chars-minimum"
+
+
 class TestContextRespect:
     """Regression: AuthenticationService must use passed-in context when provided."""
 

@@ -389,7 +389,7 @@ class TestRefreshTokenEndpoint:
         test_id = uuid.uuid4().hex[:8]
         server = Server(
             title="Test API",
-            auth=dict(auth_enabled=True),
+            auth=dict(auth_enabled=True, jwt_secret="test-secret-key"),
             db_type="json",
             db_path=f"./.test_dbs/test_db_refresh_{test_id}",
         )
@@ -437,7 +437,7 @@ class TestRefreshTokenEndpoint:
         test_id = uuid.uuid4().hex[:8]
         server = Server(
             title="Test API",
-            auth=dict(auth_enabled=True),
+            auth=dict(auth_enabled=True, jwt_secret="test-secret-key"),
             db_type="json",
             db_path=f"./.test_dbs/test_db_refresh_invalid_{test_id}",
         )
@@ -456,7 +456,7 @@ class TestRefreshTokenEndpoint:
         test_id = uuid.uuid4().hex[:8]
         server = Server(
             title="Test API",
-            auth=dict(auth_enabled=True),
+            auth=dict(auth_enabled=True, jwt_secret="test-secret-key"),
             db_type="json",
             db_path=f"./.test_dbs/test_db_revoke_{test_id}",
         )

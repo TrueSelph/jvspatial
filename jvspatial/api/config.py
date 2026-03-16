@@ -15,6 +15,7 @@ from .config_groups import (
     FileStorageConfig,
     ProxyConfig,
     RateLimitConfig,
+    SecurityConfig,
     WebhookConfig,
 )
 
@@ -57,6 +58,7 @@ class ServerConfig(BaseModel):
 
     # Configuration Groups (using composition)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
     cors: CORSConfig = Field(default_factory=CORSConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)

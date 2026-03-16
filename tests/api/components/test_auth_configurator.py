@@ -96,6 +96,7 @@ class TestAuthConfigurator:
         config = ServerConfig(
             auth=dict(
                 auth_enabled=True,
+                jwt_secret="test-secret",
                 api_key_management_enabled=False,
             )
         )

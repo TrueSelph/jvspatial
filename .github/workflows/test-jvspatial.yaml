@@ -26,7 +26,7 @@ jobs:
       run: pip install -e '.[test]'
 
     - name: Run tests
-      run: pytest tests/ -v --tb=short
+      run: pytest tests/ -v --tb=short --cov=jvspatial --cov-report=xml --cov-report=term-missing --cov-fail-under=50
 
     - name: Run pre-commit checks
       run: |

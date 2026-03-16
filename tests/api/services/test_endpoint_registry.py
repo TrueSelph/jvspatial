@@ -252,6 +252,72 @@ class TestEndpointRegistryService:
         retrieved_info = self.registry.get_by_path("/nonexistent")
         assert len(retrieved_info) == 0
 
+    async def test_get_webhook_endpoints_matching_path_parameterized(self):
+        """Test get_webhook_endpoints_matching_path with parameterized paths."""
+        handler = MagicMock()
+        handler._jvspatial_endpoint_config = {"webhook": True}
+
+        self.registry.register_function(
+            handler,
+            "/integrations/{service}/webhook/{resource_id}",
+            methods=["POST"],
+        )
+
+        # Match with API prefix (normalized before matching)
+        matches = self.registry.get_webhook_endpoints_matching_path(
+            "/api/integrations/foo/webhook/abc123", "POST"
+        )
+        assert len(matches) == 1
+        assert matches[0].path == "/integrations/{service}/webhook/{resource_id}"
+        assert matches[0].handler == handler
+
+        # Match without API prefix
+        matches2 = self.registry.get_webhook_endpoints_matching_path(
+            "/integrations/bar/webhook/xyz789", "POST"
+        )
+        assert len(matches2) == 1
+
+        # Wrong method - no match
+        matches3 = self.registry.get_webhook_endpoints_matching_path(
+            "/api/integrations/foo/webhook/abc123", "GET"
+        )
+        assert len(matches3) == 0
+
+        # Wrong path - no match
+        matches4 = self.registry.get_webhook_endpoints_matching_path(
+            "/api/other/path", "POST"
+        )
+        assert len(matches4) == 0
+
+    async def test_get_webhook_endpoints_matching_path_exact(self):
+        """Test get_webhook_endpoints_matching_path with exact path."""
+        handler = MagicMock()
+        handler._jvspatial_endpoint_config = {"webhook": True}
+
+        self.registry.register_function(handler, "/webhook/test", methods=["POST"])
+
+        matches = self.registry.get_webhook_endpoints_matching_path(
+            "/api/webhook/test", "POST"
+        )
+        assert len(matches) == 1
+        assert matches[0].path == "/webhook/test"
+
+    async def test_get_webhook_endpoints_matching_path_ignores_non_webhook(self):
+        """Test that non-webhook endpoints are not returned."""
+        handler = MagicMock()
+        handler._jvspatial_endpoint_config = {"webhook": False}
+
+        self.registry.register_function(
+            handler,
+            "/integrations/{service}/webhook/{resource_id}",
+            methods=["POST"],
+        )
+
+        matches = self.registry.get_webhook_endpoints_matching_path(
+            "/api/integrations/foo/webhook/abc123", "POST"
+        )
+        assert len(matches) == 0
+
     async def test_list_endpoints(self):
         """Test listing endpoints."""
         handler1 = MagicMock()

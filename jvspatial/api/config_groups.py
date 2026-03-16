@@ -43,6 +43,15 @@ class DatabaseConfig(BaseModel):
     )
 
 
+class SecurityConfig(BaseModel):
+    """Security configuration group."""
+
+    security_headers_enabled: bool = Field(
+        default=True,
+        description="Add security headers (X-Content-Type-Options, X-Frame-Options, etc.) to responses",
+    )
+
+
 class CORSConfig(BaseModel):
     """CORS configuration group."""
 
@@ -92,8 +101,11 @@ class AuthConfig(BaseModel):
         "Does not affect API key authentication availability.",
     )
 
-    # JWT Configuration
-    jwt_secret: str = Field(default="your-secret-key", description="JWT secret key")
+    # JWT Configuration (use empty default; must be set explicitly when auth enabled)
+    jwt_secret: str = Field(
+        default="",
+        description="JWT secret key. MUST be set via JVSPATIAL_JWT_SECRET_KEY when auth is enabled.",
+    )
     jwt_algorithm: str = Field(default="HS256", description="JWT algorithm")
     jwt_expire_minutes: int = Field(
         default=30, description="JWT expiration time in minutes"
@@ -178,7 +190,6 @@ class AuthConfig(BaseModel):
             "/auth/logout",
             "/auth/register",
             "/auth/refresh",
-            "/auth/register",
         ],
         validation_alias="auth_exempt_paths",
     )
@@ -287,6 +298,7 @@ class ProxyConfig(BaseModel):
 
 __all__ = [
     "DatabaseConfig",
+    "SecurityConfig",
     "CORSConfig",
     "AuthConfig",
     "RateLimitConfig",

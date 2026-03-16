@@ -15,6 +15,8 @@ from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from jvspatial.api.constants import APIRoutes
+
 from .utils import (
     WebhookConfig,
     get_webhook_config_from_env,
@@ -69,12 +71,18 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         if self.config.hmac_secret:
             logger.info("HMAC verification enabled")
         else:
-            logger.warning("HMAC verification disabled - no secret configured")
+            logger.info(
+                "HMAC verification disabled - no secret configured "
+                "(API key auth still available per endpoint)"
+            )
 
     def _get_endpoint_webhook_config(
         self, request: Request
     ) -> Optional[Dict[str, Any]]:
         """Extract webhook configuration from endpoint metadata.
+
+        Uses registry-based pattern matching to support parameterized paths
+        (e.g. /integrations/{service}/webhook/{resource_id}).
 
         Args:
             request: FastAPI request object
@@ -88,43 +96,16 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         method = request.method
 
-        # Get all endpoints at this path from registry
-        endpoints = self.server._endpoint_registry.get_by_path(path)
+        # Use registry-based matching for parameterized paths
+        endpoints = self.server._endpoint_registry.get_webhook_endpoints_matching_path(
+            path, method
+        )
 
-        for endpoint_info in endpoints:
-            # Check if methods match
-            if method not in endpoint_info.methods:
-                continue
-
-            # Check if endpoint requires webhook processing
-            handler = endpoint_info.handler
-
-            # Check for webhook config in endpoint metadata
-            endpoint_config = getattr(handler, "_jvspatial_endpoint_config", None)
-            if endpoint_config and endpoint_config.get("webhook", False):
-                return self._extract_webhook_metadata(handler)
+        if endpoints:
+            first_match = endpoints[0]
+            return self._extract_webhook_metadata(first_match.handler)
 
         return None
-
-    def _path_matches(self, request_path: str, endpoint_path: str) -> bool:
-        """Check if request path matches endpoint path pattern.
-
-        Args:
-            request_path: Actual request path
-            endpoint_path: Endpoint path pattern (may include {param})
-
-        Returns:
-            True if paths match
-        """
-        if not endpoint_path:
-            return False
-
-        # Simple pattern matching for {param} style paths
-        import re
-
-        pattern = re.sub(r"\{[^}]+\}", "[^/]+", endpoint_path)
-        pattern = f"^{pattern}$"
-        return bool(re.match(pattern, request_path))
 
     def _extract_webhook_metadata(self, endpoint_obj) -> Dict[str, Any]:
         """Extract webhook metadata from endpoint function or walker class.
@@ -142,6 +123,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             # No config available - return defaults
             return {
                 "hmac_secret": None,
+                "signature_required": False,
                 "idempotency_key_field": "X-Idempotency-Key",
                 "idempotency_ttl_hours": 24,
                 "async_processing": False,
@@ -156,6 +138,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         # Extract from endpoint config
         return {
             "hmac_secret": endpoint_config.get("hmac_secret"),
+            "signature_required": endpoint_config.get("signature_required", False),
             "idempotency_key_field": endpoint_config.get(
                 "idempotency_key_field", "X-Idempotency-Key"
             ),
@@ -279,23 +262,40 @@ class WebhookMiddleware(BaseHTTPMiddleware):
     def _is_webhook_request(self, request: Request) -> bool:
         """Check if request is a webhook request.
 
+        Uses registry-based detection when server is available: matches any
+        registered endpoint with webhook=True. Falls back to path-prefix check
+        when server is None (e.g. tests) for backward compatibility.
+
         Args:
             request: FastAPI request object
 
         Returns:
             True if this is a webhook request
         """
+        if request.method not in ["GET", "POST", "PUT", "PATCH"]:
+            return False
+
+        # Registry-based detection: match any endpoint with webhook=True
+        if self.server:
+            endpoints = (
+                self.server._endpoint_registry.get_webhook_endpoints_matching_path(
+                    request.url.path, request.method
+                )
+            )
+            if endpoints:
+                return True
+
+        # Fallback: path-prefix check for tests or when server is None
         path = request.url.path
-        # Check for both /webhook/ and /api/webhook/ patterns
-        # (endpoints registered via endpoint router get /api prefix)
-        is_webhook = path.startswith(self.webhook_path_pattern) or path.startswith(
-            "/api" + self.webhook_path_pattern
+        api_prefix = (APIRoutes.PREFIX or "").rstrip("/")
+        prefixed_pattern = (
+            f"{api_prefix}/{self.webhook_path_pattern.lstrip('/')}"
+            if api_prefix
+            else None
         )
-        return is_webhook and request.method in [
-            "POST",
-            "PUT",
-            "PATCH",
-        ]  # Typical webhook methods
+        return path.startswith(self.webhook_path_pattern) or (
+            prefixed_pattern is not None and path.startswith(prefixed_pattern)
+        )
 
     async def _process_webhook_request(
         self, request: Request, webhook_config: Optional[Dict[str, Any]] = None
@@ -322,25 +322,40 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                     request, webhook_auth, webhook_config
                 )
 
-            # Use the utility function for comprehensive processing
-            processed_data, cached_response = await validate_and_process_webhook(
-                request, config
-            )
+            if request.method == "GET":
+                # Light path for GET: no body, HMAC, or idempotency
+                if config.https_required and request.url.scheme != "https":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="HTTPS required for webhook endpoints",
+                    )
+                request.state.raw_body = b""
+                request.state.content_type = ""
+                request.state.parsed_payload = dict(request.query_params)
+                request.state.idempotency_key = None
+                request.state.is_duplicate_request = False
+                request.state.hmac_verified = False
+                request.state.webhook_route = self._extract_route_parameter(request)
+            else:
+                # Full path for POST/PUT/PATCH
+                processed_data, cached_response = await validate_and_process_webhook(
+                    request, config
+                )
 
-            # Populate request.state with processed data
-            request.state.raw_body = processed_data["raw_body"]
-            request.state.content_type = processed_data["content_type"]
-            request.state.parsed_payload = processed_data.get("parsed_payload")
-            request.state.idempotency_key = processed_data.get("idempotency_key")
-            request.state.is_duplicate_request = processed_data["is_duplicate"]
-            request.state.hmac_verified = processed_data["hmac_verified"]
+                # Populate request.state with processed data
+                request.state.raw_body = processed_data["raw_body"]
+                request.state.content_type = processed_data["content_type"]
+                request.state.parsed_payload = processed_data.get("parsed_payload")
+                request.state.idempotency_key = processed_data.get("idempotency_key")
+                request.state.is_duplicate_request = processed_data["is_duplicate"]
+                request.state.hmac_verified = processed_data["hmac_verified"]
 
-            # Set cached response for duplicates
-            if cached_response:
-                request.state.cached_response = cached_response
+                # Set cached response for duplicates
+                if cached_response:
+                    request.state.cached_response = cached_response
 
-            # Extract route parameter if present in path
-            request.state.webhook_route = self._extract_route_parameter(request)
+                # Extract route parameter if present in path
+                request.state.webhook_route = self._extract_route_parameter(request)
 
             logger.debug(
                 f"Webhook processing complete: "
@@ -384,21 +399,27 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                     https_required = webhook_https_required
 
         if not webhook_config:
-            # Return base config but with server override if set
-            if https_required != base_config.https_required:
-                return WebhookConfig(
-                    hmac_secret=base_config.hmac_secret,
-                    hmac_algorithm=base_config.hmac_algorithm,
-                    max_payload_size=base_config.max_payload_size,
-                    idempotency_ttl=base_config.idempotency_ttl,
-                    https_required=https_required,
-                    allowed_content_types=base_config.allowed_content_types,
-                )
-            return base_config
+            # No endpoint config (e.g. path-prefix fallback). Do not require HMAC
+            # since we cannot determine if this webhook uses signature verification.
+            return WebhookConfig(
+                hmac_secret=None,
+                hmac_algorithm=base_config.hmac_algorithm,
+                max_payload_size=base_config.max_payload_size,
+                idempotency_ttl=base_config.idempotency_ttl,
+                https_required=https_required,
+                allowed_content_types=base_config.allowed_content_types,
+            )
+
+        # Only require HMAC when endpoint has signature_required=True.
+        # API-key-only webhooks (e.g. WhatsApp) do not send HMAC signatures.
+        signature_required = webhook_config.get("signature_required", False)
+        hmac_secret = None
+        if signature_required:
+            hmac_secret = webhook_config.get("hmac_secret") or base_config.hmac_secret
 
         # Create new config with endpoint-specific overrides
         return WebhookConfig(
-            hmac_secret=webhook_config.get("hmac_secret") or base_config.hmac_secret,
+            hmac_secret=hmac_secret,
             hmac_algorithm=base_config.hmac_algorithm,
             max_payload_size=base_config.max_payload_size,
             idempotency_ttl=webhook_config.get("idempotency_ttl_hours", 24)
@@ -548,9 +569,16 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             # Check endpoint restrictions
             if api_key_entity.allowed_endpoints:
                 request_path = request.url.path
+
+                def _endpoint_allowed(ep: str) -> bool:
+                    # Support wildcard: /api/webhook/* matches /api/webhook/xyz
+                    if ep.endswith("*"):
+                        prefix = ep[:-1]
+                        return request_path.startswith(prefix)
+                    return request_path.startswith(ep)
+
                 if not any(
-                    request_path.startswith(ep)
-                    for ep in api_key_entity.allowed_endpoints
+                    _endpoint_allowed(ep) for ep in api_key_entity.allowed_endpoints
                 ):
                     logger.debug(
                         f"Webhook API key {api_key_entity.id} rejected: endpoint {request_path} not in whitelist"

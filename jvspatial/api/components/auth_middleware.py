@@ -371,9 +371,16 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             # Check endpoint restrictions
             if api_key_entity.allowed_endpoints:
                 request_path = request.url.path
+
+                def _endpoint_allowed(ep: str) -> bool:
+                    # Support wildcard: /api/webhook/* matches /api/webhook/xyz
+                    if ep.endswith("*"):
+                        prefix = ep[:-1]
+                        return request_path.startswith(prefix)
+                    return request_path.startswith(ep)
+
                 if not any(
-                    request_path.startswith(ep)
-                    for ep in api_key_entity.allowed_endpoints
+                    _endpoint_allowed(ep) for ep in api_key_entity.allowed_endpoints
                 ):
                     self._logger.debug(
                         f"API key {api_key_entity.id} rejected: endpoint {request_path} not in whitelist"

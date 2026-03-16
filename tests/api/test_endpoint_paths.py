@@ -13,7 +13,57 @@ from fastapi.testclient import TestClient
 from jvspatial.api.config import ServerConfig
 from jvspatial.api.decorators.route import endpoint
 from jvspatial.api.server import Server
-from jvspatial.api.utils.path_utils import normalize_endpoint_path
+from jvspatial.api.utils.path_utils import (
+    normalize_endpoint_path,
+    normalize_request_path,
+    path_matches,
+)
+
+
+class TestPathMatches:
+    """Test path_matches for parameterized route patterns."""
+
+    def test_matches_simple_path(self):
+        assert path_matches("/webhook/test", "/webhook/test") is True
+
+    def test_matches_single_param(self):
+        assert path_matches("/webhook/{id}", "/webhook/abc123") is True
+        assert path_matches("/webhook/{id}", "/webhook/xyz") is True
+
+    def test_matches_parameterized_path(self):
+        assert (
+            path_matches(
+                "/integrations/{service}/webhook/{resource_id}",
+                "/integrations/foo/webhook/abc123",
+            )
+            is True
+        )
+
+    def test_no_match_wrong_path(self):
+        assert path_matches("/webhook/{id}", "/other/path") is False
+
+    def test_no_match_extra_segment(self):
+        assert path_matches("/webhook/{id}", "/webhook/abc/extra") is False
+
+    def test_empty_returns_false(self):
+        assert path_matches("", "/path") is False
+        assert path_matches("/path", "") is False
+
+
+class TestNormalizeRequestPath:
+    """Test normalize_request_path for registry lookup."""
+
+    def test_strips_api_prefix(self):
+        assert (
+            normalize_request_path("/api/integrations/foo/webhook/abc123")
+            == "/integrations/foo/webhook/abc123"
+        )
+
+    def test_preserves_path_without_prefix(self):
+        assert (
+            normalize_request_path("/integrations/webhook/abc")
+            == "/integrations/webhook/abc"
+        )
 
 
 class TestNormalizeEndpointPath:

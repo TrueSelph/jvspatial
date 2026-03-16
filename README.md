@@ -255,6 +255,7 @@ server = Server(
 - [Entity Reference](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/entity-reference.md) - Node, Edge, Walker classes
 
 ### Advanced Topics
+- [Production Deployment](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/production-deployment.md) - Production checklist and security
 - [API Architecture](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/api-architecture.md) - System architecture
 - [Graph Context Guide](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/graph-context.md) - Context management and multi-database support
 - [Custom Database Guide](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/custom-database-guide.md) - Implementing custom database backends
