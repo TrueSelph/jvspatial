@@ -158,9 +158,9 @@ class TestAuthenticationMiddleware:
 
         # Register endpoint dynamically (simulating jvagent pattern)
         # Without /api prefix - router adds it
-        @endpoint("/agents/{agent_id}/interact", methods=["POST"], auth=False)
-        async def interact_endpoint(agent_id: str):
-            return {"agent_id": agent_id, "response": "interaction complete"}
+        @endpoint("/agents/{id}/interact", methods=["POST"], auth=False)
+        async def interact_endpoint(id: str):
+            return {"id": id, "response": "interaction complete"}
 
         # Rebuild app to include new endpoint and create new client
         server.app = server._create_app_instance()
@@ -171,7 +171,7 @@ class TestAuthenticationMiddleware:
         # Try to access without auth - should succeed
         response = client.post("/api/agents/test-agent/interact")
         assert response.status_code == 200
-        assert response.json()["agent_id"] == "test-agent"
+        assert response.json()["id"] == "test-agent"
 
     def test_endpoint_with_no_config_requires_auth(self, server):
         """SECURITY TEST: Endpoint found in registry but without config should require authentication.
@@ -356,9 +356,9 @@ class TestAuthenticationMiddleware:
     def test_path_normalization_with_parameters(self, server):
         """Test that path normalization works correctly with path parameters."""
 
-        @endpoint("/agents/{agent_id}/interact", methods=["POST"], auth=False)
-        async def interact_endpoint(agent_id: str):
-            return {"agent_id": agent_id}
+        @endpoint("/agents/{id}/interact", methods=["POST"], auth=False)
+        async def interact_endpoint(id: str):
+            return {"id": id}
 
         server.app = server._create_app_instance()
         middleware = AuthenticationMiddleware(

@@ -198,7 +198,7 @@ GET /api/logs?category=ERROR&page=1&page_size=50
 - `category` (optional): Filter by log level (DEBUG, INFO, WARNING, ERROR, CRITICAL, or custom levels)
 - `start_date` (optional): ISO format start date (e.g., `2024-01-01T00:00:00Z`)
 - `end_date` (optional): ISO format end date
-- `agent_id` (optional): Filter by agent_id for cross-referencing
+- `filter` (optional): MongoDB-style filter JSON. All keys must use `context.` prefix. Use `context.log_data.agent_id` for agent filtering.
 - `page` (optional, default: 1): Page number
 - `page_size` (optional, default: 50, max: 200): Items per page
 
@@ -239,9 +239,9 @@ GET /api/logs?category=ERROR&page=1&page_size=50
 curl -H "Authorization: Bearer $TOKEN" \
   "http://localhost:8000/api/logs?category=ERROR"
 
-# Get logs for specific agent
+# Get logs for specific agent (jvagent)
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8000/api/logs?agent_id=agent_123"
+  "http://localhost:8000/api/logs?filter=%7B%22context.log_data.agent_id%22%3A%22agent_123%22%7D"
 
 # Get logs in date range
 curl -H "Authorization: Bearer $TOKEN" \
@@ -249,7 +249,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 # Combined filters
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8000/api/logs?category=ERROR&agent_id=agent_123&page=1&page_size=50"
+  "http://localhost:8000/api/logs?category=ERROR&filter=%7B%22context.log_data.agent_id%22%3A%22agent_123%22%7D&page=1&page_size=50"
 
 # Query custom log levels
 curl -H "Authorization: Bearer $TOKEN" \

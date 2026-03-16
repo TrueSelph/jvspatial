@@ -720,7 +720,7 @@ Atomically finds and updates the first record matching a query. Returns the upda
 update = {
     "$push": {"media_items": {"url": url, "utterance": text}},
     "$set": {"updated_at": time.time()},
-    "$setOnInsert": {"agent_id": agent_id, "created_at": time.time()},
+    "$setOnInsert": {"entity_id": entity_id, "created_at": time.time()},
 }
 result = await db.find_one_and_update(
     "media_batches",

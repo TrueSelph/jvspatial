@@ -558,7 +558,7 @@ class TestMongoDBFindOneAndUpdate:
         update = {
             "$push": {"media_items": {"url": "img2.jpg"}},
             "$set": {"updated_at": 5678.9},
-            "$setOnInsert": {"agent_id": "agent_1", "created_at": 5678.9},
+            "$setOnInsert": {"entity_id": "entity_1", "created_at": 5678.9},
         }
         result = await mongodb.find_one_and_update(
             "media_batches", {"_id": "sender_456"}, update, upsert=True

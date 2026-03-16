@@ -463,7 +463,7 @@ class EndpointRegistryService:
     ) -> List[EndpointInfo]:
         """Get webhook endpoints that match the request path and method.
 
-        Uses pattern matching to support path parameters (e.g. {agent_id}).
+        Uses pattern matching to support path parameters (e.g. {id}).
         Normalizes the request path by stripping the API prefix before matching.
 
         Args:

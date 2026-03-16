@@ -1,17 +1,19 @@
 """Authenticated API endpoints for querying database logs.
 
 This module provides REST API endpoints for querying logs with pagination,
-category filtering, date range filtering, and agent_id cross-referencing.
+category filtering, date range filtering, and optional MongoDB-style filter.
 """
 
+import json
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import Query
+from fastapi import HTTPException, Query
 from pydantic import BaseModel, Field
 
 from jvspatial.api.decorators.route import endpoint
+from jvspatial.logging.filter_utils import validate_log_filter
 from jvspatial.logging.service import get_logging_service
 
 logger = logging.getLogger(__name__)
@@ -31,7 +33,6 @@ class LogEntry(BaseModel):
     message: str = Field(..., description="Log message")
     path: str = Field(..., description="Request path")
     method: str = Field(..., description="HTTP method")
-    agent_id: Optional[str] = Field(None, description="Agent ID for cross-referencing")
     logged_at: str = Field(..., description="ISO timestamp when logged")
     log_data: Dict[str, Any] = Field(..., description="Additional log data")
 
@@ -66,9 +67,9 @@ async def get_logs(
         None,
         description="End date (ISO format, e.g., 2024-01-31T23:59:59Z)",
     ),
-    agent_id: Optional[str] = Query(  # noqa: B008
+    filter: Optional[str] = Query(  # noqa: B008
         None,
-        description="Filter by agent ID for cross-referencing",
+        description='MongoDB-style filter JSON (e.g. {"context.log_level":"ERROR","context.log_data.user_id":"123"})',
     ),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),  # noqa: B008
     page_size: int = Query(  # noqa: B008
@@ -78,13 +79,14 @@ async def get_logs(
     """Query logs with filters and pagination.
 
     Retrieves paginated log entries with optional filtering by log level category,
-    date range, and agent ID. Requires authentication.
+    date range, and MongoDB-style filter. Requires authentication.
 
     **Query Parameters:**
     - `category`: Filter by log level (DEBUG, INFO, WARNING, ERROR, CRITICAL, or custom levels)
     - `start_date`: Start date in ISO format (e.g., `2024-01-01T00:00:00Z`)
     - `end_date`: End date in ISO format (e.g., `2024-01-31T23:59:59Z`)
-    - `agent_id`: Filter by agent ID for cross-referencing
+    - `filter`: MongoDB-style filter JSON. All keys must use `context.` prefix.
+      Supports operators: $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $regex, $exists, $and, $or
     - `page`: Page number (1-indexed, default: 1)
     - `page_size`: Items per page (1-200, default: 50)
 
@@ -94,11 +96,28 @@ async def get_logs(
     **Examples:**
     ```
     GET /api/logs?category=ERROR&page=1&page_size=50
-    GET /api/logs?agent_id=agent_123&start_date=2024-01-01T00:00:00Z
-    GET /api/logs?category=WARNING&start_date=2024-01-01T00:00:00Z&end_date=2024-01-31T23:59:59Z&page=1&page_size=100
+    GET /api/logs?filter={"context.log_level":"ERROR","context.log_data.user_id":"123"}
+    GET /api/logs?filter={"context.status_code":{"$gte":400}}&start_date=2024-01-01T00:00:00Z
     ```
     """
     try:
+        # Parse and validate filter if provided
+        filter_query: Optional[Dict[str, Any]] = None
+        if filter:
+            try:
+                filter_dict = json.loads(filter)
+            except json.JSONDecodeError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid filter JSON: {e}",
+                ) from e
+            if not isinstance(filter_dict, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Filter must be a JSON object",
+                )
+            filter_query = validate_log_filter(filter_dict)
+
         # Get logging service
         service = get_logging_service()
 
@@ -118,7 +137,6 @@ async def get_logs(
                 logger.warning(f"Invalid end_date format: {end_date}")
 
         # Query logs using the service
-        # Note: The service needs to be enhanced to support log_level filtering
         result = await service.get_error_logs(
             event_code=None,
             status_code=None,
@@ -127,9 +145,8 @@ async def get_logs(
             end_time=end_time,
             page=page,
             page_size=page_size,
-            # Pass category and agent_id as kwargs for filtering
             log_level=category.upper() if category else None,
-            agent_id=agent_id,
+            filter_query=filter_query,
         )
 
         # Transform service result to log entries (service returns event_code and log_data)
@@ -145,7 +162,6 @@ async def get_logs(
                     message=entry.get("message", ""),
                     path=entry.get("path", ""),
                     method=entry.get("method", ""),
-                    agent_id=log_data.get("agent_id"),
                     logged_at=entry.get("logged_at", ""),
                     log_data=log_data,
                 )
@@ -162,6 +178,8 @@ async def get_logs(
 
         return LogsResponse(logs=log_entries, pagination=pagination)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to query logs: {e}", exc_info=True)
         # Return empty result on error

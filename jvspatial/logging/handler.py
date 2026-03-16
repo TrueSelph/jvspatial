@@ -37,7 +37,7 @@ class DBLogHandler(logging.Handler):
         logger.error("Database connection failed")
 
         # Info level logging (if configured)
-        logger.info("User logged in", extra={"agent_id": "agent_123"})
+        logger.info("User logged in", extra={"user_id": "user_123"})
 
         # With details
         logger.error(
@@ -48,7 +48,7 @@ class DBLogHandler(logging.Handler):
                 "event_code": "validation_error",
                 "path": "/api/users",
                 "method": "POST",
-                "agent_id": "agent_456"
+                "request_id": "req_456"
             }
         )
 
@@ -69,7 +69,6 @@ class DBLogHandler(logging.Handler):
     - Log level from record (including custom levels)
     - Exception/traceback from exc_info
     - status_code, event_code, path, method from extra
-    - agent_id from extra (for cross-referencing)
     - Any other fields from extra (stored in log_data)
 
     Note:
@@ -185,7 +184,6 @@ class DBLogHandler(logging.Handler):
             )
             path = getattr(record, "path", "") or extra_dict.get("path", "")
             method = getattr(record, "method", "") or extra_dict.get("method", "")
-            agent_id = getattr(record, "agent_id", "") or extra_dict.get("agent_id", "")
 
             # Extract details from record attributes or extra dict
             details = getattr(record, "details", None) or extra_dict.get("details")
@@ -206,10 +204,6 @@ class DBLogHandler(logging.Handler):
 
             if traceback_str:
                 log_data["traceback"] = traceback_str
-
-            # Add agent_id to log_data if present
-            if agent_id:
-                log_data["agent_id"] = agent_id
 
             # Extract all custom fields from record attributes
             # Python logging adds fields from 'extra' parameter as attributes on the LogRecord
@@ -261,7 +255,6 @@ class DBLogHandler(logging.Handler):
                 "path",
                 "method",
                 "details",
-                "agent_id",
             }
 
             # Get all custom attributes from the record (these come from 'extra' parameter)

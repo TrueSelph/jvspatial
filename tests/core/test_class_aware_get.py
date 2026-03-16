@@ -242,7 +242,7 @@ class TestClassAwareGet:
             "entity": "AnotherNeverImportedClass",
             "context": {
                 "name": "ghost",
-                "agent_id": "test-agent",
+                "entity_id": "test-entity",
             },
             "edges": [],
         }
