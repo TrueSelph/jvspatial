@@ -683,6 +683,26 @@ server = Server(
 )
 ```
 
+### Removal of agent_id from jvspatial Logging
+
+**Breaking Change:** `agent_id` has been removed from jvspatial logging. It is jvagent-specific; jvspatial remains generic.
+
+#### What Changed
+
+- **Endpoint:** `GET /api/logs?agent_id=...` is removed. Use the generic `filter` parameter instead.
+- **LogEntry response:** Top-level `agent_id` field removed. Custom fields remain in `log_data`.
+- **DBLog model:** Agent_id-specific compound indexes removed.
+- **Handler:** No special handling for `agent_id`; all `extra` fields pass through generically.
+
+#### Migration for jvagent / iris_ai
+
+1. **Logging:** Continue passing `agent_id` in `extra` when logging. It will be stored in `log_data` via the generic handler.
+2. **Filtering:** Replace `GET /api/logs?agent_id=agent_123` with:
+   ```
+   GET /api/logs?filter={"context.log_data.agent_id":"agent_123"}
+   ```
+3. **Indexes:** New deployments will not create agent_id indexes. Existing MongoDB deployments may retain old indexes (harmless).
+
 ## See Also
 
 - [Design Decisions](design-decisions.md)

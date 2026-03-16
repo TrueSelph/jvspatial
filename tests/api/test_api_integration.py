@@ -818,24 +818,25 @@ class TestDynamicEndpointManagement:
         assert "/api/dynamic-walker" in schema["paths"]
 
     async def test_endpoint_removal(self, test_server):
-        """Test endpoint registration tracking (removal not yet implemented)."""
+        """Test endpoint registration and registry-level removal."""
 
         @endpoint("/removable-walker")
         class RemovableWalker(Walker):
             param: str = EndpointField(description="Removable walker")
 
         # Initially registered using endpoint manager
-        assert test_server.endpoint_manager.get_registry().has_walker(RemovableWalker)
-
-        # For now, just verify registration tracking works
-        # TODO: Implement removal functionality
-        endpoint_info = test_server.endpoint_manager.get_registry().get_walker_info(
-            RemovableWalker
-        )
+        registry = test_server.endpoint_manager.get_registry()
+        assert registry.has_walker(RemovableWalker)
+        endpoint_info = registry.get_walker_info(RemovableWalker)
         assert endpoint_info.path == "/removable-walker"
 
+        # Unregister at registry level
+        success = registry.unregister_walker(RemovableWalker)
+        assert success is True
+        assert not registry.has_walker(RemovableWalker)
+
     async def test_multiple_endpoint_registration_removal(self, test_server):
-        """Test registering multiple endpoints (removal not yet implemented)."""
+        """Test registering multiple endpoints and registry-level removal."""
 
         @endpoint("/walker-a")
         class WalkerA(Walker):
@@ -845,17 +846,20 @@ class TestDynamicEndpointManagement:
         class WalkerB(Walker):
             param_b: str = EndpointField(description="Parameter B")
 
-        walkers = test_server.endpoint_manager.get_registry().list_walkers()
+        registry = test_server.endpoint_manager.get_registry()
+        walkers = registry.list_walkers()
         assert len(walkers) == 2
-        assert test_server.endpoint_manager.get_registry().has_walker(WalkerA)
-        assert test_server.endpoint_manager.get_registry().has_walker(WalkerB)
+        assert registry.has_walker(WalkerA)
+        assert registry.has_walker(WalkerB)
 
         # Verify both are properly mapped
-        endpoint_info_a = test_server.endpoint_manager.get_registry().get_walker_info(
-            WalkerA
-        )
-        endpoint_info_b = test_server.endpoint_manager.get_registry().get_walker_info(
-            WalkerB
-        )
+        endpoint_info_a = registry.get_walker_info(WalkerA)
+        endpoint_info_b = registry.get_walker_info(WalkerB)
         assert endpoint_info_a.path == "/walker-a"
         assert endpoint_info_b.path == "/walker-b"
+
+        # Unregister one walker
+        assert registry.unregister_walker(WalkerA) is True
+        assert not registry.has_walker(WalkerA)
+        assert registry.has_walker(WalkerB)
+        assert len(registry.list_walkers()) == 1

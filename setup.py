@@ -38,17 +38,19 @@ setup(
     include_package_data=True,
     install_requires=[
         "pydantic>=2.0",
-        "fastapi",
-        "uvicorn",
-        "python-multipart",
-        "motor",
-        "pymongo",
+        "fastapi>=0.100.0",
+        "uvicorn>=0.23.0",
+        "python-multipart>=0.0.6",
+        "motor>=3.0.0",
+        "pymongo>=4.0.0",
         "aiosqlite>=0.19.0",  # SQLite database backend
-        "PyJWT",  # JWT token handling for authentication
-        "bcrypt",  # Password hashing for authentication
+        "PyJWT>=2.0.0",  # JWT token handling for authentication
+        "bcrypt>=4.0.0",  # Password hashing for authentication
+        "email-validator>=2.0.0",  # Email validation for Pydantic EmailStr
         "schedule>=1.2.2",  # Job scheduling
-        "typing-extensions",  # For @override decorator and enhanced typing
-        "aioboto3",  # AWS SDK for S3 storage support
+        "typing-extensions>=4.0.0",  # For @override decorator and enhanced typing
+        "aiofiles>=23.0.0",  # Async file operations for JsonDB
+        "aioboto3>=15.5.0",  # AWS SDK for S3 storage support
     ],
     extras_require={
         "dev": [

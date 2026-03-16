@@ -219,9 +219,10 @@ class TestClassAwareGet:
     async def test_ghost_node_delete_removes_node_and_edges(self, temp_context):
         """Node.get() + node.delete(cascade=True) fully removes a ghost node and its edges.
 
-        This is the end-to-end path used by jvagent to remove actions whose
-        class module is no longer imported.  After deletion both the node record
-        and any edge pointing to it must be absent from the database.
+        This is the end-to-end path used by applications that use class-aware
+        get for graph cleanup when a node's class module is no longer imported.
+        After deletion both the node record and any edge pointing to it must be
+        absent from the database.
         """
         from jvspatial.core.context import get_default_context
         from jvspatial.core.entities.node import Node as _Node
@@ -242,13 +243,13 @@ class TestClassAwareGet:
             "entity": "AnotherNeverImportedClass",
             "context": {
                 "name": "ghost",
-                "agent_id": "test-agent",
+                "entity_id": "test-entity",
             },
             "edges": [],
         }
         await context.database.save(collection, ghost_record)
 
-        # Inject an edge from manager → ghost (as would exist in jvagent)
+        # Inject an edge from manager → ghost (as would exist in any graph app)
         edge_record = {
             "id": "ghost-delete-edge-id",
             "entity": "Edge",

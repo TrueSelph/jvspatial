@@ -5,15 +5,18 @@ to build the complete API functionality, following the new standard implementati
 """
 
 from .app_builder import AppBuilder
-from .auth_middleware import AuthenticationMiddleware, PathMatcher
+from .auth_middleware import AuthenticationMiddleware
+from .endpoint_auth_resolver import EndpointAuthResolver
 from .endpoint_manager import EndpointManager
 from .error_handler import APIErrorHandler
+from .path_matcher import PathMatcher
 
 __all__ = [
     "AppBuilder",
     "AuthenticationMiddleware",
-    "PathMatcher",
+    "EndpointAuthResolver",
     "EndpointManager",
     "APIErrorHandler",
     "ErrorHandler",
+    "PathMatcher",
 ]

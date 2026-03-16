@@ -77,7 +77,6 @@ server = Server(
     db_path="./jvdb",
     # Enable authentication
     auth_enabled=True,
-    jwt_auth_enabled=True,
     jwt_secret="demo-secret-key-2024",  # pragma: allowlist secret
     jwt_expire_minutes=60,
 )

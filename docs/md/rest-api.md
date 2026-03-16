@@ -27,7 +27,7 @@ This example demonstrates:
 server = Server(
     title="Authenticated CRUD API",
     auth_enabled=True,  # Enables /auth/register, /auth/login, /auth/logout
-    jwt_auth_enabled=True,
+    auth_enabled=True,
     db_type="json"
 )
 
@@ -208,7 +208,7 @@ The recommended approach uses the modern `Server` class with entity-centric oper
 
 ```python
 from jvspatial.api import Server, endpoint
-from jvspatial.api.endpoint import EndpointField
+from jvspatial.api.decorators import EndpointField
 from jvspatial.core import Walker, Node, on_visit
 
 # Define your entity
@@ -302,7 +302,7 @@ For maximum flexibility, use the modern `@endpoint` decorator (works for both fu
 
 ```python
 from jvspatial.api import endpoint
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api.decorators import EndpointField
 from jvspatial.core import Walker, Node, on_visit
 from fastapi import HTTPException
 from typing import List, Optional
@@ -1096,7 +1096,7 @@ class AdvancedProductSearch(Walker):
 ```python
 from jvspatial.core import Node, Edge, Walker, on_visit
 from jvspatial.api import endpoint, Server
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api.decorators import EndpointField
 from typing import List, Optional
 
 # Entity definitions
@@ -1295,7 +1295,7 @@ curl -X POST "http://localhost:8000/api/users/skill-matching" \
 The `EndpointField` provides comprehensive parameter control for API endpoints:
 
 ```python
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api.decorators import EndpointField
 from typing import Optional, List
 
 class ExampleWalker(Walker):
@@ -1718,7 +1718,7 @@ from jvspatial.api import Server
 server = Server(
     title="Authenticated API",
     auth_enabled=True,
-    jwt_auth_enabled=True,
+    auth_enabled=True,
     jwt_secret="your-secret-key",
     jwt_expire_minutes=1440,  # 24 hours
     db_type="json",

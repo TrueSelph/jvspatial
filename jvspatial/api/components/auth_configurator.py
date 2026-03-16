@@ -4,10 +4,11 @@ This module provides authentication endpoint registration and configuration,
 extracted from the Server class for better separation of concerns.
 """
 
+import asyncio
 import logging
-from typing import Any, List, Optional, cast
+from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from jvspatial.api.auth.api_key_service import APIKeyService
@@ -16,6 +17,9 @@ from jvspatial.api.auth.models import (
     APIKeyCreateRequest,
     APIKeyCreateResponse,
     APIKeyResponse,
+    ForgotPasswordRequest,
+    PasswordChangeRequest,
+    ResetPasswordRequest,
     TokenRefreshRequest,
     TokenResponse,
     UserCreate,
@@ -38,18 +42,26 @@ class AuthConfigurator:
     and API key management endpoints.
     """
 
-    def __init__(self, config: Any, logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        config: Any,
+        logger: Optional[logging.Logger] = None,
+        server: Optional[Any] = None,
+    ):
         """Initialize the auth configurator.
 
         Args:
             config: Server configuration object
             logger: Optional logger instance (defaults to module logger)
+            server: Optional Server instance for callbacks (on_user_registered)
         """
         self.config = config
         self._logger = logger or logging.getLogger(__name__)
+        self._server = server
         self._auth_config: Optional[AuthConfig] = None
         self._auth_router: Optional[APIRouter] = None
         self._auth_endpoints_registered = False
+        self._auth_service: Optional[AuthenticationService] = None
 
     def configure(self) -> Optional[AuthConfig]:
         """Configure authentication middleware and register auth endpoints if enabled.
@@ -57,96 +69,55 @@ class AuthConfigurator:
         Returns:
             AuthConfig instance if auth is enabled, None otherwise
         """
-        if not self.config.auth.auth_enabled:
+        if not self.config.auth.enabled:
             return None
 
         # Return existing config if already configured (idempotent)
         if self._auth_config is not None:
             return self._auth_config
 
-        # Create auth configuration - only pass fields that are not None
-        # AuthConfig has defaults for all fields, so we only override when explicitly set
-        auth_config_kwargs: dict[str, Any] = {
-            "enabled": True,
-        }
+        # Use unified config directly - no mapping needed
+        self._auth_config = self.config.auth
 
-        # Only include fields that are explicitly set (not None)
-        if self.config.auth.auth_exempt_paths is not None:
-            auth_config_kwargs["exempt_paths"] = self.config.auth.auth_exempt_paths
-        # Always include JWT config if auth is enabled (they have defaults but should use config values)
-        auth_config_kwargs["jwt_secret"] = self.config.auth.jwt_secret
-        auth_config_kwargs["jwt_algorithm"] = self.config.auth.jwt_algorithm
-        auth_config_kwargs["jwt_expire_minutes"] = self.config.auth.jwt_expire_minutes
-        # Include refresh token config
-        if hasattr(self.config.auth, "jwt_refresh_expire_days"):
-            auth_config_kwargs["refresh_expire_days"] = (
-                self.config.auth.jwt_refresh_expire_days
-            )
-        if hasattr(self.config.auth, "refresh_token_rotation"):
-            auth_config_kwargs["refresh_token_rotation"] = getattr(
-                self.config.auth, "refresh_token_rotation", False
-            )
-        if hasattr(self.config.auth, "blacklist_cache_ttl_seconds"):
-            auth_config_kwargs["blacklist_cache_ttl_seconds"] = cast(
-                int, getattr(self.config.auth, "blacklist_cache_ttl_seconds", 3600)
-            )
-        if self.config.auth.api_key_header is not None:
-            auth_config_kwargs["api_key_header"] = self.config.auth.api_key_header
-        # Include api_key_management_enabled (supports both new and old flag names)
-        api_key_mgmt_enabled = getattr(
-            self.config.auth, "api_key_management_enabled", None
-        ) or getattr(self.config.auth, "api_key_auth_enabled", True)
-        if api_key_mgmt_enabled is not None:
-            auth_config_kwargs["api_key_management_enabled"] = api_key_mgmt_enabled
-        if self.config.auth.session_cookie_name is not None:
-            auth_config_kwargs["session_cookie_name"] = (
-                self.config.auth.session_cookie_name
-            )
-        if self.config.auth.session_expire_minutes is not None:
-            auth_config_kwargs["session_expire_minutes"] = (
-                self.config.auth.session_expire_minutes
-            )
-        # RBAC config
-        if hasattr(self.config.auth, "rbac_enabled"):
-            auth_config_kwargs["rbac_enabled"] = self.config.auth.rbac_enabled
-        if hasattr(self.config.auth, "default_role"):
-            auth_config_kwargs["default_role"] = self.config.auth.default_role
-        if hasattr(self.config.auth, "admin_role"):
-            auth_config_kwargs["admin_role"] = self.config.auth.admin_role
-        if hasattr(self.config.auth, "registration_open"):
-            auth_config_kwargs["registration_open"] = self.config.auth.registration_open
-        if hasattr(self.config.auth, "role_permission_mapping"):
-            auth_config_kwargs["role_permission_mapping"] = (
-                self.config.auth.role_permission_mapping
-            )
-
-        self._auth_config = AuthConfig(**auth_config_kwargs)
-
-        # Store JWT config for use in closures (avoid closure issues)
+        # Store values for closures (avoid closure issues)
         self._jwt_secret = self._auth_config.jwt_secret
         self._jwt_algorithm = self._auth_config.jwt_algorithm
         self._jwt_expire_minutes = self._auth_config.jwt_expire_minutes
-        self._refresh_expire_days = getattr(self._auth_config, "refresh_expire_days", 7)
-        self._refresh_token_rotation = getattr(
-            self._auth_config, "refresh_token_rotation", False
+        self._refresh_expire_days = self._auth_config.refresh_expire_days
+        self._refresh_token_rotation = self._auth_config.refresh_token_rotation
+        self._blacklist_cache_ttl_seconds = (
+            self._auth_config.blacklist_cache_ttl_seconds
         )
-        self._blacklist_cache_ttl_seconds = getattr(
-            self._auth_config, "blacklist_cache_ttl_seconds", 3600
+        self._role_permission_mapping = self._auth_config.role_permission_mapping
+        self._admin_role = self._auth_config.admin_role
+        self._default_role = self._auth_config.default_role
+
+        # Create and cache the auth service singleton for consumer apps
+        self._auth_service = AuthenticationService(
+            GraphContext(database=get_prime_database()),
+            jwt_secret=self._jwt_secret,
+            jwt_algorithm=self._jwt_algorithm,
+            jwt_expire_minutes=self._jwt_expire_minutes,
+            refresh_expire_days=self._refresh_expire_days,
+            refresh_token_rotation=self._refresh_token_rotation,
+            blacklist_cache_ttl_seconds=self._blacklist_cache_ttl_seconds,
+            password_reset_token_expiry_minutes=getattr(
+                self._auth_config,
+                "password_reset_token_expiry_minutes",
+                60,
+            ),
+            role_permission_mapping=self._role_permission_mapping,
+            admin_role=self._admin_role,
+            default_role=self._default_role,
+            registration_open=self.config.auth.registration_open,
         )
-        self._role_permission_mapping = getattr(
-            self._auth_config, "role_permission_mapping", {"admin": ["*"], "user": []}
-        )
-        self._admin_role = getattr(self._auth_config, "admin_role", "admin")
-        self._default_role = getattr(self._auth_config, "default_role", "user")
 
         # Register authentication endpoints
         self._register_auth_endpoints()
 
-        # Log authentication configuration
-        api_key_mgmt = getattr(self._auth_config, "api_key_management_enabled", True)
         self._logger.debug(
             f"🔐 Authentication configured: JWT=enabled, "
-            f"API-key-mgmt={api_key_mgmt}, "
+            f"API-key-mgmt={self._auth_config.api_key_management_enabled}, "
             f"endpoints-registered={self._auth_endpoints_registered}"
         )
 
@@ -157,50 +128,28 @@ class AuthConfigurator:
         if self._auth_endpoints_registered:
             return
 
-        # Helper function to get authentication service
-        # Use stored JWT config values to avoid closure issues
-        jwt_secret = self._jwt_secret
-        jwt_algorithm = self._jwt_algorithm
-        jwt_expire_minutes = self._jwt_expire_minutes
-        refresh_expire_days = self._refresh_expire_days
-        refresh_token_rotation = self._refresh_token_rotation
-        blacklist_cache_ttl_seconds = self._blacklist_cache_ttl_seconds
-        role_permission_mapping = self._role_permission_mapping
-        admin_role = self._admin_role
-        default_role = self._default_role
-
         def get_auth_service():
-            """Get authentication service using prime database for core persistence.
-
-            Authentication and session management always use the prime database
-            regardless of the current database context.
-            """
-            prime_ctx = GraphContext(database=get_prime_database())
-            return AuthenticationService(
-                prime_ctx,
-                jwt_secret=jwt_secret,
-                jwt_algorithm=jwt_algorithm,
-                jwt_expire_minutes=jwt_expire_minutes,
-                refresh_expire_days=refresh_expire_days,
-                refresh_token_rotation=refresh_token_rotation,
-                blacklist_cache_ttl_seconds=blacklist_cache_ttl_seconds,
-                role_permission_mapping=role_permission_mapping,
-                admin_role=admin_role,
-                default_role=default_role,
-            )
+            """Get cached authentication service singleton."""
+            return self._auth_service
 
         # Create auth router
         auth_router = APIRouter(prefix="/auth", tags=["Auth"])
 
-        # Create custom security scheme for BearerAuth compatibility
-        security = HTTPBearer(scheme_name="BearerAuth")
+        # Use auto_error=False so we can raise 401 (not 403) for missing credentials.
+        # FastAPI's HTTPBearer returns 403 in older versions and 401 in newer ones;
+        # we explicitly raise 401 for consistency across environments.
+        security = HTTPBearer(scheme_name="BearerAuth", auto_error=False)
 
         # Helper function to get current user from token.
         # Uses HTTPBearer dependency so auth is handled via security scheme (no redundant param).
         async def get_current_user(
-            credentials: HTTPAuthorizationCredentials = Depends(security),  # noqa: B008
+            credentials: Optional[HTTPAuthorizationCredentials] = Depends(  # noqa: B008
+                security
+            ),
         ) -> UserResponse:
             """Get current user from Authorization header."""
+            if not credentials:
+                raise HTTPException(status_code=401, detail="Not authenticated")
             token = credentials.credentials
 
             # Initialize authentication service and validate token
@@ -215,24 +164,58 @@ class AuthConfigurator:
             current_user: UserResponse = Depends(get_current_user),  # noqa: B008
         ) -> UserResponse:
             """Require admin role. Raises 403 if user is not admin."""
-            if admin_role not in (current_user.roles or []):
+            if self._admin_role not in (current_user.roles or []):
                 raise HTTPException(
                     status_code=403,
                     detail="Admin access required",
                 )
             return current_user
 
-        # Register endpoint
+        # Register endpoint (accepts extra fields for on_user_registered callback)
         @auth_router.post("/register", response_model=UserResponse)
-        async def register(user_data: UserCreate):
+        async def register(request: Request):
             """Register a new user.
 
-            The email field is validated by Pydantic's EmailStr type,
-            which ensures proper email format before this function is called.
+            The email field is validated by Pydantic's EmailStr type.
+            Extra fields in the request body are passed to on_user_registered callback.
             """
             try:
+                body = await request.json() if hasattr(request, "json") else {}
+            except Exception:
+                body = {}
+            if not isinstance(body, dict):
+                body = {}
+            email = body.get("email")
+            password = body.get("password")
+            if not email or not password:
+                raise HTTPException(
+                    status_code=422,
+                    detail="email and password are required",
+                )
+            if len(password) < 6:
+                raise HTTPException(
+                    status_code=422,
+                    detail="password must be at least 6 characters",
+                )
+            try:
                 auth_service = get_auth_service()
+                user_data = UserCreate(email=email, password=password)
                 user = await auth_service.register_user(user_data)
+                callback = (
+                    getattr(self._server, "_on_user_registered", None)
+                    if self._server
+                    else None
+                )
+                if callback and user:
+                    try:
+                        if asyncio.iscoroutinefunction(callback):
+                            await callback(user, body)
+                        else:
+                            callback(user, body)
+                    except Exception as e:
+                        self._logger.exception(
+                            "on_user_registered callback failed: %s", e
+                        )
                 return user
             except RegistrationDisabledError:
                 raise
@@ -241,6 +224,32 @@ class AuthConfigurator:
             except Exception as e:
                 self._logger.error(f"Registration error: {e}")
                 raise HTTPException(status_code=500, detail="Internal server error")
+
+        # Current user endpoint (requires authentication)
+        @auth_router.get("/me")
+        async def get_me(
+            current_user: UserResponse = Depends(get_current_user),  # noqa: B008
+        ):
+            """Get the currently authenticated user's information."""
+            data = current_user.model_dump()
+            callback = (
+                getattr(self._server, "_on_enrich_current_user", None)
+                if self._server
+                else None
+            )
+            if callback:
+                try:
+                    if asyncio.iscoroutinefunction(callback):
+                        extra = await callback(current_user)
+                    else:
+                        extra = callback(current_user)
+                    if isinstance(extra, dict):
+                        data.update(extra)
+                except Exception as e:
+                    self._logger.exception(
+                        "on_enrich_current_user callback failed: %s", e
+                    )
+            return {"user": data}
 
         # Login endpoint
         @auth_router.post("/login", response_model=TokenResponse)
@@ -314,12 +323,75 @@ class AuthConfigurator:
                 self._logger.error(f"Revoke all tokens error: {e}")
                 raise HTTPException(status_code=500, detail="Internal server error")
 
+        # Change password endpoint (requires authentication)
+        if getattr(self.config.auth, "password_change_enabled", True):
+
+            @auth_router.post("/change-password", dependencies=[_default_security_dep])
+            async def change_password(
+                request: PasswordChangeRequest,
+                current_user: UserResponse = Depends(get_current_user),  # noqa: B008
+            ):
+                """Change password for the authenticated user."""
+                try:
+                    auth_service = get_auth_service()
+                    await auth_service.change_password(
+                        current_user.id,
+                        request.current_password,
+                        request.new_password,
+                    )
+                    return {"message": "Password changed successfully"}
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
+                except Exception as e:
+                    self._logger.error(f"Change password error: {e}")
+                    raise HTTPException(status_code=500, detail="Internal server error")
+
+        # Forgot password endpoint (public)
+        if getattr(self.config.auth, "password_reset_enabled", True):
+
+            @auth_router.post("/forgot-password")
+            async def forgot_password(request: ForgotPasswordRequest):
+                """Request a password reset link. Always returns success (no enumeration)."""
+                try:
+                    auth_service = get_auth_service()
+                    on_reset = getattr(
+                        self._server, "_on_password_reset_requested", None
+                    )
+                    reset_base = (
+                        getattr(self.config.auth, "password_reset_base_url", None) or ""
+                    )
+                    await auth_service.request_password_reset(
+                        request.email,
+                        on_reset_requested=on_reset,
+                        reset_base_url=reset_base,
+                    )
+                    return {
+                        "message": "If an account exists, a reset link has been sent."
+                    }
+                except Exception as e:
+                    self._logger.error(f"Forgot password error: {e}")
+                    raise HTTPException(status_code=500, detail="Internal server error")
+
+            @auth_router.post("/reset-password")
+            async def reset_password(request: ResetPasswordRequest):
+                """Complete password reset with token from email."""
+                try:
+                    auth_service = get_auth_service()
+                    await auth_service.reset_password_with_token(
+                        request.token, request.new_password
+                    )
+                    return {"message": "Password reset successfully"}
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid or expired token",
+                    )
+                except Exception as e:
+                    self._logger.error(f"Reset password error: {e}")
+                    raise HTTPException(status_code=500, detail="Internal server error")
+
         # API Key Management Endpoints (require authentication)
-        # Support both new and deprecated flag names for backward compatibility
-        api_key_mgmt_enabled = getattr(
-            self.config.auth, "api_key_management_enabled", None
-        ) or getattr(self.config.auth, "api_key_auth_enabled", True)
-        if api_key_mgmt_enabled:
+        if self.config.auth.api_key_management_enabled:
             # Helper function to get API key service
             def get_api_key_service():
                 """Get API key service using prime database."""
@@ -516,6 +588,15 @@ class AuthConfigurator:
             AuthConfig instance if configured, None otherwise
         """
         return self._auth_config
+
+    @property
+    def auth_service(self) -> Optional[AuthenticationService]:
+        """Get the cached authentication service singleton.
+
+        Returns:
+            AuthenticationService instance if auth is configured, None otherwise
+        """
+        return self._auth_service
 
     @property
     def auth_router(self) -> Optional[APIRouter]:

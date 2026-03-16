@@ -32,8 +32,7 @@ import os
 from typing import Any, Dict, Optional
 
 from jvspatial.api import Server, endpoint
-from jvspatial.core.decorators import on_visit
-from jvspatial.core.entities import Node, Root, Walker
+from jvspatial.core import Node, Root, Walker, on_visit
 
 
 # Example 1: Basic Server Setup with File Storage
@@ -316,10 +315,12 @@ if __name__ == "__main__":
     print("🚀 File Storage Demo Server")
     print("=" * 70)
     print("\n📁 File Storage Configuration:")
-    print(f"   Provider: {server.config.file_storage_provider}")
-    print(f"   Root: {server.config.file_storage_root}")
-    print(f"   Max Size: {server.config.file_storage_max_size / (1024*1024):.1f}MB")
-    print(f"   Proxy Enabled: {server.config.proxy_enabled}")
+    print(f"   Provider: {server.config.file_storage.file_storage_provider}")
+    print(f"   Root: {server.config.file_storage.file_storage_root}")
+    print(
+        f"   Max Size: {server.config.file_storage.file_storage_max_size / (1024*1024):.1f}MB"
+    )
+    print(f"   Proxy Enabled: {server.config.proxy.proxy_enabled}")
 
     print("\n🔗 Available Endpoints:")
     print("   POST   /api/storage/upload")

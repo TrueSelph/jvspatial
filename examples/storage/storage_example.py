@@ -16,8 +16,7 @@ from typing import Any, Dict, Optional
 
 from jvspatial.api import Server, endpoint
 from jvspatial.api.decorators import EndpointField
-from jvspatial.core.decorators import on_visit
-from jvspatial.core.entities import Node, Root, Walker
+from jvspatial.core import Node, Root, Walker, on_visit
 from jvspatial.storage import create_storage, get_proxy_manager
 
 
@@ -224,7 +223,7 @@ class FileDownloader(FileWalker):
             )
 
 
-def create_server():
+def create_storage_server():
     """Create and configure the server with storage backends."""
     server = Server(
         title="Storage Example API",
@@ -241,7 +240,7 @@ def create_server():
 def main():
     """Run the storage example."""
     print("Setting up server...")
-    server = create_server()
+    server = create_storage_server()
 
     print("\nStorage backends configured:")
     print("- local (default)")

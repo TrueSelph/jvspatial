@@ -350,17 +350,17 @@ db = create_database(
 ```python
 db = create_database(
     db_type="mongodb",
-    connection_string="mongodb://localhost:27017",
+    uri="mongodb://localhost:27017",
     db_name="my_app"
 )
 ```
 
-#### Memory Database (Testing)
+#### In-Memory Database (Testing)
 ```python
-# For testing - data is not persisted
+# For testing - use SQLite :memory: (JSON does not support :memory:)
 db = create_database(
-    db_type="json",
-    base_path=":memory:"
+    db_type="sqlite",
+    db_path=":memory:"
 )
 ```
 
@@ -372,17 +372,17 @@ The `create_database()` function provides a unified interface:
 def create_database(
     db_type: str,
     base_path: str | None = None,
-    connection_string: str | None = None,
+    uri: str | None = None,
     db_name: str | None = None,
     auto_create: bool = True
 ) -> Database
 ```
 
 **Parameters:**
-- `db_type`: "json" or "mongodb"
-- `base_path`: Path for JSON database files
-- `connection_string`: MongoDB connection string
-- `database_name`: MongoDB database name
+- `db_type`: "json", "sqlite", "mongodb", or "dynamodb"
+- `base_path`: Path for JSON database files (alias: `db_path` for SQLite)
+- `uri`: MongoDB connection string (alias: `connection_string`)
+- `db_name`: MongoDB database name
 - `auto_create`: Whether to create database/directories automatically
 
 ## Testing with GraphContext
@@ -394,12 +394,12 @@ GraphContext makes testing much easier by providing database isolation:
 ```python
 import pytest
 from jvspatial.core.context import GraphContext
-from jvspatial.db.factory import get_database
+from jvspatial.db import create_database
 
 @pytest.fixture
 async def test_context():
     """Create isolated test database"""
-    db = get_database(db_type="json", base_path=":memory:")
+    db = create_database(db_type="sqlite", db_path=":memory:")
     ctx = GraphContext(database=db)
     yield ctx
     # Automatic cleanup
@@ -496,13 +496,22 @@ All existing entity methods continue to work:
 
 The main difference is that database management is now centralized and configurable through GraphContext.
 
+## Prime vs Current Database
+
+jvspatial distinguishes between the **prime database** and the **current database**:
+
+- **Prime database** (`get_prime_database()`): The primary database created at Server init. **Authentication (JWT, API key) always uses the prime database**, regardless of `server._graph_context` or `switch_database()`. Users, sessions, and API keys are stored here.
+- **Current database** (`get_current_database()`): The database used for general app data. Can be switched via `switch_database(name)` for multi-tenant or multi-database scenarios.
+
+When `server._graph_context` points to a different database (e.g. after `set_graph_context()`), auth validation still succeeds because it uses the prime database, not the graph context.
+
 ## Multi-Database Support
 
 jvspatial supports managing multiple databases with a prime database for core persistence operations (authentication, session management). See the [Multi-Database Example](../../examples/database/multi_database_example.py) for a complete demonstration.
 
 ### Key Features
 
-- **Prime Database**: Always used for authentication and session management
+- **Prime Database**: Always used for authentication and session management (JWT, API key, users)
 - **Multiple Databases**: Register and switch between application databases
 - **Easy Switching**: Use `switch_database(name)` or `DatabaseManager.set_current_database(name)`
 - **Database Removal**: Use `unregister_database(name)` to remove non-prime databases
@@ -542,7 +551,7 @@ unregister_database("app")
 # Always use isolated test contexts
 @pytest.fixture
 async def test_context():
-    db = get_database(db_type="json", base_path=":memory:")
+    db = create_database(db_type="sqlite", db_path=":memory:")
     return GraphContext(database=db)
 ```
 
@@ -619,7 +628,7 @@ if user is None:
 # Use isolated test contexts
 @pytest.fixture
 async def clean_context():
-    db = create_database("json", base_path=":memory:")
+    db = create_database("sqlite", db_path=":memory:")
     return GraphContext(database=db)
 ```
 

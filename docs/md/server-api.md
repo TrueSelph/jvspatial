@@ -220,6 +220,7 @@ server = Server(config=config)
 | `cors_headers` | List[str] | ["*"] | Allowed headers |
 | `db_type` | str | None | Database type |
 | `db_path` | str | None | Database path |
+| `db_path_resolve` | str | None | When `"app"`, resolve relative `db_path` against the module that created the Server. Use when cwd varies. |
 | `log_level` | str | "info" | Logging level |
 
 ### Logging (Colorized, Consistent Console Output)
@@ -248,7 +249,7 @@ Walker endpoints are the primary way to define business logic in jvspatial APIs.
 ```python
 @endpoint("/tasks/create")
 class CreateTask(Walker):
-ame: str = EndpointField(description="User name", min_length=2)
+    name: str = EndpointField(description="User name", min_length=2)
     email: str = EndpointField(description="User email")
 
     @on_visit(Root)
@@ -393,7 +394,7 @@ my_walkers/
 ```python
 # my_walkers/walkers.py
 from jvspatial.api import register_walker_to_default
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api.decorators import EndpointField
 from jvspatial.core import Walker, Root, on_visit
 
 @register_walker_to_default("/my-package/process")
@@ -792,7 +793,7 @@ The server automatically sets these environment variables:
 ```python
 from jvspatial.api.server import create_server
 from jvspatial.core import Node, Root, Walker, on_visit
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api.decorators import EndpointField
 
 server = create_server(title="CRUD API", version="1.0.0")
 
@@ -894,9 +895,22 @@ class Server:
     def __init__(
         self,
         config: Optional[Union[ServerConfig, Dict[str, Any]]] = None,
+        packages: Optional[List[str]] = None,
+        node_types: Optional[List[Type[Node]]] = None,
+        on_startup: Optional[List[Callable]] = None,
+        on_shutdown: Optional[List[Callable]] = None,
+        on_admin_bootstrapped: Optional[Callable] = None,
+        on_user_registered: Optional[Callable] = None,
+        on_enrich_current_user: Optional[Callable] = None,
         **kwargs: Any
     )
 ```
+
+**Auth callbacks:**
+
+- `on_admin_bootstrapped(user_response)` — Called when bootstrap creates an admin from env. Use to create app-specific entities (e.g. UserNode).
+- `on_user_registered(user_response, request_body)` — Called after registration. Use to create domain entities (UserNode, Organization, etc.). `request_body` includes email, password, and any extra fields.
+- `on_enrich_current_user(user_response) -> dict` — Augments `GET /auth/me` response. Return dict merged into the response.
 
 #### Methods
 

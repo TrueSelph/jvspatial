@@ -124,39 +124,36 @@ async def create_sample_network() -> City:
         is_capital=True,
     )
 
-    # Create and connect highways
-    i95 = await Highway.create(
-        source=nyc.id,
-        target=boston.id,
+    # Create and connect highways (pass edge class and kwargs; connect creates the edge)
+    i95 = await nyc.connect(
+        boston,
+        edge=Highway,
         name="I-95",
         distance=215.0,
         speed_limit=65,
         num_lanes=4,
     )
-    await nyc.connect(boston, edge=i95)
     print(f"Created {i95.name}: {i95.distance} miles")
 
-    i87 = await Highway.create(
-        source=nyc.id,
-        target=albany.id,
+    i87 = await nyc.connect(
+        albany,
+        edge=Highway,
         name="I-87",
         distance=155.0,
         speed_limit=65,
         num_lanes=3,
     )
-    await nyc.connect(albany, edge=i87)
     print(f"Created {i87.name}: {i87.distance} miles")
 
-    i90 = await Highway.create(
-        source=albany.id,
-        target=boston.id,
+    i90 = await albany.connect(
+        boston,
+        edge=Highway,
         name="I-90",
         distance=170.0,
         speed_limit=65,
         num_lanes=3,
         is_toll_road=True,
     )
-    await albany.connect(boston, edge=i90)
     print(f"Created {i90.name}: {i90.distance} miles")
 
     return nyc  # Return NYC as our starting point
@@ -175,7 +172,8 @@ async def main():
 
     # Print the walker's report
     print("\nWalker Report:")
-    for item in result.get_report():
+    report = await result.get_report()
+    for item in report:
         if isinstance(item, dict):
             for key, value in item.items():
                 if isinstance(value, (int, float)) and value > 1000:

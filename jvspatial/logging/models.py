@@ -23,18 +23,6 @@ from jvspatial.core.annotations import attribute, compound_index
 @compound_index(
     [("context.log_level", 1), ("context.logged_at", -1)], name="log_level_logged_at"
 )
-@compound_index(
-    [("context.log_data.agent_id", 1), ("context.logged_at", -1)],
-    name="agent_id_logged_at",
-)
-@compound_index(
-    [
-        ("context.log_level", 1),
-        ("context.log_data.agent_id", 1),
-        ("context.logged_at", -1),
-    ],
-    name="log_level_agent_id_logged_at",
-)
 class DBLog(Object):
     """Base log entry for database logging.
 
@@ -54,8 +42,7 @@ class DBLog(Object):
             - log_level: Log level name (required)
             - details: Additional details (optional)
             - traceback: Stack trace for exceptions (optional)
-            - agent_id: Agent identifier for cross-referencing (optional, indexed)
-            - Any custom fields added by implementations
+            - Any custom fields added by implementations (e.g. user_id, request_id)
 
     Example:
         Error log entry:
@@ -81,12 +68,12 @@ class DBLog(Object):
             status_code=200,
             event_code="action_completed",
             log_level="INFO",
-            path="/api/agents/123/actions",
+            path="/api/actions/123",
             method="POST",
             log_data={
                 "message": "Action executed successfully",
                 "log_level": "INFO",
-                "agent_id": "agent_456",
+                "user_id": "user_456",
                 "details": {"action": "process_data", "duration": 0.5}
             }
         )
@@ -112,7 +99,7 @@ class DBLog(Object):
             status_code=422,
             event_code="validation_warning",
             log_level="WARNING",
-            path="/api/agents/123/actions",
+            path="/api/actions/123",
             method="POST",
             log_data={
                 "message": "Invalid action parameters",
@@ -120,10 +107,9 @@ class DBLog(Object):
                 "details": [...],
                 # Custom fields added by implementation
                 "app_id": "app_123",
-                "agent_id": "agent_456",
                 "user_id": "user_789",
                 "session_id": "session_abc",
-                "interaction_id": "interaction_xyz"
+                "request_id": "req_xyz"
             }
         )
         ```

@@ -36,6 +36,58 @@ def mock_user():
     return user
 
 
+class TestJWTSecretValidation:
+    """Test JWT secret validation - fail fast when insecure default used."""
+
+    def test_raises_when_jwt_secret_is_default_placeholder(self):
+        """AuthenticationService must raise when jwt_secret is insecure default."""
+        context = MagicMock(spec=GraphContext)
+        with pytest.raises(ValueError) as exc_info:
+            AuthenticationService(
+                context, jwt_secret="jvspatial-secret-key-change-in-production"
+            )
+        assert "JWT secret must be set explicitly" in str(exc_info.value)
+
+    def test_raises_when_jwt_secret_is_your_secret_key(self):
+        """AuthenticationService must raise when jwt_secret is config default."""
+        context = MagicMock(spec=GraphContext)
+        with pytest.raises(ValueError) as exc_info:
+            AuthenticationService(context, jwt_secret="your-secret-key")
+        assert "JWT secret must be set explicitly" in str(exc_info.value)
+
+    def test_raises_when_jwt_secret_is_empty(self):
+        """AuthenticationService must raise when jwt_secret is empty."""
+        context = MagicMock(spec=GraphContext)
+        with pytest.raises(ValueError):
+            AuthenticationService(context, jwt_secret="")
+
+    def test_accepts_valid_jwt_secret(self):
+        """AuthenticationService accepts explicit secure secret."""
+        context = MagicMock(spec=GraphContext)
+        service = AuthenticationService(
+            context, jwt_secret="secure-secret-32-chars-minimum"
+        )
+        assert service.jwt_secret == "secure-secret-32-chars-minimum"
+
+
+class TestContextRespect:
+    """Regression: AuthenticationService must use passed-in context when provided."""
+
+    def test_uses_passed_context_instead_of_get_prime_database(self):
+        """Verify AuthenticationService uses the passed-in GraphContext directly.
+
+        Previously it ignored the context and always called get_prime_database(),
+        which could resolve to the wrong database under certain request conditions.
+        """
+        context = MagicMock(spec=GraphContext)
+        service = AuthenticationService(
+            context,
+            jwt_secret="test-secret-key",
+        )
+        # Service must use the exact context we passed, not a new one from get_prime_database
+        assert service.context is context
+
+
 class TestTokenValidation:
     """Test token validation behavior."""
 
@@ -151,24 +203,24 @@ class TestTokenValidation:
 
     @pytest.mark.asyncio
     async def test_validate_token_logging_on_failure(self, auth_service):
-        """Verify debug logging occurs on validation failure."""
+        """Verify warning logging occurs on validation failure."""
         # Create an invalid token
         invalid_token = "invalid.token.here"
 
-        # Track logger calls
+        # Track logger calls (service uses warning for decode failure)
         logger_calls = []
 
-        def log_debug(msg):
-            logger_calls.append(msg)
+        def log_warning(msg, *args):
+            logger_calls.append(msg % args if args else msg)
 
-        auth_service._logger.debug = log_debug
+        auth_service._logger.warning = log_warning
 
         # Validate invalid token
         result = await auth_service.validate_token(invalid_token)
 
         # Verify logging occurred for failure
         assert len(logger_calls) > 0
-        assert any("Token validation failed" in call for call in logger_calls)
+        assert any("failed" in call and "decode" in call for call in logger_calls)
         assert result is None
 
     @pytest.mark.asyncio
@@ -206,13 +258,13 @@ class TestTokenValidation:
             payload, auth_service.jwt_secret, algorithm=auth_service.jwt_algorithm
         )
 
-        # Track logger calls
+        # Track logger calls (service uses warning for missing JTI)
         logger_calls = []
 
-        def log_debug(msg):
-            logger_calls.append(msg)
+        def log_warning(msg, *args):
+            logger_calls.append(msg % args if args else msg)
 
-        auth_service._logger.debug = log_debug
+        auth_service._logger.warning = log_warning
 
         # Validate token
         result = await auth_service.validate_token(token)
@@ -235,13 +287,13 @@ class TestTokenValidation:
         auth_service._is_token_blacklisted_by_jti = AsyncMock(return_value=False)
         auth_service._get_user_by_id = AsyncMock(return_value=None)
 
-        # Track logger calls
+        # Track logger calls (service uses warning for user not found)
         logger_calls = []
 
-        def log_debug(msg):
-            logger_calls.append(msg)
+        def log_warning(msg, *args):
+            logger_calls.append(msg % args if args else msg)
 
-        auth_service._logger.debug = log_debug
+        auth_service._logger.warning = log_warning
 
         # Validate token
         result = await auth_service.validate_token(token)
@@ -270,13 +322,13 @@ class TestTokenValidation:
         auth_service._is_token_blacklisted_by_jti = AsyncMock(return_value=False)
         auth_service._get_user_by_id = AsyncMock(return_value=mock_user)
 
-        # Track logger calls
+        # Track logger calls (service uses warning for inactive user)
         logger_calls = []
 
-        def log_debug(msg):
-            logger_calls.append(msg)
+        def log_warning(msg, *args):
+            logger_calls.append(msg % args if args else msg)
 
-        auth_service._logger.debug = log_debug
+        auth_service._logger.warning = log_warning
 
         # Validate token
         result = await auth_service.validate_token(token)

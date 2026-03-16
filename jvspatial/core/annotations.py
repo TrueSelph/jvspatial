@@ -280,9 +280,9 @@ def compound_index(
         Class decorator function
 
     Example:
-        @compound_index([("agent_id", 1), ("enabled", 1)], name="agent_enabled")
+        @compound_index([("entity_id", 1), ("enabled", 1)], name="entity_enabled")
         class MyEntity(Node):
-            agent_id: str = attribute(indexed=True)
+            entity_id: str = attribute(indexed=True)
             enabled: bool = attribute(indexed=True)
     """
 

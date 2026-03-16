@@ -179,6 +179,7 @@ class Edge(Object):
         self: "Edge",
         exclude_transient: bool = True,
         exclude: Optional[Union[set, Dict[str, Any]]] = None,
+        flat: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Export edge to a dictionary.
@@ -189,10 +190,12 @@ class Edge(Object):
         Args:
             exclude_transient: Whether to automatically exclude transient fields (default: True)
             exclude: Additional fields to exclude (can be a set of field names or a dict)
+            flat: If True, return attributes at top level instead of nested under context (for API responses)
             **kwargs: Additional arguments passed to base export/model_dump()
 
         Returns:
-            Nested format dictionary with id, name, context, source, target, bidirectional for database storage
+            Nested format dictionary with id, name, context, source, target, bidirectional for database storage,
+            or flat format {id, entity, source, target, bidirectional, **context} when flat=True
         """
         # Nested persistence format - structure for database storage
         # Exclude source, target, bidirectional from context (id and type_code are transient and auto-excluded)
@@ -212,6 +215,15 @@ class Edge(Object):
 
         context = serialize_datetime(context)
 
+        if flat:
+            return {
+                "id": self.id,
+                "entity": self.entity,
+                "source": self.source,
+                "target": self.target,
+                "bidirectional": self.bidirectional,
+                **context,
+            }
         return {
             "id": self.id,
             "entity": self.entity,

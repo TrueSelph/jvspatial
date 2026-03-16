@@ -1225,6 +1225,7 @@ class Node(Object):
         self: "Node",
         exclude_transient: bool = True,
         exclude: Optional[Union[set, Dict[str, Any]]] = None,
+        flat: bool = False,
         include_edges: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
@@ -1237,11 +1238,13 @@ class Node(Object):
         Args:
             exclude_transient: Whether to automatically exclude transient fields (default: True)
             exclude: Additional fields to exclude (can be a set of field names or a dict)
+            flat: If True, return attributes at top level instead of nested under context (for API responses)
             include_edges: Whether to include edges in export (default: False, set to True for database persistence)
             **kwargs: Additional arguments passed to base export/model_dump()
 
         Returns:
-            Nested format dictionary with id, entity, context (and optionally edges) for database storage
+            Nested format dictionary with id, entity, context (and optionally edges) for database storage,
+            or flat format {id, entity, **context} when flat=True
         """
         # Nested persistence format - structure for database storage
         # Exclude _visitor_ref from context (id, edge_ids, and type_code are transient and auto-excluded)
@@ -1261,11 +1264,14 @@ class Node(Object):
 
         context_data = serialize_datetime(context_data)
 
-        result = {
-            "id": self.id,
-            "entity": self.entity,
-            "context": context_data,
-        }
+        if flat:
+            result = {"id": self.id, "entity": self.entity, **context_data}
+        else:
+            result = {
+                "id": self.id,
+                "entity": self.entity,
+                "context": context_data,
+            }
 
         # Include edges only when explicitly requested (e.g., for database persistence)
         if include_edges:

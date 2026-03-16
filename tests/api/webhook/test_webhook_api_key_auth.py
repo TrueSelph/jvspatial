@@ -296,3 +296,44 @@ class TestWebhookAPIKeyAuthentication:
         assert config["webhook"] is True
         assert config["signature_required"] is True
         assert config["webhook_auth"] == "api_key"
+
+    def test_webhook_parameterized_path_with_api_key(self, server, unique_email):
+        """Test webhook at parameterized path (e.g. /integrations/{service}/webhook/{id}).
+
+        Verifies registry-based detection: paths that contain 'webhook' but do not
+        start with /webhook/ are correctly recognized and processed.
+        """
+        set_current_server(server)
+
+        @endpoint(
+            "/integrations/{service}/webhook/{resource_id}",
+            methods=["POST"],
+            webhook=True,
+            webhook_auth="api_key",
+        )
+        async def integration_webhook(service: str, resource_id: str):
+            return {"status": "received", "service": service, "id": resource_id}
+
+        server.app = None
+        client = TestClient(server.get_app())
+
+        token = self._register_and_login(client, unique_email)
+
+        create_response = client.post(
+            "/api/auth/api-keys",
+            json={"name": "Integration Webhook Key"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        api_key = create_response.json()["key"]
+
+        response = client.post(
+            "/api/integrations/foo/webhook/abc123",
+            json={"event": "message"},
+            headers={"X-API-Key": api_key},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "received"
+        assert data["service"] == "foo"
+        assert data["id"] == "abc123"

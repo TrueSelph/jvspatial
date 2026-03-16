@@ -132,7 +132,7 @@ async def send_completion_notification(walker):
 - `methods` (List[str], optional): HTTP methods (default: `["GET"]` for functions, `["POST"]` for Walkers)
 - `auth` (bool, optional): **Require authentication** (default: `False`)
   - **Important**: This parameter is the primary way to control endpoint authentication
-  - `auth=True`: Endpoint requires valid JWT token or API key
+  - `auth=True`: Endpoint requires valid JWT token or API key. Add `user_id: str` or `current_user` as parameters to receive the injected value (401 returned automatically if missing).
   - `auth=False`: Endpoint is public and accessible without authentication
   - The authentication middleware uses the endpoint registry to check this setting
 - `roles` (List[str], optional): Required user roles (e.g., `["admin"]`)

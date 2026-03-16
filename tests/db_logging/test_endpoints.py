@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from jvspatial.logging.endpoints import (
     LogEntry,
@@ -33,8 +34,8 @@ class TestLogEntryModel:
         assert entry.status_code == 500
         assert entry.log_data["log_level"] == "ERROR"
 
-    def test_log_entry_with_optional_agent_id(self):
-        """LogEntry accepts optional agent_id."""
+    def test_log_entry_with_custom_log_data(self):
+        """LogEntry accepts custom fields in log_data."""
         entry = LogEntry(
             log_id="log_2",
             log_level="INFO",
@@ -43,11 +44,11 @@ class TestLogEntryModel:
             message="OK",
             path="",
             method="",
-            agent_id="agent_123",
             logged_at="2024-01-15T10:30:00Z",
-            log_data={},
+            log_data={"user_id": "user_123", "request_id": "req_456"},
         )
-        assert entry.agent_id == "agent_123"
+        assert entry.log_data["user_id"] == "user_123"
+        assert entry.log_data["request_id"] == "req_456"
 
     def test_log_entry_status_code_zero_allowed(self):
         """LogEntry accepts status_code 0 (e.g. non-HTTP logs)."""
@@ -123,7 +124,7 @@ class TestGetLogsEndpoint:
                 category=None,
                 start_date=None,
                 end_date=None,
-                agent_id=None,
+                filter=None,
                 page=1,
                 page_size=50,
             )
@@ -170,7 +171,7 @@ class TestGetLogsEndpoint:
                 category=None,
                 start_date=None,
                 end_date=None,
-                agent_id=None,
+                filter=None,
                 page=1,
                 page_size=50,
             )
@@ -200,7 +201,7 @@ class TestGetLogsEndpoint:
                 category=None,
                 start_date=None,
                 end_date=None,
-                agent_id=None,
+                filter=None,
                 page=1,
                 page_size=50,
             )
@@ -210,7 +211,7 @@ class TestGetLogsEndpoint:
 
     @pytest.mark.asyncio
     async def test_get_logs_passes_filters_to_service(self, mock_service):
-        """get_logs passes category, dates, agent_id, page, page_size to service."""
+        """get_logs passes category, dates, filter, page, page_size to service."""
         with patch(
             "jvspatial.logging.endpoints.get_logging_service",
             return_value=mock_service,
@@ -219,14 +220,14 @@ class TestGetLogsEndpoint:
                 category="ERROR",
                 start_date="2024-01-01T00:00:00Z",
                 end_date="2024-01-31T23:59:59Z",
-                agent_id="agent_456",
+                filter='{"context.log_level":"ERROR"}',
                 page=2,
                 page_size=25,
             )
         mock_service.get_error_logs.assert_called_once()
         call_kw = mock_service.get_error_logs.call_args[1]
         assert call_kw.get("log_level") == "ERROR"
-        assert call_kw.get("agent_id") == "agent_456"
+        assert call_kw.get("filter_query") == {"context.log_level": "ERROR"}
         assert call_kw.get("page") == 2
         assert call_kw.get("page_size") == 25
         assert call_kw.get("start_time") is not None
@@ -265,14 +266,13 @@ class TestGetLogsEndpoint:
                 category=None,
                 start_date=None,
                 end_date=None,
-                agent_id=None,
+                filter=None,
                 page=1,
                 page_size=50,
             )
         assert len(response.logs) == 1
         assert response.logs[0].log_level == "ERROR"  # default when not in log_data
         assert response.logs[0].log_data == {}
-        assert response.logs[0].agent_id is None
 
     @pytest.mark.asyncio
     async def test_get_logs_on_exception_returns_empty_response(self, mock_service):
@@ -288,7 +288,7 @@ class TestGetLogsEndpoint:
                 category=None,
                 start_date=None,
                 end_date=None,
-                agent_id=None,
+                filter=None,
                 page=1,
                 page_size=50,
             )
@@ -297,3 +297,41 @@ class TestGetLogsEndpoint:
         assert response.pagination.total_pages == 0
         assert response.pagination.page == 1
         assert response.pagination.page_size == 50
+
+    @pytest.mark.asyncio
+    async def test_get_logs_invalid_filter_json_returns_400(self, mock_service):
+        """get_logs returns 400 when filter is invalid JSON."""
+        with patch(
+            "jvspatial.logging.endpoints.get_logging_service",
+            return_value=mock_service,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await get_logs(
+                    category=None,
+                    start_date=None,
+                    end_date=None,
+                    filter='{"invalid json',
+                    page=1,
+                    page_size=50,
+                )
+        assert exc_info.value.status_code == 400
+        assert "Invalid filter JSON" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_get_logs_filter_disallowed_keys_returns_400(self, mock_service):
+        """get_logs returns 400 when filter has keys without context. prefix."""
+        with patch(
+            "jvspatial.logging.endpoints.get_logging_service",
+            return_value=mock_service,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await get_logs(
+                    category=None,
+                    start_date=None,
+                    end_date=None,
+                    filter='{"entity":"DBLog"}',
+                    page=1,
+                    page_size=50,
+                )
+        assert exc_info.value.status_code == 400
+        assert "context." in exc_info.value.detail

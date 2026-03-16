@@ -92,7 +92,7 @@ class DatabaseManager:
                         "aiosqlite is required for SQLite support. Install it with: pip install aiosqlite"
                     ) from exc
 
-                db_path = os.getenv("JVSPATIAL_SQLITE_PATH", "jvdb/sqlite/jvspatial.db")
+                db_path = os.getenv("JVSPATIAL_DB_PATH", "jvdb/sqlite/jvspatial.db")
                 self._prime_database = SQLiteDB(db_path=db_path)
             elif db_type == "dynamodb":
                 try:
@@ -160,6 +160,18 @@ class DatabaseManager:
         if self._prime_database is None:
             raise RuntimeError("Prime database not initialized")
         return self._prime_database
+
+    def set_prime_database(self, database: Database) -> None:
+        """Set the prime database instance.
+
+        Use this when reconfiguring the database (e.g. from Server config)
+        instead of mutating internal attributes.
+
+        Args:
+            database: Database instance to set as prime
+        """
+        self._prime_database = database
+        self._databases["prime"] = database
 
     def get_current_database(self) -> Database:
         """Get the current active database instance.

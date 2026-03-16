@@ -29,6 +29,11 @@ def reset_database_manager():
 def auth_service():
     """Create authentication service instance."""
     context = MagicMock(spec=GraphContext)
+    # Mock context.database.find for DB operations (AuthenticationService now
+    # uses passed-in context; ensure_indexes and database.find must be awaitable)
+    context.ensure_indexes = AsyncMock()
+    context.database = MagicMock()
+    context.database.find = AsyncMock(return_value=[])
     return AuthenticationService(
         context,
         jwt_secret="test-secret-key",
@@ -384,7 +389,7 @@ class TestRefreshTokenEndpoint:
         test_id = uuid.uuid4().hex[:8]
         server = Server(
             title="Test API",
-            auth=dict(auth_enabled=True),
+            auth=dict(auth_enabled=True, jwt_secret="test-secret-key"),
             db_type="json",
             db_path=f"./.test_dbs/test_db_refresh_{test_id}",
         )
@@ -432,7 +437,7 @@ class TestRefreshTokenEndpoint:
         test_id = uuid.uuid4().hex[:8]
         server = Server(
             title="Test API",
-            auth=dict(auth_enabled=True),
+            auth=dict(auth_enabled=True, jwt_secret="test-secret-key"),
             db_type="json",
             db_path=f"./.test_dbs/test_db_refresh_invalid_{test_id}",
         )
@@ -451,7 +456,7 @@ class TestRefreshTokenEndpoint:
         test_id = uuid.uuid4().hex[:8]
         server = Server(
             title="Test API",
-            auth=dict(auth_enabled=True),
+            auth=dict(auth_enabled=True, jwt_secret="test-secret-key"),
             db_type="json",
             db_path=f"./.test_dbs/test_db_revoke_{test_id}",
         )
@@ -516,11 +521,11 @@ class TestResilientRefreshTokenGeneration:
 
         auth_service._generate_and_store_refresh_token = failing_refresh_token
 
-        # Track logger warnings
+        # Track logger warnings (accept *args for %-style format calls)
         logger_warnings = []
 
-        def log_warning(msg):
-            logger_warnings.append(msg)
+        def log_warning(msg, *args):
+            logger_warnings.append(msg % args if args else msg)
 
         auth_service._logger.warning = log_warning
 
@@ -593,11 +598,11 @@ class TestResilientRefreshTokenGeneration:
             side_effect=Exception("Test error")
         )
 
-        # Track logger warnings
+        # Track logger warnings (accept *args for %-style format calls)
         logger_warnings = []
 
-        def log_warning(msg):
-            logger_warnings.append(msg)
+        def log_warning(msg, *args):
+            logger_warnings.append(msg % args if args else msg)
 
         auth_service._logger.warning = log_warning
 

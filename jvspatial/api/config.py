@@ -15,6 +15,7 @@ from .config_groups import (
     FileStorageConfig,
     ProxyConfig,
     RateLimitConfig,
+    SecurityConfig,
     WebhookConfig,
 )
 
@@ -57,6 +58,7 @@ class ServerConfig(BaseModel):
 
     # Configuration Groups (using composition)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
     cors: CORSConfig = Field(default_factory=CORSConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
@@ -84,14 +86,21 @@ class ServerConfig(BaseModel):
             return data
         db_type = data.get("db_type")
         db_path = data.get("db_path")
-        if db_type is None and db_path is None:
+        db_path_resolve = data.get("db_path_resolve")
+        if db_type is None and db_path is None and db_path_resolve is None:
             return data
-        result = {k: v for k, v in data.items() if k not in ("db_type", "db_path")}
+        result = {
+            k: v
+            for k, v in data.items()
+            if k not in ("db_type", "db_path", "db_path_resolve")
+        }
         db = result.get("database") or {}
         if isinstance(db, dict):
             if db_type is not None:
                 db = {**db, "db_type": db_type}
             if db_path is not None:
                 db = {**db, "db_path": db_path}
+            if db_path_resolve is not None:
+                db = {**db, "db_path_resolve": db_path_resolve}
             result["database"] = db
         return result

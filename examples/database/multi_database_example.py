@@ -284,7 +284,10 @@ async def demonstrate_server_with_multi_database():
             title="Multi-DB API",
             db_type="json",
             db_path=prime_dir,
-            auth_enabled=True,
+            auth={
+                "enabled": True,
+                "jwt_secret": "demo-secret-multi-db-example",  # pragma: allowlist secret
+            },
         )
 
         # Verify prime database is set up
@@ -302,9 +305,9 @@ async def demonstrate_server_with_multi_database():
 
         # Verify authentication uses prime database
         print("\n3. Verifying authentication uses prime database...")
-        from jvspatial.api.auth.service import AuthenticationService
+        from jvspatial.api import get_auth_service
 
-        auth_service = AuthenticationService()
+        auth_service = get_auth_service()
         # AuthenticationService should use prime database
         auth_ctx_db = auth_service.context.database
         assert auth_ctx_db == prime_db, "Authentication should use prime database"

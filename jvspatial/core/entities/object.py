@@ -244,6 +244,7 @@ class Object(AttributeMixin, BaseModel):
         self: "Object",
         exclude_transient: bool = True,
         exclude: Optional[Union[set, Dict[str, Any]]] = None,
+        flat: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Export the object to a dictionary using model_dump() as the base.
@@ -256,6 +257,7 @@ class Object(AttributeMixin, BaseModel):
         Args:
             exclude_transient: Whether to automatically exclude transient fields (default: True)
             exclude: Additional fields to exclude (can be a set of field names or a dict)
+            flat: If True, return attributes at top level instead of nested under context (for API responses)
             **kwargs: Additional arguments passed to model_dump() (e.g., exclude_none, mode, etc.)
 
         Returns:
@@ -321,7 +323,9 @@ class Object(AttributeMixin, BaseModel):
 
             result = serialize_datetime(result)
 
-            # Return nested persistence format (same as Node/Edge/Walker)
+            # Return nested persistence format (same as Node/Edge/Walker) or flat for API responses
+            if flat:
+                return {"id": self.id, "entity": self.entity, **result}
             return {
                 "id": self.id,
                 "entity": self.entity,

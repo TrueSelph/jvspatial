@@ -24,6 +24,10 @@ class UserCreateAdmin(BaseModel):
     password: str = Field(
         ..., min_length=6, description="User password (min 6 characters)"
     )
+    name: str = Field(
+        default="",
+        description="User display name (defaults to email if empty)",
+    )
     roles: List[str] = Field(
         default_factory=lambda: ["user"],
         description="Roles to assign to the user",
@@ -90,6 +94,30 @@ class TokenRefreshRequest(BaseModel):
     """Request model for refreshing access token."""
 
     refresh_token: str = Field(..., description="Refresh token to exchange")
+
+
+class PasswordChangeRequest(BaseModel):
+    """Request to change password (authenticated user)."""
+
+    current_password: str = Field(..., description="Current password for verification")
+    new_password: str = Field(
+        ..., min_length=6, description="New password (min 6 characters)"
+    )
+
+
+class ForgotPasswordRequest(BaseModel):
+    """Request to initiate password reset."""
+
+    email: EmailStr = Field(..., description="User email address")
+
+
+class ResetPasswordRequest(BaseModel):
+    """Request to complete password reset with token."""
+
+    token: str = Field(..., description="Password reset token from email")
+    new_password: str = Field(
+        ..., min_length=6, description="New password (min 6 characters)"
+    )
 
 
 class User(Object):
@@ -286,3 +314,19 @@ class RefreshToken(Object):
     last_used_at: Optional[datetime] = Field(None, description="Last usage timestamp")
     device_info: Optional[str] = Field(None, description="Optional device identifier")
     ip_address: Optional[str] = Field(None, description="Optional IP address")
+
+
+class PasswordResetToken(Object):
+    """Single-use token for password reset. Stored hashed, short expiry."""
+
+    token_hash: str = Field(..., description="Hashed reset token (never plaintext)")
+    user_id: str = Field(..., description="Owner user ID")
+    email: str = Field(..., description="User email address")
+    expires_at: datetime = Field(..., description="Token expiration timestamp")
+    used_at: Optional[datetime] = Field(
+        None, description="When token was used (None = unused)"
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Creation timestamp",
+    )

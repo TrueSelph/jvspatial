@@ -106,6 +106,10 @@ class BaseRouter:
             source_obj: Source object for metadata propagation
             **kwargs: Additional FastAPI route parameters
         """
+        from jvspatial.api.utils.path_utils import normalize_endpoint_path
+
+        path = normalize_endpoint_path(path)
+
         if methods is None:
             methods = ["POST"]
 

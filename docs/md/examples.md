@@ -25,7 +25,7 @@ These examples serve as the **standard reference implementation** for building c
 server = Server(
     title="Authenticated CRUD API Example",
     auth_enabled=True,
-    jwt_auth_enabled=True,
+    auth_enabled=True,
     db_type="json",
     db_path="./jvdb"
 )
@@ -228,7 +228,7 @@ class FreightTrain(Walker):
 
 **API Endpoint Integration with Semantic Responses**:
 ```python path=examples/agent_graph.py start=116
-from jvspatial.api.endpoint.router import EndpointField
+from jvspatial.api.decorators import EndpointField
 
 @endpoint("/api/agents/interact", methods=["POST"])
 class InteractWalker(Walker):
@@ -641,7 +641,7 @@ unregister_database("app")
 **Testing Pattern**:
 ```python path=examples/graphcontext_demo.py start=194
 # Create isolated test database
-test_db = get_database(db_type="json", base_path=test_db_path)
+test_db = create_database(db_type="json", base_path=test_db_path)
 test_ctx = GraphContext(database=test_db)
 ```
 

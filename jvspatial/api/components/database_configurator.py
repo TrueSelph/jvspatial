@@ -4,7 +4,10 @@ This module provides database initialization and configuration logic,
 extracted from the Server class for better separation of concerns.
 """
 
+import inspect
 import logging
+import os
+from pathlib import Path
 from typing import Any, Optional
 
 from jvspatial.core.context import GraphContext, set_default_context
@@ -31,6 +34,42 @@ class DatabaseConfigurator:
         """
         self.config = config
         self._logger = logging.getLogger(__name__)
+
+    def _resolve_db_path(self, db_path: str) -> str:
+        """Resolve relative db_path when db_path_resolve is configured."""
+        db_config = self.config.database
+        resolve_mode = getattr(db_config, "db_path_resolve", None)
+        if not resolve_mode or resolve_mode != "app":
+            return db_path
+        if os.path.isabs(db_path):
+            return db_path
+        base_dir = self._get_app_base_dir()
+        if base_dir is None:
+            self._logger.warning(
+                "db_path_resolve='app' but could not determine app base dir; "
+                "using cwd for relative path"
+            )
+            base_dir = os.getcwd()
+        return str(Path(base_dir) / db_path)
+
+    def _get_app_base_dir(self) -> Optional[str]:
+        """Get the directory of the module that instantiated Server (app root)."""
+        frame = inspect.currentframe()
+        try:
+            for _ in range(20):
+                if frame is None:
+                    break
+                frame = frame.f_back
+                if frame is None:
+                    break
+                module_name = frame.f_globals.get("__name__", "")
+                if module_name and not module_name.startswith("jvspatial."):
+                    fname = frame.f_globals.get("__file__")
+                    if fname:
+                        return os.path.dirname(os.path.abspath(fname))
+        finally:
+            del frame
+        return None
 
     def initialize_graph_context(self) -> Optional[GraphContext]:
         """Initialize GraphContext with current database configuration.
@@ -60,6 +99,7 @@ class DatabaseConfigurator:
             if db_type == "json":
                 # Check if db_path is an S3 path (not supported for file-based databases)
                 db_path = self.config.database.db_path or "./jvdb"
+                db_path = self._resolve_db_path(db_path)
                 if db_path.startswith("s3://"):
                     raise ValueError(
                         f"JSON database does not support S3 paths. "
@@ -82,6 +122,7 @@ class DatabaseConfigurator:
             elif db_type == "sqlite":
                 # Check if db_path is an S3 path (not supported for file-based databases)
                 db_path = self.config.database.db_path or "jvdb/sqlite/jvspatial.db"
+                db_path = self._resolve_db_path(db_path)
                 if db_path.startswith("s3://"):
                     raise ValueError(
                         f"SQLite database does not support S3 paths. "
@@ -109,9 +150,7 @@ class DatabaseConfigurator:
 
             try:
                 manager = get_database_manager()
-                # Update prime database if manager already exists
-                manager._prime_database = prime_db
-                manager._databases["prime"] = prime_db
+                manager.set_prime_database(prime_db)
             except (RuntimeError, AttributeError):
                 # Manager doesn't exist yet, create it with our prime database
                 manager = DatabaseManager(prime_database=prime_db)

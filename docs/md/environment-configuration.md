@@ -37,12 +37,14 @@ jvspatial uses environment variables to configure database connections, file pat
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `JVSPATIAL_JSONDB_PATH` | string | `jvdb` | Base directory path for JSON database files |
+| `JVSPATIAL_DB_PATH` | string | — | Generic path for JSON/SQLite when using env-only config. Server config (`db_path`) overrides env when both are set. |
 
 ### SQLite Configuration
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `JVSPATIAL_SQLITE_PATH` | string | `jvdb/sqlite/jvspatial.db` | SQLite database file location (directories are created automatically) |
+| `JVSPATIAL_DB_PATH` | string | — | Alternative; used when `db_type` is sqlite and no explicit path is set. Server config overrides env. |
 
 ### MongoDB Configuration
 
@@ -85,6 +87,32 @@ Normalization is applied recursively to all string values in nested dictionaries
 To disable text normalization:
 ```bash
 export JVSPATIAL_TEXT_NORMALIZATION_ENABLED=false
+```
+
+### Authentication & Bootstrap Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `JVSPATIAL_JWT_SECRET_KEY` | string | — | JWT secret (required when auth enabled). Must be cryptographically secure, 32+ chars. |
+| `JVSPATIAL_API_PREFIX` | string | `/api` | URL prefix for API routes. Auth endpoints become `{prefix}/auth/...`. Affects exempt path expansion. |
+| `ADMIN_EMAIL` | string | — | Admin email for bootstrap. When set with `ADMIN_PASSWORD`, creates an admin user on first run. Pass to `auth.bootstrap_admin_email`. |
+| `ADMIN_PASSWORD` | string | — | Admin password for bootstrap (min 6 chars). Pass to `auth.bootstrap_admin_password`. |
+| `ADMIN_NAME` | string | — | Admin display name for bootstrap. Defaults to email. Pass to `auth.bootstrap_admin_name`. |
+
+Example usage in Server config:
+
+```python
+import os
+
+server = Server(
+    auth=dict(
+        auth_enabled=True,
+        jwt_secret=os.getenv("JWT_SECRET_KEY"),
+        bootstrap_admin_email=os.getenv("ADMIN_EMAIL"),
+        bootstrap_admin_password=os.getenv("ADMIN_PASSWORD"),
+        bootstrap_admin_name=os.getenv("ADMIN_NAME"),
+    ),
+)
 ```
 
 ## Configuration Methods
@@ -136,7 +164,7 @@ from jvspatial.db import create_database
 os.environ['JVSPATIAL_DB_TYPE'] = 'mongodb'
 
 # Or pass configuration directly
-db = get_database('mongodb',
+db = create_database('mongodb',
                   uri='mongodb://localhost:27017',
                   db_name='custom_db')
 ```
@@ -310,13 +338,34 @@ stringData:
   JVSPATIAL_MONGODB_URI: "mongodb+srv://user:password@cluster.mongodb.net/"
 ```
 
+## Server Config vs Environment
+
+When using `Server(db_type=..., db_path=...)`, the Server configuration **overrides** environment variables. Environment variables apply when no explicit config is passed (e.g. when using `create_database()` directly or when Server is configured via env-only).
+
+## Path Resolution
+
+Relative `db_path` values resolve against the **current working directory** (cwd). When the app runs from different directories (e.g. project root vs `backend/`), the path can point to different locations.
+
+**Options:**
+- **Absolute paths**: Use `/var/data/jvdb` or `os.path.abspath("track75_db")` in production.
+- **`db_path_resolve="app"`**: Resolve relative paths against the directory of the module that instantiated `Server`:
+  ```python
+  server = Server(
+      db_type="json",
+      db_path="track75_db",
+      db_path_resolve="app",
+      auth=dict(auth_enabled=True, jwt_secret="..."),
+  )
+  ```
+
 ## Environment Variable Priority
 
 Environment variables are resolved in the following order (highest to lowest priority):
 
-1. **Runtime environment variables** - Set directly in the process environment
-2. **System environment variables** - Set at the OS level
-3. **Default values** - Built-in defaults in the library
+1. **Server config** - `Server(db_path="...")` overrides env
+2. **Runtime environment variables** - Set directly in the process environment
+3. **System environment variables** - Set at the OS level
+4. **Default values** - Built-in defaults in the library
 
 ### Example Priority Resolution
 
@@ -449,8 +498,8 @@ except Exception as e:
 ```python
 # production_config.py
 import os
-from jvspatial.db import create_database, set_default_database
-from jvspatial.core import GraphContext
+from jvspatial.db import create_database, get_database_manager
+from jvspatial.core.context import GraphContext
 
 def configure_production():
     """Configure jvspatial for production environment."""
@@ -465,15 +514,17 @@ def configure_production():
     if missing_vars:
         raise RuntimeError(f"Missing required environment variables: {missing_vars}")
 
-    # Set MongoDB as default
-    set_default_database('mongodb')
-
-    # Test database connection
+    # Test database connection (uses env vars: JVSPATIAL_DB_TYPE, JVSPATIAL_MONGODB_URI, etc.)
     try:
-        db = create_database()  # Uses env vars (JVSPATIAL_DB_TYPE, etc.)
-        # Perform a simple test operation
+        db = create_database(
+            db_type=os.getenv("JVSPATIAL_DB_TYPE", "mongodb"),
+            uri=os.getenv("JVSPATIAL_MONGODB_URI"),
+            db_name=os.getenv("JVSPATIAL_MONGODB_DB_NAME"),
+        )
+        manager = get_database_manager()
+        manager.set_prime_database(db)
         test_ctx = GraphContext(database=db)
-print("Production database configuration successful")
+        print("Production database configuration successful")
         return test_ctx
     except Exception as e:
         raise RuntimeError(f"Production database configuration failed: {e}")

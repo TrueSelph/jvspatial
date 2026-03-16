@@ -311,6 +311,7 @@ class BaseLoggingService:
         end_time: Optional[datetime] = None,
         page: int = 1,
         page_size: int = 50,
+        filter_query: Optional[Dict[str, Any]] = None,
         **kwargs: Any,  # Allow extensions to filter by custom fields
     ) -> Dict[str, Any]:
         """Query logs with filters and pagination.
@@ -325,7 +326,8 @@ class BaseLoggingService:
             end_time: Optional end time filter
             page: Page number (1-indexed)
             page_size: Items per page
-            **kwargs: Custom field filters (e.g., log_level="ERROR", log_level="AUDIT", agent_id="123")
+            filter_query: Optional MongoDB-style filter (keys must use context. prefix)
+            **kwargs: Custom field filters (e.g., log_level="ERROR", log_level="AUDIT")
 
         Returns:
             Dictionary with logs and pagination metadata:
@@ -385,20 +387,17 @@ class BaseLoggingService:
                 query["context.logged_at"] = logged_at_filter
 
             # Add custom field filters from kwargs
-            # Handle both direct fields and nested log_data fields
             for key, value in kwargs.items():
                 if value is None:
                     continue
-
-                # Special handling for log_level (direct field)
                 if key == "log_level":
                     query["context.log_level"] = value
-                # Special handling for agent_id (in log_data)
-                elif key == "agent_id":
-                    query["context.log_data.agent_id"] = value
-                # Other custom fields are stored in log_data
                 else:
                     query[f"context.log_data.{key}"] = value
+
+            # Merge filter_query (MongoDB-style, validated to use context. prefix)
+            if filter_query:
+                query.update(filter_query)
 
             # Query logs
             log_context = GraphContext(database=log_db)

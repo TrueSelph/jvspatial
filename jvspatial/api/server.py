@@ -6,6 +6,7 @@ setup, lifecycle management, and endpoint routing.
 
 """
 
+import asyncio
 import contextlib
 import logging
 import warnings
@@ -104,6 +105,10 @@ class Server:
         node_types: Optional[List[Type[Node]]] = None,
         on_startup: Optional[List[Callable]] = None,
         on_shutdown: Optional[List[Callable]] = None,
+        on_admin_bootstrapped: Optional[Callable] = None,
+        on_user_registered: Optional[Callable] = None,
+        on_enrich_current_user: Optional[Callable] = None,
+        on_password_reset_requested: Optional[Callable] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the Server.
@@ -119,10 +124,35 @@ class Server:
                 Equivalent to calling ``server.add_node_type()`` for each class.
             on_startup: Async or sync callables added as startup lifecycle hooks.
             on_shutdown: Async or sync callables added as shutdown lifecycle hooks.
+            on_admin_bootstrapped: Optional callback(user_response) called when bootstrap
+                creates an admin. Use to create app-specific entities (e.g. UserNode).
+            on_user_registered: Optional callback(user_response, request_body) called after
+                registration. Use to create domain entities (e.g. UserNode, Organization).
+            on_enrich_current_user: Optional callback(user_response) -> dict to augment
+                /auth/me response. Return dict merged into the response.
+            on_password_reset_requested: Optional callback(email, token, reset_url) called
+                when a password reset is requested. Use to send reset email.
             **kwargs: Additional configuration parameters forwarded to ServerConfig
         """
+        # Extract callbacks that are not part of ServerConfig
+        self._on_admin_bootstrapped = on_admin_bootstrapped
+        self._on_user_registered = on_user_registered
+        self._on_enrich_current_user = on_enrich_current_user
+        self._on_password_reset_requested = on_password_reset_requested
+        config_kwargs = {
+            k: v
+            for k, v in kwargs.items()
+            if k
+            not in (
+                "on_admin_bootstrapped",
+                "on_user_registered",
+                "on_enrich_current_user",
+                "on_password_reset_requested",
+            )
+        }
+
         # Initialize configuration using clean merging
-        merged_config = self._merge_config(config, kwargs)
+        merged_config = self._merge_config(config, config_kwargs)
 
         self.config = ServerConfig(**merged_config)
 
@@ -160,6 +190,7 @@ class Server:
         # Authentication configuration
         self._auth_config: Optional[Any] = None
         self._auth_endpoints_registered = False
+        self._auth_service: Optional[Any] = None
 
         # Declarative node type registration
         if node_types:
@@ -211,6 +242,44 @@ class Server:
         if self.config.file_storage.file_storage_enabled:
             self._initialize_file_storage()
 
+    async def _bootstrap_admin_startup(self: "Server") -> None:
+        """Create admin user on startup when bootstrap_admin_* config is set."""
+        import os
+
+        if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING"):
+            return
+        if not self._auth_service:
+            return
+        email = self.config.auth.bootstrap_admin_email
+        password = self.config.auth.bootstrap_admin_password
+        if not email or not password:
+            return
+        if len(password) < 6:
+            self._logger.warning(
+                "bootstrap_admin_password must be at least 6 characters; skipping bootstrap"
+            )
+            return
+        try:
+            name = self.config.auth.bootstrap_admin_name or email
+            user = await self._auth_service.bootstrap_admin(
+                email=email, password=password, name=name
+            )
+            if user:
+                self._logger.info("Bootstrap admin created: %s", email)
+                callback = getattr(self, "_on_admin_bootstrapped", None)
+                if callback:
+                    try:
+                        if asyncio.iscoroutinefunction(callback):
+                            await callback(user)
+                        else:
+                            callback(user)
+                    except Exception as e:
+                        self._logger.exception(
+                            "on_admin_bootstrapped callback failed: %s", e
+                        )
+        except Exception as e:
+            self._logger.exception("Failed to bootstrap admin: %s", e)
+
     def _configure_authentication(self: "Server") -> None:
         """Configure authentication middleware and register auth endpoints if enabled."""
         from jvspatial.api.components.auth_configurator import AuthConfigurator
@@ -226,11 +295,20 @@ class Server:
                 "⚠️  Using default JWT secret. Set jwt_secret in production!"
             )
 
-        auth_configurator = AuthConfigurator(self.config, self._logger)
+        auth_configurator = AuthConfigurator(self.config, self._logger, server=self)
         self._auth_config = auth_configurator.configure()
         self._auth_router = auth_configurator.auth_router
         self._auth_endpoints_registered = auth_configurator.has_auth_endpoints
         self._has_auth_endpoints = auth_configurator.has_auth_endpoints
+        self._auth_service = auth_configurator.auth_service
+
+        # Register bootstrap admin startup hook when configured
+        if (
+            self._auth_service
+            and self.config.auth.bootstrap_admin_email
+            and self.config.auth.bootstrap_admin_password
+        ):
+            self.lifecycle_manager.add_startup_hook(self._bootstrap_admin_startup)
 
     def disable_auth_endpoint(self: "Server", path: str) -> bool:
         """Disable a specific auth endpoint by removing it from the auth router.
@@ -816,7 +894,6 @@ class Server:
             app.add_middleware(
                 AuthenticationMiddleware, auth_config=self._auth_config, server=self
             )
-            # Authentication middleware logging handled by middleware manager
         except ImportError as e:
             self._logger.warning(f"Could not add authentication middleware: {e}")
 

@@ -80,10 +80,10 @@ from jvspatial.api.endpoints.decorators import endpoint_field  # Wrong module
 ### **Graph Decorators**
 
 ```python
-# ✅ Best: Import from core
+# ✅ Best: Import from core (preferred)
 from jvspatial.core import on_visit, on_exit, attribute
 
-# ✅ Also good: Import from specific modules
+# ✅ Also good: Import from decorators module
 from jvspatial.core.decorators import on_visit, on_exit
 from jvspatial.core.annotations import attribute
 

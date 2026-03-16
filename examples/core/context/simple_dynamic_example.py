@@ -18,9 +18,8 @@ from datetime import datetime
 from typing import Any, Optional
 
 from jvspatial.api import create_server, endpoint
-from jvspatial.api.endpoint.decorators import EndpointField
-from jvspatial.core.decorators import on_visit
-from jvspatial.core.entities import Node, Root, Walker
+from jvspatial.api.decorators import EndpointField
+from jvspatial.core import Node, Root, Walker, on_visit
 
 # ====================== DATA MODELS ======================
 

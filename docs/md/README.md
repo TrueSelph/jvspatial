@@ -1,9 +1,11 @@
 # JVspatial Documentation
 
-**Version**: 0.0.3
-**Last Updated**: 2025-02-22
+**Version**: 0.0.6
+**Last Updated**: 2025-03-16
 
 Welcome to the jvspatial documentation! This guide will help you understand and use the jvspatial library effectively.
+
+> **Developer Quickstart**: For minimal setup (Server with database + auth, import API modules, run), see [Auth Quickstart](auth-quickstart.md) and [Endpoint Registration Guide](endpoint-registration-guide.md).
 
 ---
 
@@ -44,6 +46,8 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 |----------|-------------|----------|
 | [Authentication](authentication.md) | Auth system overview | Intermediate |
 | [Auth Quickstart](auth-quickstart.md) | Get auth working fast | Beginners |
+| [Testing Guide](testing-guide.md) | Test auth mode and isolated databases | Intermediate |
+| [Password Migration Guide](password-migration-guide.md) | bcrypt upgrade and transparent migration | Intermediate |
 
 ### **Integrations**
 
@@ -59,7 +63,8 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 
 | Document | Description | Audience |
 |----------|-------------|----------|
-| [Graph Context](graph-context.md) | Database management and multi-database support | Intermediate |
+| [Graph Context](graph-context.md) | Database management and multi-database support (JSON, SQLite, MongoDB, DynamoDB) | Intermediate |
+| [DynamoDB Guide](dynamodb-guide.md) | DynamoDB setup and configuration | Intermediate |
 | [MongoDB Query Interface](mongodb-query-interface.md) | Database queries | Intermediate |
 | [Custom Database Guide](custom-database-guide.md) | Implementing custom database backends | Advanced |
 | [Caching](caching.md) | Cache strategies | Intermediate |
@@ -165,6 +170,8 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 | Context errors | [Context Management](context-management-guide.md) | Usage Patterns |
 | Import patterns | [Import Patterns](import-patterns.md) | Best Practices |
 | Authentication fails | [Troubleshooting](troubleshooting.md) | Auth Issues |
+| 401 with valid token | [Troubleshooting](troubleshooting.md) | Authentication: 401 with valid token |
+| Database path wrong | [Troubleshooting](troubleshooting.md) | Database path wrong |
 
 ---
 
@@ -286,7 +293,7 @@ from jvspatial.core import GraphContext, on_visit, on_exit
 from jvspatial.core.graph import generate_graph_dot, generate_graph_mermaid, export_graph
 
 # API
-from jvspatial.api import Server, ServerConfig, endpoint
+from jvspatial.api import Server, ServerConfig, endpoint, get_auth_service
 
 # Database
 from jvspatial.db import create_database, Database
@@ -307,6 +314,8 @@ from jvspatial.utils import memoize, retry, NodeId
 
 | Version | Date | Changes |
 |---------|------|---------|
+| **0.0.6** | 2025-03-16 | Auth streamlining: get_auth_service(), bootstrap_admin, on_user_registered/on_admin_bootstrapped/on_enrich_current_user callbacks, built-in /auth/me, user_id guarantee, exempt path auto-discovery, argon2 fix |
+| **0.0.5** | 2025-03-15 | JWT auth uses prime DB (fixes 401 with valid token), db_path_resolve, docs updates |
 | **0.0.4** | 2025-03-14 | Auto-registration for endpoints, Endpoint Registration Guide |
 | **0.0.3** | 2025-02-22 | Documentation updates, DynamoDB support |
 | **0.0.2** | 2025-xx-xx | Bug fixes and improvements |
@@ -338,6 +347,6 @@ See [License](license.md) for details.
 
 ---
 
-**Last Updated**: 2025-02-22
-**Version**: 0.0.3
+**Last Updated**: 2025-03-16
+**Version**: 0.0.6
 **Maintainer**: JVspatial Team

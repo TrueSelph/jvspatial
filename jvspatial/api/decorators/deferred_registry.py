@@ -132,6 +132,10 @@ def _register_deferred_endpoint(server: "Server", deferred: DeferredEndpoint) ->
         )
         return
 
+    from jvspatial.api.utils.path_utils import normalize_endpoint_path
+
+    path = normalize_endpoint_path(path)
+
     methods = config.get("methods", ["POST"] if is_walker else ["GET"])
     auth = config.get("auth_required", config.get("auth", False))
     permissions = config.get("permissions", [])
