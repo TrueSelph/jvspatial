@@ -802,3 +802,86 @@ class TestAuthenticationMiddleware:
         result = middleware._endpoint_requires_auth(request)
         # If config is missing, middleware should default to requiring auth for security
         # This depends on the middleware implementation, but security should be the default
+
+
+class TestJwtAuthUsesPrimeDatabase:
+    """Integration test: JWT auth must use get_prime_database(), not server._graph_context.
+
+    Regression test for 401 with valid token when server._graph_context differs from
+    prime DB (e.g. after set_graph_context or context switch). Auth middleware must
+    always validate JWT against the prime database where users are stored.
+    """
+
+    @pytest.mark.asyncio
+    async def test_jwt_succeeds_when_graph_context_differs_from_prime(self):
+        """Verify JWT validation succeeds when server._graph_context points to a different database."""
+        import uuid
+
+        from jvspatial.api import endpoint
+        from jvspatial.api.context import set_current_server
+        from jvspatial.db import create_database, get_prime_database
+        from jvspatial.db.manager import DatabaseManager, set_database_manager
+
+        # Reset DatabaseManager for test isolation
+        DatabaseManager._instance = None
+        try:
+            test_id = uuid.uuid4().hex[:8]
+            server = Server(
+                title="Test API",
+                auth=dict(
+                    auth_enabled=True,
+                    jwt_secret="test-secret-key-for-prime-db-test",
+                ),
+                db_type="json",
+                db_path=f"./.test_dbs/test_db_prime_auth_{test_id}",
+            )
+            set_current_server(server)
+
+            @endpoint("/test/protected-prime", methods=["GET"], auth=True)
+            async def protected_endpoint():
+                return {"message": "authenticated"}
+
+            server.app = server._create_app_instance()
+            client = TestClient(server.get_app())
+
+            # Register user and login (user stored in prime DB)
+            email = f"test_{test_id}@example.com"
+            register_response = client.post(
+                "/api/auth/register",
+                json={"email": email, "password": "password123"},
+            )
+            assert register_response.status_code == 200, register_response.text
+
+            login_response = client.post(
+                "/api/auth/login",
+                json={"email": email, "password": "password123"},
+            )
+            assert login_response.status_code == 200, login_response.text
+            access_token = login_response.json()["access_token"]
+
+            # Simulate bug scenario: server._graph_context points to a different database
+            # (e.g. after set_graph_context for multi-tenant or app data switch)
+            alt_db = create_database(
+                "json",
+                base_path=f"./.test_dbs/test_db_alt_{test_id}",
+            )
+            from jvspatial.core.context import GraphContext
+
+            alt_ctx = GraphContext(database=alt_db)
+            server.set_graph_context(alt_ctx)
+
+            # Prime DB is unchanged; auth middleware uses get_prime_database()
+            assert get_prime_database() is not alt_db
+
+            # Call protected endpoint with valid token - must succeed (200)
+            # because auth uses prime DB, not server._graph_context
+            response = client.get(
+                "/api/test/protected-prime",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            assert (
+                response.status_code == 200
+            ), f"Expected 200 with valid token when graph context differs; got {response.status_code}: {response.text}"
+            assert response.json()["message"] == "authenticated"
+        finally:
+            DatabaseManager._instance = None

@@ -171,13 +171,20 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             )
             return await call_next(request)
 
-        # Allow pre-set user (e.g. from test middleware that decodes token before ASGI)
+        # Allow pre-set user (e.g. from test middleware when ASGITransport prevents
+        # normal JWT validation). See docs/md/authentication.md "Request State Contract".
         user = getattr(request.state, "user", None)
         if user is not None and hasattr(user, "id"):
             pass  # Use pre-set user, skip _authenticate_request
         else:
             user = await self._authenticate_request(request)
         if not user:
+            has_auth = bool(request.headers.get("authorization", "").strip().lower().startswith("bearer "))
+            self._logger.warning(
+                "[401] path=%s has_auth_header=%s -> auth failed (user=None)",
+                request.url.path,
+                has_auth,
+            )
             return JSONResponse(
                 status_code=401,
                 content={
@@ -696,12 +703,15 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             User object if authenticated, None otherwise
         """
         try:
-            # Try JWT authentication first
-            if "authorization" in request.headers:
+            # Try JWT authentication first (use .get() for case-insensitive header presence)
+            auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+            has_bearer = bool(auth_header and auth_header.strip().lower().startswith("bearer "))
+            if has_bearer:
                 return await self._authenticate_jwt(request)
 
             # Try API key authentication
-            if "x-api-key" in request.headers:
+            api_key_header = self.auth_config.api_key_header or "x-api-key"
+            if request.headers.get(api_key_header):
                 return await self._authenticate_api_key(request)
 
             # Try session authentication
@@ -734,10 +744,26 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 return None
 
             # Initialize authentication service with JWT config from auth_config
+            # Use prime database (same as API key auth) to ensure correct DB regardless of
+            # server._graph_context state - fixes 401 for valid tokens when context differs
             from jvspatial.api.auth.service import AuthenticationService
+            from jvspatial.core.context import GraphContext
+            from jvspatial.db import get_prime_database
 
+            try:
+                prime_db = get_prime_database()
+            except Exception as db_err:
+                self._logger.error(
+                    "_authenticate_jwt: get_prime_database() failed - auth will fail. "
+                    "Ensure Server has database config and DatabaseConfigurator ran. %s",
+                    db_err,
+                    exc_info=True,
+                )
+                return None
+
+            prime_ctx = GraphContext(database=prime_db)
             auth_service = AuthenticationService(
-                server._graph_context,
+                prime_ctx,
                 jwt_secret=self.auth_config.jwt_secret,
                 jwt_algorithm=self.auth_config.jwt_algorithm,
                 jwt_expire_minutes=self.auth_config.jwt_expire_minutes,
