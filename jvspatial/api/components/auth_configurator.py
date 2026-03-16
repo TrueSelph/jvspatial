@@ -135,15 +135,21 @@ class AuthConfigurator:
         # Create auth router
         auth_router = APIRouter(prefix="/auth", tags=["Auth"])
 
-        # Create custom security scheme for BearerAuth compatibility
-        security = HTTPBearer(scheme_name="BearerAuth")
+        # Use auto_error=False so we can raise 401 (not 403) for missing credentials.
+        # FastAPI's HTTPBearer returns 403 in older versions and 401 in newer ones;
+        # we explicitly raise 401 for consistency across environments.
+        security = HTTPBearer(scheme_name="BearerAuth", auto_error=False)
 
         # Helper function to get current user from token.
         # Uses HTTPBearer dependency so auth is handled via security scheme (no redundant param).
         async def get_current_user(
-            credentials: HTTPAuthorizationCredentials = Depends(security),  # noqa: B008
+            credentials: Optional[HTTPAuthorizationCredentials] = Depends(  # noqa: B008
+                security
+            ),
         ) -> UserResponse:
             """Get current user from Authorization header."""
+            if not credentials:
+                raise HTTPException(status_code=401, detail="Not authenticated")
             token = credentials.credentials
 
             # Initialize authentication service and validate token

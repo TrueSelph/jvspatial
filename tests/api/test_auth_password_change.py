@@ -107,7 +107,7 @@ class TestChangePasswordEndpoint:
 
     @pytest.mark.asyncio
     async def test_change_password_unauthenticated(self):
-        """Test change-password without auth returns 403."""
+        """Test change-password without auth returns 401."""
         test_id = uuid.uuid4().hex[:8]
         server = Server(
             title="Test API",
@@ -124,7 +124,7 @@ class TestChangePasswordEndpoint:
                 "new_password": "newpass456",
             },
         )
-        assert change_response.status_code == 403
+        assert change_response.status_code == 401
 
     @pytest.mark.asyncio
     async def test_change_password_disabled_returns_404(self):
