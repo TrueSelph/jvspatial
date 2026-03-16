@@ -193,11 +193,17 @@ async def enrich_current_user(user_response):
     """Augment /auth/me response with app-specific data."""
     return {"display_name": "...", "organization": {...}}
 
+async def on_password_reset(email, token, reset_url):
+    """Send password reset email. Called when user requests reset."""
+    # reset_url is built from password_reset_base_url when configured
+    await send_email(email, "Reset your password", f"Click: {reset_url}")
+
 server = Server(
-    auth=dict(auth_enabled=True, jwt_secret="..."),
+    auth=dict(auth_enabled=True, jwt_secret="...", password_reset_base_url="https://app.example.com"),
     on_admin_bootstrapped=on_admin_created,
     on_user_registered=on_user_registered,
     on_enrich_current_user=enrich_current_user,
+    on_password_reset_requested=on_password_reset,
 )
 ```
 
@@ -382,6 +388,8 @@ The system generates refresh tokens with resilience and reliability:
 - Token verification uses secure hash comparison
 
 ### API Endpoint Organization
+
+Auth endpoints are mounted at `{prefix}/auth/...` where prefix defaults to `/api` and can be overridden via `JVSPATIAL_API_PREFIX`. See [Environment Configuration](environment-configuration.md) for details.
 
 Endpoints are organized by tags in OpenAPI documentation:
 
@@ -733,7 +741,7 @@ The authentication middleware uses the **endpoint registry** as the single sourc
 
 The authentication middleware follows a **"deny by default"** security model:
 
-1. **Exempt Paths**: Paths in `exempt_paths` bypass authentication. Built-in auth paths (`/auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/signup`) are always exempt.
+1. **Exempt Paths**: Paths in `exempt_paths` bypass authentication. Built-in auth paths (`/auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/signup`, `/auth/forgot-password`, `/auth/reset-password`) are always exempt. PathMatcher expands these to `{prefix}/auth/...` at runtime based on `APIRoutes.PREFIX` (default `/api`), so custom prefixes work without hardcoding.
 2. **Registered Endpoints**: Endpoints in the registry with `auth=False` are public
 3. **Unknown Endpoints**: Endpoints not in the registry **require authentication**
 4. **Error Handling**: Any error during authentication checking **denies access**
@@ -768,7 +776,7 @@ exempted_paths = [
 # Custom exemption patterns can be added in middleware configuration
 ```
 
-**Note**: Exempt paths are checked **before** registry lookups, so they bypass authentication entirely. Use exempt paths for system routes like health checks and documentation.
+**Note**: Exempt paths are checked **before** registry lookups, so they bypass authentication entirely. Use exempt paths for system routes like health checks and documentation. Use prefix-relative paths (e.g. `/auth/login`) when customizing `exempt_paths`. Avoid hardcoding `/api`—PathMatcher expands paths using `JVSPATIAL_API_PREFIX` at runtime.
 
 ## Security Best Practices
 
@@ -836,9 +844,12 @@ All authentication endpoints are automatically registered:
 - `POST /auth/login` - User login
 - `POST /auth/refresh` - Token refresh
 - `POST /auth/logout` - User logout
+- `POST /auth/forgot-password` - Request password reset (always returns success; no email enumeration). Requires `on_password_reset_requested` callback to send the reset email; otherwise the token is created but no email is sent.
+- `POST /auth/reset-password` - Complete password reset with token from email
 
 **Authenticated Endpoints:**
 - `GET /auth/me` - Get current user (supports `on_enrich_current_user` callback)
+- `POST /auth/change-password` - Change password (requires current password verification)
 - `POST /auth/api-keys` - Create API key
 - `GET /auth/api-keys` - List API keys
 - `DELETE /auth/api-keys/{key_id}` - Revoke API key

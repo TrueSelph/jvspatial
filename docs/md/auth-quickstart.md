@@ -52,6 +52,8 @@ if __name__ == "__main__":
 - Rate limiting
 - Automatic API documentation at `/docs`
 
+> **Note**: Auth endpoints use the API prefix (default `/api`). With `JVSPATIAL_API_PREFIX=/v1`, paths become `/v1/auth/login`, etc.
+
 ## Step 2: Create Protected Endpoints (1 minute)
 
 ```python

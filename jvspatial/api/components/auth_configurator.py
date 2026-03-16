@@ -17,6 +17,9 @@ from jvspatial.api.auth.models import (
     APIKeyCreateRequest,
     APIKeyCreateResponse,
     APIKeyResponse,
+    ForgotPasswordRequest,
+    PasswordChangeRequest,
+    ResetPasswordRequest,
     TokenRefreshRequest,
     TokenResponse,
     UserCreate,
@@ -98,6 +101,11 @@ class AuthConfigurator:
             refresh_expire_days=self._refresh_expire_days,
             refresh_token_rotation=self._refresh_token_rotation,
             blacklist_cache_ttl_seconds=self._blacklist_cache_ttl_seconds,
+            password_reset_token_expiry_minutes=getattr(
+                self._auth_config,
+                "password_reset_token_expiry_minutes",
+                60,
+            ),
             role_permission_mapping=self._role_permission_mapping,
             admin_role=self._admin_role,
             default_role=self._default_role,
@@ -308,6 +316,73 @@ class AuthConfigurator:
             except Exception as e:
                 self._logger.error(f"Revoke all tokens error: {e}")
                 raise HTTPException(status_code=500, detail="Internal server error")
+
+        # Change password endpoint (requires authentication)
+        if getattr(self.config.auth, "password_change_enabled", True):
+
+            @auth_router.post("/change-password", dependencies=[_default_security_dep])
+            async def change_password(
+                request: PasswordChangeRequest,
+                current_user: UserResponse = Depends(get_current_user),  # noqa: B008
+            ):
+                """Change password for the authenticated user."""
+                try:
+                    auth_service = get_auth_service()
+                    await auth_service.change_password(
+                        current_user.id,
+                        request.current_password,
+                        request.new_password,
+                    )
+                    return {"message": "Password changed successfully"}
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
+                except Exception as e:
+                    self._logger.error(f"Change password error: {e}")
+                    raise HTTPException(status_code=500, detail="Internal server error")
+
+        # Forgot password endpoint (public)
+        if getattr(self.config.auth, "password_reset_enabled", True):
+
+            @auth_router.post("/forgot-password")
+            async def forgot_password(request: ForgotPasswordRequest):
+                """Request a password reset link. Always returns success (no enumeration)."""
+                try:
+                    auth_service = get_auth_service()
+                    on_reset = getattr(
+                        self._server, "_on_password_reset_requested", None
+                    )
+                    reset_base = (
+                        getattr(self.config.auth, "password_reset_base_url", None) or ""
+                    )
+                    await auth_service.request_password_reset(
+                        request.email,
+                        on_reset_requested=on_reset,
+                        reset_base_url=reset_base,
+                    )
+                    return {
+                        "message": "If an account exists, a reset link has been sent."
+                    }
+                except Exception as e:
+                    self._logger.error(f"Forgot password error: {e}")
+                    raise HTTPException(status_code=500, detail="Internal server error")
+
+            @auth_router.post("/reset-password")
+            async def reset_password(request: ResetPasswordRequest):
+                """Complete password reset with token from email."""
+                try:
+                    auth_service = get_auth_service()
+                    await auth_service.reset_password_with_token(
+                        request.token, request.new_password
+                    )
+                    return {"message": "Password reset successfully"}
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid or expired token",
+                    )
+                except Exception as e:
+                    self._logger.error(f"Reset password error: {e}")
+                    raise HTTPException(status_code=500, detail="Internal server error")
 
         # API Key Management Endpoints (require authentication)
         if self.config.auth.api_key_management_enabled:

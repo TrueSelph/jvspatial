@@ -10,13 +10,15 @@ from typing import List, Pattern
 
 from jvspatial.api.constants import APIRoutes
 
-# Built-in auth paths always exempt (login, register, refresh, signup)
+# Built-in auth paths always exempt (login, register, refresh, signup, password reset)
 _BUILTIN_AUTH_EXEMPT = [
     "/auth/register",
     "/auth/login",
     "/auth/refresh",
     "/auth/logout",
     "/auth/signup",
+    "/auth/forgot-password",
+    "/auth/reset-password",
 ]
 
 

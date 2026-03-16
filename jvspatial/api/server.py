@@ -108,6 +108,7 @@ class Server:
         on_admin_bootstrapped: Optional[Callable] = None,
         on_user_registered: Optional[Callable] = None,
         on_enrich_current_user: Optional[Callable] = None,
+        on_password_reset_requested: Optional[Callable] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the Server.
@@ -129,12 +130,15 @@ class Server:
                 registration. Use to create domain entities (e.g. UserNode, Organization).
             on_enrich_current_user: Optional callback(user_response) -> dict to augment
                 /auth/me response. Return dict merged into the response.
+            on_password_reset_requested: Optional callback(email, token, reset_url) called
+                when a password reset is requested. Use to send reset email.
             **kwargs: Additional configuration parameters forwarded to ServerConfig
         """
         # Extract callbacks that are not part of ServerConfig
         self._on_admin_bootstrapped = on_admin_bootstrapped
         self._on_user_registered = on_user_registered
         self._on_enrich_current_user = on_enrich_current_user
+        self._on_password_reset_requested = on_password_reset_requested
         config_kwargs = {
             k: v
             for k, v in kwargs.items()
@@ -143,6 +147,7 @@ class Server:
                 "on_admin_bootstrapped",
                 "on_user_registered",
                 "on_enrich_current_user",
+                "on_password_reset_requested",
             )
         }
 

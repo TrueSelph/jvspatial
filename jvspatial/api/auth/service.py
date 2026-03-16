@@ -1,16 +1,18 @@
 """Authentication service for user management and JWT token handling."""
 
+import asyncio
 import hashlib
 import logging
 import secrets
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import jwt
 
 from jvspatial.api.auth.models import (
+    PasswordResetToken,
     RefreshToken,
     TokenBlacklist,
     TokenResponse,
@@ -77,6 +79,7 @@ class AuthenticationService:
         refresh_expire_days: Optional[int] = None,
         refresh_token_rotation: Optional[bool] = None,
         blacklist_cache_ttl_seconds: Optional[int] = None,
+        password_reset_token_expiry_minutes: Optional[int] = None,
         role_permission_mapping: Optional[Dict[str, List[str]]] = None,
         admin_role: str = "admin",
         default_role: str = "user",
@@ -117,6 +120,9 @@ class AuthenticationService:
         self.refresh_expire_days = refresh_expire_days or 7
         self.refresh_token_rotation = refresh_token_rotation or False
         self.blacklist_cache_ttl_seconds = blacklist_cache_ttl_seconds or 3600
+        self.password_reset_token_expiry_minutes = (
+            password_reset_token_expiry_minutes or 60
+        )
         self.role_permission_mapping = role_permission_mapping or {
             "admin": ["*"],
             "user": [],
@@ -1212,6 +1218,154 @@ class AuthenticationService:
                 pass
 
         return revoked_count
+
+    async def change_password(
+        self, user_id: str, current_password: str, new_password: str
+    ) -> bool:
+        """Change password for an authenticated user.
+
+        Args:
+            user_id: User ID
+            current_password: Current password for verification
+            new_password: New password (min 6 characters)
+
+        Returns:
+            True on success
+
+        Raises:
+            ValueError: If current password is wrong or user not found
+        """
+        user = await self._get_user_by_id(user_id)
+        if not user:
+            raise ValueError("User not found")
+
+        if not self._verify_password(current_password, user.password_hash):
+            raise ValueError("Current password is incorrect")
+
+        user.password_hash = self._hash_password(new_password)
+        user._graph_context = self.context
+        await self.context.save(user)
+
+        await self.revoke_all_user_tokens(user_id)
+        return True
+
+    async def request_password_reset(
+        self,
+        email: str,
+        on_reset_requested: Optional[Callable[[str, str, str], Any]] = None,
+        reset_base_url: str = "",
+    ) -> bool:
+        """Request a password reset for a user by email.
+
+        Always returns True to prevent email enumeration. If user exists and is
+        active, generates a token, stores it hashed, and invokes the callback.
+
+        Args:
+            email: User email address
+            on_reset_requested: Optional callback (email, token, reset_url)
+            reset_base_url: Base URL for building reset link (e.g. https://app.example.com)
+
+        Returns:
+            True always (no email enumeration)
+        """
+        user = await self._find_user_by_email(email)
+        if not user or not user.is_active:
+            return True
+
+        token = secrets.token_urlsafe(32)
+        token_hash = self._hash_refresh_token(token)
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            minutes=self.password_reset_token_expiry_minutes
+        )
+
+        from jvspatial.core.utils import generate_id
+
+        await self.context.ensure_indexes(PasswordResetToken)
+        reset_token_id = generate_id("o", "PasswordResetToken")
+        reset_token = PasswordResetToken(
+            id=reset_token_id,
+            token_hash=token_hash,
+            user_id=user.id,
+            email=user.email,
+            expires_at=expires_at,
+            used_at=None,
+        )
+        reset_token._graph_context = self.context
+        await self.context.save(reset_token)
+
+        reset_url = ""
+        if reset_base_url:
+            base = reset_base_url.rstrip("/")
+            reset_url = f"{base}/reset-password?token={token}"
+
+        if on_reset_requested:
+            try:
+                if asyncio.iscoroutinefunction(on_reset_requested):
+                    await on_reset_requested(email, token, reset_url)
+                else:
+                    on_reset_requested(email, token, reset_url)
+            except Exception as e:
+                self._logger.exception(
+                    "on_password_reset_requested callback failed: %s", e
+                )
+
+        return True
+
+    async def reset_password_with_token(self, token: str, new_password: str) -> bool:
+        """Reset password using a valid reset token.
+
+        Args:
+            token: Plaintext reset token from email
+            new_password: New password (min 6 characters)
+
+        Returns:
+            True on success
+
+        Raises:
+            ValueError: If token is invalid, expired, or already used
+        """
+        now = datetime.now(timezone.utc)
+        await self.context.ensure_indexes(PasswordResetToken)
+        collection, final_query = await PasswordResetToken._build_database_query(
+            self.context,
+            {"context.used_at": None},
+            {},
+        )
+        results = await self.context.database.find(collection, final_query)
+
+        for data in results:
+            try:
+                entity = await self.context._deserialize_entity(
+                    PasswordResetToken, data
+                )
+                if not entity:
+                    continue
+                entity._graph_context = self.context
+
+                if entity.expires_at < now:
+                    continue
+
+                if not self._verify_refresh_token(token, entity.token_hash):
+                    continue
+
+                user = await self._get_user_by_id(entity.user_id)
+                if not user:
+                    raise ValueError("Invalid or expired token")
+
+                user.password_hash = self._hash_password(new_password)
+                await self.context.save(user)
+
+                entity.used_at = now
+                await self.context.save(entity)
+
+                await self.revoke_all_user_tokens(entity.user_id)
+                return True
+            except ValueError:
+                raise
+            except Exception:
+                continue
+
+        raise ValueError("Invalid or expired token")
 
     async def create_user_with_roles(self, user_data: UserCreateAdmin) -> UserResponse:
         """Create a user with specified roles and permissions (admin-only).

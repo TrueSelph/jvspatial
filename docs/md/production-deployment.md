@@ -23,7 +23,7 @@ JVSPATIAL_JWT_SECRET_KEY=your-cryptographically-secure-secret-minimum-32-chars
 
 ### 2. Rate Limiting
 
-Rate limiting is **disabled by default**. For production, enable it to protect against brute-force attacks and DoS:
+Rate limiting is **disabled by default**. For production, enable it to protect against brute-force attacks and DoS. **Especially important** when using forgot-password: enable rate limiting to prevent abuse of the public `/auth/forgot-password` endpoint.
 
 ```python
 server = Server(

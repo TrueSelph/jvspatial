@@ -119,6 +119,22 @@ class AuthConfig(BaseModel):
     blacklist_cache_ttl_seconds: int = Field(
         default=3600, description="Cache TTL for blacklist checks in seconds"
     )
+    password_reset_token_expiry_minutes: int = Field(
+        default=60,
+        description="Password reset token expiry in minutes",
+    )
+    password_change_enabled: bool = Field(
+        default=True,
+        description="Enable /auth/change-password endpoint",
+    )
+    password_reset_enabled: bool = Field(
+        default=True,
+        description="Enable /auth/forgot-password and /auth/reset-password endpoints",
+    )
+    password_reset_base_url: Optional[str] = Field(
+        default=None,
+        description="Base URL for reset links, e.g. https://app.example.com",
+    )
 
     # API Key Configuration
     api_key_header: str = Field(
@@ -175,6 +191,8 @@ class AuthConfig(BaseModel):
     )
 
     # Authentication Exempt Paths (accept auth_exempt_paths for backward compat)
+    # Use prefix-relative paths only; PathMatcher expands to {APIRoutes.PREFIX}/auth/...
+    # at runtime so any prefix (e.g. /api, /v1) works without hardcoding.
     exempt_paths: List[str] = Field(
         default_factory=lambda: [
             "/health",
@@ -182,14 +200,12 @@ class AuthConfig(BaseModel):
             "/redoc",
             "/openapi.json",
             "/favicon.ico",
-            "/api/auth/register",
-            "/api/auth/login",
-            "/api/auth/refresh",
-            "/api/auth/logout",
+            "/auth/register",
             "/auth/login",
             "/auth/logout",
-            "/auth/register",
             "/auth/refresh",
+            "/auth/forgot-password",
+            "/auth/reset-password",
         ],
         validation_alias="auth_exempt_paths",
     )

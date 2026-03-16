@@ -93,6 +93,8 @@ export JVSPATIAL_TEXT_NORMALIZATION_ENABLED=false
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
+| `JVSPATIAL_JWT_SECRET_KEY` | string | — | JWT secret (required when auth enabled). Must be cryptographically secure, 32+ chars. |
+| `JVSPATIAL_API_PREFIX` | string | `/api` | URL prefix for API routes. Auth endpoints become `{prefix}/auth/...`. Affects exempt path expansion. |
 | `ADMIN_EMAIL` | string | — | Admin email for bootstrap. When set with `ADMIN_PASSWORD`, creates an admin user on first run. Pass to `auth.bootstrap_admin_email`. |
 | `ADMIN_PASSWORD` | string | — | Admin password for bootstrap (min 6 chars). Pass to `auth.bootstrap_admin_password`. |
 | `ADMIN_NAME` | string | — | Admin display name for bootstrap. Defaults to email. Pass to `auth.bootstrap_admin_name`. |
