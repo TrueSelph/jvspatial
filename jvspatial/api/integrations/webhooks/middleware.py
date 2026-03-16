@@ -217,13 +217,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                     import json
 
                     response_data = json.loads(response_content)
-                    # Note: This should be awaited in an async context, but response processing
-                    # happens after the main request handling, so we'll use create_task
-                    import asyncio
-
-                    asyncio.create_task(
-                        store_idempotent_response(idempotency_key, response_data)
-                    )
+                    await store_idempotent_response(idempotency_key, response_data)
                 except Exception as e:
                     logger.warning(f"Failed to cache response for idempotency: {e}")
 
