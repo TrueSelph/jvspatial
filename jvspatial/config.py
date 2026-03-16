@@ -317,3 +317,13 @@ def set_config(config: Config) -> None:
     """
     global _config
     _config = config
+
+
+def is_background_tasks_enabled() -> bool:
+    """Return True if fire-and-forget asyncio.create_task is safe.
+
+    Set JVSPATIAL_BACKGROUND_TASKS=false for Lambda (context freezes after
+    handler returns). Default when unset is True.
+    """
+    val = os.environ.get("JVSPATIAL_BACKGROUND_TASKS", "true")
+    return str(val).lower() in ("true", "1", "yes")

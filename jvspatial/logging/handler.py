@@ -13,6 +13,7 @@ import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Set
 
+from jvspatial.config import is_background_tasks_enabled
 from jvspatial.core.context import GraphContext
 from jvspatial.db import get_database_manager
 from jvspatial.logging.models import DBLog
@@ -302,19 +303,21 @@ class DBLogHandler(logging.Handler):
                         exc_info=True,
                     )
 
-            # Create task for async save (fire-and-forget)
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # Event loop is running, create task
-                    asyncio.create_task(save_log())
-                else:
-                    # No event loop running, run synchronously
-                    asyncio.run(save_log())
-            except RuntimeError:
-                # No event loop running (e.g. sync context or different thread)
-                with contextlib.suppress(Exception):
-                    asyncio.run(save_log())
+            # Create task for async save (fire-and-forget) when background tasks allowed
+            if not is_background_tasks_enabled():
+                logger.debug(
+                    "DBLogHandler: skipping async save (JVSPATIAL_BACKGROUND_TASKS disabled)"
+                )
+            else:
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.create_task(save_log())
+                    else:
+                        asyncio.run(save_log())
+                except RuntimeError:
+                    with contextlib.suppress(Exception):
+                        asyncio.run(save_log())
 
         except Exception as e:
             # Never let logging failures break the application

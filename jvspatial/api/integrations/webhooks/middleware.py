@@ -8,6 +8,8 @@ This middleware handles all webhook-specific processing including:
 - Route parameter extraction
 """
 
+import asyncio
+import json
 import logging
 from typing import Any, Callable, Dict, Optional
 
@@ -16,6 +18,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from jvspatial.api.constants import APIRoutes
+from jvspatial.config import is_background_tasks_enabled
 
 from .utils import (
     WebhookConfig,
@@ -189,8 +192,12 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                 )
                 return JSONResponse(content=cached_response, status_code=200)
 
-            # Handle async processing if enabled
-            if webhook_config and webhook_config.get("async_processing", False):
+            # Handle async processing if enabled and background tasks allowed
+            if (
+                webhook_config
+                and webhook_config.get("async_processing", False)
+                and is_background_tasks_enabled()
+            ):
                 # Queue for async processing and return immediate response
                 task_id = self._queue_async_processing(request, call_next)
                 from datetime import datetime
@@ -210,14 +217,16 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             idempotency_key = getattr(request.state, "idempotency_key", None)
             if idempotency_key and isinstance(response, JSONResponse):
                 try:
-                    # Extract response content for caching
                     response_content = (
                         response.body.decode("utf-8") if response.body else "{}"
                     )
-                    import json
-
                     response_data = json.loads(response_content)
-                    await store_idempotent_response(idempotency_key, response_data)
+                    if is_background_tasks_enabled():
+                        asyncio.create_task(
+                            store_idempotent_response(idempotency_key, response_data)
+                        )
+                    else:
+                        await store_idempotent_response(idempotency_key, response_data)
                 except Exception as e:
                     logger.warning(f"Failed to cache response for idempotency: {e}")
 

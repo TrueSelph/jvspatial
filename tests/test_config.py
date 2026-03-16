@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from jvspatial.config import Config, get_config, set_config
+from jvspatial.config import Config, get_config, is_background_tasks_enabled, set_config
 
 
 class TestConfig:
@@ -186,3 +186,25 @@ class TestConfig:
         assert config.cache_ttl_seconds == 3600
         assert config.cache_key_prefix == "jvspatial:"
         assert config.redis_url == "redis://localhost:6379/0"
+
+
+class TestIsBackgroundTasksEnabled:
+    """Test is_background_tasks_enabled for JVSPATIAL_BACKGROUND_TASKS."""
+
+    def test_default_enabled(self):
+        """Unset env defaults to True."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("JVSPATIAL_BACKGROUND_TASKS", None)
+            assert is_background_tasks_enabled() is True
+
+    def test_explicit_true(self):
+        """Explicit true/1/yes enables background tasks."""
+        for val in ("true", "1", "yes", "True", "TRUE"):
+            with patch.dict(os.environ, {"JVSPATIAL_BACKGROUND_TASKS": val}):
+                assert is_background_tasks_enabled() is True
+
+    def test_explicit_false(self):
+        """Explicit false/0/no disables background tasks."""
+        for val in ("false", "0", "no", "False", "FALSE"):
+            with patch.dict(os.environ, {"JVSPATIAL_BACKGROUND_TASKS": val}):
+                assert is_background_tasks_enabled() is False
