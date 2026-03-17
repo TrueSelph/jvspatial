@@ -102,8 +102,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
     ) -> Optional[Dict[str, Any]]:
         """Extract webhook configuration from endpoint metadata.
 
-        Uses registry-based pattern matching to support parameterized paths
-        (e.g. /integrations/{service}/webhook/{resource_id}).
+        Uses cached registry result from dispatch when available.
 
         Args:
             request: FastAPI request object
@@ -114,13 +113,14 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         if not self.server:
             return None
 
-        path = request.url.path
-        method = request.method
-
-        # Use registry-based matching for parameterized paths
-        endpoints = self.server._endpoint_registry.get_webhook_endpoints_matching_path(
-            path, method
-        )
+        # Use cached registry result from dispatch
+        endpoints = getattr(request.state, "_webhook_endpoints_match", None)
+        if endpoints is None:
+            endpoints = (
+                self.server._endpoint_registry.get_webhook_endpoints_matching_path(
+                    request.url.path, request.method
+                )
+            )
 
         if endpoints:
             first_match = endpoints[0]
@@ -187,6 +187,16 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         Returns:
             Response object
         """
+        # Cache registry lookup once for both _is_webhook_request and _get_endpoint_webhook_config
+        if self.server and request.method in ["GET", "POST", "PUT", "PATCH"]:
+            request.state._webhook_endpoints_match = (
+                self.server._endpoint_registry.get_webhook_endpoints_matching_path(
+                    request.url.path, request.method
+                )
+            )
+        else:
+            request.state._webhook_endpoints_match = None  # Fallback uses path check
+
         # Check if this is a webhook request
         if not self._is_webhook_request(request):
             # Not a webhook request, pass through normally
@@ -195,7 +205,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         logger.debug(f"Processing webhook request: {request.url.path}")
 
         try:
-            # Get endpoint-specific webhook configuration
+            # Get endpoint-specific webhook configuration (uses cached match)
             webhook_config = self._get_endpoint_webhook_config(request)
             request.state.webhook_config = webhook_config
 
@@ -296,7 +306,12 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         if request.method not in ["GET", "POST", "PUT", "PATCH"]:
             return False
 
-        # Registry-based detection: match any endpoint with webhook=True
+        # Use cached registry result when available (set in dispatch)
+        endpoints = getattr(request.state, "_webhook_endpoints_match", None)
+        if endpoints is not None:
+            return len(endpoints) > 0
+
+        # Registry-based detection when cache not set (e.g. server added mid-request)
         if self.server:
             endpoints = (
                 self.server._endpoint_registry.get_webhook_endpoints_matching_path(
@@ -596,6 +611,8 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             else:
                 api_key_entity = None
 
+            prime_ctx = None
+            service = None
             if api_key_entity is None:
                 prime_ctx = GraphContext(database=get_prime_database())
                 service = APIKeyService(prime_ctx)
@@ -657,10 +674,8 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             }
 
             # Update last used timestamp (skip on cache hit to avoid DB write)
-            if not cache_hit:
+            if not cache_hit and service is not None:
                 try:
-                    prime_ctx = GraphContext(database=get_prime_database())
-                    service = APIKeyService(prime_ctx)
                     await service.update_key_usage(api_key_entity)
                 except Exception as e:
                     logger.warning(f"Failed to update API key usage: {e}")

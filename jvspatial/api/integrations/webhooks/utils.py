@@ -377,9 +377,7 @@ async def check_idempotency(
             from typing import cast as _cast
 
             existing = _cast(WebhookIdempotencyKey, existing)
-            # Update last accessed time
-            existing.last_accessed_at = datetime.now()
-            await existing.save()
+            # Return cached response without save (avoids extra DB write on duplicate)
             return True, _cast(Dict[str, Any], existing.cached_response)
 
         return False, None

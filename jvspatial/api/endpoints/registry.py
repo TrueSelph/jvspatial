@@ -4,6 +4,7 @@ This module provides centralized endpoint registration and tracking,
 eliminating duplicate logic across the Server class.
 """
 
+import contextlib
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Set, Type, Union
@@ -127,6 +128,9 @@ class EndpointRegistryService:
         # Track all endpoints by path for fast lookup
         self._path_index: Dict[str, List[EndpointInfo]] = {}
 
+        # Track webhook endpoints for fast lookup (avoids O(n) over all endpoints)
+        self._webhook_endpoints: List[EndpointInfo] = []
+
         # Track dynamic endpoints separately
         self._dynamic_endpoints: Set[Union[Type, Callable]] = set()
 
@@ -178,6 +182,7 @@ class EndpointRegistryService:
         # Register walker
         self._walker_registry[walker_class] = endpoint_info
         self._add_to_path_index(path, endpoint_info)
+        self._add_to_webhook_index(walker_class, endpoint_info)
 
         # Track if dynamic
         if is_dynamic:
@@ -252,6 +257,7 @@ class EndpointRegistryService:
         # Register function
         self._function_registry[func] = endpoint_info
         self._add_to_path_index(path, endpoint_info)
+        self._add_to_webhook_index(func, endpoint_info)
 
         # Track if dynamic
         if is_dynamic:
@@ -293,6 +299,7 @@ class EndpointRegistryService:
             self._custom_routes[path] = []
         self._custom_routes[path].append(endpoint_info)
         self._add_to_path_index(path, endpoint_info)
+        self._add_to_webhook_index(handler, endpoint_info)
 
         return endpoint_info
 
@@ -314,6 +321,7 @@ class EndpointRegistryService:
         # Remove from registries
         del self._walker_registry[walker_class]
         self._remove_from_path_index(endpoint_info.path, endpoint_info)
+        self._remove_from_webhook_index(endpoint_info)
         self._dynamic_endpoints.discard(walker_class)
 
         return True
@@ -336,6 +344,7 @@ class EndpointRegistryService:
         # Remove from registries
         del self._function_registry[func]
         self._remove_from_path_index(endpoint_info.path, endpoint_info)
+        self._remove_from_webhook_index(endpoint_info)
         self._dynamic_endpoints.discard(func)
 
         return True
@@ -371,6 +380,8 @@ class EndpointRegistryService:
 
         # Remove custom routes at this path
         if path in self._custom_routes:
+            for endpoint_info in self._custom_routes[path]:
+                self._remove_from_webhook_index(endpoint_info)
             removed_count += len(self._custom_routes[path])
             del self._custom_routes[path]
 
@@ -463,8 +474,8 @@ class EndpointRegistryService:
     ) -> List[EndpointInfo]:
         """Get webhook endpoints that match the request path and method.
 
-        Uses pattern matching to support path parameters (e.g. {id}).
-        Normalizes the request path by stripping the API prefix before matching.
+        Uses _webhook_endpoints index for O(k) lookup where k is number of
+        webhook endpoints (typically 1-5) instead of O(n) over all endpoints.
 
         Args:
             request_path: Raw request path (e.g. /api/integrations/foo/webhook/abc123)
@@ -476,27 +487,11 @@ class EndpointRegistryService:
         normalized = normalize_request_path(request_path)
         method_upper = method.upper() if method else ""
         results: List[EndpointInfo] = []
-
-        def _is_webhook_endpoint(handler: Union[Type, Callable]) -> bool:
-            cfg = getattr(handler, "_jvspatial_endpoint_config", None)
-            return cfg is not None and cfg.get("webhook") is True
-
-        for func, endpoint_info in self._function_registry.items():
-            if not _is_webhook_endpoint(func):
-                continue
+        for endpoint_info in self._webhook_endpoints:
             if method_upper and method_upper not in endpoint_info.methods:
                 continue
             if path_matches(endpoint_info.path, normalized):
                 results.append(endpoint_info)
-
-        for walker_class, endpoint_info in self._walker_registry.items():
-            if not _is_webhook_endpoint(walker_class):
-                continue
-            if method_upper and method_upper not in endpoint_info.methods:
-                continue
-            if path_matches(endpoint_info.path, normalized):
-                results.append(endpoint_info)
-
         return results
 
     def has_walker(self, walker_class: Type) -> bool:
@@ -633,7 +628,25 @@ class EndpointRegistryService:
         self._function_registry.clear()
         self._custom_routes.clear()
         self._path_index.clear()
+        self._webhook_endpoints.clear()
         self._dynamic_endpoints.clear()
+
+    def _add_to_webhook_index(
+        self, handler: Union[Type, Callable], endpoint_info: EndpointInfo
+    ) -> None:
+        """Add endpoint to webhook index when webhook=True."""
+        cfg = getattr(handler, "_jvspatial_endpoint_config", None)
+        if (
+            cfg is not None
+            and cfg.get("webhook") is True
+            and endpoint_info not in self._webhook_endpoints
+        ):
+            self._webhook_endpoints.append(endpoint_info)
+
+    def _remove_from_webhook_index(self, endpoint_info: EndpointInfo) -> None:
+        """Remove endpoint from webhook index."""
+        with contextlib.suppress(ValueError):
+            self._webhook_endpoints.remove(endpoint_info)
 
     def _add_to_path_index(self, path: str, endpoint_info: EndpointInfo) -> None:
         """Add endpoint to path index for fast lookup.
