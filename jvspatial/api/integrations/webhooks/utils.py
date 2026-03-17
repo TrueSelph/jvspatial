@@ -450,13 +450,18 @@ def get_webhook_config_from_env() -> WebhookConfig:
 
 # Convenience function for common webhook validation workflow
 async def validate_and_process_webhook(
-    request: Request, config: Optional[WebhookConfig] = None
+    request: Request,
+    config: Optional[WebhookConfig] = None,
+    skip_idempotency: bool = False,
 ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
     """Complete webhook validation and processing workflow.
 
     Args:
         request: FastAPI request object
         config: Webhook configuration (uses env defaults if None)
+        skip_idempotency: When True, skip idempotency check and storage.
+            Use for api_key webhooks (e.g. WhatsApp) that do not send
+            X-Idempotency-Key, to avoid unnecessary DB round-trips on Lambda.
 
     Returns:
         Tuple of (processed_data_dict, cached_response_if_duplicate)
@@ -484,17 +489,19 @@ async def validate_and_process_webhook(
         if not verify_hmac_signature(raw_body, signature, config.hmac_secret):
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
 
-    # Check idempotency
-    idempotency_key = extract_idempotency_key(request)
-    is_duplicate, cached_response = await check_idempotency(idempotency_key)
-
-    if is_duplicate:
-        return {
-            "raw_body": raw_body,
-            "content_type": content_type,
-            "idempotency_key": idempotency_key,
-            "is_duplicate": True,
-        }, cached_response
+    # Check idempotency (skip for api_key webhooks without idempotency key)
+    idempotency_key = None if skip_idempotency else extract_idempotency_key(request)
+    is_duplicate = False
+    cached_response = None
+    if not skip_idempotency:
+        is_duplicate, cached_response = await check_idempotency(idempotency_key)
+        if is_duplicate:
+            return {
+                "raw_body": raw_body,
+                "content_type": content_type,
+                "idempotency_key": idempotency_key,
+                "is_duplicate": True,
+            }, cached_response
 
     # Parse payload
     try:

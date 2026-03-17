@@ -9,9 +9,11 @@ This middleware handles all webhook-specific processing including:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
-from typing import Any, Callable, Dict, Optional
+import time
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -22,10 +24,26 @@ from jvspatial.config import use_background_processing
 
 from .utils import (
     WebhookConfig,
+    extract_idempotency_key,
     get_webhook_config_from_env,
     store_idempotent_response,
     validate_and_process_webhook,
 )
+
+# API key validation cache: (expiry_timestamp, api_key_entity)
+# TTL 60s, max 500 entries. Reduces DB round-trips for repeated webhook calls.
+_API_KEY_CACHE: Dict[str, Tuple[float, Any]] = {}
+_API_KEY_CACHE_TTL = 60.0
+_API_KEY_CACHE_MAX_SIZE = 500
+
+
+def _api_key_cache_cleanup() -> None:
+    """Remove expired entries from API key cache."""
+    now = time.time()
+    expired = [k for k, (exp, _) in _API_KEY_CACHE.items() if exp <= now]
+    for k in expired:
+        del _API_KEY_CACHE[k]
+
 
 logger = logging.getLogger(__name__)
 
@@ -288,7 +306,8 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             if endpoints:
                 return True
 
-        # Fallback: path-prefix check for tests or when server is None
+        # Fallback: path check for tests or when server is None.
+        # Match paths containing /webhook/ or /webhook (e.g. /api/whatsapp/interact/webhook/{id})
         path = request.url.path
         api_prefix = (APIRoutes.PREFIX or "").rstrip("/")
         prefixed_pattern = (
@@ -296,8 +315,11 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             if api_prefix
             else None
         )
-        return path.startswith(self.webhook_path_pattern) or (
-            prefixed_pattern is not None and path.startswith(prefixed_pattern)
+        return (
+            path.startswith(self.webhook_path_pattern)
+            or (prefixed_pattern is not None and path.startswith(prefixed_pattern))
+            or "/webhook" in path
+            or path.endswith("/webhook")
         )
 
     async def _process_webhook_request(
@@ -341,8 +363,16 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                 request.state.webhook_route = self._extract_route_parameter(request)
             else:
                 # Full path for POST/PUT/PATCH
+                # Skip idempotency for api_key webhooks without X-Idempotency-Key
+                # (e.g. WhatsApp) to avoid unnecessary DB round-trips on Lambda
+                skip_idempotency = (
+                    webhook_config is not None
+                    and webhook_config.get("webhook_auth")
+                    in ("api_key", "api_key_path")
+                    and extract_idempotency_key(request) is None
+                )
                 processed_data, cached_response = await validate_and_process_webhook(
-                    request, config
+                    request, config, skip_idempotency=skip_idempotency
                 )
 
                 # Populate request.state with processed data
@@ -547,10 +577,37 @@ class WebhookMiddleware(BaseHTTPMiddleware):
 
         # Validate API key using database-backed service
         # Use prime database for API key validation (consistent with auth service)
+        # Cache valid keys for 60s to reduce DB round-trips on Lambda (warm invocations)
         try:
-            prime_ctx = GraphContext(database=get_prime_database())
-            service = APIKeyService(prime_ctx)
-            api_key_entity = await service.validate_key(api_key)
+            cache_key = hashlib.sha256(api_key.encode()).hexdigest()
+            now = time.time()
+            cache_hit = False
+            if cache_key in _API_KEY_CACHE:
+                cached_expiry, cached_entity = _API_KEY_CACHE[cache_key]
+                if cached_expiry > now and cached_entity is not None:
+                    api_key_entity = cached_entity
+                    cache_hit = True
+                    logger.debug(
+                        f"Webhook API key cache hit: key_id={cached_entity.id}"
+                    )
+                else:
+                    api_key_entity = None
+                    del _API_KEY_CACHE[cache_key]
+            else:
+                api_key_entity = None
+
+            if api_key_entity is None:
+                prime_ctx = GraphContext(database=get_prime_database())
+                service = APIKeyService(prime_ctx)
+                api_key_entity = await service.validate_key(api_key)
+                if api_key_entity:
+                    # Store in cache for warm invocations
+                    if len(_API_KEY_CACHE) >= _API_KEY_CACHE_MAX_SIZE:
+                        _api_key_cache_cleanup()
+                    _API_KEY_CACHE[cache_key] = (
+                        now + _API_KEY_CACHE_TTL,
+                        api_key_entity,
+                    )
 
             if not api_key_entity:
                 raise HTTPException(
@@ -599,11 +656,14 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                 "auth_source": source,  # Track authentication source
             }
 
-            # Update last used timestamp
-            try:
-                await service.update_key_usage(api_key_entity)
-            except Exception as e:
-                logger.warning(f"Failed to update API key usage: {e}")
+            # Update last used timestamp (skip on cache hit to avoid DB write)
+            if not cache_hit:
+                try:
+                    prime_ctx = GraphContext(database=get_prime_database())
+                    service = APIKeyService(prime_ctx)
+                    await service.update_key_usage(api_key_entity)
+                except Exception as e:
+                    logger.warning(f"Failed to update API key usage: {e}")
 
             logger.debug(
                 f"Webhook API key authentication successful: key_id={api_key_entity.id}, source={source}"
@@ -655,6 +715,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
 
         Attempts to extract route from patterns like:
         - /webhook/{route}/{auth_token}
+        - /webhooks/{route}/{auth_token}
         - /webhook/process/{route}/{auth_token}
 
         Args:
@@ -667,18 +728,26 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         path_parts = [p for p in path.split("/") if p]  # Remove empty parts
 
         try:
-            # Look for common webhook patterns
-            if len(path_parts) >= 3 and path_parts[0] == "webhooks":
-                # Pattern: /webhook/{route}/{auth_token}
-                if len(path_parts) == 3:
-                    return str(path_parts[1])  # route is second part
+            # Find webhook segment (support both "webhook" and "webhooks")
+            webhook_idx = None
+            for i, part in enumerate(path_parts):
+                if part in ("webhook", "webhooks"):
+                    webhook_idx = i
+                    break
+
+            if webhook_idx is not None and len(path_parts) >= webhook_idx + 3:
+                # Pattern: /webhook/{route}/{auth_token} or /webhooks/{route}/{auth_token}
+                if len(path_parts) == webhook_idx + 3:
+                    return str(path_parts[webhook_idx + 1])
                 # Pattern: /webhook/process/{route}/{auth_token}
-                elif len(path_parts) == 4 and path_parts[1] == "process":
-                    return str(path_parts[2])  # route is third part
+                if (
+                    len(path_parts) >= webhook_idx + 4
+                    and path_parts[webhook_idx + 1] == "process"
+                ):
+                    return str(path_parts[webhook_idx + 2])
                 # Pattern: /webhook/{service}/{route}/{auth_token}
-                elif len(path_parts) >= 4:
-                    # Could be service or route - prefer route (second-to-last non-token)
-                    return str(path_parts[-2])  # Second to last (before auth_token)
+                if len(path_parts) >= webhook_idx + 4:
+                    return str(path_parts[-2])
 
             return None
 
