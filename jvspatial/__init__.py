@@ -58,7 +58,7 @@ from .api.decorators.route import endpoint
 from .cache import create_cache
 
 # Unified configuration
-from .config import Config
+from .config import Config, use_background_processing
 
 # Simplified decorators
 from .core.annotations import attribute
@@ -85,6 +85,7 @@ __all__ = [
     "__version__",
     # Unified configuration
     "Config",
+    "use_background_processing",
     # Core entities
     "Object",
     "Node",

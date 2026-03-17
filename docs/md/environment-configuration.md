@@ -67,6 +67,25 @@ jvspatial uses environment variables to configure database connections, file pat
 
 See the [Caching Documentation](caching.md) for detailed information about cache backends and configuration.
 
+### Background Processing Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `BACKGROUND_PROCESSING` | boolean | auto | Whether the environment supports fire-and-forget background tasks (`asyncio.create_task`). Set to `false` for serverless (e.g. AWS Lambda) where the context freezes after handler return. When unset, auto-detects: `false` if `AWS_LAMBDA_FUNCTION_NAME` is set, else `true`. |
+
+Use `use_background_processing()` from `jvspatial.config` to check at runtime:
+
+```python
+from jvspatial.config import use_background_processing
+
+if use_background_processing():
+    asyncio.create_task(some_coro())
+else:
+    await some_coro()
+```
+
+**Downstream usage:** jvagent uses `use_background_processing()` for webhook async mode and WhatsApp media batch mode. When `BACKGROUND_PROCESSING` is false and `AWS_LAMBDA_FUNCTION_NAME` is set, media batch uses lambda mode (MongoDB + Lambda invoke); otherwise disabled.
+
 ### Text Normalization Configuration
 
 | Variable | Type | Default | Description |

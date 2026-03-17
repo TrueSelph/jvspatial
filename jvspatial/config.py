@@ -319,11 +319,25 @@ def set_config(config: Config) -> None:
     _config = config
 
 
-def is_background_tasks_enabled() -> bool:
+def _parse_bool_env(val: str) -> bool:
+    """Parse env string to bool. True for true/1/yes, False otherwise."""
+    return str(val).strip().lower() in ("true", "1", "yes")
+
+
+def use_background_processing() -> bool:
     """Return True if fire-and-forget asyncio.create_task is safe.
 
-    Set JVSPATIAL_BACKGROUND_TASKS=false for Lambda (context freezes after
-    handler returns). Default when unset is True.
+    Resolution order:
+    1. BACKGROUND_PROCESSING if set (true/1/yes -> True; false/0/no -> False)
+    2. If unset and AWS_LAMBDA_FUNCTION_NAME is set -> False (Lambda default)
+    3. Else -> True (long-running server default)
+
+    Set BACKGROUND_PROCESSING=false for serverless (e.g. Lambda) where the
+    context freezes after handler returns.
     """
-    val = os.environ.get("JVSPATIAL_BACKGROUND_TASKS", "true")
-    return str(val).lower() in ("true", "1", "yes")
+    val = os.environ.get("BACKGROUND_PROCESSING", "").strip()
+    if val:
+        return _parse_bool_env(val)
+    if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+        return False
+    return True

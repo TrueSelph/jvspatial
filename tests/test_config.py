@@ -8,7 +8,12 @@ from unittest.mock import patch
 
 import pytest
 
-from jvspatial.config import Config, get_config, is_background_tasks_enabled, set_config
+from jvspatial.config import (
+    Config,
+    get_config,
+    set_config,
+    use_background_processing,
+)
 
 
 class TestConfig:
@@ -188,23 +193,38 @@ class TestConfig:
         assert config.redis_url == "redis://localhost:6379/0"
 
 
-class TestIsBackgroundTasksEnabled:
-    """Test is_background_tasks_enabled for JVSPATIAL_BACKGROUND_TASKS."""
+class TestUseBackgroundProcessing:
+    """Test use_background_processing for BACKGROUND_PROCESSING."""
 
-    def test_default_enabled(self):
-        """Unset env defaults to True."""
+    def test_default_enabled_when_unset(self):
+        """Unset env defaults to True (non-Lambda)."""
         with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("JVSPATIAL_BACKGROUND_TASKS", None)
-            assert is_background_tasks_enabled() is True
+            os.environ.pop("BACKGROUND_PROCESSING", None)
+            os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
+            assert use_background_processing() is True
 
     def test_explicit_true(self):
-        """Explicit true/1/yes enables background tasks."""
+        """Explicit true/1/yes enables background processing."""
         for val in ("true", "1", "yes", "True", "TRUE"):
-            with patch.dict(os.environ, {"JVSPATIAL_BACKGROUND_TASKS": val}):
-                assert is_background_tasks_enabled() is True
+            with patch.dict(os.environ, {"BACKGROUND_PROCESSING": val}):
+                assert use_background_processing() is True
 
     def test_explicit_false(self):
-        """Explicit false/0/no disables background tasks."""
+        """Explicit false/0/no disables background processing."""
         for val in ("false", "0", "no", "False", "FALSE"):
-            with patch.dict(os.environ, {"JVSPATIAL_BACKGROUND_TASKS": val}):
-                assert is_background_tasks_enabled() is False
+            with patch.dict(os.environ, {"BACKGROUND_PROCESSING": val}):
+                assert use_background_processing() is False
+
+    def test_lambda_default_disabled(self):
+        """When AWS_LAMBDA_FUNCTION_NAME is set and BACKGROUND_PROCESSING unset, default False."""
+        with patch.dict(os.environ, {"AWS_LAMBDA_FUNCTION_NAME": "my-func"}):
+            os.environ.pop("BACKGROUND_PROCESSING", None)
+            assert use_background_processing() is False
+
+    def test_explicit_overrides_lambda(self):
+        """BACKGROUND_PROCESSING=true overrides Lambda detection."""
+        with patch.dict(
+            os.environ,
+            {"BACKGROUND_PROCESSING": "true", "AWS_LAMBDA_FUNCTION_NAME": "my-func"},
+        ):
+            assert use_background_processing() is True

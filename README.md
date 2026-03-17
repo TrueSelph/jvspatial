@@ -201,6 +201,10 @@ active_users = await User.count(active=True)  # Count filtered users using keywo
 
 ## Configuration
 
+### Background Processing
+
+Set `BACKGROUND_PROCESSING=false` for serverless (e.g. AWS Lambda) where fire-and-forget tasks are unsafe. When unset, auto-detects Lambda via `AWS_LAMBDA_FUNCTION_NAME`. Use `use_background_processing()` from `jvspatial.config` to check at runtime. See [Environment Configuration](docs/md/environment-configuration.md) for details.
+
 ### Server Configuration
 
 ```python

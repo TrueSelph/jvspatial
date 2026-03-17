@@ -7,7 +7,9 @@ concurrency limiting, batch processing, and performance enhancements.
 import asyncio
 import logging
 import time
-from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
+from typing import Any, Awaitable, Callable, Coroutine, Dict, List, Optional, TypeVar
+
+from jvspatial.config import use_background_processing
 
 T = TypeVar("T")
 
@@ -491,6 +493,50 @@ def timeout(seconds: float):
     return decorator
 
 
+def _handle_task_exception(task: asyncio.Task, name: str) -> None:
+    """Handle exceptions from background tasks.
+
+    Args:
+        task: The completed task
+        name: Name of the task for logging
+    """
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logging.getLogger(__name__).error(
+            f"Background task '{name}' failed: {e}", exc_info=True
+        )
+
+
+def create_background_task(
+    coro: Coroutine[Any, Any, Any], name: str = "background"
+) -> Optional[asyncio.Task]:
+    """Create a background task with automatic exception logging.
+
+    When BACKGROUND_PROCESSING is false (e.g. Lambda), returns None
+    without running the coroutine. Callers must handle None.
+
+    Args:
+        coro: Coroutine to run as a background task
+        name: Descriptive name for the task (used in error logs)
+
+    Returns:
+        The created asyncio.Task, or None when background tasks disabled
+    """
+    if not use_background_processing():
+        logging.getLogger(__name__).warning(
+            "create_background_task called with BACKGROUND_PROCESSING disabled; "
+            "coroutine will not run. Set BACKGROUND_PROCESSING=true for "
+            "non-Lambda deployments."
+        )
+        return None
+    task = asyncio.create_task(coro)
+    task.add_done_callback(lambda t: _handle_task_exception(t, name))
+    return task
+
+
 __all__ = [
     "AsyncUtils",
     "BatchProcessor",
@@ -503,4 +549,5 @@ __all__ = [
     "retry_with_backoff",
     "retry",
     "timeout",
+    "create_background_task",
 ]

@@ -13,7 +13,7 @@ import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Set
 
-from jvspatial.config import is_background_tasks_enabled
+from jvspatial.config import use_background_processing
 from jvspatial.core.context import GraphContext
 from jvspatial.db import get_database_manager
 from jvspatial.logging.models import DBLog
@@ -304,9 +304,9 @@ class DBLogHandler(logging.Handler):
                     )
 
             # Create task for async save (fire-and-forget) when background tasks allowed
-            if not is_background_tasks_enabled():
+            if not use_background_processing():
                 logger.debug(
-                    "DBLogHandler: skipping async save (JVSPATIAL_BACKGROUND_TASKS disabled)"
+                    "DBLogHandler: skipping async save (BACKGROUND_PROCESSING disabled)"
                 )
             else:
                 try:
