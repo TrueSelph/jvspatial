@@ -430,19 +430,15 @@ def get_webhook_config_from_env() -> WebhookConfig:
     Returns:
         WebhookConfig instance
     """
-    import os
+    from jvspatial.env import load_env
 
+    env = load_env()
     return WebhookConfig(
-        hmac_secret=os.getenv("JVSPATIAL_WEBHOOK_HMAC_SECRET"),
-        hmac_algorithm=os.getenv("JVSPATIAL_WEBHOOK_HMAC_ALGORITHM", "sha256"),
-        max_payload_size=int(
-            os.getenv("JVSPATIAL_WEBHOOK_MAX_PAYLOAD_SIZE", "1048576")
-        ),  # 1MB
-        idempotency_ttl=int(
-            os.getenv("JVSPATIAL_WEBHOOK_IDEMPOTENCY_TTL", "3600")
-        ),  # 1 hour
-        https_required=os.getenv("JVSPATIAL_WEBHOOK_HTTPS_REQUIRED", "true").lower()
-        == "true",
+        hmac_secret=env.webhook_hmac_secret,
+        hmac_algorithm=env.webhook_hmac_algorithm,
+        max_payload_size=env.webhook_max_payload_size,
+        idempotency_ttl=env.webhook_idempotency_ttl,
+        https_required=env.webhook_https_required,
     )
 
 

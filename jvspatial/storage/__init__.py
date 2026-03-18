@@ -179,20 +179,20 @@ def create_storage(provider: str = "local", **kwargs: Any) -> FileStorageInterfa
                 "S3 storage requires boto3. Install it with: pip install boto3"
             )
 
-        bucket_name = kwargs.get("bucket_name") or os.getenv("JVSPATIAL_S3_BUCKET_NAME")
+        from jvspatial.env import load_env
+
+        env = load_env()
+        bucket_name = kwargs.get("bucket_name") or env.s3_bucket_name
         if not bucket_name:
             raise ValueError("S3 bucket_name is required")
 
         return S3FileInterface(
             bucket_name=bucket_name,
-            region_name=kwargs.get("region_name")
-            or os.getenv("JVSPATIAL_S3_REGION_NAME", "us-east-1"),
-            access_key_id=kwargs.get("access_key_id")
-            or os.getenv("JVSPATIAL_S3_ACCESS_KEY_ID"),
+            region_name=kwargs.get("region_name") or env.s3_region_name,
+            access_key_id=kwargs.get("access_key_id") or env.s3_access_key_id,
             secret_access_key=kwargs.get("secret_access_key")
-            or os.getenv("JVSPATIAL_S3_SECRET_ACCESS_KEY"),
-            endpoint_url=kwargs.get("endpoint_url")
-            or os.getenv("JVSPATIAL_S3_ENDPOINT_URL"),
+            or env.s3_secret_access_key,
+            endpoint_url=kwargs.get("endpoint_url") or env.s3_endpoint_url,
             url_expiration=kwargs.get("url_expiration", 3600),
         )
 

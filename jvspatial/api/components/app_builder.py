@@ -379,11 +379,11 @@ class AppBuilder:
 
                 # Wrap function with parameter handling if needed
                 if param_model is not None:
-                    from jvspatial.api.decorators.route import (
-                        _wrap_function_with_params,
+                    from jvspatial.api.decorators.function_wrappers import (
+                        wrap_function_with_params,
                     )
 
-                    wrapped_func = _wrap_function_with_params(
+                    wrapped_func = wrap_function_with_params(
                         get_graph, param_model, ["GET"], path="/api/graph"
                     )
                 else:

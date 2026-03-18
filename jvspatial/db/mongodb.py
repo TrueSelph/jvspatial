@@ -10,7 +10,6 @@ Index Creation Behavior:
 
 import contextlib
 import logging
-import os
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
@@ -54,15 +53,14 @@ class MongoDB(Database):
         """
         self.uri = uri
         self.db_name = db_name
+        from jvspatial.env import load_env
+
+        env = load_env()
         self.max_pool_size = (
-            max_pool_size
-            if max_pool_size is not None
-            else int(os.getenv("JVSPATIAL_MONGODB_MAX_POOL_SIZE", "10"))
+            max_pool_size if max_pool_size is not None else (env.mongodb_max_pool or 10)
         )
         self.min_pool_size = (
-            min_pool_size
-            if min_pool_size is not None
-            else int(os.getenv("JVSPATIAL_MONGODB_MIN_POOL_SIZE", "0"))
+            min_pool_size if min_pool_size is not None else (env.mongodb_min_pool or 0)
         )
         self._client: Optional[AsyncIOMotorClient] = None
         self._db: Optional[AsyncIOMotorDatabase] = None

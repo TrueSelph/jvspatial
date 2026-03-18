@@ -22,7 +22,6 @@ Index Creation Behavior:
 import asyncio
 import json
 import logging
-import os
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 try:
@@ -1259,10 +1258,9 @@ class DynamoDB(Database):
         # Determine whether to wait based on parameter or environment variable
         # Default is False to allow immediate graph usage (indexes created asynchronously)
         if wait_for_active is None:
-            wait_for_active = (
-                os.getenv("JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX", "false").lower()
-                == "true"
-            )
+            from jvspatial.env import load_env
+
+            wait_for_active = load_env().dynamodb_wait_for_index
         table_name = await self._ensure_table_exists(collection)
 
         # Initialize collections in registry if needed

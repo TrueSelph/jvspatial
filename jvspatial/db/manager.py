@@ -5,7 +5,6 @@ within the same application, with automatic prime database management for
 core persistence operations like authentication and session management.
 """
 
-import os
 from typing import Any, Dict, Optional
 
 from .database import Database
@@ -65,26 +64,23 @@ class DatabaseManager:
         # Initialize prime database
         if prime_database is None:
             # Create default prime database (avoid circular import)
+            from jvspatial.env import load_env
+
             from .jsondb import JsonDB
 
-            db_type = os.getenv("JVSPATIAL_DB_TYPE", "json")
-            if db_type == "json":
-                base_path = os.getenv("JVSPATIAL_JSONDB_PATH", "jvdb")
-                self._prime_database = JsonDB(str(base_path))
-            elif db_type == "mongodb":
+            env = load_env()
+            if env.db_type == "json":
+                self._prime_database = JsonDB(str(env.jsondb_path))
+            elif env.db_type == "mongodb":
                 from .mongodb import MongoDB
 
-                uri = os.getenv("JVSPATIAL_MONGODB_URI", "mongodb://localhost:27017")
-                db_name = os.getenv("JVSPATIAL_MONGODB_DB_NAME", "jvdb")
-                max_pool = os.getenv("JVSPATIAL_MONGODB_MAX_POOL_SIZE")
-                min_pool = os.getenv("JVSPATIAL_MONGODB_MIN_POOL_SIZE")
                 self._prime_database = MongoDB(
-                    uri=uri,
-                    db_name=db_name,
-                    max_pool_size=int(max_pool) if max_pool is not None else None,
-                    min_pool_size=int(min_pool) if min_pool is not None else None,
+                    uri=env.mongodb_uri,
+                    db_name=env.mongodb_db_name,
+                    max_pool_size=env.mongodb_max_pool,
+                    min_pool_size=env.mongodb_min_pool,
                 )
-            elif db_type == "sqlite":
+            elif env.db_type == "sqlite":
                 try:
                     from .sqlite import SQLiteDB
                 except ImportError as exc:  # pragma: no cover - dependency missing
@@ -92,9 +88,8 @@ class DatabaseManager:
                         "aiosqlite is required for SQLite support. Install it with: pip install aiosqlite"
                     ) from exc
 
-                db_path = os.getenv("JVSPATIAL_DB_PATH", "jvdb/sqlite/jvspatial.db")
-                self._prime_database = SQLiteDB(db_path=db_path)
-            elif db_type == "dynamodb":
+                self._prime_database = SQLiteDB(db_path=env.db_path)
+            elif env.db_type == "dynamodb":
                 try:
                     from .dynamodb import DynamoDB
                 except ImportError as exc:  # pragma: no cover - dependency missing
@@ -102,22 +97,16 @@ class DatabaseManager:
                         "aioboto3 is required for DynamoDB support. Install it with: pip install aioboto3"
                     ) from exc
 
-                table_name = os.getenv("JVSPATIAL_DYNAMODB_TABLE_NAME", "jvspatial")
-                region_name = os.getenv("JVSPATIAL_DYNAMODB_REGION", "us-east-1")
-                endpoint_url = os.getenv("JVSPATIAL_DYNAMODB_ENDPOINT_URL")
-                aws_access_key_id = os.getenv("AWS_ACCESS_KEY_ID")
-                aws_secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY")
                 self._prime_database = DynamoDB(
-                    table_name=table_name,
-                    region_name=region_name,
-                    endpoint_url=endpoint_url,
-                    aws_access_key_id=aws_access_key_id,
-                    aws_secret_access_key=aws_secret_access_key,
+                    table_name=env.dynamodb_table_name,
+                    region_name=env.dynamodb_region,
+                    endpoint_url=env.dynamodb_endpoint_url,
+                    aws_access_key_id=env.dynamodb_access_key_id,
+                    aws_secret_access_key=env.dynamodb_secret_access_key,
                 )
             else:
                 # Fallback to JSON
-                base_path = os.getenv("JVSPATIAL_JSONDB_PATH", "jvdb")
-                self._prime_database = JsonDB(str(base_path))
+                self._prime_database = JsonDB(str(env.jsondb_path))
         else:
             self._prime_database = prime_database
 

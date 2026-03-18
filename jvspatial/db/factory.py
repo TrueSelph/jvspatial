@@ -6,7 +6,6 @@ Includes integration with DatabaseManager for multi-database support.
 Supports custom database registration for seamless extension.
 """
 
-import os
 from typing import Any, Callable, Dict, Optional
 
 from .database import Database
@@ -167,15 +166,15 @@ def create_database(
     Raises:
         ValueError: If db_type is not supported or registration fails
     """
+    from jvspatial.env import load_env
+
+    env = load_env()
+
     # Check built-in types first
     db: Database
     if db_type == "json":
         # Accept base_path or db_path
-        base_path = (
-            kwargs.get("base_path")
-            or kwargs.get("db_path")
-            or os.getenv("JVSPATIAL_JSONDB_PATH", "jvdb")
-        )
+        base_path = kwargs.get("base_path") or kwargs.get("db_path") or env.jsondb_path
         db = JsonDB(str(base_path))
 
     elif db_type == "mongodb":
@@ -190,19 +189,13 @@ def create_database(
             kwargs["db_name"] = kwargs.pop("database_name", None)
         # Provide defaults from environment
         if "uri" not in kwargs:
-            kwargs["uri"] = os.getenv(
-                "JVSPATIAL_MONGODB_URI", "mongodb://localhost:27017"
-            )
+            kwargs["uri"] = env.mongodb_uri
         if "db_name" not in kwargs:
-            kwargs["db_name"] = os.getenv("JVSPATIAL_MONGODB_DB_NAME", "jvdb")
+            kwargs["db_name"] = env.mongodb_db_name
         if "max_pool_size" not in kwargs:
-            max_pool = os.getenv("JVSPATIAL_MONGODB_MAX_POOL_SIZE")
-            if max_pool is not None:
-                kwargs["max_pool_size"] = int(max_pool)
+            kwargs["max_pool_size"] = env.mongodb_max_pool
         if "min_pool_size" not in kwargs:
-            min_pool = os.getenv("JVSPATIAL_MONGODB_MIN_POOL_SIZE")
-            if min_pool is not None:
-                kwargs["min_pool_size"] = int(min_pool)
+            kwargs["min_pool_size"] = env.mongodb_min_pool
 
         db = MongoDB(**kwargs)
 
@@ -216,7 +209,7 @@ def create_database(
         db_path = (
             sqlite_kwargs.pop("db_path", None)
             or sqlite_kwargs.pop("path", None)
-            or os.getenv("JVSPATIAL_DB_PATH", "jvdb/sqlite/jvspatial.db")
+            or env.db_path
         )
         db = SQLiteDB(db_path=db_path, **sqlite_kwargs)
 
@@ -231,23 +224,15 @@ def create_database(
         # Provide defaults from environment
         dynamodb_kwargs = kwargs.copy()
         if "table_name" not in dynamodb_kwargs:
-            dynamodb_kwargs["table_name"] = os.getenv(
-                "JVSPATIAL_DYNAMODB_TABLE_NAME", "jvspatial"
-            )
+            dynamodb_kwargs["table_name"] = env.dynamodb_table_name
         if "region_name" not in dynamodb_kwargs:
-            dynamodb_kwargs["region_name"] = os.getenv(
-                "JVSPATIAL_DYNAMODB_REGION", "us-east-1"
-            )
+            dynamodb_kwargs["region_name"] = env.dynamodb_region
         if "endpoint_url" not in dynamodb_kwargs:
-            dynamodb_kwargs["endpoint_url"] = os.getenv(
-                "JVSPATIAL_DYNAMODB_ENDPOINT_URL"
-            )
+            dynamodb_kwargs["endpoint_url"] = env.dynamodb_endpoint_url
         if "aws_access_key_id" not in dynamodb_kwargs:
-            dynamodb_kwargs["aws_access_key_id"] = os.getenv("AWS_ACCESS_KEY_ID")
+            dynamodb_kwargs["aws_access_key_id"] = env.dynamodb_access_key_id
         if "aws_secret_access_key" not in dynamodb_kwargs:
-            dynamodb_kwargs["aws_secret_access_key"] = os.getenv(
-                "AWS_SECRET_ACCESS_KEY"
-            )
+            dynamodb_kwargs["aws_secret_access_key"] = env.dynamodb_secret_access_key
 
         db = DynamoDB(**dynamodb_kwargs)
 

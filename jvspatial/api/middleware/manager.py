@@ -2,6 +2,9 @@
 
 This module provides centralized middleware configuration and management,
 including CORS, webhook middleware, security headers, and custom middleware registration.
+
+Note: Auth middleware is configured by Server (not here) to control ordering:
+rate limit -> auth. See server._configure_auth_middleware().
 """
 
 import logging
@@ -61,7 +64,7 @@ class MiddlewareManager:
             func: Middleware function to register
         """
         self._custom_middleware.append(
-            {"middleware_type": middleware_type, "func": func}
+            {"func": func, "middleware_type": middleware_type}
         )
         self._logger.debug(
             f"{LogIcons.REGISTERED} Custom middleware registered: "
@@ -74,10 +77,11 @@ class MiddlewareManager:
         This orchestrator method applies middleware in the correct order:
         1. Security headers (if enabled)
         2. CORS middleware (if enabled)
-        3. Authentication middleware (if authenticated endpoints exist)
-        4. Webhook middleware (if webhook endpoints exist)
-        5. File storage endpoints (if enabled)
-        6. Custom user-defined middleware
+        3. Webhook middleware (if webhook endpoints exist)
+        4. File storage endpoints (if enabled)
+        5. Custom user-defined middleware
+
+        Auth middleware is configured by Server separately (rate limit -> auth).
 
         Works in both sync and async contexts.
 
@@ -86,7 +90,6 @@ class MiddlewareManager:
         """
         self._configure_security_headers(app)
         self._configure_cors(app)
-        self._configure_auth_middleware(app)
         self._configure_webhook_middleware(app)
         self._configure_file_storage(app)
         self._configure_custom_middleware(app)
@@ -130,70 +133,6 @@ class MiddlewareManager:
             f"{LogIcons.SUCCESS} CORS middleware configured with "
             f"origins: {self.server.config.cors.cors_origins}"
         )
-
-    def _configure_auth_middleware(self, app: FastAPI) -> None:
-        """Configure authentication middleware if authenticated endpoints exist.
-
-        Scans the endpoint registry for auth-enabled endpoints and
-        adds the authentication middleware if any are found.
-
-        Args:
-            app: FastAPI application instance
-        """
-        has_auth_endpoints = self._detect_auth_endpoints()
-
-        if not has_auth_endpoints:
-            self._logger.debug(
-                "No authenticated endpoints found, skipping auth middleware"
-            )
-            return
-
-        try:
-            # Authentication middleware is now handled by components
-            # from jvspatial.api.auth.middleware import AuthenticationMiddleware
-            # app.add_middleware(AuthenticationMiddleware)
-            self._logger.debug(
-                f"{LogIcons.SUCCESS} Authentication middleware added to server"
-            )
-        except ImportError as e:
-            self._logger.warning(
-                f"{LogIcons.WARNING} Could not add authentication middleware: {e}"
-            )
-
-    def _detect_auth_endpoints(self) -> bool:
-        """Detect if any registered endpoints require authentication.
-
-        Returns:
-            True if authenticated endpoints are found, False otherwise
-        """
-        # First check the flag set by auth decorators (most reliable)
-        if getattr(self.server, "_has_auth_endpoints", False):
-            # Auth endpoints detected - middleware will be added
-            return True
-
-        # Fallback: Check walker endpoints from registry
-        registry = self.server._endpoint_registry
-
-        self._logger.debug(
-            f"Checking {len(registry._walker_registry)} walker endpoints"
-        )
-        for walker_class in registry._walker_registry.keys():
-            if getattr(walker_class, "_auth_required", False):
-                self._logger.debug(
-                    f"Found auth-required walker: {walker_class.__name__}"
-                )
-                return True
-
-        # Check function endpoints from registry
-        self._logger.debug(
-            f"Checking {len(registry._function_registry)} function endpoints"
-        )
-        for func in registry._function_registry.keys():
-            if getattr(func, "_auth_required", False):
-                self._logger.debug(f"Found auth-required function: {func.__name__}")
-                return True
-
-        return False
 
     def _configure_webhook_middleware(self, app: FastAPI) -> None:
         """Configure webhook middleware if webhook endpoints exist.

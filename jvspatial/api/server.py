@@ -7,9 +7,7 @@ setup, lifecycle management, and endpoint routing.
 """
 
 import asyncio
-import contextlib
 import logging
-import warnings
 from typing import (
     Any,
     Callable,
@@ -22,7 +20,7 @@ from typing import (
 )
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from jvspatial.api.components import AppBuilder, EndpointManager
@@ -31,6 +29,7 @@ from jvspatial.api.config import ServerConfig
 from jvspatial.api.constants import APIRoutes
 from jvspatial.api.endpoints.router import EndpointRouter
 from jvspatial.api.middleware.manager import MiddlewareManager
+from jvspatial.api.server_configurator import ServerConfigurator
 from jvspatial.api.services.discovery import EndpointDiscoveryService
 from jvspatial.api.services.lifecycle import LifecycleManager
 from jvspatial.core.context import GraphContext
@@ -101,7 +100,6 @@ class Server:
     def __init__(
         self: "Server",
         config: Optional[Union[ServerConfig, Dict[str, Any]]] = None,
-        packages: Optional[List[str]] = None,
         node_types: Optional[List[Type[Node]]] = None,
         on_startup: Optional[List[Callable]] = None,
         on_shutdown: Optional[List[Callable]] = None,
@@ -115,11 +113,6 @@ class Server:
 
         Args:
             config: Server configuration as ServerConfig or dict
-            packages: Package strings to import for endpoint registration.  Each
-                package is imported (with module-cache eviction for reload safety)
-                inside ``_create_app_instance()``, before endpoint discovery runs.
-                This replaces the manual ``import app.api`` + ``sys.modules``
-                eviction pattern.  Example: ``packages=["app.api"]``.
             node_types: Node subclasses to register with the server in bulk.
                 Equivalent to calling ``server.add_node_type()`` for each class.
             on_startup: Async or sync callables added as startup lifecycle hooks.
@@ -204,17 +197,6 @@ class Server:
         if on_shutdown:
             for hook in on_shutdown:
                 self.lifecycle_manager.add_shutdown_hook(hook)
-
-        # Store packages for lazy import in _create_app_instance() (with eviction)
-        # packages is deprecated: use import app.api and sync_endpoint_modules instead
-        self._registered_packages: List[str] = list(packages or [])
-        if packages:
-            warnings.warn(
-                "packages= is deprecated; import your API modules directly (e.g. import app.api) "
-                "and endpoints will auto-register. packages= will be removed in a future release.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
 
         # Automatically set this server as the current server in context
         # The most recently instantiated Server becomes the current one
@@ -584,17 +566,8 @@ class Server:
         # Configure middleware using MiddlewareManager
         self.middleware_manager.configure_all(app)
 
-        # Add error logging context middleware for cleanup
-        self._configure_error_logging_context_middleware(app)
-
-        # Configure rate limiting middleware BEFORE auth (rate limit first)
-        self._configure_rate_limit_middleware(app)
-
-        # Configure authentication middleware if enabled
-        self._configure_auth_middleware(app)
-
-        # Configure exception handlers
-        self._configure_exception_handlers(app)
+        # Apply server configuration (error context, rate limit, auth, exception handlers)
+        ServerConfigurator(self).configure_all(app)
 
         # Register core routes using AppBuilder
         self.app_builder.register_core_routes(app, self._graph_context, server=self)
@@ -602,19 +575,9 @@ class Server:
         # Sync endpoints from modules decorated with @endpoint (handles uvicorn reload)
         from jvspatial.api.decorators.deferred_registry import sync_endpoint_modules
 
-        if self._registered_packages:
-            # Backward compat: packages= was provided, run legacy register_package loop
-            for pkg in self._registered_packages:
-                try:
-                    self.register_package(pkg)
-                except ImportError as exc:
-                    self._logger.warning(
-                        f"Could not import registered package '{pkg}': {exc}"
-                    )
-        else:
-            synced = sync_endpoint_modules(self)
-            if synced > 0:
-                self._logger.info(f"Synced {synced} endpoint(s) from module tracker")
+        synced = sync_endpoint_modules(self)
+        if synced > 0:
+            self._logger.info(f"Synced {synced} endpoint(s) from module tracker")
 
         # Discover and register endpoints from pre-loaded modules BEFORE including routers
         # This ensures all @endpoint decorated functions/classes are registered with the
@@ -638,264 +601,6 @@ class Server:
         self.app_builder.configure_openapi_security(app, self._has_auth_endpoints)
 
         return app
-
-    def _create_base_app(self: "Server") -> FastAPI:
-        """Create base FastAPI app with lifespan configuration.
-
-        Returns:
-            FastAPI: Configured base application instance
-        """
-        # Create FastAPI app with lifespan - but only if not already running
-        # to avoid lifespan conflicts
-        if self._is_running:
-            app = FastAPI(
-                title=self.config.title,
-                description=self.config.description,
-                version=self.config.version,
-                docs_url=self.config.docs_url,
-                redoc_url=self.config.redoc_url,
-                debug=self.config.debug,
-                # Skip lifespan for rebuilt apps
-            )
-        else:
-            app = FastAPI(
-                title=self.config.title,
-                description=self.config.description,
-                version=self.config.version,
-                docs_url=self.config.docs_url,
-                redoc_url=self.config.redoc_url,
-                debug=self.config.debug,
-                lifespan=self.lifecycle_manager.lifespan,
-            )
-        return app
-
-    def _configure_middleware(self: "Server", app: FastAPI) -> None:
-        """Configure all middleware using MiddlewareManager.
-
-        Works in both sync and async contexts.
-
-        Args:
-            app: FastAPI application instance to configure
-        """
-        self.middleware_manager.configure_all(app)
-
-    def _configure_exception_handlers(self: "Server", app: FastAPI) -> None:
-        """Configure all exception handlers using the unified APIErrorHandler.
-
-        Args:
-            app: FastAPI application instance to configure
-        """
-        # Add custom exception handlers
-        for exc_class, handler in self._exception_handlers.items():
-            app.add_exception_handler(exc_class, handler)
-
-        # Explicitly register JVSpatialAPIException handler BEFORE HTTPException
-        # This ensures function endpoints that raise ResourceNotFoundError, etc.
-        # are handled gracefully without triggering Starlette's error logging
-        from jvspatial.exceptions import JVSpatialAPIException
-
-        @app.exception_handler(JVSpatialAPIException)
-        async def jvspatial_exception_handler(
-            request: Request, exc: JVSpatialAPIException
-        ) -> JSONResponse:
-            # Known errors (4xx) are handled gracefully - no stack trace needed
-            # Only 5xx errors will be logged with stack traces for debugging
-            return await APIErrorHandler.handle_exception(request, exc)
-
-        # Explicitly register HTTPException handler to ensure consistent formatting
-        # This must be registered before the generic Exception handler
-        # FastAPI's default HTTPException handler returns {"detail": "..."} format
-        # We override it to use our consistent error structure
-        from fastapi import HTTPException
-
-        @app.exception_handler(HTTPException)
-        async def http_exception_handler(
-            request: Request, exc: HTTPException
-        ) -> JSONResponse:
-            # Known errors (4xx) are handled gracefully - no stack trace needed
-            # Only 5xx errors will be logged with stack traces for debugging
-            return await APIErrorHandler.handle_exception(request, exc)
-
-        # Add default exception handler using the unified ErrorHandler
-        # This catches unexpected exceptions (not HTTPException, not JVSpatialAPIException)
-        # These are treated as 500 errors and logged with full stack traces
-        @app.exception_handler(Exception)
-        async def global_exception_handler(
-            request: Request, exc: Exception
-        ) -> JSONResponse:
-            # All unexpected exceptions are treated as 500 errors
-            # They will be logged with stack traces for debugging
-            return await APIErrorHandler.handle_exception(request, exc)
-
-        # Configure exception logging using LoggingConfigurator
-        from jvspatial.api.components.logging_config import LoggingConfigurator
-
-        LoggingConfigurator.configure_exception_logging()
-
-    def _configure_error_logging_context_middleware(
-        self: "Server", app: FastAPI
-    ) -> None:
-        """Configure middleware to clean up error logging context after each request.
-
-        This middleware ensures that context variables used for tracking logged
-        error responses are properly cleaned up after each request to prevent
-        memory leaks and context pollution between requests.
-
-        Args:
-            app: FastAPI application instance
-        """
-        from starlette.middleware.base import BaseHTTPMiddleware
-
-        class ErrorLoggingContextMiddleware(BaseHTTPMiddleware):
-            """Middleware to manage error logging context lifecycle."""
-
-            async def dispatch(self, request: Request, call_next):
-                """Process request and clean up context after response."""
-                from jvspatial.api.components.error_handler import (
-                    _logged_error_responses,
-                )
-
-                # Initialize context for this request
-                with contextlib.suppress(Exception):
-                    # If context initialization fails, continue without it
-                    _logged_error_responses.set(set())
-
-                try:
-                    # Process request
-                    response = await call_next(request)
-                    return response
-                finally:
-                    # Clean up context after request completes
-                    with contextlib.suppress(Exception):
-                        # If cleanup fails, continue - context will be reset on next request
-                        # Clear the context variable for this request
-                        # This prevents memory leaks and ensures clean state
-                        _logged_error_responses.set(set())
-
-        # Add middleware early in the stack to ensure context is available
-        # for the entire request lifecycle
-        app.add_middleware(ErrorLoggingContextMiddleware)
-
-    def _configure_rate_limit_middleware(self: "Server", app: FastAPI) -> None:
-        """Configure rate limiting middleware if rate limiting is enabled."""
-        if not self.config.rate_limit.rate_limit_enabled:
-            return
-
-        try:
-            from jvspatial.api.middleware.rate_limit import RateLimitMiddleware
-            from jvspatial.api.middleware.rate_limit_backend import (
-                MemoryRateLimitBackend,
-            )
-
-            # Build rate limit configuration from endpoint registry
-            rate_limits = self._build_rate_limit_config()
-
-            # Use memory backend by default (can be overridden via config)
-            backend = (
-                getattr(self.config, "rate_limit_backend", None)
-                or MemoryRateLimitBackend()
-            )
-
-            app.add_middleware(
-                RateLimitMiddleware,
-                config=rate_limits,
-                default_limit=self.config.rate_limit.rate_limit_default_requests,
-                default_window=self.config.rate_limit.rate_limit_default_window,
-                backend=backend,
-            )
-
-            self._logger.debug(
-                f"🔒 Rate limiting enabled: {len(rate_limits)} endpoints configured, "
-                f"default {self.config.rate_limit.rate_limit_default_requests} req/{self.config.rate_limit.rate_limit_default_window}s"
-            )
-        except ImportError as e:
-            self._logger.warning(f"Could not add rate limiting middleware: {e}")
-
-    def _build_rate_limit_config(self: "Server") -> Dict[str, Any]:
-        """Build rate limit configuration from endpoint registry and decorator configs.
-
-        Returns:
-            Dictionary mapping endpoint paths to RateLimitConfig objects
-        """
-        from jvspatial.api.constants import APIRoutes
-        from jvspatial.api.middleware.rate_limit import RateLimitConfig
-
-        rate_limits: Dict[str, RateLimitConfig] = {}
-        api_prefix = APIRoutes.PREFIX
-
-        # Check endpoint registry for rate limit configurations
-        registry = self._endpoint_registry
-
-        # Check function endpoints - iterate over registry directly
-        for func, endpoint_info in registry._function_registry.items():
-            if endpoint_info and hasattr(endpoint_info, "path"):
-                func_path = endpoint_info.path
-                endpoint_config = getattr(func, "_jvspatial_endpoint_config", None)
-                if endpoint_config and endpoint_config.get("rate_limit"):
-                    rate_limit_dict = endpoint_config["rate_limit"]
-                    # Add API prefix to path for matching (endpoints are accessed with /api prefix)
-                    full_path = (
-                        f"{api_prefix}{func_path}"
-                        if not func_path.startswith(api_prefix)
-                        else func_path
-                    )
-                    rate_limits[full_path] = RateLimitConfig(
-                        requests=rate_limit_dict.get("requests", 60),
-                        window=rate_limit_dict.get("window", 60),
-                    )
-
-        # Check walker endpoints - iterate over registry directly
-        for walker_class, endpoint_info in registry._walker_registry.items():
-            if endpoint_info and hasattr(endpoint_info, "path"):
-                walker_path = endpoint_info.path
-                endpoint_config = getattr(
-                    walker_class, "_jvspatial_endpoint_config", None
-                )
-                if endpoint_config and endpoint_config.get("rate_limit"):
-                    rate_limit_dict = endpoint_config["rate_limit"]
-                    # Add API prefix to path for matching (endpoints are accessed with /api prefix)
-                    full_path = (
-                        f"{api_prefix}{walker_path}"
-                        if not walker_path.startswith(api_prefix)
-                        else walker_path
-                    )
-                    rate_limits[full_path] = RateLimitConfig(
-                        requests=rate_limit_dict.get("requests", 60),
-                        window=rate_limit_dict.get("window", 60),
-                    )
-
-        # Add server config overrides
-        for path, override in self.config.rate_limit.rate_limit_overrides.items():
-            # Ensure override paths have the prefix
-            full_path = (
-                f"{api_prefix}{path}" if not path.startswith(api_prefix) else path
-            )
-            rate_limits[full_path] = RateLimitConfig(
-                requests=override.get(
-                    "requests", self.config.rate_limit.rate_limit_default_requests
-                ),
-                window=override.get(
-                    "window", self.config.rate_limit.rate_limit_default_window
-                ),
-            )
-
-        return rate_limits
-
-    def _configure_auth_middleware(self: "Server", app: FastAPI) -> None:
-        """Configure authentication middleware if authentication is enabled."""
-        if not self.config.auth.auth_enabled or not self._auth_config:
-            return
-
-        try:
-            from jvspatial.api.components.auth_middleware import (
-                AuthenticationMiddleware,
-            )
-
-            app.add_middleware(
-                AuthenticationMiddleware, auth_config=self._auth_config, server=self
-            )
-        except ImportError as e:
-            self._logger.warning(f"Could not add authentication middleware: {e}")
 
     def _register_core_routes(self: "Server", app: FastAPI) -> None:
         """Register core routes (health, root).
@@ -957,20 +662,6 @@ class Server:
         for endpoint_info in self._endpoint_registry.get_dynamic_endpoints():
             if endpoint_info.router:
                 app.include_router(endpoint_info.router.router, prefix=APIRoutes.PREFIX)
-
-    def _configure_openapi_security(self: "Server", app: FastAPI) -> None:
-        """Configure OpenAPI security schemes if auth endpoints exist.
-
-        Args:
-            app: FastAPI application instance to configure
-        """
-        # Check if server has any authenticated endpoints
-        if getattr(self, "_has_auth_endpoints", False):
-            # Configure OpenAPI security if needed
-            from jvspatial.api.auth.openapi_config import configure_openapi_security
-
-            configure_openapi_security(app)
-            self._logger.debug("📄 OpenAPI security schemes configured")
 
     def _register_walker_dynamically(
         self: "Server",
@@ -1461,43 +1152,6 @@ class Server:
         # This is mainly for documentation/organization purposes
         # The actual registration happens automatically in jvspatial
         self._logger.info(f"Registered node type: {node_class.__name__}")
-
-    def register_package(self: "Server", package: str) -> None:
-        """Import a package so its ``@endpoint`` decorators register with this server.
-
-        .. deprecated::
-            Import your API modules directly (e.g. ``import app.api``) and endpoints
-            will auto-register via the module tracker. This method will be removed
-            in a future release.
-
-        Any previously cached copy of the package (and its submodules) is evicted
-        from ``sys.modules`` before importing, ensuring decorators always re-run
-        against the current server instance.  This makes the method safe to call
-        under uvicorn ``--reload``, where modules may have been cached by a previous
-        worker load.
-
-        Args:
-            package: Dotted package name to import, e.g. ``"app.api"``.
-        """
-        warnings.warn(
-            "register_package() is deprecated; import your API modules directly "
-            "and endpoints will auto-register. It will be removed in a future release.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        import importlib
-
-        from jvspatial.api.utils.reload import evict_package
-
-        evicted = evict_package(package)
-        if evicted:
-            self._logger.debug(
-                f"Evicted cached modules for '{package}' (reload worker)"
-            )
-        importlib.import_module(package)
-        self._logger.debug(f"Registered package '{package}'")
-        if package not in self._registered_packages:
-            self._registered_packages.append(package)
 
     def configure_database(self: "Server", db_type: str, **db_config: Any) -> None:
         """Configure database settings using GraphContext.

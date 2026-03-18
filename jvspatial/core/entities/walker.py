@@ -2,7 +2,6 @@
 
 import asyncio
 import inspect
-import os
 from collections import deque
 from typing import (
     TYPE_CHECKING,
@@ -312,20 +311,17 @@ class Walker(AttributeMixin, BaseModel):
             kwargs["entity"] = self.__class__.__name__
 
         # Extract component configuration from kwargs (before super().__init__)
-        max_steps = kwargs.pop(
-            "max_steps", int(os.getenv("JVSPATIAL_WALKER_MAX_STEPS", "10000"))
-        )
+        from jvspatial.env import load_env
+
+        env = load_env()
+        max_steps = kwargs.pop("max_steps", env.walker_max_steps)
         max_visits_per_node = kwargs.pop(
-            "max_visits_per_node",
-            int(os.getenv("JVSPATIAL_WALKER_MAX_VISITS_PER_NODE", "100")),
+            "max_visits_per_node", env.walker_max_visits_per_node
         )
         max_execution_time = kwargs.pop(
-            "max_execution_time",
-            float(os.getenv("JVSPATIAL_WALKER_MAX_EXECUTION_TIME", "300.0")),
+            "max_execution_time", env.walker_max_execution_time
         )
-        max_queue_size = kwargs.pop(
-            "max_queue_size", int(os.getenv("JVSPATIAL_WALKER_MAX_QUEUE_SIZE", "1000"))
-        )
+        max_queue_size = kwargs.pop("max_queue_size", env.walker_max_queue_size)
         paused = kwargs.pop("paused", False)
 
         super().__init__(**kwargs)

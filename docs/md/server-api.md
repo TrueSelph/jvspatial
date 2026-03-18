@@ -121,7 +121,7 @@ See the [Endpoint Registration Guide](endpoint-registration-guide.md) for:
 - Minimal entrypoint setup
 - How "decorate + import" auto-registration works
 - Conditional imports (e.g., optional logging endpoints)
-- Migration from deprecated `packages=` and `register_package()`
+- Import patterns for endpoint auto-registration
 
 ## Server Class Overview
 

@@ -1,7 +1,6 @@
 """GraphContext for managing database dependencies."""
 
 import logging
-import os
 import time
 from contextlib import asynccontextmanager, contextmanager, suppress
 from typing import (
@@ -1131,9 +1130,9 @@ class GraphContext:
         """
         # Check if automatic index creation is enabled
         # Default is False - indexes must be created explicitly
-        auto_create = (
-            os.getenv("JVSPATIAL_AUTO_CREATE_INDEXES", "false").lower() == "true"
-        )
+        from jvspatial.env import load_env
+
+        auto_create = load_env().auto_create_indexes
         if not auto_create:
             return  # Automatic index creation is disabled
 
