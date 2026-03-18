@@ -31,10 +31,13 @@ from .utils import (
 )
 
 # API key validation cache: (expiry_timestamp, api_key_entity)
-# TTL 60s, max 500 entries. Reduces DB round-trips for repeated webhook calls.
+# TTL 300s, max 500 entries. Reduces DB round-trips for repeated webhook calls.
 _API_KEY_CACHE: Dict[str, Tuple[float, Any]] = {}
-_API_KEY_CACHE_TTL = 60.0
+_API_KEY_CACHE_TTL = 300.0
 _API_KEY_CACHE_MAX_SIZE = 500
+
+# Timeout for API key validation (fail-fast on slow DB). Lambda-safe (event-loop only).
+_API_KEY_VALIDATE_TIMEOUT = 10.0
 
 
 def _api_key_cache_cleanup() -> None:
@@ -597,7 +600,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
 
         # Validate API key using database-backed service
         # Use prime database for API key validation (consistent with auth service)
-        # Cache valid keys for 60s to reduce DB round-trips on Lambda (warm invocations)
+        # Cache valid keys for 300s to reduce DB round-trips on Lambda (warm invocations)
         try:
             cache_key = hashlib.sha256(api_key.encode()).hexdigest()
             now = time.time()
@@ -619,7 +622,19 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             if api_key_entity is None:
                 prime_ctx = GraphContext(database=get_prime_database())
                 service = APIKeyService(prime_ctx)
-                api_key_entity = await service.validate_key(api_key)
+                try:
+                    api_key_entity = await asyncio.wait_for(
+                        service.validate_key(api_key),
+                        timeout=_API_KEY_VALIDATE_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Webhook API key validation timed out (DB slow or unavailable)"
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Service temporarily unavailable",
+                    )
                 if api_key_entity:
                     # Store in cache for warm invocations
                     if len(_API_KEY_CACHE) >= _API_KEY_CACHE_MAX_SIZE:

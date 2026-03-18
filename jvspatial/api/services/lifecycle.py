@@ -103,10 +103,19 @@ class LifecycleManager:
         try:
             if self.server._graph_context:
                 # Use explicit GraphContext
-                db_type = type(self.server._graph_context.database).__name__
+                db = self.server._graph_context.database
+                db_type = type(db).__name__
             else:
-                # Use default GraphContext behavior
+                db = None
                 db_type = "default"
+
+            # Eager MongoDB connection: warm connection at startup to avoid
+            # cold-start latency on first webhook request (Lambda).
+            if db is not None and hasattr(db, "_ensure_connected"):
+                try:
+                    await db._ensure_connected()
+                except Exception as e:
+                    self._logger.warning(f"Eager DB connection failed (non-fatal): {e}")
 
             # Ensure root node exists - Root.get() always returns singleton
             root = await Root.get()
