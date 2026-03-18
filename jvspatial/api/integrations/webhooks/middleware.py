@@ -202,7 +202,9 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             # Not a webhook request, pass through normally
             return await call_next(request)
 
-        logger.debug(f"Processing webhook request: {request.url.path}")
+        t0 = time.perf_counter()
+        logger.info(f"Processing webhook request: {request.url.path}")
+        request.state.webhook_start = t0
 
         try:
             # Get endpoint-specific webhook configuration (uses cached match)
@@ -211,6 +213,9 @@ class WebhookMiddleware(BaseHTTPMiddleware):
 
             # Process the webhook request with endpoint-specific config
             await self._process_webhook_request(request, webhook_config)
+            logger.info(
+                f"Webhook: middleware done in {int((time.perf_counter() - t0) * 1000)}ms"
+            )
 
             # Check for duplicate requests
             if getattr(request.state, "is_duplicate_request", False):
@@ -405,7 +410,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                 # Extract route parameter if present in path
                 request.state.webhook_route = self._extract_route_parameter(request)
 
-            logger.debug(
+            logger.info(
                 f"Webhook processing complete: "
                 f"route={request.state.webhook_route}, "
                 f"duplicate={request.state.is_duplicate_request}, "
@@ -602,9 +607,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                 if cached_expiry > now and cached_entity is not None:
                     api_key_entity = cached_entity
                     cache_hit = True
-                    logger.debug(
-                        f"Webhook API key cache hit: key_id={cached_entity.id}"
-                    )
+                    logger.info(f"Webhook API key cache hit: key_id={cached_entity.id}")
                 else:
                     api_key_entity = None
                     del _API_KEY_CACHE[cache_key]
@@ -638,7 +641,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                 and client_ip
                 and client_ip not in api_key_entity.allowed_ips
             ):
-                logger.debug(
+                logger.info(
                     f"Webhook API key {api_key_entity.id} rejected: IP {client_ip} not in whitelist"
                 )
                 raise HTTPException(status_code=403, detail="IP address not allowed")
@@ -657,7 +660,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                 if not any(
                     _endpoint_allowed(ep) for ep in api_key_entity.allowed_endpoints
                 ):
-                    logger.debug(
+                    logger.info(
                         f"Webhook API key {api_key_entity.id} rejected: endpoint {request_path} not in whitelist"
                     )
                     raise HTTPException(
@@ -680,7 +683,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                 except Exception as e:
                     logger.warning(f"Failed to update API key usage: {e}")
 
-            logger.debug(
+            logger.info(
                 f"Webhook API key authentication successful: key_id={api_key_entity.id}, source={source}"
             )
 
