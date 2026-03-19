@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import logging
 import sys
+import threading
 import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Set
@@ -141,8 +142,9 @@ class DBLogHandler(logging.Handler):
         """Emit a log record to the database.
 
         This method is called by the logging system for configured log levels.
-        It extracts information from the log record and saves it to the database
-        asynchronously (fire-and-forget).
+        It extracts information from the log record and saves it to the database.
+        When BACKGROUND_PROCESSING is enabled, saves asynchronously (fire-and-forget).
+        When disabled (e.g. Lambda), saves synchronously in a thread to ensure persistence.
 
         Args:
             record: The log record to process
@@ -287,7 +289,7 @@ class DBLogHandler(logging.Handler):
                 logged_at=datetime.now(timezone.utc),
             )
 
-            # Save to database asynchronously (fire-and-forget)
+            # Save to database
             async def save_log():
                 """Save log entry to database."""
                 try:
@@ -303,12 +305,8 @@ class DBLogHandler(logging.Handler):
                         exc_info=True,
                     )
 
-            # Create task for async save (fire-and-forget) when background tasks allowed
-            if not use_background_processing():
-                logger.debug(
-                    "DBLogHandler: skipping async save (BACKGROUND_PROCESSING disabled)"
-                )
-            else:
+            if use_background_processing():
+                # Fire-and-forget async save when background tasks allowed
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
@@ -318,6 +316,15 @@ class DBLogHandler(logging.Handler):
                 except RuntimeError:
                     with contextlib.suppress(Exception):
                         asyncio.run(save_log())
+            else:
+                # Sync save in thread when BACKGROUND_PROCESSING disabled (e.g. Lambda)
+                # Ensures logs persist regardless of JVAGENT_LOGGING_ENABLED
+                def _run_sync_save():
+                    asyncio.run(save_log())
+
+                thread = threading.Thread(target=_run_sync_save, daemon=True)
+                thread.start()
+                thread.join(timeout=10)
 
         except Exception as e:
             # Never let logging failures break the application

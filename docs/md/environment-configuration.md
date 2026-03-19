@@ -84,7 +84,7 @@ else:
     await some_coro()
 ```
 
-**Downstream usage:** jvagent uses `use_background_processing()` for webhook async mode and WhatsApp media batch mode. When `BACKGROUND_PROCESSING` is false and `AWS_LAMBDA_FUNCTION_NAME` is set, media batch uses lambda mode (MongoDB + Lambda invoke); otherwise disabled.
+**Downstream usage:** jvagent uses `use_background_processing()` for webhook async mode and WhatsApp media batch mode. When `BACKGROUND_PROCESSING` is false and `AWS_LAMBDA_FUNCTION_NAME` is set, media batch uses lambda mode (MongoDB + Lambda invoke); otherwise disabled. Database logging (DBLogHandler) is not affected by `BACKGROUND_PROCESSING`—it persists logs via synchronous save when disabled, so logging is controlled only by `JVAGENT_LOGGING_ENABLED` (or `JVSPATIAL_DB_LOGGING_ENABLED`).
 
 ### Text Normalization Configuration
 
