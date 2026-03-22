@@ -247,6 +247,8 @@ class RateLimitConfig(BaseModel):
 class FileStorageConfig(BaseModel):
     """File storage configuration group."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     file_storage_enabled: bool = Field(
         default=False, validation_alias="JVSPATIAL_FILE_STORAGE_ENABLED"
     )

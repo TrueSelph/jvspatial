@@ -89,7 +89,8 @@ class LocalFileInterface(FileStorageInterface):
         if is_serverless_mode() and not str(self.root_dir).startswith("/tmp"):
             logger.warning(
                 "LocalFileInterface root_dir '%s' is outside /tmp in serverless mode. "
-                "Files may be ephemeral or unavailable across invocations.",
+                "Unless this path is on shared storage (e.g. EFS) mounted on every "
+                "invocation, files may be ephemeral or unavailable across invocations.",
                 self.root_dir,
             )
 

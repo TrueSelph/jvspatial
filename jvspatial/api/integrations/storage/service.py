@@ -7,7 +7,7 @@ operations, separating concerns from the main Server class.
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 from jvspatial.api.constants import APIRoutes, ErrorMessages
 from jvspatial.api.exceptions import (
@@ -116,7 +116,8 @@ class FileStorageService:
             HTTPException: If file not found or storage error
         """
         try:
-            return await self.file_interface.serve_file(file_path)
+            stream = self.file_interface.serve_file(file_path)
+            return StreamingResponse(stream, media_type="application/octet-stream")
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail=ErrorMessages.FILE_NOT_FOUND)
         except StorageError as e:
@@ -209,8 +210,8 @@ class FileStorageService:
             # Resolve proxy to file path
             file_path, _metadata = self.proxy_manager.resolve_proxy(code)
 
-            # Serve the file
-            return await self.file_interface.serve_file(file_path)
+            stream = self.file_interface.serve_file(file_path)
+            return StreamingResponse(stream, media_type="application/octet-stream")
 
         except FileNotFoundError:
             raise HTTPException(404, "Proxy not found or expired")
@@ -262,15 +263,15 @@ class FileStorageService:
             raise HTTPException(500, str(e))
 
     @classmethod
-    async def register_endpoints(
+    def register_endpoints(
         cls,
         app: FastAPI,
         service: "FileStorageService",
     ) -> None:
         """Register all file storage endpoints with the FastAPI app.
 
-        This class method registers the file storage routes and binds them
-        to the service instance's handler methods.
+        Synchronous: only registers route handlers (no I/O). Called from
+        middleware setup where the event loop is not guaranteed.
 
         Args:
             app: FastAPI application instance
