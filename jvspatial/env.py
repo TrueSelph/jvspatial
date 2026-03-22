@@ -4,7 +4,9 @@ Application code should read configuration via :func:`load_env` (cached) instead
 ``os.getenv`` directly.
 
 **Loaded here:** All ``JVSPATIAL_*`` settings used by the library, plus shared AWS
-credential keys where applicable.
+credential keys where applicable. Local file storage root uses
+:func:`resolve_file_storage_root` from ``JVSPATIAL_FILES_ROOT_PATH`` (and config
+fallback) for both :func:`load_env` and Server ``FileStorageConfig``.
 
 **Not loaded here (avoid import cycles with :func:`load_env`):**
 
@@ -41,6 +43,45 @@ def _split_csv_list(raw: Optional[str]) -> Optional[List[str]]:
     if not raw or not raw.strip():
         return None
     return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def _normalize_env_str(val: Optional[str]) -> Optional[str]:
+    if val is None:
+        return None
+    s = str(val).strip()
+    return s if s else None
+
+
+def resolve_file_storage_root(
+    merged_root: Optional[str] = None,
+    *,
+    serverless: Optional[bool] = None,
+) -> str:
+    """Resolve local filesystem root for stored files (jvagent + /api/storage).
+
+    Precedence (matches jvagent ``get_file_storage_config``):
+
+    #. ``JVSPATIAL_FILES_ROOT_PATH`` (non-empty)
+    #. ``merged_root`` (e.g. YAML / pydantic-parsed value after defaults)
+    #. ``/tmp/.files`` when serverless else ``./.files``
+
+    Args:
+        merged_root: Config-derived value when env is unset (may be None).
+        serverless: If None, uses :func:`jvspatial.runtime.serverless.is_serverless_mode`.
+    """
+    if serverless is None:
+        serverless = is_serverless_mode()
+
+    files = _normalize_env_str(os.environ.get("JVSPATIAL_FILES_ROOT_PATH"))
+    merged = _normalize_env_str(merged_root)
+
+    default = "/tmp/.files" if serverless else "./.files"
+
+    if files:
+        return files
+    if merged:
+        return merged
+    return default
 
 
 _DEFAULT_DEV_CORS_ORIGINS = [
@@ -340,7 +381,7 @@ def _load_env_impl() -> EnvConfig:
             os.getenv("JVSPATIAL_FILE_STORAGE_ENABLED", "false")
         ),
         file_storage_provider=os.getenv("JVSPATIAL_FILE_STORAGE_PROVIDER", "local"),
-        file_storage_root=os.getenv("JVSPATIAL_FILE_STORAGE_ROOT", ".files"),
+        file_storage_root=resolve_file_storage_root(serverless=serverless),
         file_storage_max_size=int(
             os.getenv("JVSPATIAL_FILE_STORAGE_MAX_SIZE", str(100 * 1024 * 1024))
         ),

@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from jvspatial.env import clear_load_env_cache, load_env
+from jvspatial.env import clear_load_env_cache, load_env, resolve_file_storage_root
 
 
 @pytest.fixture(autouse=True)
@@ -96,6 +96,37 @@ def test_s3_legacy_env_aliases():
         assert e.s3_region_name == "eu-west-1"
         assert e.s3_access_key_id == "ak"
         assert e.s3_secret_access_key == "sk"
+
+
+def test_resolve_file_storage_root_ignores_legacy_jvspatial_file_storage_root():
+    """JVSPATIAL_FILE_STORAGE_ROOT is no longer read (breaking change)."""
+    with patch.dict(
+        os.environ,
+        {"JVSPATIAL_FILE_STORAGE_ROOT": "/legacy_only"},
+        clear=True,
+    ):
+        assert resolve_file_storage_root(serverless=False) == "./.files"
+
+
+def test_resolve_file_storage_root_merged_fallback():
+    with patch.dict(os.environ, {}, clear=True):
+        assert resolve_file_storage_root(merged_root="/from_yaml") == "/from_yaml"
+
+
+def test_resolve_file_storage_root_explicit_serverless_default():
+    with patch.dict(os.environ, {}, clear=True):
+        assert resolve_file_storage_root(serverless=True) == "/tmp/.files"
+        assert resolve_file_storage_root(serverless=False) == "./.files"
+
+
+def test_load_env_file_storage_root_uses_resolve():
+    with patch.dict(
+        os.environ,
+        {"JVSPATIAL_FILES_ROOT_PATH": "/tmp/jvfiles"},
+        clear=True,
+    ):
+        clear_load_env_cache()
+        assert load_env().file_storage_root == "/tmp/jvfiles"
 
 
 def test_load_env_is_cached_until_cleared():

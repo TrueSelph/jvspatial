@@ -35,7 +35,6 @@ from jvspatial.api.services.lifecycle import LifecycleManager
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node, Root, Walker
 from jvspatial.logging import configure_standard_logging
-from jvspatial.runtime.serverless import is_serverless_mode
 
 
 class _LevelColorFormatter(logging.Formatter):
@@ -428,15 +427,9 @@ class Server:
 
             # Initialize file interface
             if self.config.file_storage.file_storage_provider == "local":
-                default_root = (
-                    "/tmp/.files" if is_serverless_mode(self.config) else ".files"
-                )
-                storage_root = (
-                    self.config.file_storage.file_storage_root or default_root
-                )
                 self._file_interface = create_storage(
                     provider="local",
-                    root_dir=storage_root,
+                    root_dir=self.config.file_storage.file_storage_root,
                     base_url=self.config.file_storage.file_storage_base_url,
                     max_file_size=self.config.file_storage.file_storage_max_size,
                 )

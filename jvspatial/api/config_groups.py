@@ -6,8 +6,9 @@ improving organization and maintainability.
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from jvspatial.env import resolve_file_storage_root
 from jvspatial.runtime.serverless import is_serverless_mode
 
 _DEFAULT_ROLE_MAPPING: Dict[str, List[str]] = {"admin": ["*"], "user": []}
@@ -253,8 +254,8 @@ class FileStorageConfig(BaseModel):
         default="local", validation_alias="JVSPATIAL_FILE_STORAGE_PROVIDER"
     )  # "local" or "s3"
     file_storage_root: str = Field(
-        default_factory=lambda: "/tmp/.files" if is_serverless_mode() else ".files",
-        validation_alias="JVSPATIAL_FILE_STORAGE_ROOT",
+        default_factory=lambda: "/tmp/.files" if is_serverless_mode() else "./.files",
+        validation_alias="JVSPATIAL_FILES_ROOT_PATH",
     )
     file_storage_base_url: str = Field(
         default="http://localhost:8000",
@@ -280,6 +281,16 @@ class FileStorageConfig(BaseModel):
     s3_endpoint_url: Optional[str] = Field(
         default=None, validation_alias="JVSPATIAL_S3_ENDPOINT_URL"
     )
+
+    @model_validator(mode="after")
+    def _unify_file_storage_root_with_jvagent(self) -> "FileStorageConfig":
+        """Apply :func:`jvspatial.env.resolve_file_storage_root` (env + merged fallback)."""
+        object.__setattr__(
+            self,
+            "file_storage_root",
+            resolve_file_storage_root(self.file_storage_root),
+        )
+        return self
 
 
 class WebhookConfig(BaseModel):

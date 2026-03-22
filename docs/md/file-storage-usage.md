@@ -189,7 +189,7 @@ All configuration can be set via environment variables:
 # File Storage
 JVSPATIAL_FILE_STORAGE_ENABLED=true
 JVSPATIAL_FILE_STORAGE_PROVIDER=local
-JVSPATIAL_FILE_STORAGE_ROOT=.files
+JVSPATIAL_FILES_ROOT_PATH=./.files
 JVSPATIAL_FILE_STORAGE_MAX_SIZE=10485760
 
 # S3 Configuration
