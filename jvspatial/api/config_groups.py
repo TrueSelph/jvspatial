@@ -8,6 +8,8 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from jvspatial.runtime.serverless import is_serverless_mode
+
 _DEFAULT_ROLE_MAPPING: Dict[str, List[str]] = {"admin": ["*"], "user": []}
 
 
@@ -206,6 +208,7 @@ class AuthConfig(BaseModel):
             "/auth/refresh",
             "/auth/forgot-password",
             "/auth/reset-password",
+            "/_internal/deferred",
         ],
         validation_alias="auth_exempt_paths",
     )
@@ -250,7 +253,8 @@ class FileStorageConfig(BaseModel):
         default="local", validation_alias="JVSPATIAL_FILE_STORAGE_PROVIDER"
     )  # "local" or "s3"
     file_storage_root: str = Field(
-        default=".files", validation_alias="JVSPATIAL_FILE_STORAGE_ROOT"
+        default_factory=lambda: "/tmp/.files" if is_serverless_mode() else ".files",
+        validation_alias="JVSPATIAL_FILE_STORAGE_ROOT",
     )
     file_storage_base_url: str = Field(
         default="http://localhost:8000",

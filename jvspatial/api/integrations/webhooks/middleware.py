@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from jvspatial.api.constants import APIRoutes
-from jvspatial.config import use_background_processing
+from jvspatial.runtime.serverless import is_serverless_mode
 
 from .utils import (
     WebhookConfig,
@@ -211,10 +211,11 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                 return JSONResponse(content=cached_response, status_code=200)
 
             # Handle async processing if enabled and background tasks allowed
+            serverless_mode = is_serverless_mode(getattr(self.server, "config", None))
             if (
                 webhook_config
                 and webhook_config.get("async_processing", False)
-                and use_background_processing()
+                and not serverless_mode
             ):
                 # Queue for async processing and return immediate response
                 task_id = self._queue_async_processing(request, call_next)
@@ -239,7 +240,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                         response.body.decode("utf-8") if response.body else "{}"
                     )
                     response_data = json.loads(response_content)
-                    if use_background_processing():
+                    if not serverless_mode:
                         asyncio.create_task(
                             store_idempotent_response(idempotency_key, response_data)
                         )

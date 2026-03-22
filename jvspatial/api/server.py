@@ -35,6 +35,7 @@ from jvspatial.api.services.lifecycle import LifecycleManager
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node, Root, Walker
 from jvspatial.logging import configure_standard_logging
+from jvspatial.runtime.serverless import is_serverless_mode
 
 
 class _LevelColorFormatter(logging.Formatter):
@@ -148,6 +149,10 @@ class Server:
         merged_config = self._merge_config(config, config_kwargs)
 
         self.config = ServerConfig(**merged_config)
+
+        from jvspatial.runtime.lwa import apply_aws_lwa_env_defaults
+
+        apply_aws_lwa_env_defaults(self.config)
 
         # Initialize focused components
         self.app_builder = AppBuilder(self.config)
@@ -423,7 +428,12 @@ class Server:
 
             # Initialize file interface
             if self.config.file_storage.file_storage_provider == "local":
-                storage_root = self.config.file_storage.file_storage_root or ".files"
+                default_root = (
+                    "/tmp/.files" if is_serverless_mode(self.config) else ".files"
+                )
+                storage_root = (
+                    self.config.file_storage.file_storage_root or default_root
+                )
                 self._file_interface = create_storage(
                     provider="local",
                     root_dir=storage_root,

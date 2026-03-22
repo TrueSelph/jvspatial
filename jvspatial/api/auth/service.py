@@ -28,6 +28,25 @@ from jvspatial.api.auth.rbac import get_effective_permissions
 from jvspatial.api.exceptions import RegistrationDisabledError
 from jvspatial.core.context import GraphContext
 from jvspatial.db import get_prime_database
+from jvspatial.env import load_env
+from jvspatial.runtime.serverless import is_serverless_mode
+
+_argon2_hasher_singleton = None
+
+
+def _get_argon2_hasher():
+    global _argon2_hasher_singleton
+    if _argon2_hasher_singleton is None:
+        from argon2 import PasswordHasher
+
+        e = load_env()
+        _argon2_hasher_singleton = PasswordHasher(
+            time_cost=e.argon2_time_cost,
+            memory_cost=e.argon2_memory_cost,
+            parallelism=e.argon2_parallelism,
+        )
+    return _argon2_hasher_singleton
+
 
 # Try to import secure hashing libraries for refresh tokens
 try:
@@ -37,11 +56,10 @@ try:
     _HASHING_LIB = "bcrypt"
 except ImportError:
     try:
-        from argon2 import PasswordHasher
+        import argon2  # noqa: F401
 
         _HASHING_AVAILABLE = True
         _HASHING_LIB = "argon2"
-        _argon2_hasher = PasswordHasher()
     except ImportError:
         try:
             from passlib.context import CryptContext
@@ -134,6 +152,16 @@ class AuthenticationService:
         # In-memory cache for blacklist checks: {jti: (is_blacklisted, timestamp)}
         self._blacklist_cache: Dict[str, Tuple[bool, float]] = {}
         self._logger = logging.getLogger(__name__)
+        self._serverless_mode = is_serverless_mode()
+        _e = load_env()
+        self._bcrypt_rounds = (
+            _e.bcrypt_rounds_serverless if self._serverless_mode else _e.bcrypt_rounds
+        )
+        if self._serverless_mode:
+            self._logger.info(
+                "AuthenticationService using serverless hashing profile (bcrypt rounds=%s).",
+                self._bcrypt_rounds,
+            )
 
     def _get_user_roles(self, user: User) -> List[str]:
         """Get user roles with backward compatibility for existing users."""
@@ -175,17 +203,22 @@ class AuthenticationService:
             Hashed password string
         """
         if _HASHING_AVAILABLE and _HASHING_LIB == "bcrypt":
-            salt = bcrypt.gensalt()
+            salt = bcrypt.gensalt(rounds=self._bcrypt_rounds)
             hashed = bcrypt.hashpw(password.encode("utf-8"), salt)
             return hashed.decode("utf-8")
         if _HASHING_AVAILABLE and _HASHING_LIB == "argon2":
-            return _argon2_hasher.hash(password)
+            return _get_argon2_hasher().hash(password)
         if _HASHING_AVAILABLE and _HASHING_LIB == "passlib":
             return _passlib_context.hash(password)
         # Fallback when no secure library available
+        if load_env().auth_strict_hashing:
+            raise RuntimeError(
+                "Secure hashing library required but unavailable. "
+                "Install bcrypt/argon2/passlib or disable JVSPATIAL_AUTH_STRICT_HASHING."
+            )
         self._logger.warning(
             "No secure hashing library (bcrypt/argon2/passlib). "
-            "Using SHA-256 for passwords. Install bcrypt for production."
+            "Using SHA-256 fallback for passwords. This is not recommended for production."
         )
         salt = secrets.token_hex(16)
         password_hash = hashlib.sha256((password + salt).encode()).hexdigest()
@@ -217,7 +250,7 @@ class AuthenticationService:
             if password_hash.startswith("$argon2"):
                 if _HASHING_AVAILABLE and _HASHING_LIB == "argon2":
                     try:
-                        _argon2_hasher.verify(password_hash, password)
+                        _get_argon2_hasher().verify(password_hash, password)
                         return True
                     except Exception:
                         return False
@@ -258,17 +291,23 @@ class AuthenticationService:
                     # Hash with SHA-256 first, then bcrypt the hash
                     token_hash = hashlib.sha256(token_bytes).hexdigest()
                     token_bytes = token_hash.encode("utf-8")
-                salt = bcrypt.gensalt()
+                salt = bcrypt.gensalt(rounds=self._bcrypt_rounds)
                 hashed = bcrypt.hashpw(token_bytes, salt)
                 return hashed.decode("utf-8")
             elif _HASHING_LIB == "argon2":
-                return _argon2_hasher.hash(token)
+                return _get_argon2_hasher().hash(token)
             elif _HASHING_LIB == "passlib":
                 return _passlib_context.hash(token)
         else:
+            if load_env().auth_strict_hashing:
+                raise RuntimeError(
+                    "Secure hashing library required but unavailable. "
+                    "Install bcrypt/argon2/passlib or disable JVSPATIAL_AUTH_STRICT_HASHING."
+                )
             self._logger.warning(
                 "No secure hashing library available (bcrypt/argon2/passlib). "
-                "Using SHA-256 for refresh tokens. Install bcrypt for production: pip install bcrypt"
+                "Using SHA-256 fallback for refresh tokens. "
+                "Install bcrypt for production: pip install bcrypt"
             )
             return hashlib.sha256(token.encode()).hexdigest()
 
@@ -296,7 +335,7 @@ class AuthenticationService:
                     return False
             elif _HASHING_LIB == "argon2":
                 try:
-                    _argon2_hasher.verify(hashed, token)
+                    _get_argon2_hasher().verify(hashed, token)
                     return True
                 except Exception:
                     return False

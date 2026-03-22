@@ -14,10 +14,10 @@ import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Set
 
-from jvspatial.config import use_background_processing
 from jvspatial.core.context import GraphContext
 from jvspatial.db import get_database_manager
 from jvspatial.logging.models import DBLog
+from jvspatial.runtime.serverless import is_serverless_mode
 
 logger = logging.getLogger(__name__)
 
@@ -143,8 +143,8 @@ class DBLogHandler(logging.Handler):
 
         This method is called by the logging system for configured log levels.
         It extracts information from the log record and saves it to the database.
-        When BACKGROUND_PROCESSING is enabled, saves asynchronously (fire-and-forget).
-        When disabled (e.g. Lambda), saves synchronously in a thread to ensure persistence.
+        In non-serverless mode, saves asynchronously (fire-and-forget).
+        In serverless mode, saves synchronously in a thread to ensure persistence.
 
         Args:
             record: The log record to process
@@ -305,7 +305,7 @@ class DBLogHandler(logging.Handler):
                         exc_info=True,
                     )
 
-            if use_background_processing():
+            if not is_serverless_mode():
                 # Fire-and-forget async save when background tasks allowed
                 try:
                     loop = asyncio.get_event_loop()
@@ -317,7 +317,7 @@ class DBLogHandler(logging.Handler):
                     with contextlib.suppress(Exception):
                         asyncio.run(save_log())
             else:
-                # Sync save in thread when BACKGROUND_PROCESSING disabled (e.g. Lambda)
+                # Sync save in thread in serverless mode (e.g. Lambda)
                 # Ensures logs persist regardless of JVAGENT_LOGGING_ENABLED
                 def _run_sync_save():
                     asyncio.run(save_log())

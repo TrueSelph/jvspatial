@@ -72,7 +72,7 @@ Inspired by [Jaseci's](https://jaseci.org) object-spatial paradigm and leveragin
 
 ### ⚡ Performance Mixins
 - **DeferredSaveMixin**: Batch multiple `save()` calls into a single database write
-- Configurable via `JVSPATIAL_ENABLE_DEFERRED_SAVES` environment variable
+- Configurable via `JVSPATIAL_ENABLE_DEFERRED_SAVES`; **disabled automatically in serverless mode** (`deferred_saves_globally_allowed()`)
 - Ideal for entities with rapid, sequential updates
 
 ## Installation
@@ -201,9 +201,11 @@ active_users = await User.count(active=True)  # Count filtered users using keywo
 
 ## Configuration
 
-### Background Processing
+### Serverless Mode
 
-Set `BACKGROUND_PROCESSING=false` for serverless (e.g. AWS Lambda) where fire-and-forget tasks are unsafe. When unset, auto-detects Lambda via `AWS_LAMBDA_FUNCTION_NAME`. Use `use_background_processing()` from `jvspatial.config` to check at runtime. See [Environment Configuration](docs/md/environment-configuration.md) for details.
+Set `SERVERLESS_MODE=true` to force serverless-safe behavior (strict synchronous request lifecycle, no fire-and-forget background task assumptions). When unset, jvspatial auto-detects AWS Lambda via runtime environment variables. Use `is_serverless_mode()` from `jvspatial.runtime.serverless` to check mode at runtime.
+
+For deferred work across invocations, use `dispatch_deferred_task()` from `jvspatial.serverless`. On AWS, Lambda async invoke and optional EventBridge deliver JSON to your app; with the Lambda Web Adapter, configure **`AWS_LWA_PASS_THROUGH_PATH`** to match **`{JVSPATIAL_API_PREFIX}/_internal/deferred`** (default `/api/_internal/deferred`). Register task handlers with `register_deferred_invoke_handler()` in `jvspatial.serverless.deferred_invoke`. See [docs/md/serverless-mode.md](docs/md/serverless-mode.md) for LWA env defaults and security notes.
 
 ### Server Configuration
 
@@ -258,6 +260,7 @@ server = Server(
 - [Entity Reference](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/entity-reference.md) - Node, Edge, Walker classes
 
 ### Advanced Topics
+- [Serverless mode](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/serverless-mode.md) - Deferred tasks, Lambda Web Adapter, and LWA env defaults
 - [Production Deployment](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/production-deployment.md) - Production checklist and security
 - [API Architecture](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/api-architecture.md) - System architecture
 - [Graph Context Guide](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/graph-context.md) - Context management and multi-database support

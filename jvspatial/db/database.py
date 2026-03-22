@@ -8,19 +8,33 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from jvspatial.db.query import QueryEngine
+
 logger = logging.getLogger(__name__)
 
 
 class Database(ABC):
     """Simplified abstract base class for database adapters.
 
-    Provides essential CRUD operations without complex transaction support
-    or MongoDB-style query methods. Focuses on core functionality.
+    Provides essential CRUD operations without complex transaction support.
+    Focuses on core functionality.
 
     All implementations must support:
     - Basic CRUD operations (save, get, delete, find)
     - Collection-based data organization
     - Simple query operations with dict-based filters
+
+    **Standard compound operations** (always available on built-in adapters):
+
+    - ``find_one_and_update`` — default uses ``find_one`` + ``QueryEngine.apply_update``
+      + ``save`` (read-modify-write; **not** atomic under concurrency except where
+      overridden, e.g. MongoDB native).
+    - ``find_one_and_delete`` — default uses ``find_one`` + ``delete`` (not atomic
+      except MongoDB native override).
+
+    Query matching for both follows the same rules as :meth:`find_one` / :meth:`find`
+    (Mongo-style operators via :class:`~jvspatial.db.query.QueryEngine` where the
+    adapter applies it).
     """
 
     @abstractmethod
@@ -109,20 +123,21 @@ class Database(ABC):
     async def find_one_and_delete(
         self, collection: str, query: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
-        """Atomically find and delete the first record matching a query.
+        """Find and delete the first record matching ``query``.
 
-        Returns the deleted document if found, None otherwise. Useful for
-        claiming work in a concurrent-safe way (e.g., batch processing).
+        **Query semantics** match :meth:`find_one` (same dict filters and operators
+        supported by the adapter, typically via :class:`~jvspatial.db.query.QueryEngine`).
 
-        Default implementation uses find_one + delete (not atomic).
-        MongoDB overrides with native find_one_and_delete for atomicity.
+        **Atomicity:** the default implementation is ``find_one`` then ``delete`` and is
+        **not** atomic under concurrent writers. MongoDB overrides with a native
+        ``find_one_and_delete`` for atomicity.
 
         Args:
             collection: Collection name
-            query: Query parameters (e.g., {"_id": "sender_id"})
+            query: Query parameters (e.g. ``{"_id": "x", "_jv_claim": "token"}``)
 
         Returns:
-            Deleted record or None if not found
+            Deleted document if found, ``None`` otherwise
         """
         doc = await self.find_one(collection, query)
         if doc is None:
@@ -139,24 +154,43 @@ class Database(ABC):
         update: Dict[str, Any],
         upsert: bool = False,
     ) -> Optional[Dict[str, Any]]:
-        """Atomically find and update the first record matching a query.
+        """Find and update the first record matching ``query``.
 
-        Returns the updated document if found (or created when upsert=True).
-        MongoDB overrides with native find_one_and_update for atomicity.
-        Default raises NotImplementedError.
+        Default implementation: ``find_one`` + ``QueryEngine.apply_update`` + ``save``.
+        **Not atomic** under concurrent writers (MongoDB overrides with native
+        ``find_one_and_update``).
+
+        Supported update operators include ``$set``, ``$unset``, ``$inc``, ``$push``,
+        ``$addToSet``, and ``$setOnInsert`` when ``upsert=True``.
 
         Args:
             collection: Collection name
-            query: Query parameters (e.g., {"_id": "sender_id"})
-            update: MongoDB-style update operators (e.g., {"$push": {...}, "$set": {...}})
-            upsert: If True, create document when no match
+            query: Query parameters (e.g. ``{"_id": "sender_id"}``)
+            update: MongoDB-style update document
+            upsert: If ``True``, create a document when no match
 
         Returns:
-            Updated record or None if not found and not upserted
+            Updated document, or ``None`` if no match and ``upsert`` is ``False``
         """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not implement find_one_and_update"
-        )
+        doc = await self.find_one(collection, query)
+        is_new = doc is None
+        if is_new:
+            if not upsert:
+                return None
+            doc = {}
+            doc_id = query.get("_id", query.get("id"))
+            if doc_id is not None:
+                doc["_id"] = doc_id
+                doc["id"] = str(doc_id)
+            QueryEngine.apply_update(doc, update, apply_set_on_insert=True)
+        else:
+            QueryEngine.apply_update(doc, update, apply_set_on_insert=False)
+
+        record_id = doc.get("id", doc.get("_id"))
+        if record_id is not None:
+            doc["id"] = str(record_id)
+        await self.save(collection, doc)
+        return doc
 
     async def create_index(
         self,

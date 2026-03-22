@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
+from jvspatial.env import clear_load_env_cache
 from jvspatial.storage import create_default_storage, create_storage
 from jvspatial.storage.exceptions import StorageProviderError
 from jvspatial.storage.interfaces.local import LocalFileInterface
@@ -51,6 +52,7 @@ class TestStorageFactory:
         """Test default storage creation."""
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch.dict(os.environ, {"JVSPATIAL_FILE_INTERFACE": "local"}):
+                clear_load_env_cache()
                 storage = create_default_storage()
         assert isinstance(storage, LocalFileInterface)
 

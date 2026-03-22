@@ -199,8 +199,8 @@ class MyEntity(DeferredSaveMixin, Node):
 ### API Reference
 
 ```python
-# Enable deferred saves - subsequent save() calls mark entity as dirty
-entity.enable_deferred_saves()
+# New entities start with deferred batching on when globally allowed.
+# Optional: entity.enable_deferred_saves()  # after flush(), or if auto-init off
 
 # Multiple updates - no database writes yet
 entity.counter += 1
@@ -241,13 +241,15 @@ JVSPATIAL_ENABLE_DEFERRED_SAVES=true
 JVSPATIAL_ENABLE_DEFERRED_SAVES=false
 ```
 
-When disabled globally, `save()` always writes immediately even if `enable_deferred_saves()` was called.
+When disabled globally, `save()` always writes immediately (construction does not enable batching).
+
+**Serverless mode:** When `is_serverless_mode()` is true (e.g. AWS Lambda or `SERVERLESS_MODE=true`), deferred saves are **always off**, even if `JVSPATIAL_ENABLE_DEFERRED_SAVES=true`. Use `deferred_saves_globally_allowed()` for the effective runtime check. `EnvConfig.enable_deferred_saves` reflects the raw env flag only; it does not imply serverless is off.
 
 ### Complete Example
 
 ```python
 from jvspatial.core import Node
-from jvspatial.core.mixins import DeferredSaveMixin, ENABLE_DEFERRED_SAVES
+from jvspatial.core.mixins import DeferredSaveMixin
 
 class Conversation(DeferredSaveMixin, Node):
     interaction_count: int = 0
@@ -255,9 +257,8 @@ class Conversation(DeferredSaveMixin, Node):
     metadata: dict = {}
 
 async def process_interaction(conversation: Conversation, data: dict):
-    # Enable deferred saves for this processing session
-    if ENABLE_DEFERRED_SAVES:
-        conversation.enable_deferred_saves()
+    # Batching is on at construct when allowed; call enable_deferred_saves() only after flush()
+    # if you need another batch in the same session.
 
     try:
         # Multiple updates during processing
@@ -273,8 +274,7 @@ async def process_interaction(conversation: Conversation, data: dict):
         # ... more processing ...
 
     finally:
-        # Single database write at the end
-        conversation.disable_deferred_saves()
+        # Single database write at the end; flush() ends deferred batching
         await conversation.flush()  # One DB write for all changes
 ```
 

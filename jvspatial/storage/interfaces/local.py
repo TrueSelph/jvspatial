@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, cast
 
+from jvspatial.runtime.serverless import is_serverless_mode
+
 from ..exceptions import (
     AccessDeniedError,
     FileNotFoundError,
@@ -84,6 +86,12 @@ class LocalFileInterface(FileStorageInterface):
         if create_root:
             self.root_dir.mkdir(parents=True, exist_ok=True)
             logger.info(f"Local storage initialized at: {self.root_dir}")
+        if is_serverless_mode() and not str(self.root_dir).startswith("/tmp"):
+            logger.warning(
+                "LocalFileInterface root_dir '%s' is outside /tmp in serverless mode. "
+                "Files may be ephemeral or unavailable across invocations.",
+                self.root_dir,
+            )
 
         # Verify root directory exists and is writable
         if not self.root_dir.exists():

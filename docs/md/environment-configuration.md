@@ -67,24 +67,27 @@ jvspatial uses environment variables to configure database connections, file pat
 
 See the [Caching Documentation](caching.md) for detailed information about cache backends and configuration.
 
-### Background Processing Configuration
+### Serverless Mode Configuration
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `BACKGROUND_PROCESSING` | boolean | auto | Whether the environment supports fire-and-forget background tasks (`asyncio.create_task`). Set to `false` for serverless (e.g. AWS Lambda) where the context freezes after handler return. When unset, auto-detects: `false` if `AWS_LAMBDA_FUNCTION_NAME` is set, else `true`. |
+| `SERVERLESS_MODE` | boolean | auto | Force serverless-safe runtime behavior. When unset, auto-detects AWS Lambda (`AWS_LAMBDA_RUNTIME_API` / `AWS_LAMBDA_FUNCTION_NAME`) and other common serverless runtimes. |
+| `JVSPATIAL_DEFERRED_INVOKE_DISABLED` | boolean | `false` | When true, `register_deferred_invoke_route` does not mount `POST …/_internal/deferred`. |
+| `JVSPATIAL_DEFERRED_INVOKE_SECRET` | string | _(empty)_ | When set, deferred-invoke HTTP requests must send this value via `X-JVSPATIAL-Deferred-Authorize` or `Authorization: Bearer …`. |
+| `JVSPATIAL_WORK_CLAIM_STALE_SECONDS` | float | `600` | Default TTL for work-claim leases (`claim_record`). After this many seconds another worker can re-claim the document. |
 
-Use `use_background_processing()` from `jvspatial.config` to check at runtime:
+Use `is_serverless_mode()` from `jvspatial` or `jvspatial.runtime.serverless` to check at runtime. With no argument, `is_serverless_mode()` uses `get_current_server().config` when the server context is set (see serverless-mode docs):
 
 ```python
-from jvspatial.config import use_background_processing
+from jvspatial import is_serverless_mode
 
-if use_background_processing():
-    asyncio.create_task(some_coro())
-else:
+if is_serverless_mode():
     await some_coro()
+else:
+    asyncio.create_task(some_coro())
 ```
 
-**Downstream usage:** jvagent uses `use_background_processing()` for webhook async mode and WhatsApp media batch mode. When `BACKGROUND_PROCESSING` is false and `AWS_LAMBDA_FUNCTION_NAME` is set, media batch uses lambda mode (MongoDB + Lambda invoke); otherwise disabled. Database logging (DBLogHandler) is not affected by `BACKGROUND_PROCESSING`—it persists logs via synchronous save when disabled, so logging is controlled only by `JVAGENT_LOGGING_ENABLED` (or `JVSPATIAL_DB_LOGGING_ENABLED`).
+`BACKGROUND_PROCESSING` is removed. Runtime behavior is derived from serverless mode only.
 
 ### Text Normalization Configuration
 

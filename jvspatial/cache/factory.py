@@ -4,7 +4,7 @@ This module provides simple utilities for creating cache backends,
 replacing the complex factory pattern with direct instantiation.
 """
 
-import os
+from jvspatial.env import load_env
 
 from .base import CacheBackend
 from .memory import MemoryCache
@@ -69,12 +69,11 @@ def create_default_cache() -> CacheBackend:
     Returns:
         Configured cache backend instance
     """
-    # Check environment variables
-    backend = os.getenv("JVSPATIAL_CACHE_BACKEND", "memory")
-    cache_size = int(os.getenv("JVSPATIAL_CACHE_SIZE", "1000"))
+    e = load_env()
+    backend = e.cache_backend
+    cache_size = e.cache_size
 
-    # Auto-detect Redis if available
-    if backend == "memory" and os.getenv("JVSPATIAL_REDIS_URL"):
+    if backend == "memory" and e.redis_url:
         backend = "layered"
 
     return create_cache(backend, cache_size)

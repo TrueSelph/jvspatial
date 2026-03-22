@@ -364,6 +364,15 @@ db = create_database(
 )
 ```
 
+### Compound document operations (`find_one_and_update`, `find_one_and_delete`)
+
+Every `Database` from `create_database()` supports:
+
+- **`find_one_and_update`** — default implementation uses `find_one` + Mongo-style update operators (`$set`, `$push`, etc.) + `save`. MongoDB overrides with a native atomic `find_one_and_update`.
+- **`find_one_and_delete`** — default uses `find_one` + `delete` by document id. MongoDB overrides with native atomic `find_one_and_delete`.
+
+JSON, SQLite, and DynamoDB inherit these defaults (read-modify-write; not fully atomic under concurrent writers). Use MongoDB when you need strongest guarantees for claim/lease patterns (for example `jvspatial.db.work_claim`).
+
 ### Database Factory Function
 
 The `create_database()` function provides a unified interface:

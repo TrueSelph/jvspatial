@@ -17,6 +17,7 @@ from jvspatial.db.manager import (
     get_database_manager,
     set_database_manager,
 )
+from jvspatial.runtime.serverless import is_serverless_mode
 
 
 class DatabaseConfigurator:
@@ -98,7 +99,10 @@ class DatabaseConfigurator:
 
             if db_type == "json":
                 # Check if db_path is an S3 path (not supported for file-based databases)
-                db_path = self.config.database.db_path or "./jvdb"
+                default_json_path = (
+                    "/tmp/jvdb" if is_serverless_mode(self.config) else "./jvdb"
+                )
+                db_path = self.config.database.db_path or default_json_path
                 db_path = self._resolve_db_path(db_path)
                 if db_path.startswith("s3://"):
                     raise ValueError(
@@ -121,7 +125,12 @@ class DatabaseConfigurator:
                 )
             elif db_type == "sqlite":
                 # Check if db_path is an S3 path (not supported for file-based databases)
-                db_path = self.config.database.db_path or "jvdb/sqlite/jvspatial.db"
+                default_sqlite_path = (
+                    "/tmp/jvdb/sqlite/jvspatial.db"
+                    if is_serverless_mode(self.config)
+                    else "jvdb/sqlite/jvspatial.db"
+                )
+                db_path = self.config.database.db_path or default_sqlite_path
                 db_path = self._resolve_db_path(db_path)
                 if db_path.startswith("s3://"):
                     raise ValueError(

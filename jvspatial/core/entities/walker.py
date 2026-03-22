@@ -346,6 +346,7 @@ class Walker(AttributeMixin, BaseModel):
             max_steps=max_steps,
             max_visits_per_node=max_visits_per_node,
             max_execution_time=max_execution_time,
+            enabled=env.walker_protection_enabled,
         )
         self._walker_events = WalkerEventSystem()
 

@@ -3,38 +3,58 @@
 This module provides centralized constants for routes, HTTP methods,
 collection names, and other magic strings used throughout the API.
 
-All constants can be overridden via environment variables with the prefix 'JVSPATIAL_'.
-For example, to override APIRoutes.PREFIX, set JVSPATIAL_API_PREFIX in your environment.
+Values resolve from :func:`jvspatial.env.load_env` on each attribute read so
+environment changes take effect after :func:`~jvspatial.env.clear_load_env_cache`.
 """
 
-import os
 from http import HTTPStatus
+from typing import Any, List
+
+from jvspatial.env import load_env
+
+
+class _EnvAttr:
+    """Descriptor: return ``getattr(load_env(), attr_name)``."""
+
+    def __init__(self, attr_name: str):
+        self._attr_name = attr_name
+
+    def __get__(self, obj: Any, owner: type) -> Any:
+        return getattr(load_env(), self._attr_name)
+
+
+class _StorageJoin:
+    """Append a path segment to ``load_env().storage_prefix``."""
+
+    def __init__(self, suffix: str):
+        self._suffix = suffix
+
+    def __get__(self, obj: Any, owner: type) -> str:
+        base = load_env().storage_prefix
+        return f"{base}{self._suffix}"
 
 
 class APIRoutes:
-    """API route path constants.
+    """API route path constants (resolved via load_env on access)."""
 
-    All values can be overridden via environment variables:
-    - JVSPATIAL_API_PREFIX
-    - JVSPATIAL_API_HEALTH
-    - JVSPATIAL_API_ROOT
-    - JVSPATIAL_STORAGE_PREFIX
-    - JVSPATIAL_PROXY_PREFIX
-    """
+    PREFIX = _EnvAttr("api_prefix")
+    HEALTH = _EnvAttr("api_health")
+    ROOT = _EnvAttr("api_root")
 
-    # Core routes
-    PREFIX = os.getenv("JVSPATIAL_API_PREFIX", "/api")
-    HEALTH = os.getenv("JVSPATIAL_API_HEALTH", "/health")
-    ROOT = os.getenv("JVSPATIAL_API_ROOT", "/")
+    STORAGE_PREFIX = _EnvAttr("storage_prefix")
+    STORAGE_UPLOAD = _StorageJoin("/upload")
+    STORAGE_FILES = _StorageJoin("/files")
+    STORAGE_PROXY = _StorageJoin("/proxy")
 
-    # Storage routes
-    STORAGE_PREFIX = os.getenv("JVSPATIAL_STORAGE_PREFIX", "/storage")
-    STORAGE_UPLOAD = f"{STORAGE_PREFIX}/upload"
-    STORAGE_FILES = f"{STORAGE_PREFIX}/files"
-    STORAGE_PROXY = f"{STORAGE_PREFIX}/proxy"
+    PROXY_PREFIX = _EnvAttr("proxy_prefix")
 
-    # Proxy routes
-    PROXY_PREFIX = os.getenv("JVSPATIAL_PROXY_PREFIX", "/p")
+    DEFERRED_INVOKE_SUFFIX = "/_internal/deferred"
+
+    @classmethod
+    def deferred_invoke_full_path(cls) -> str:
+        """Full URL path for LWA pass-through and POST deferred invocations."""
+        prefix = (cls.PREFIX or "").rstrip("/") or ""
+        return f"{prefix}{cls.DEFERRED_INVOKE_SUFFIX}"
 
 
 class HTTPMethods:
@@ -50,29 +70,14 @@ class HTTPMethods:
 
 
 class Collections:
-    """Database collection names.
+    """Database collection names (resolved via load_env on access)."""
 
-    All values can be overridden via environment variables:
-    - JVSPATIAL_COLLECTION_USERS
-    - JVSPATIAL_COLLECTION_API_KEYS
-    - JVSPATIAL_COLLECTION_SESSIONS
-    - JVSPATIAL_COLLECTION_WEBHOOKS
-    - JVSPATIAL_COLLECTION_WEBHOOK_REQUESTS
-    - JVSPATIAL_COLLECTION_SCHEDULED_TASKS
-    """
-
-    USERS = os.getenv("JVSPATIAL_COLLECTION_USERS", "users")
-    API_KEYS = os.getenv(
-        "JVSPATIAL_COLLECTION_API_KEYS", "api_keys"
-    )  # pragma: allowlist secret
-    SESSIONS = os.getenv("JVSPATIAL_COLLECTION_SESSIONS", "sessions")
-    WEBHOOKS = os.getenv("JVSPATIAL_COLLECTION_WEBHOOKS", "webhooks")
-    WEBHOOK_REQUESTS = os.getenv(
-        "JVSPATIAL_COLLECTION_WEBHOOK_REQUESTS", "webhook_requests"
-    )
-    SCHEDULED_TASKS = os.getenv(
-        "JVSPATIAL_COLLECTION_SCHEDULED_TASKS", "scheduled_tasks"
-    )
+    USERS = _EnvAttr("collection_users")
+    API_KEYS = _EnvAttr("collection_api_keys")  # pragma: allowlist secret
+    SESSIONS = _EnvAttr("collection_sessions")
+    WEBHOOKS = _EnvAttr("collection_webhooks")
+    WEBHOOK_REQUESTS = _EnvAttr("collection_webhook_requests")
+    SCHEDULED_TASKS = _EnvAttr("collection_scheduled_tasks")
 
 
 class LogIcons:
@@ -104,120 +109,78 @@ class LogIcons:
 class ErrorMessages:
     """Standard error messages."""
 
-    # Authentication
     AUTH_REQUIRED = "Authentication required"
     INVALID_CREDENTIALS = "Invalid credentials"
     TOKEN_EXPIRED = "Authentication token has expired"
     INVALID_TOKEN = "Invalid authentication token"
 
-    # Authorization
     INACTIVE_USER = "User account is inactive"
     ADMIN_REQUIRED = "Admin access required"
     PERMISSION_DENIED = "Permission denied"
     INSUFFICIENT_PERMISSIONS = "Insufficient permissions"
 
-    # Resources
     NOT_FOUND = "Resource not found"
     ALREADY_EXISTS = "Resource already exists"
     CONFLICT = "Resource conflict"
 
-    # Validation
     VALIDATION_FAILED = "Validation failed"
     INVALID_INPUT = "Invalid input"
 
-    # Storage
     FILE_NOT_FOUND = "File not found"
     STORAGE_ERROR = "Storage operation failed"
     PATH_TRAVERSAL = "Invalid file path"
     FILE_TOO_LARGE = "File exceeds maximum size"
 
-    # Generic
     INTERNAL_ERROR = "Internal server error"
     SERVICE_UNAVAILABLE = "Service temporarily unavailable"
 
 
+class _CorsListCopy:
+    def __get__(self, obj: Any, owner: type) -> List[str]:
+        return list(load_env().cors_origins)
+
+
+class _CorsMethodsCopy:
+    def __get__(self, obj: Any, owner: type) -> List[str]:
+        return list(load_env().cors_methods)
+
+
+class _CorsHeadersCopy:
+    def __get__(self, obj: Any, owner: type) -> List[str]:
+        return list(load_env().cors_headers)
+
+
 class Defaults:
-    """Default configuration values.
+    """Default configuration values (resolved via load_env on access)."""
 
-    All values can be overridden via environment variables with 'JVSPATIAL_' prefix.
-    For boolean values, use 'true', '1', 'yes' for True, anything else for False.
-    For list values (like CORS_ORIGINS), use comma-separated strings.
-    """
+    API_TITLE = _EnvAttr("api_title")
+    API_VERSION = _EnvAttr("api_version")
+    API_DESCRIPTION = _EnvAttr("api_description")
 
-    # API
-    API_TITLE = os.getenv("JVSPATIAL_API_TITLE", "jvspatial API")
-    API_VERSION = os.getenv("JVSPATIAL_API_VERSION", "1.0.0")
-    API_DESCRIPTION = os.getenv(
-        "JVSPATIAL_API_DESCRIPTION", "API built with jvspatial framework"
-    )
+    HOST = _EnvAttr("host")
+    PORT = _EnvAttr("port")
+    LOG_LEVEL = _EnvAttr("log_level")
+    DEBUG = _EnvAttr("debug")
 
-    # Server
-    HOST = os.getenv("JVSPATIAL_HOST", "0.0.0.0")
-    PORT = int(os.getenv("JVSPATIAL_PORT", "8000"))
-    LOG_LEVEL = os.getenv("JVSPATIAL_LOG_LEVEL", "info")
-    DEBUG = os.getenv("JVSPATIAL_DEBUG", "false").lower() in ("true", "1", "yes")
+    CORS_ENABLED = _EnvAttr("cors_enabled")
+    CORS_ORIGINS = _CorsListCopy()
+    CORS_METHODS = _CorsMethodsCopy()
+    CORS_HEADERS = _CorsHeadersCopy()
 
-    # CORS
-    CORS_ENABLED = os.getenv("JVSPATIAL_CORS_ENABLED", "true").lower() in (
-        "true",
-        "1",
-        "yes",
-    )
-    _DEFAULT_DEV_CORS_ORIGINS = [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-    ]
+    FILE_STORAGE_ENABLED = _EnvAttr("file_storage_enabled")
+    FILE_STORAGE_PROVIDER = _EnvAttr("file_storage_provider")
+    FILE_STORAGE_ROOT = _EnvAttr("file_storage_root")
+    FILE_STORAGE_MAX_SIZE = _EnvAttr("file_storage_max_size")
+    FILE_STORAGE_BASE_URL = _EnvAttr("file_storage_base_url")
 
-    CORS_ORIGINS = (
-        os.getenv("JVSPATIAL_CORS_ORIGINS", "").split(",")
-        if os.getenv("JVSPATIAL_CORS_ORIGINS")
-        else _DEFAULT_DEV_CORS_ORIGINS
-    )
-    CORS_METHODS = (
-        os.getenv("JVSPATIAL_CORS_METHODS", "").split(",")
-        if os.getenv("JVSPATIAL_CORS_METHODS")
-        else ["*"]
-    )
-    CORS_HEADERS = (
-        os.getenv("JVSPATIAL_CORS_HEADERS", "").split(",")
-        if os.getenv("JVSPATIAL_CORS_HEADERS")
-        else ["*"]
-    )
+    PROXY_ENABLED = _EnvAttr("proxy_enabled")
+    PROXY_EXPIRATION = _EnvAttr("proxy_expiration")
+    PROXY_MAX_EXPIRATION = _EnvAttr("proxy_max_expiration")
 
-    # File Storage
-    FILE_STORAGE_ENABLED = os.getenv(
-        "JVSPATIAL_FILE_STORAGE_ENABLED", "false"
-    ).lower() in ("true", "1", "yes")
-    FILE_STORAGE_PROVIDER = os.getenv("JVSPATIAL_FILE_STORAGE_PROVIDER", "local")
-    FILE_STORAGE_ROOT = os.getenv("JVSPATIAL_FILE_STORAGE_ROOT", ".files")
-    FILE_STORAGE_MAX_SIZE = int(
-        os.getenv("JVSPATIAL_FILE_STORAGE_MAX_SIZE", str(100 * 1024 * 1024))
-    )  # 100MB
-    FILE_STORAGE_BASE_URL = os.getenv(
-        "JVSPATIAL_FILE_STORAGE_BASE_URL", "http://localhost:8000"
-    )
-
-    # Proxy
-    PROXY_ENABLED = os.getenv("JVSPATIAL_PROXY_ENABLED", "false").lower() in (
-        "true",
-        "1",
-        "yes",
-    )
-    PROXY_EXPIRATION = int(os.getenv("JVSPATIAL_PROXY_EXPIRATION", "3600"))  # 1 hour
-    PROXY_MAX_EXPIRATION = int(
-        os.getenv("JVSPATIAL_PROXY_MAX_EXPIRATION", "86400")
-    )  # 24 hours
-
-    # Database
-    DB_TYPE = os.getenv("JVSPATIAL_DB_TYPE", "json")
-    DB_PATH = os.getenv("JVSPATIAL_DB_PATH", "./jvdb")
+    DB_TYPE = _EnvAttr("db_type")
+    DB_PATH = _EnvAttr("db_path")
 
 
-# Re-export HTTPStatus for convenience
 __all__ = [
     "APIRoutes",
     "HTTPMethods",

@@ -55,6 +55,8 @@ class ServerConfig(BaseModel):
     port: int = 8000
     docs_url: Optional[str] = "/docs"
     redoc_url: Optional[str] = "/redoc"
+    serverless_mode: Optional[bool] = None
+    deferred_task_provider: Optional[str] = None
 
     # Configuration Groups (using composition)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)

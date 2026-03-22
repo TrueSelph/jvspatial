@@ -14,9 +14,10 @@ Usage:
         # ... entity definition ...
         pass
 
-    # In your code:
+    # In your code (deferred mode is on at construct when globally allowed):
     entity = await MyEntity.get(entity_id)
-    entity.enable_deferred_saves()
+    # Optional: entity.enable_deferred_saves()  # idempotent; use after flush()
+    # to start a new batch in the same session.
 
     # Multiple updates - no database writes yet
     entity.field1 = "value1"
@@ -31,11 +32,24 @@ Environment Variable:
     JVSPATIAL_ENABLE_DEFERRED_SAVES: Set to "true" (default) to enable
     the deferred save optimization. Set to "false" to disable and have
     all save() calls write immediately.
+
+Serverless:
+    In serverless mode (`is_serverless_mode()`), deferred saves are always
+    disabled regardless of this env var. Use `deferred_saves_globally_allowed()`
+    for the effective runtime check.
+
+Multi-entity:
+    Use `flush_deferred_entities(interaction, conversation, strict=False)` to
+    call `flush()` on several objects; pass `strict=True` to fail the request
+    on the first flush error.
 """
 
+import inspect
 import logging
-import os
-from typing import Any, Protocol
+from typing import Any, ClassVar, Optional, Protocol
+
+from jvspatial.env import load_env
+from jvspatial.runtime.serverless import is_serverless_mode
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +62,59 @@ class _SaveableProtocol(Protocol):
         ...
 
 
-# Global configuration for deferred saves (no effect until enable_deferred_saves()
-# is called on an instance). Default "true" enables the optimization when deferred
-# mode is enabled.
-ENABLE_DEFERRED_SAVES = (
-    os.getenv("JVSPATIAL_ENABLE_DEFERRED_SAVES", "true").lower() == "true"
-)
+def _env_allows_deferred_saves() -> bool:
+    """Whether JVSPATIAL_ENABLE_DEFERRED_SAVES permits deferred saves (via load_env cache)."""
+    return load_env().enable_deferred_saves
+
+
+def deferred_saves_globally_allowed(config: Optional[Any] = None) -> bool:
+    """Return True if deferred batching is allowed (env on and not serverless).
+
+    Reflects both ``JVSPATIAL_ENABLE_DEFERRED_SAVES`` (via :func:`load_env`) and
+    :func:`is_serverless_mode`. ``EnvConfig.enable_deferred_saves`` is the raw env
+    flag only; use this function for effective batching policy at runtime.
+    """
+    return _env_allows_deferred_saves() and not is_serverless_mode(config)
+
+
+async def flush_deferred_entities(*entities: Any, strict: bool = False) -> bool:
+    """Flush entities that expose ``flush`` (e.g. :class:`DeferredSaveMixin`).
+
+    Skips ``None`` and objects without a callable ``flush``. For each entity,
+    ``await entity.flush()`` ends deferred batching and persists when dirty.
+
+    Args:
+        *entities: Interaction, conversation, or any saveable with ``flush``.
+        strict: If False, log errors and continue; return False if any failed.
+            If True, log and re-raise the first exception.
+
+    Returns:
+        True if every flush succeeded or was skipped; False if any failed
+        (only when strict is False).
+    """
+    success = True
+    for entity in entities:
+        if entity is None:
+            continue
+        flush_fn = getattr(entity, "flush", None)
+        if flush_fn is None or not callable(flush_fn):
+            continue
+        try:
+            result = flush_fn()
+            if inspect.isawaitable(result):
+                await result
+        except Exception as e:
+            eid = getattr(entity, "id", "unknown")
+            logger.error(
+                "Failed to flush %s %s: %s",
+                entity.__class__.__name__,
+                eid,
+                e,
+            )
+            success = False
+            if strict:
+                raise
+    return success
 
 
 class DeferredSaveMixin:
@@ -75,7 +136,15 @@ class DeferredSaveMixin:
 
             class MyEntity(DeferredSaveMixin, Node):  # Correct
             class MyEntity(Node, DeferredSaveMixin):  # Incorrect
+
+    ClassVar:
+        deferred_saves_auto_on_init: When True (default), new instances start
+        with deferred batching enabled if :func:`deferred_saves_globally_allowed`
+        is true. Set to False on a subclass to keep deferred mode off until
+        :meth:`enable_deferred_saves` is called.
     """
+
+    deferred_saves_auto_on_init: ClassVar[bool] = True
 
     _deferred_save_mode: bool
     _dirty: bool
@@ -98,31 +167,34 @@ class DeferredSaveMixin:
             **kwargs: Keyword arguments passed to parent class.
         """
         super().__init__(*args, **kwargs)
-        self._deferred_save_mode = False
         self._dirty = False
+        if self.deferred_saves_auto_on_init and deferred_saves_globally_allowed():
+            self._deferred_save_mode = True
+        else:
+            self._deferred_save_mode = False
 
     def enable_deferred_saves(self) -> None:
-        """Enable deferred save mode for this instance.
+        """Enable deferred save mode for this instance (optional at construct time).
 
-        When enabled, calls to save() will mark the entity as dirty
-        but will not perform the actual database write. Use flush()
-        to force a save when ready.
-
-        This is useful when you know an entity will be updated multiple
-        times in sequence and you want to batch those updates into a
-        single database write for performance.
+        New instances already enable deferred batching when
+        :func:`deferred_saves_globally_allowed` is true unless
+        ``deferred_saves_auto_on_init`` is false on the class. Call this to
+        re-enable after :meth:`flush` or to turn batching on explicitly.
         """
+        if not deferred_saves_globally_allowed():
+            logger.debug(
+                "enable_deferred_saves ignored: deferred saves disabled "
+                "(serverless mode or JVSPATIAL_ENABLE_DEFERRED_SAVES=false)"
+            )
+            return
         self._deferred_save_mode = True
 
     def disable_deferred_saves(self) -> None:
-        """Disable deferred save mode for this instance.
+        """Disable deferred save mode without persisting.
 
-        After disabling, calls to save() will perform immediate
-        database writes as normal.
-
-        Note: This does NOT automatically flush pending changes.
-        Call flush() first if you have dirty data that needs to
-        be persisted.
+        Prefer :meth:`flush` to end a batching session (it persists when dirty and
+        always clears deferred mode). Use this only when you must turn off
+        batching without writing.
         """
         self._deferred_save_mode = False
 
@@ -147,8 +219,9 @@ class DeferredSaveMixin:
     async def save(self, *args: Any, **kwargs: Any) -> Any:
         """Save the entity with deferred mode support.
 
-        If deferred save mode is enabled (via enable_deferred_saves())
-        and the global ENABLE_DEFERRED_SAVES is True, this method marks
+        If deferred save mode is enabled (from construction, via
+        :meth:`enable_deferred_saves`, or after a failed :meth:`flush` retry
+        path) and deferred_saves_globally_allowed() is True, this method marks
         the entity as dirty without performing the database write.
 
         Otherwise, it performs the save immediately by calling the
@@ -161,45 +234,40 @@ class DeferredSaveMixin:
         Returns:
             The result of the parent save() method, or None if deferred.
         """
-        if ENABLE_DEFERRED_SAVES and self._deferred_save_mode:
+        if deferred_saves_globally_allowed() and self._deferred_save_mode:
             self._dirty = True
             return None
         return await self._super_save(*args, **kwargs)
 
     async def flush(self) -> None:
-        """Force save if there are pending changes.
+        """End deferred batching for this instance and persist if dirty.
 
-        If the entity has been marked as dirty (has pending changes
-        from deferred save() calls), this method:
-        1. Disables deferred save mode temporarily
-        2. Performs the actual database write
-        3. Clears the dirty flag only on success
+        Always clears deferred save mode when this call completes successfully,
+        including when there is nothing dirty (so later ``save()`` calls are not
+        stuck in batching mode).
 
-        If the entity is not dirty, this method does nothing.
-
-        This should be called when you're done making updates and
-        want to persist all accumulated changes to the database.
+        When dirty, temporarily disables deferred mode, performs the underlying
+        ``save()`` with no arguments, then clears the dirty flag on success.
 
         Note:
-            When using deferred saves, callers must not rely on arguments
-            passed to save() (e.g. *args, **kwargs) being applied at flush
-            time; flush() invokes the underlying save with no arguments.
+            Callers must not rely on arguments passed to ``save()`` being
+            applied at flush time.
 
         Raises:
             Exception: Re-raises any exception from save(), preserving
-                the dirty state so flush() can be retried.
+                dirty state and deferred mode for retry.
         """
-        if self._dirty:
-            # Temporarily disable deferred mode to allow save() to proceed
+        if not self._dirty:
             self._deferred_save_mode = False
-            try:
-                await self._super_save()
-                # Only clear dirty flag if save succeeds
-                self._dirty = False
-            except Exception as e:
-                # Re-enable deferred mode so entity remains in correct state for retry
-                self._deferred_save_mode = True
-                logger.error(
-                    f"Failed to flush deferred save for {self.__class__.__name__}: {e}"
-                )
-                raise
+            return
+
+        self._deferred_save_mode = False
+        try:
+            await self._super_save()
+            self._dirty = False
+        except Exception as e:
+            self._deferred_save_mode = True
+            logger.error(
+                f"Failed to flush deferred save for {self.__class__.__name__}: {e}"
+            )
+            raise

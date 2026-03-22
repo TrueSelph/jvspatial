@@ -7,9 +7,9 @@ concurrency limiting, batch processing, and performance enhancements.
 import asyncio
 import logging
 import time
-from typing import Any, Awaitable, Callable, Coroutine, Dict, List, Optional, TypeVar
+from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
 
-from jvspatial.config import use_background_processing
+from jvspatial.runtime.serverless import is_serverless_mode
 
 T = TypeVar("T")
 
@@ -494,12 +494,7 @@ def timeout(seconds: float):
 
 
 def _handle_task_exception(task: asyncio.Task, name: str) -> None:
-    """Handle exceptions from background tasks.
-
-    Args:
-        task: The completed task
-        name: Name of the task for logging
-    """
+    """Handle exceptions from background tasks."""
     try:
         task.result()
     except asyncio.CancelledError:
@@ -510,29 +505,110 @@ def _handle_task_exception(task: asyncio.Task, name: str) -> None:
         )
 
 
-def create_background_task(
-    coro: Coroutine[Any, Any, Any], name: str = "background"
+def _is_coroutine_arg(first_arg: Any) -> bool:
+    return asyncio.iscoroutine(first_arg)
+
+
+async def create_task(
+    task_type_or_coro: Any,
+    payload: Optional[Dict[str, Any]] = None,
+    *,
+    delay_seconds: float = 0,
+    run_at: Optional[float] = None,
+    name: str = "background",
+    config: Optional[Any] = None,
+    strict: bool = False,
+    concurrent: bool = False,
 ) -> Optional[asyncio.Task]:
-    """Create a background task with automatic exception logging.
+    """Schedule or run background work; always await this coroutine at call sites.
 
-    When BACKGROUND_PROCESSING is false (e.g. Lambda), returns None
-    without running the coroutine. Callers must handle None.
+    **Shape A** — registered handler (serverless-safe)::
 
-    Args:
-        coro: Coroutine to run as a background task
-        name: Descriptive name for the task (used in error logs)
+        await create_task("my.task_type", {"key": "value"}, run_at=time.time() + 5)
+
+    *Non-serverless*: starts a local ``asyncio.Task`` (sleep/handler); returns it.
+    *Serverless*: ``dispatch_deferred_task``; returns ``None``.
+    ``concurrent`` is ignored for Shape A.
+
+    **Shape B** — raw coroutine (default ``concurrent=False``)::
+
+        await create_task(some_coroutine(), name="worker")
+
+    *Non-serverless*: ``asyncio.create_task`` + exception logging; returns ``Task``.
+    *Serverless*: awaits the coroutine in the current request; returns ``None``.
+
+    **Shape B with** ``concurrent=True`` — keep a background ``Task`` (e.g. SSE
+    streaming that polls ``task.done()``). Uses ``asyncio.create_task`` in both
+    environments; on serverless the task may not outlive the invocation.
 
     Returns:
-        The created asyncio.Task, or None when background tasks disabled
+        ``asyncio.Task`` when work was scheduled as a local task, ``None`` when
+        the coroutine was awaited inline (Shape B serverless) or deferred (Shape A
+        serverless).
     """
-    if not use_background_processing():
-        logging.getLogger(__name__).warning(
-            "create_background_task called with BACKGROUND_PROCESSING disabled; "
-            "coroutine will not run. Set BACKGROUND_PROCESSING=true for "
-            "non-Lambda deployments."
+    if _is_coroutine_arg(task_type_or_coro):
+        if concurrent:
+            task = asyncio.create_task(task_type_or_coro)
+            task.add_done_callback(lambda t: _handle_task_exception(t, name))
+            return task
+        if is_serverless_mode():
+            await task_type_or_coro
+            return None
+        task = asyncio.create_task(task_type_or_coro)
+        task.add_done_callback(lambda t: _handle_task_exception(t, name))
+        return task
+    if not isinstance(task_type_or_coro, str):
+        raise TypeError(
+            "create_task expects a task_type string or a coroutine as the first argument"
+        )
+    return _create_task_handler(
+        task_type_or_coro,
+        payload or {},
+        delay_seconds=delay_seconds,
+        run_at=run_at,
+        name=name,
+        config=config,
+        strict=strict,
+    )
+
+
+def _create_task_handler(
+    task_type: str,
+    payload: Dict[str, Any],
+    *,
+    delay_seconds: float,
+    run_at: Optional[float],
+    name: str,
+    config: Optional[Any],
+    strict: bool,
+) -> Optional[asyncio.Task]:
+    """Shape A: registered handler → local sleep-then-invoke or serverless dispatch."""
+    if is_serverless_mode():
+        from jvspatial.serverless.factory import dispatch_deferred_task
+
+        dispatch_deferred_task(
+            task_type,
+            payload,
+            delay_seconds=int(delay_seconds),
+            run_at=run_at,
+            config=config,
+            strict=strict,
         )
         return None
-    task = asyncio.create_task(coro)
+
+    async def _run() -> None:
+        wait = 0.0
+        if run_at is not None:
+            wait = max(0.0, run_at - time.time())
+        elif delay_seconds > 0:
+            wait = delay_seconds
+        if wait > 0:
+            await asyncio.sleep(wait)
+        from jvspatial.serverless.deferred_invoke import dispatch_deferred_invoke
+
+        await dispatch_deferred_invoke({**payload, "task_type": task_type})
+
+    task = asyncio.create_task(_run())
     task.add_done_callback(lambda t: _handle_task_exception(t, name))
     return task
 
@@ -549,5 +625,5 @@ __all__ = [
     "retry_with_backoff",
     "retry",
     "timeout",
-    "create_background_task",
+    "create_task",
 ]

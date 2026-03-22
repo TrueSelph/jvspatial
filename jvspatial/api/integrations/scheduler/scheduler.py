@@ -19,6 +19,7 @@ import schedule
 
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Walker
+from jvspatial.runtime.serverless import is_serverless_mode
 
 from .models import (
     ExecutionRecord,
@@ -107,6 +108,12 @@ class SchedulerService:
         if self.is_running:
             self.logger.info("Scheduler is already running")
             return self._event
+        if is_serverless_mode():
+            self.logger.warning(
+                "SchedulerService.start() skipped in serverless mode: "
+                "background scheduler thread model is not supported."
+            )
+            return None
 
         if interval is None:
             interval = self.config.interval
@@ -900,6 +907,11 @@ class SchedulerLifecycleManager:
     async def start(self) -> None:
         """Start the scheduler lifecycle."""
         if not self._is_started:
+            if is_serverless_mode():
+                self.scheduler_service.logger.warning(
+                    "Scheduler lifecycle start skipped in serverless mode."
+                )
+                return
             self.scheduler_service.start()
             self._is_started = True
 
@@ -919,6 +931,12 @@ def add_scheduler_to_app(app, scheduler_service: SchedulerService) -> None:
     """
     # Add middleware
     app.add_middleware(SchedulerMiddleware, scheduler_service=scheduler_service)
+
+    if is_serverless_mode():
+        scheduler_service.logger.warning(
+            "add_scheduler_to_app: startup/shutdown scheduler hooks disabled in serverless mode."
+        )
+        return
 
     # Add startup/shutdown events
     @app.on_event("startup")

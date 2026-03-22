@@ -12,8 +12,8 @@ from jvspatial.config import (
     Config,
     get_config,
     set_config,
-    use_background_processing,
 )
+from jvspatial.runtime.serverless import is_serverless_mode, reset_serverless_mode_cache
 
 
 class TestConfig:
@@ -193,38 +193,61 @@ class TestConfig:
         assert config.redis_url == "redis://localhost:6379/0"
 
 
-class TestUseBackgroundProcessing:
-    """Test use_background_processing for BACKGROUND_PROCESSING."""
+class TestServerlessRuntimeMode:
+    """Test serverless runtime detection and derived behavior."""
 
-    def test_default_enabled_when_unset(self):
-        """Unset env defaults to True (non-Lambda)."""
+    def test_default_non_serverless_when_unset(self):
+        """Unset env defaults to non-serverless."""
         with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("BACKGROUND_PROCESSING", None)
+            os.environ.pop("SERVERLESS_MODE", None)
             os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
-            assert use_background_processing() is True
+            os.environ.pop("AWS_LAMBDA_RUNTIME_API", None)
+            reset_serverless_mode_cache()
+            assert is_serverless_mode() is False
 
-    def test_explicit_true(self):
-        """Explicit true/1/yes enables background processing."""
+    def test_serverless_override_true(self):
+        """Explicit SERVERLESS_MODE=true enables serverless mode."""
         for val in ("true", "1", "yes", "True", "TRUE"):
-            with patch.dict(os.environ, {"BACKGROUND_PROCESSING": val}):
-                assert use_background_processing() is True
+            with patch.dict(os.environ, {"SERVERLESS_MODE": val}):
+                reset_serverless_mode_cache()
+                assert is_serverless_mode() is True
 
-    def test_explicit_false(self):
-        """Explicit false/0/no disables background processing."""
+    def test_serverless_override_false(self):
+        """Explicit SERVERLESS_MODE=false disables serverless mode."""
         for val in ("false", "0", "no", "False", "FALSE"):
-            with patch.dict(os.environ, {"BACKGROUND_PROCESSING": val}):
-                assert use_background_processing() is False
+            with patch.dict(
+                os.environ, {"SERVERLESS_MODE": val, "AWS_LAMBDA_FUNCTION_NAME": "func"}
+            ):
+                reset_serverless_mode_cache()
+                assert is_serverless_mode() is False
 
-    def test_lambda_default_disabled(self):
-        """When AWS_LAMBDA_FUNCTION_NAME is set and BACKGROUND_PROCESSING unset, default False."""
+    def test_lambda_auto_detection(self):
+        """AWS env vars auto-enable serverless mode."""
         with patch.dict(os.environ, {"AWS_LAMBDA_FUNCTION_NAME": "my-func"}):
-            os.environ.pop("BACKGROUND_PROCESSING", None)
-            assert use_background_processing() is False
+            os.environ.pop("SERVERLESS_MODE", None)
+            reset_serverless_mode_cache()
+            assert is_serverless_mode() is True
 
-    def test_explicit_overrides_lambda(self):
-        """BACKGROUND_PROCESSING=true overrides Lambda detection."""
-        with patch.dict(
-            os.environ,
-            {"BACKGROUND_PROCESSING": "true", "AWS_LAMBDA_FUNCTION_NAME": "my-func"},
-        ):
-            assert use_background_processing() is True
+    def test_config_override_precedence(self):
+        """Config.serverless_mode takes precedence over env and auto-detection."""
+        with patch.dict(os.environ, {"SERVERLESS_MODE": "false"}):
+            assert is_serverless_mode(Config(serverless_mode=True)) is True
+            assert is_serverless_mode(Config(serverless_mode=False)) is False
+
+    def test_current_server_config_used_when_no_explicit_config(self):
+        """``is_serverless_mode()`` without args uses ``get_current_server().config`` when set."""
+        from unittest.mock import MagicMock
+
+        from jvspatial.api.context import set_current_server
+
+        mock_srv = MagicMock()
+        mock_srv.config = Config(serverless_mode=True)
+        with patch.dict(os.environ, {"SERVERLESS_MODE": "false"}):
+            os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
+            os.environ.pop("AWS_LAMBDA_RUNTIME_API", None)
+            reset_serverless_mode_cache()
+            set_current_server(mock_srv)
+            try:
+                assert is_serverless_mode() is True
+            finally:
+                set_current_server(None)

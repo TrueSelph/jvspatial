@@ -55,10 +55,11 @@ Example:
 # API server
 from .api import Server
 from .api.decorators.route import endpoint
+from .async_utils import create_task
 from .cache import create_cache
 
 # Unified configuration
-from .config import Config, use_background_processing
+from .config import Config
 
 # Simplified decorators
 from .core.annotations import attribute
@@ -68,10 +69,27 @@ from .core.context import GraphContext
 from .core.entities import Edge, Node, Object, Root, Walker
 
 # Mixins
-from .core.mixins import ENABLE_DEFERRED_SAVES, DeferredSaveMixin
+from .core.mixins import (
+    DeferredSaveMixin,
+    deferred_saves_globally_allowed,
+    flush_deferred_entities,
+)
 
 # Simplified database and cache
 from .db import Database, create_database
+from .db.work_claim import claim_record, delete_claimed_record, release_claim
+from .runtime.serverless import detect_serverless_provider, is_serverless_mode
+from .serverless.deferred_invoke import (
+    MalformedDeferredInvokeError,
+    UnknownDeferredTaskError,
+    clear_deferred_invoke_handlers,
+    deferred_invoke_handler,
+    dispatch_deferred_invoke,
+    normalize_deferred_envelope,
+    register_deferred_invoke_handler,
+)
+from .serverless.factory import dispatch_deferred_task, get_task_scheduler
+from .serverless.tasks import RetryConfig, TaskScheduler
 
 # Utilities
 from .utils.serialization import deserialize_datetime, serialize_datetime
@@ -85,7 +103,25 @@ __all__ = [
     "__version__",
     # Unified configuration
     "Config",
-    "use_background_processing",
+    "is_serverless_mode",
+    "detect_serverless_provider",
+    "get_task_scheduler",
+    "dispatch_deferred_task",
+    "register_deferred_invoke_handler",
+    "deferred_invoke_handler",
+    "dispatch_deferred_invoke",
+    "normalize_deferred_envelope",
+    "MalformedDeferredInvokeError",
+    "UnknownDeferredTaskError",
+    "clear_deferred_invoke_handlers",
+    "TaskScheduler",
+    "RetryConfig",
+    # Background task API
+    "create_task",
+    # Work-claim helpers
+    "claim_record",
+    "release_claim",
+    "delete_claimed_record",
     # Core entities
     "Object",
     "Node",
@@ -95,7 +131,8 @@ __all__ = [
     "GraphContext",
     # Mixins
     "DeferredSaveMixin",
-    "ENABLE_DEFERRED_SAVES",
+    "deferred_saves_globally_allowed",
+    "flush_deferred_entities",
     # Simplified decorators
     "attribute",
     "endpoint",

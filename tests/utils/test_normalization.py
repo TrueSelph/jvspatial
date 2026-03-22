@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
+from jvspatial.env import clear_load_env_cache
 from jvspatial.utils.normalization import (
     is_text_normalization_enabled,
     normalize_data,
@@ -250,42 +251,70 @@ class TestIsTextNormalizationEnabled:
             # Remove the env var if it exists
             if "JVSPATIAL_TEXT_NORMALIZATION_ENABLED" in os.environ:
                 del os.environ["JVSPATIAL_TEXT_NORMALIZATION_ENABLED"]
-            result = is_text_normalization_enabled()
-            assert result is True
+            clear_load_env_cache()
+            try:
+                result = is_text_normalization_enabled()
+                assert result is True
+            finally:
+                clear_load_env_cache()
 
     def test_explicitly_enabled(self):
         """Test that normalization can be explicitly enabled."""
         with patch.dict(os.environ, {"JVSPATIAL_TEXT_NORMALIZATION_ENABLED": "true"}):
-            result = is_text_normalization_enabled()
-            assert result is True
+            clear_load_env_cache()
+            try:
+                result = is_text_normalization_enabled()
+                assert result is True
+            finally:
+                clear_load_env_cache()
 
     def test_explicitly_enabled_uppercase(self):
         """Test that uppercase TRUE is accepted."""
         with patch.dict(os.environ, {"JVSPATIAL_TEXT_NORMALIZATION_ENABLED": "TRUE"}):
-            result = is_text_normalization_enabled()
-            assert result is True
+            clear_load_env_cache()
+            try:
+                result = is_text_normalization_enabled()
+                assert result is True
+            finally:
+                clear_load_env_cache()
 
     def test_explicitly_disabled(self):
         """Test that normalization can be disabled."""
         with patch.dict(os.environ, {"JVSPATIAL_TEXT_NORMALIZATION_ENABLED": "false"}):
-            result = is_text_normalization_enabled()
-            assert result is False
+            clear_load_env_cache()
+            try:
+                result = is_text_normalization_enabled()
+                assert result is False
+            finally:
+                clear_load_env_cache()
 
     def test_explicitly_disabled_uppercase(self):
         """Test that uppercase FALSE is accepted."""
         with patch.dict(os.environ, {"JVSPATIAL_TEXT_NORMALIZATION_ENABLED": "FALSE"}):
-            result = is_text_normalization_enabled()
-            assert result is False
+            clear_load_env_cache()
+            try:
+                result = is_text_normalization_enabled()
+                assert result is False
+            finally:
+                clear_load_env_cache()
 
     def test_case_insensitive(self):
         """Test that the check is case-insensitive."""
         with patch.dict(os.environ, {"JVSPATIAL_TEXT_NORMALIZATION_ENABLED": "True"}):
-            result = is_text_normalization_enabled()
-            assert result is True
+            clear_load_env_cache()
+            try:
+                result = is_text_normalization_enabled()
+                assert result is True
+            finally:
+                clear_load_env_cache()
 
         with patch.dict(os.environ, {"JVSPATIAL_TEXT_NORMALIZATION_ENABLED": "False"}):
-            result = is_text_normalization_enabled()
-            assert result is False
+            clear_load_env_cache()
+            try:
+                result = is_text_normalization_enabled()
+                assert result is False
+            finally:
+                clear_load_env_cache()
 
 
 class TestNormalizationIntegration:

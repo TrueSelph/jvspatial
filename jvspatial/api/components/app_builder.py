@@ -207,6 +207,10 @@ class AppBuilder:
         if self.config.graph_endpoint_enabled:
             self._register_graph_endpoint(app, graph_context, server)
 
+        from jvspatial.api.deferred_invoke_route import register_deferred_invoke_route
+
+        register_deferred_invoke_route(app)
+
         # Core routes registered (no log needed)
 
     def _register_graph_endpoint(

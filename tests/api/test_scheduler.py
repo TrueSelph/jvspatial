@@ -139,7 +139,8 @@ class TestSchedulerIntegration:
         scheduler = SchedulerService(config=config)
 
         # Test starting
-        scheduler.start()
+        with patch.dict("os.environ", {"SERVERLESS_MODE": "false"}):
+            scheduler.start()
         assert scheduler.is_running is True
 
         # Let it run briefly
@@ -148,6 +149,20 @@ class TestSchedulerIntegration:
         # Test stopping
         scheduler.stop()
         assert scheduler.is_running is False
+
+    async def test_scheduler_disabled_in_serverless_mode(self):
+        """Scheduler should not start background thread in serverless mode."""
+        from jvspatial.api.integrations.scheduler.scheduler import (
+            SchedulerConfig,
+            SchedulerService,
+        )
+
+        config = SchedulerConfig(enabled=True, interval=0.1)
+        scheduler = SchedulerService(config=config)
+        with patch.dict("os.environ", {"SERVERLESS_MODE": "true"}):
+            event = scheduler.start()
+            assert event is None
+            assert scheduler.is_running is False
 
     async def test_scheduler_status(self):
         """Test getting scheduler status information."""
@@ -198,7 +213,8 @@ class TestSchedulerIntegration:
         lifecycle_manager = SchedulerLifecycleManager(scheduler)
 
         # Test starting
-        await lifecycle_manager.start()
+        with patch.dict("os.environ", {"SERVERLESS_MODE": "false"}):
+            await lifecycle_manager.start()
         assert lifecycle_manager.is_started is True
         assert scheduler.is_running is True
 
@@ -298,10 +314,32 @@ class TestFastAPIIntegration:
         config = SchedulerConfig(enabled=True, interval=1)
         scheduler = SchedulerService(config=config)
 
-        add_scheduler_to_app(mock_app, scheduler)
+        with patch.dict("os.environ", {"SERVERLESS_MODE": "false"}):
+            add_scheduler_to_app(mock_app, scheduler)
 
         # Verify middleware was added
         mock_app.add_middleware.assert_called_once()
 
         # Verify event handlers were registered
         assert mock_app.on_event.call_count == 2  # startup and shutdown
+
+    async def test_add_scheduler_to_app_skips_hooks_in_serverless(self):
+        """App integration should skip scheduler lifecycle hooks in serverless."""
+        from jvspatial.api.integrations.scheduler.scheduler import (
+            SchedulerConfig,
+            SchedulerService,
+            add_scheduler_to_app,
+        )
+
+        mock_app = Mock()
+        mock_app.add_middleware = Mock()
+        mock_app.on_event = Mock()
+
+        config = SchedulerConfig(enabled=True, interval=1)
+        scheduler = SchedulerService(config=config)
+
+        with patch.dict("os.environ", {"SERVERLESS_MODE": "true"}):
+            add_scheduler_to_app(mock_app, scheduler)
+
+        mock_app.add_middleware.assert_called_once()
+        assert mock_app.on_event.call_count == 0

@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from jvspatial.db.database import Database
 from jvspatial.db.query import QueryEngine
+from jvspatial.runtime.serverless import is_serverless_mode
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class JsonDB(Database):
             base_path: Base directory for JSON files
         """
         self.base_path = Path(base_path).resolve()
+        self._warned_non_tmp_serverless = False
         # Don't create directory immediately - create it lazily on first use
         # This prevents 'jvdb' from being created when DatabaseManager is auto-created
         # before Server initializes with the correct database path
@@ -48,6 +50,17 @@ class JsonDB(Database):
 
     def _get_collection_dir(self, collection: str) -> Path:
         """Get the directory path for a collection."""
+        if (
+            is_serverless_mode()
+            and not self._warned_non_tmp_serverless
+            and not str(self.base_path).startswith("/tmp")
+        ):
+            self._warned_non_tmp_serverless = True
+            logger.warning(
+                "JsonDB is using '%s' in serverless mode. "
+                "Use a /tmp path or a durable external database backend.",
+                self.base_path,
+            )
         # Create base directory lazily (only when actually used)
         # This prevents 'jvdb' from being created when DatabaseManager is auto-created
         # before Server initializes with the correct database path
@@ -196,38 +209,6 @@ class JsonDB(Database):
                 return None
 
         return current
-
-    async def find_one_and_update(
-        self,
-        collection: str,
-        query: Dict[str, Any],
-        update: Dict[str, Any],
-        upsert: bool = False,
-    ) -> Optional[Dict[str, Any]]:
-        """Find and update the first record matching a query.
-
-        Uses find_one + QueryEngine.apply_update + save. Not atomic.
-        Supports $set, $unset, $inc, $push, $addToSet, $setOnInsert (on upsert).
-        """
-        doc = await self.find_one(collection, query)
-        is_new = doc is None
-        if is_new:
-            if not upsert:
-                return None
-            doc = {}
-            doc_id = query.get("_id", query.get("id"))
-            if doc_id is not None:
-                doc["_id"] = doc_id
-                doc["id"] = str(doc_id)
-            QueryEngine.apply_update(doc, update, apply_set_on_insert=True)
-        else:
-            QueryEngine.apply_update(doc, update, apply_set_on_insert=False)
-
-        record_id = doc.get("id", doc.get("_id"))
-        if record_id is not None:
-            doc["id"] = str(record_id)
-        await self.save(collection, doc)
-        return doc
 
     async def create_index(
         self,

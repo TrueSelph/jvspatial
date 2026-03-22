@@ -7,6 +7,7 @@ is handled internally to maintain semantic simplicity.
 
 from .context import (
     GraphContext,
+    async_graph_context,
     get_default_context,
     graph_context,
     set_default_context,
@@ -28,7 +29,11 @@ from .graph import (
     generate_graph_dot,
     generate_graph_mermaid,
 )
-from .mixins import ENABLE_DEFERRED_SAVES, DeferredSaveMixin
+from .mixins import (
+    DeferredSaveMixin,
+    deferred_saves_globally_allowed,
+    flush_deferred_entities,
+)
 from .pager import ObjectPager, paginate_by_field, paginate_objects
 from .utils import find_subclass_by_name, generate_id, serialize_datetime
 
@@ -42,7 +47,8 @@ __all__ = [
     "NodeQuery",
     # Mixins
     "DeferredSaveMixin",
-    "ENABLE_DEFERRED_SAVES",
+    "deferred_saves_globally_allowed",
+    "flush_deferred_entities",
     # Pagination
     "ObjectPager",
     "paginate_objects",

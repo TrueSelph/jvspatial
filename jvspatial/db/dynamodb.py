@@ -645,38 +645,6 @@ class DynamoDB(Database):
 
         return results
 
-    async def find_one_and_update(
-        self,
-        collection: str,
-        query: Dict[str, Any],
-        update: Dict[str, Any],
-        upsert: bool = False,
-    ) -> Optional[Dict[str, Any]]:
-        """Find and update the first record matching a query.
-
-        Uses find_one + QueryEngine.apply_update + save. Not atomic.
-        Supports $set, $unset, $inc, $push, $addToSet, $setOnInsert (on upsert).
-        """
-        doc = await self.find_one(collection, query)
-        is_new = doc is None
-        if is_new:
-            if not upsert:
-                return None
-            doc = {}
-            doc_id = query.get("_id", query.get("id"))
-            if doc_id is not None:
-                doc["_id"] = doc_id
-                doc["id"] = str(doc_id)
-            QueryEngine.apply_update(doc, update, apply_set_on_insert=True)
-        else:
-            QueryEngine.apply_update(doc, update, apply_set_on_insert=False)
-
-        record_id = doc.get("id", doc.get("_id"))
-        if record_id is not None:
-            doc["id"] = str(record_id)
-        await self.save(collection, doc)
-        return doc
-
     async def batch_write(self, collection: str, items: List[Dict[str, Any]]) -> None:
         """Write multiple records using batch_write_item.
 

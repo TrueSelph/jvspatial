@@ -52,8 +52,9 @@ For detailed documentation, see:
 """
 
 import logging
-import os
 from typing import Any, Dict
+
+from jvspatial.env import load_env
 
 # Import core components
 from .interfaces import FileStorageInterface, LocalFileInterface
@@ -179,8 +180,6 @@ def create_storage(provider: str = "local", **kwargs: Any) -> FileStorageInterfa
                 "S3 storage requires boto3. Install it with: pip install boto3"
             )
 
-        from jvspatial.env import load_env
-
         env = load_env()
         bucket_name = kwargs.get("bucket_name") or env.s3_bucket_name
         if not bucket_name:
@@ -206,8 +205,7 @@ def create_default_storage() -> FileStorageInterface:
     Returns:
         Configured storage interface
     """
-    provider = os.getenv("JVSPATIAL_FILE_INTERFACE", "local")
-    return create_storage(provider)
+    return create_storage(load_env().file_interface)
 
 
 def get_default_config() -> Dict[str, Any]:

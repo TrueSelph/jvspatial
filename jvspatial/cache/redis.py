@@ -5,9 +5,10 @@ enabling shared caching across multiple application instances with
 integrated connection pooling and cache invalidation strategies.
 """
 
-import os
 import pickle
 from typing import Any, Dict, List, Optional
+
+from jvspatial.env import load_env
 
 from .base import CacheBackend, CacheStats
 
@@ -53,11 +54,10 @@ class RedisCache(CacheBackend):
                 "Install with: pip install redis[hiredis]"
             )
 
-        self.redis_url = redis_url or os.getenv(
-            "JVSPATIAL_REDIS_URL", "redis://localhost:6379"
-        )
+        e = load_env()
+        self.redis_url = redis_url or e.redis_url or "redis://localhost:6379"
 
-        self.default_ttl = ttl or int(os.getenv("JVSPATIAL_REDIS_TTL", "3600"))
+        self.default_ttl = ttl if ttl is not None else e.redis_ttl
         self.prefix = prefix
         self._stats = CacheStats()
         self._client = None

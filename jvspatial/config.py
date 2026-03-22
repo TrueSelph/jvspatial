@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from jvspatial.runtime.serverless import is_serverless_mode
+
 
 class Config(BaseModel):
     """Unified configuration for jvspatial.
@@ -38,6 +40,17 @@ class Config(BaseModel):
     redoc_url: Optional[str] = Field(
         default="/redoc", description="ReDoc documentation URL"
     )
+    serverless_mode: Optional[bool] = Field(
+        default=None,
+        description="Force serverless mode on/off. None enables auto-detection.",
+    )
+    deferred_task_provider: Optional[str] = Field(
+        default=None,
+        description=(
+            "Deferred task backend: aws, azure, gcp, vercel, unknown, or auto. "
+            "None uses JVSPATIAL_DEFERRED_TASK_PROVIDER env or runtime detection."
+        ),
+    )
 
     # CORS Configuration
     cors_enabled: bool = Field(default=True, description="Enable CORS middleware")
@@ -57,7 +70,8 @@ class Config(BaseModel):
 
     db_type: str = Field(default="json", description="Database type (json, mongodb)")
     db_base_path: Optional[str] = Field(
-        default=".data", description="Database base path for JSON database"
+        default_factory=lambda: "/tmp/jvdb" if is_serverless_mode() else ".data",
+        description="Database base path for JSON database",
     )
     db_uri: Optional[str] = Field(default=None, description="Database URI for MongoDB")
     db_name: Optional[str] = Field(
@@ -156,7 +170,10 @@ class Config(BaseModel):
     storage_provider: str = Field(
         default="local", description="Storage provider (local, s3)"
     )
-    storage_root: str = Field(default=".files", description="Storage root directory")
+    storage_root: str = Field(
+        default_factory=lambda: "/tmp/.files" if is_serverless_mode() else ".files",
+        description="Storage root directory",
+    )
     storage_base_url: str = Field(
         default="http://localhost:8000", description="Storage base URL"
     )
@@ -219,6 +236,7 @@ class Config(BaseModel):
             "debug": "JVSPATIAL_DEBUG",
             "host": "JVSPATIAL_HOST",
             "port": "JVSPATIAL_PORT",
+            "deferred_task_provider": "JVSPATIAL_DEFERRED_TASK_PROVIDER",
             # Database
             "db_type": "JVSPATIAL_DB_TYPE",
             "db_path": "JVSPATIAL_DB_PATH",
@@ -317,27 +335,3 @@ def set_config(config: Config) -> None:
     """
     global _config
     _config = config
-
-
-def _parse_bool_env(val: str) -> bool:
-    """Parse env string to bool. True for true/1/yes, False otherwise."""
-    return str(val).strip().lower() in ("true", "1", "yes")
-
-
-def use_background_processing() -> bool:
-    """Return True if fire-and-forget asyncio.create_task is safe.
-
-    Resolution order:
-    1. BACKGROUND_PROCESSING if set (true/1/yes -> True; false/0/no -> False)
-    2. If unset and AWS_LAMBDA_FUNCTION_NAME is set -> False (Lambda default)
-    3. Else -> True (long-running server default)
-
-    Set BACKGROUND_PROCESSING=false for serverless (e.g. Lambda) where the
-    context freezes after handler returns.
-    """
-    val = os.environ.get("BACKGROUND_PROCESSING", "").strip()
-    if val:
-        return _parse_bool_env(val)
-    if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
-        return False
-    return True
