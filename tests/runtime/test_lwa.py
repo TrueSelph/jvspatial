@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from jvspatial.api.constants import deferred_invoke_http_path
+from jvspatial.env import clear_load_env_cache, load_env
 from jvspatial.runtime.lwa import apply_aws_lwa_env_defaults
 from jvspatial.runtime.serverless import reset_serverless_mode_cache
 
@@ -96,3 +98,24 @@ def test_apply_skips_when_serverless_but_not_aws(_restore_lwa_env):
         apply_aws_lwa_env_defaults(cfg)
         assert "AWS_LWA_PASS_THROUGH_PATH" not in os.environ
         assert "JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED" not in os.environ
+
+
+def test_deferred_invoke_http_path_respects_api_prefix(_restore_lwa_env):
+    with patch.dict(os.environ, {"JVSPATIAL_API_PREFIX": "/v1"}, clear=False):
+        assert deferred_invoke_http_path() == "/v1/_internal/deferred"
+
+
+def test_load_env_applies_lwa_defaults_aws_serverless(_restore_lwa_env):
+    """First :func:`load_env` must set LWA pass-through so IaC need not."""
+    for k in _LWA_KEYS:
+        os.environ.pop(k, None)
+    with patch.dict(
+        os.environ,
+        {"SERVERLESS_MODE": "true", "AWS_LAMBDA_FUNCTION_NAME": "fn"},
+        clear=False,
+    ):
+        clear_load_env_cache()
+        reset_serverless_mode_cache()
+        load_env()
+        assert os.environ["AWS_LWA_PASS_THROUGH_PATH"] == "/api/_internal/deferred"
+        assert os.environ["AWS_LWA_INVOKE_MODE"] == "RESPONSE_STREAM"

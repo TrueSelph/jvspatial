@@ -741,7 +741,7 @@ The authentication middleware uses the **endpoint registry** as the single sourc
 
 The authentication middleware follows a **"deny by default"** security model:
 
-1. **Exempt Paths**: Paths in `exempt_paths` bypass authentication. Built-in auth paths (`/auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/signup`, `/auth/forgot-password`, `/auth/reset-password`) are always exempt. PathMatcher expands these to `{prefix}/auth/...` at runtime based on `APIRoutes.PREFIX` (default `/api`), so custom prefixes work without hardcoding.
+1. **Exempt Paths**: Paths in `exempt_paths` bypass authentication. Built-in auth paths (`/auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/signup`, `/auth/forgot-password`, `/auth/reset-password`) are always exempt. **`/_internal/deferred`** (jvspatial deferred task / LWA pass-through) is **always** merged in as well—you cannot remove it via `exempt_paths`, because Lambda async invoke cannot send your app JWT. PathMatcher expands these using `APIRoutes.PREFIX` (default `/api`).
 2. **Registered Endpoints**: Endpoints in the registry with `auth=False` are public
 3. **Unknown Endpoints**: Endpoints not in the registry **require authentication**
 4. **Error Handling**: Any error during authentication checking **denies access**

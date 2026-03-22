@@ -100,6 +100,7 @@ class Config(BaseModel):
             "/redoc",
             "/openapi.json",
             "/favicon.ico",
+            "/_internal/deferred",  # LWA pass-through; PathMatcher also forces this exempt
         ],
         description="Paths exempt from authentication",
     )

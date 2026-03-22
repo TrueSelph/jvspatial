@@ -13,8 +13,11 @@ fallback) for both :func:`load_env` and Server ``FileStorageConfig``.
 - ``SERVERLESS_MODE`` and cloud runtime detection — see
   :mod:`jvspatial.runtime.serverless` (``AWS_LAMBDA_RUNTIME_API``, ``AWS_LAMBDA_FUNCTION_NAME``,
   ``FUNCTIONS_WORKER_RUNTIME``, ``K_SERVICE``, ``VERCEL``, etc.).
-- ``AWS_LWA_PASS_THROUGH_PATH``, ``AWS_LWA_INVOKE_MODE`` — set by
-  :mod:`jvspatial.runtime.lwa` via ``os.environ.setdefault`` when bootstrapping LWA.
+- ``AWS_LWA_PASS_THROUGH_PATH``, ``AWS_LWA_INVOKE_MODE`` — defaulted via
+  :func:`jvspatial.runtime.lwa.apply_aws_lwa_env_defaults` on first
+  :func:`load_env` (AWS serverless) and again when :class:`~jvspatial.api.server.Server`
+  starts. Default path is ``/api/_internal/deferred`` when ``JVSPATIAL_API_PREFIX`` is
+  unset (see :func:`jvspatial.api.constants.deferred_invoke_http_path`).
 - ``JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED`` — may default to ``"true"`` via
   ``os.environ.setdefault`` in :mod:`jvspatial.runtime.lwa` on AWS serverless; application
   code still reads the effective value through :func:`load_env` (cached together with other
@@ -455,7 +458,13 @@ def _load_env_impl() -> EnvConfig:
 @functools.lru_cache(maxsize=1)
 def load_env() -> EnvConfig:
     """Load all environment variables into a single :class:`EnvConfig` (cached)."""
-    return _load_env_impl()
+    cfg = _load_env_impl()
+    # Earliest hook: set LWA pass-through default before most code reads os.environ,
+    # so deferred Lambda self-invoke works without IaC setting AWS_LWA_PASS_THROUGH_PATH.
+    from jvspatial.runtime.lwa import apply_aws_lwa_env_defaults
+
+    apply_aws_lwa_env_defaults(None)
+    return cfg
 
 
 def clear_load_env_cache() -> None:
