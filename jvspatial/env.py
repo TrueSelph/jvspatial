@@ -7,21 +7,25 @@ Application code should read configuration via :func:`load_env` (cached) instead
 credential keys where applicable. Local file storage root uses
 :func:`resolve_file_storage_root` from ``JVSPATIAL_FILES_ROOT_PATH`` (and config
 fallback) for both :func:`load_env` and Server ``FileStorageConfig``.
+``JVSPATIAL_LOG_RETENTION_DEFAULT_DAYS`` sets the default log retention window in
+days when unset in app config (``0`` = indefinite); jvagent reads the same variable
+when bootstrapping ``app.yaml``.
+``JVSPATIAL_LOG_LEVEL`` sets API / process log verbosity; jvagent ``load_env().log_level`` reads the same variable.
+``JVSPATIAL_JWT_SECRET_KEY`` env name for the JWT signing secret.
 
 **Not loaded here (avoid import cycles with :func:`load_env`):**
 
 - ``SERVERLESS_MODE`` and cloud runtime detection — see
   :mod:`jvspatial.runtime.serverless` (``AWS_LAMBDA_RUNTIME_API``, ``AWS_LAMBDA_FUNCTION_NAME``,
   ``FUNCTIONS_WORKER_RUNTIME``, ``K_SERVICE``, ``VERCEL``, etc.).
-- ``AWS_LWA_PASS_THROUGH_PATH``, ``AWS_LWA_INVOKE_MODE`` — defaulted via
-  :func:`jvspatial.runtime.lwa.apply_aws_lwa_env_defaults` on first
-  :func:`load_env` (AWS serverless) and again when :class:`~jvspatial.api.server.Server`
-  starts. Default path is ``/api/_internal/deferred`` when ``JVSPATIAL_API_PREFIX`` is
-  unset (see :func:`jvspatial.api.constants.deferred_invoke_http_path`).
+- ``AWS_LWA_PASS_THROUGH_PATH``, ``AWS_LWA_INVOKE_MODE`` — best-effort defaults via
+  :func:`jvspatial.runtime.lwa.apply_aws_lwa_env_defaults` when the Server starts on
+  AWS serverless and LWA is detected; IaC is still recommended (the extension may read
+  env before Python starts). Opt out with ``JVSPATIAL_LWA_ENV_DEFAULTS=false``.
 - ``JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED`` — may default to ``"true"`` via
-  ``os.environ.setdefault`` in :mod:`jvspatial.runtime.lwa` on AWS serverless; application
-  code still reads the effective value through :func:`load_env` (cached together with other
-  EventBridge fields).
+  ``os.environ.setdefault`` when :class:`~jvspatial.api.server.Server` starts on AWS
+  serverless; application code still reads the effective value through :func:`load_env`
+  (cached together with other EventBridge fields).
 """
 
 from __future__ import annotations
@@ -53,6 +57,17 @@ def _normalize_env_str(val: Optional[str]) -> Optional[str]:
         return None
     s = str(val).strip()
     return s if s else None
+
+
+def _parse_optional_nonnegative_int(val: Optional[str]) -> Optional[int]:
+    """Parse env string to int. None if unset/invalid/negative; 0 allowed (indefinite)."""
+    if val is None or not str(val).strip():
+        return None
+    try:
+        n = int(val)
+        return n if n >= 0 else None
+    except ValueError:
+        return None
 
 
 def resolve_file_storage_root(
@@ -201,6 +216,7 @@ class EnvConfig:
     log_db_table_name: str
     log_db_region: Optional[str]
     log_db_endpoint_url: Optional[str]
+    log_retention_default_days: Optional[int]
 
     # Cache
     cache_backend: str
@@ -410,6 +426,9 @@ def _load_env_impl() -> EnvConfig:
         log_db_uri=log_db_uri,
         log_db_region=log_db_region,
         log_db_endpoint_url=log_db_endpoint,
+        log_retention_default_days=_parse_optional_nonnegative_int(
+            os.getenv("JVSPATIAL_LOG_RETENTION_DEFAULT_DAYS")
+        ),
         cache_backend=os.getenv("JVSPATIAL_CACHE_BACKEND", "memory"),
         cache_size=int(os.getenv("JVSPATIAL_CACHE_SIZE", "1000")),
         redis_url=redis_url,
@@ -458,13 +477,7 @@ def _load_env_impl() -> EnvConfig:
 @functools.lru_cache(maxsize=1)
 def load_env() -> EnvConfig:
     """Load all environment variables into a single :class:`EnvConfig` (cached)."""
-    cfg = _load_env_impl()
-    # Earliest hook: set LWA pass-through default before most code reads os.environ,
-    # so deferred Lambda self-invoke works without IaC setting AWS_LWA_PASS_THROUGH_PATH.
-    from jvspatial.runtime.lwa import apply_aws_lwa_env_defaults
-
-    apply_aws_lwa_env_defaults(None)
-    return cfg
+    return _load_env_impl()
 
 
 def clear_load_env_cache() -> None:

@@ -50,9 +50,12 @@ setup(
         "schedule>=1.2.2",  # Job scheduling
         "typing-extensions>=4.0.0",  # For @override decorator and enhanced typing
         "aiofiles>=23.0.0",  # Async file operations for JsonDB
-        "aioboto3>=15.5.0",  # AWS SDK for S3 storage support
     ],
     extras_require={
+        "lambda": [
+            "aioboto3>=15.5.0",
+            "boto3>=1.28.0",
+        ],
         "dev": [
             "pytest>=7.0",
             "pytest-asyncio>=0.21.0",

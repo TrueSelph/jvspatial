@@ -7,26 +7,10 @@ Values resolve from :func:`jvspatial.env.load_env` on each attribute read so
 environment changes take effect after :func:`~jvspatial.env.clear_load_env_cache`.
 """
 
-import os
 from http import HTTPStatus
 from typing import Any, List
 
 from jvspatial.env import load_env
-
-
-def deferred_invoke_http_path() -> str:
-    """Full HTTP path for LWA deferred pass-through (``POST …/_internal/deferred``).
-
-    Uses only ``os.environ`` / ``JVSPATIAL_API_PREFIX`` so this is safe while
-    :func:`jvspatial.env.load_env` is computing its cache entry (no circular
-    access to :class:`APIRoutes.PREFIX`).
-    """
-    raw = (os.environ.get("JVSPATIAL_API_PREFIX", "/api") or "/api").strip()
-    if not raw.startswith("/"):
-        raw = f"/{raw}"
-    prefix = raw.rstrip("/") or ""
-    suffix = "/_internal/deferred"
-    return f"{prefix}{suffix}" if prefix else suffix
 
 
 class _EnvAttr:
@@ -69,7 +53,9 @@ class APIRoutes:
     @classmethod
     def deferred_invoke_full_path(cls) -> str:
         """Full URL path for LWA pass-through and POST deferred invocations."""
-        return deferred_invoke_http_path()
+        prefix = str(cls.PREFIX).rstrip("/")
+        suffix = cls.DEFERRED_INVOKE_SUFFIX
+        return f"{prefix}{suffix}" if prefix else suffix
 
 
 class HTTPMethods:
@@ -198,7 +184,6 @@ class Defaults:
 
 __all__ = [
     "APIRoutes",
-    "deferred_invoke_http_path",
     "HTTPMethods",
     "Collections",
     "LogIcons",

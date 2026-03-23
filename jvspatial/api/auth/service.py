@@ -190,6 +190,14 @@ class AuthenticationService:
         collection, final_query = await User._build_database_query(self.context, {}, {})
         return await self.context.database.count(collection, final_query)
 
+    async def count_users(self) -> int:
+        """Return the number of users in the auth database (public API)."""
+        return await self._user_count()
+
+    async def find_user_by_email(self, email: str) -> Optional[User]:
+        """Find a user by email (public API)."""
+        return await self._find_user_by_email(email)
+
     def _hash_password(self, password: str) -> str:
         """Hash a password using bcrypt when available, else SHA-256 with salt.
 

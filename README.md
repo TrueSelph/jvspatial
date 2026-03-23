@@ -205,7 +205,7 @@ active_users = await User.count(active=True)  # Count filtered users using keywo
 
 Set `SERVERLESS_MODE=true` to force serverless-safe behavior (strict synchronous request lifecycle, no fire-and-forget background task assumptions). When unset, jvspatial auto-detects AWS Lambda via runtime environment variables. Use `is_serverless_mode()` from `jvspatial.runtime.serverless` to check mode at runtime.
 
-For deferred work across invocations, use `dispatch_deferred_task()` from `jvspatial.serverless`. On AWS, Lambda async invoke and optional EventBridge deliver JSON to your app; with the Lambda Web Adapter, configure **`AWS_LWA_PASS_THROUGH_PATH`** to match **`{JVSPATIAL_API_PREFIX}/_internal/deferred`** (default `/api/_internal/deferred`). Register task handlers with `register_deferred_invoke_handler()` in `jvspatial.serverless.deferred_invoke`. See [docs/md/serverless-mode.md](docs/md/serverless-mode.md) for LWA env defaults and security notes.
+For deferred work across invocations, use `dispatch_deferred_task()` from `jvspatial.serverless`. On AWS, Lambda async invoke and optional EventBridge deliver JSON to your app; with the Lambda Web Adapter, **`Server`** applies best-effort **`AWS_LWA_PASS_THROUGH_PATH`** / **`AWS_LWA_INVOKE_MODE`** defaults when LWA is detected (see [docs/md/serverless-mode.md](docs/md/serverless-mode.md)); set them in IaC when the extension must read them before Python starts. Register task handlers with `register_deferred_invoke_handler()` in `jvspatial.serverless.deferred_invoke`.
 
 ### Server Configuration
 

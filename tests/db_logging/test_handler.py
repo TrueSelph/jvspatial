@@ -16,8 +16,8 @@ class TestDBLogHandlerBackgroundProcessing:
     def test_persists_logs_in_serverless_mode(self):
         """DBLogHandler persists logs when serverless mode is enabled.
 
-        Logging should only be controlled by JVAGENT_LOGGING_ENABLED. In serverless mode, the handler
-        uses synchronous save in a thread instead of skipping.
+        jvagent gates DB log handler setup via JVSPATIAL_DB_LOGGING_ENABLED.
+        In serverless mode, the handler uses synchronous save in a thread instead of skipping.
         """
         with patch.dict(os.environ, {"SERVERLESS_MODE": "true"}):
             reset_serverless_mode_cache()

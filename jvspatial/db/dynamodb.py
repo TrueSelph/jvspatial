@@ -1,22 +1,17 @@
 """DynamoDB database implementation.
 
-Index Creation Behavior:
-    By default, indexes are NOT created automatically. To enable automatic index creation,
-    set the environment variable:
+Index creation policy (auto-create vs wait) is **not** read inside this module.
+``JVSPATIAL_AUTO_CREATE_INDEXES`` is loaded via ``jvspatial.env.load_env()`` and applied
+when entities use ``GraphContext`` (e.g. during ``ensure_indexes``). This class only
+consumes ``JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX`` (and related wait behavior) where
+``create_index(..., wait_for_active=...)`` defaults are resolved from ``load_env()``.
 
-        JVSPATIAL_AUTO_CREATE_INDEXES=true
-
-    When automatic index creation is enabled, indexes are created asynchronously and do NOT
-    wait for Global Secondary Indexes (GSI) to become active by default, allowing immediate
-    graph usage. Indexes will be available for queries once they become active (typically
-    a few minutes).
-
-    To enable waiting for index activation (when auto-create is enabled), set:
-
-        JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX=true
-
-    When set to true, the system will wait up to 5 minutes per index for activation before
-    proceeding, which can cause significant delays during initialization.
+Summary:
+    - ``JVSPATIAL_AUTO_CREATE_INDEXES``: interpreted in ``GraphContext`` / env layer,
+      not in ``DynamoDB`` methods directly.
+    - ``JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX``: when auto-creation is enabled elsewhere,
+      set to ``true`` to wait for GSI activation (up to ~5 minutes per index), which
+      can delay startup; default is non-blocking creation for faster cold starts.
 """
 
 import asyncio
@@ -84,7 +79,7 @@ class DynamoDB(Database):
         if not _BOTO3_AVAILABLE:
             raise ImportError(
                 "aioboto3 is required for DynamoDB support. "
-                "Install it with: pip install aioboto3>=12.0.0"
+                "Install it with: pip install jvspatial[lambda]"
             )
 
         self.table_name = table_name

@@ -139,3 +139,28 @@ def test_load_env_is_cached_until_cleared():
     with patch.dict(os.environ, {"JVSPATIAL_API_PREFIX": "/v2"}):
         clear_load_env_cache()
         assert load_env().api_prefix == "/v2"
+
+
+def test_log_retention_default_days_unset():
+    with patch.dict(os.environ, {}, clear=True):
+        clear_load_env_cache()
+        assert load_env().log_retention_default_days is None
+
+
+def test_log_retention_default_days_valid():
+    with patch.dict(os.environ, {"JVSPATIAL_LOG_RETENTION_DEFAULT_DAYS": "90"}):
+        clear_load_env_cache()
+        assert load_env().log_retention_default_days == 90
+
+
+def test_log_retention_default_days_zero():
+    with patch.dict(os.environ, {"JVSPATIAL_LOG_RETENTION_DEFAULT_DAYS": "0"}):
+        clear_load_env_cache()
+        assert load_env().log_retention_default_days == 0
+
+
+def test_log_retention_default_days_invalid_or_negative():
+    for raw in ("not-int", "-1", "  "):
+        with patch.dict(os.environ, {"JVSPATIAL_LOG_RETENTION_DEFAULT_DAYS": raw}):
+            clear_load_env_cache()
+            assert load_env().log_retention_default_days is None

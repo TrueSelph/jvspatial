@@ -34,7 +34,10 @@ def _make_sqs_scheduler(queue_url: str) -> TaskScheduler:
     try:
         import boto3
     except ImportError:
-        logger.warning("boto3 not installed; cannot create SQS deferred task scheduler")
+        logger.warning(
+            "boto3 not installed; cannot create SQS deferred task scheduler "
+            "(pip install jvspatial[lambda])"
+        )
         return LoggingNoopTaskScheduler(
             "boto3 not installed; deferred tasks not dispatched"
         )

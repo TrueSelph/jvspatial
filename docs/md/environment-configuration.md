@@ -129,7 +129,7 @@ import os
 server = Server(
     auth=dict(
         auth_enabled=True,
-        jwt_secret=os.getenv("JWT_SECRET_KEY"),
+        jwt_secret=os.getenv("JVSPATIAL_JWT_SECRET_KEY"),
         bootstrap_admin_email=os.getenv("ADMIN_EMAIL"),
         bootstrap_admin_password=os.getenv("ADMIN_PASSWORD"),
         bootstrap_admin_name=os.getenv("ADMIN_NAME"),

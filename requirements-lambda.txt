@@ -1,0 +1,5 @@
+# AWS Lambda-oriented deps (DynamoDB async + sync boto3 for serverless tasks).
+# Usage: pip install -r requirements-lambda.txt
+-r requirements.txt
+aioboto3>=15.5.0
+boto3>=1.28.0

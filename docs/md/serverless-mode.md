@@ -73,7 +73,7 @@ Serverless runtimes cannot rely on `asyncio.create_task` for work that must cont
 
 EventBridge (avoids relying on delayed Lambda invoke for timed `run_at` work) uses **`JVSPATIAL_EVENTBRIDGE_*`**:
 
-- `JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED` — defaults to **`true`** on serverless AWS via `apply_aws_lwa_env_defaults()` (`setdefault`); set to `false` to force Lambda-only behavior.
+- `JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED` — defaults to **`true`** on serverless AWS when `Server` starts via `apply_aws_eventbridge_env_default()` (`setdefault`); set to `false` to force Lambda-only behavior.
 - `JVSPATIAL_EVENTBRIDGE_ROLE_ARN` — **required** for schedules to be created (IAM role EventBridge Scheduler uses to invoke your function).
 - `JVSPATIAL_EVENTBRIDGE_LAMBDA_ARN` — optional; if unset, built from `AWS_LAMBDA_FUNCTION_NAME` + `AWS_REGION` + `AWS_ACCOUNT_ID` when all are set.
 - `JVSPATIAL_EVENTBRIDGE_SCHEDULER_GROUP` (default `default`)
@@ -105,11 +105,8 @@ Direct Lambda invocations (async invoke and EventBridge targets) deliver a JSON 
 - **Disable**: set `JVSPATIAL_DEFERRED_INVOKE_DISABLED=true` to skip registering the route (e.g. when another entrypoint handles deferred work).
 - **Dispatch**: the body must be a JSON object with a string **`task_type`**. jvspatial dispatches to handlers registered via **`register_deferred_invoke_handler(task_type, fn)`** or **`@deferred_invoke_handler("…")`** (also exported from top-level **`jvspatial`**). Unknown `task_type` yields HTTP 404.
 - **Auth**: The deferred HTTP path is **always exempt from `AuthenticationMiddleware`** (JWT/API key): Lambda async invoke bodies cannot carry your app’s `Authorization` header. Optional **`JVSPATIAL_DEFERRED_INVOKE_SECRET`** is checked **inside** the deferred route only. If that secret is set, each request must send the same value in **`X-JVSPATIAL-Deferred-Authorize`** or **`Authorization: Bearer <secret>`**; otherwise the route returns 401. For same-function self-invoke, leave the secret unset unless you inject headers in infra. Still prefer private network / VPC boundaries for production.
-- **Environment defaults (best-effort)**: when `is_serverless_mode()` is true and `detect_serverless_provider() == "aws"`, **`apply_aws_lwa_env_defaults()`** (`jvspatial.runtime.lwa`) uses `os.environ.setdefault` for:
-  - `AWS_LWA_PASS_THROUGH_PATH` → `deferred_invoke_http_path()` (default **`/api/_internal/deferred`** from `JVSPATIAL_API_PREFIX`, or override the env var). This runs on **first `load_env()`** and again in `Server.__init__`, so you usually do not need IaC to set it for in-process readers. The LWA **extension** may still read Lambda env before Python starts—mirror the value in Lambda configuration if needed.
-  - `AWS_LWA_INVOKE_MODE` → `RESPONSE_STREAM`
-  - `JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED` → `true`
-  The LWA extension may read Lambda **platform** environment before your process starts, so **set the same values in Lambda/IaC** in production; Python defaults are a convenience for local/emulated runs. EventBridge still needs **`JVSPATIAL_EVENTBRIDGE_ROLE_ARN`** (and ARN pieces) from IaC before schedules can succeed.
+- **LWA environment (best-effort)**: when `is_serverless_mode()` is true, `detect_serverless_provider() == "aws"`, and LWA is detected (e.g. `AWS_LWA_PORT` or `AWS_LAMBDA_EXEC_WRAPPER` indicating the adapter), **`apply_aws_lwa_env_defaults()`** (`jvspatial.runtime.lwa`) runs from **`Server.__init__`** and uses `os.environ.setdefault` for **`AWS_LWA_PASS_THROUGH_PATH`** (same path rule as `{JVSPATIAL_API_PREFIX}/_internal/deferred`) and **`AWS_LWA_INVOKE_MODE=RESPONSE_STREAM`**. Set **`JVSPATIAL_LWA_ENV_DEFAULTS=true`** to force these defaults if detection misses; **`JVSPATIAL_LWA_ENV_DEFAULTS=false`** to disable. The LWA extension may still read env before Python starts, so **set them in Lambda / IaC** when you need guarantees.
+- **EventBridge default (best-effort)**: when `is_serverless_mode()` is true and `detect_serverless_provider() == "aws"`, **`apply_aws_eventbridge_env_default()`** (`jvspatial.runtime.lwa`) runs from **`Server.__init__`** and uses `os.environ.setdefault("JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED", "true")`. EventBridge still needs **`JVSPATIAL_EVENTBRIDGE_ROLE_ARN`** (and ARN pieces) from IaC before schedules can succeed.
 
 Payloads from **`AwsLambdaDeferredTaskScheduler`** and EventBridge **`Input`** both include `task_type`, so they align with this router.
 

@@ -40,6 +40,16 @@ API configuration is managed through [`ServerConfig`](../../jvspatial/api/config
 
 Environment variables follow the pattern `JVSPATIAL_*` for configuration overrides.
 
+### Middleware stack order
+
+FastAPI applies HTTP middleware in **reverse** registration order (last registered runs first on the request path). jvspatial splits wiring across two places on purpose:
+
+1. **[`MiddlewareManager`](../../jvspatial/api/middleware/manager.py)** ([`configure_all`](../../jvspatial/api/middleware/manager.py)) — security headers, CORS, optional webhook middleware, file-storage routes, and any custom middleware registered via [`Server.middleware`](../../jvspatial/api/server_lifecycle.py). **JWT/API-key auth is intentionally not registered here** so its order relative to rate limiting stays explicit.
+
+2. **[`ServerConfigurator`](../../jvspatial/api/server_configurator.py)** ([`configure_all`](../../jvspatial/api/server_configurator.py)) — per-request error-logging context (contextvars reset), **rate limiting**, **[`AuthenticationMiddleware`](../../jvspatial/api/components/auth_middleware.py)**, and unified exception handlers.
+
+**Security intent:** CORS and static security headers run early; rate limits and auth apply together before your route handlers. `/auth/*` routes that use FastAPI `Depends` for bearer tokens bypass the auth middleware when the framework has already resolved credentials (see auth middleware docstring). Adjust exempt paths and backends via `ServerConfig` and the injectable rate-limit backend.
+
 ## Core Components
 
 ### 1. Context Management

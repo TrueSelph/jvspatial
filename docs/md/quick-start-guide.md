@@ -16,6 +16,7 @@ pip install jvspatial
 # Install with optional dependencies
 pip install jvspatial[dev]    # Development tools (pytest, pre-commit)
 pip install jvspatial[test]   # Testing (pytest, httpx)
+pip install jvspatial[lambda] # AWS Lambda / DynamoDB (aioboto3, boto3)
 pip install jvspatial[all]    # All optional deps
 ```
 
@@ -241,7 +242,7 @@ JVSPATIAL_HOST=0.0.0.0
 JVSPATIAL_PORT=8000
 
 # Authentication
-JVSPATIAL_JWT_SECRET=your-secret-key-here
+JVSPATIAL_JWT_SECRET_KEY=your-secret-key-here
 ```
 
 ### **Programmatic Configuration**

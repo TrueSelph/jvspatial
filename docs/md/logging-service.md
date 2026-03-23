@@ -120,6 +120,17 @@ JVSPATIAL_DB_LOGGING_ENABLED=false
 JVSPATIAL_DB_LOGGING_DB_NAME=logs
 ```
 
+### Default retention (jvagent / app bootstrap)
+
+Optional default for how long interaction logs are retained when not set in `app.yaml` (`context.log_retention_days`). jvagent reads `JVSPATIAL_LOG_RETENTION_DEFAULT_DAYS` from the environment; jvspatial exposes the same value on `load_env().log_retention_default_days`.
+
+```bash
+# Optional: default retention in days (0 = indefinite)
+JVSPATIAL_LOG_RETENTION_DEFAULT_DAYS=60
+```
+
+If unset, jvagent falls back to `context.log_retention_days` in `app.yaml`, then `60`.
+
 ### API Endpoints
 
 ```bash

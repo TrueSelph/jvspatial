@@ -213,7 +213,7 @@ Set these in production:
 
 ```bash
 # .env file
-JVSPATIAL_JWT_SECRET="your-super-secret-256-bit-key"
+JVSPATIAL_JWT_SECRET_KEY="your-super-secret-256-bit-key"
 JVSPATIAL_DB_PATH="./data"  # For JSON/SQLite when using env-only config
 
 # Bootstrap admin (optional)
@@ -789,7 +789,7 @@ server = Server(
     db_path="./data",
     auth=dict(
         auth_enabled=True,
-        jwt_secret=os.getenv("JWT_SECRET_KEY"),  # 256-bit random key
+        jwt_secret=os.getenv("JVSPATIAL_JWT_SECRET_KEY"),  # 256-bit random key
         jwt_algorithm="HS256",
         jwt_expire_minutes=1440,
     ),

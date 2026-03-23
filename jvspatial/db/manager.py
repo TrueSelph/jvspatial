@@ -63,49 +63,15 @@ class DatabaseManager:
 
         # Initialize prime database
         if prime_database is None:
-            # Create default prime database (avoid circular import)
             from jvspatial.env import load_env
 
+            from .factory import create_database
             from .jsondb import JsonDB
 
             env = load_env()
-            if env.db_type == "json":
-                self._prime_database = JsonDB(str(env.jsondb_path))
-            elif env.db_type == "mongodb":
-                from .mongodb import MongoDB
-
-                self._prime_database = MongoDB(
-                    uri=env.mongodb_uri,
-                    db_name=env.mongodb_db_name,
-                    max_pool_size=env.mongodb_max_pool,
-                    min_pool_size=env.mongodb_min_pool,
-                )
-            elif env.db_type == "sqlite":
-                try:
-                    from .sqlite import SQLiteDB
-                except ImportError as exc:  # pragma: no cover - dependency missing
-                    raise ImportError(
-                        "aiosqlite is required for SQLite support. Install it with: pip install aiosqlite"
-                    ) from exc
-
-                self._prime_database = SQLiteDB(db_path=env.db_path)
-            elif env.db_type == "dynamodb":
-                try:
-                    from .dynamodb import DynamoDB
-                except ImportError as exc:  # pragma: no cover - dependency missing
-                    raise ImportError(
-                        "aioboto3 is required for DynamoDB support. Install it with: pip install aioboto3"
-                    ) from exc
-
-                self._prime_database = DynamoDB(
-                    table_name=env.dynamodb_table_name,
-                    region_name=env.dynamodb_region,
-                    endpoint_url=env.dynamodb_endpoint_url,
-                    aws_access_key_id=env.dynamodb_access_key_id,
-                    aws_secret_access_key=env.dynamodb_secret_access_key,
-                )
-            else:
-                # Fallback to JSON
+            try:
+                self._prime_database = create_database(env.db_type, env=env)
+            except ValueError:
                 self._prime_database = JsonDB(str(env.jsondb_path))
         else:
             self._prime_database = prime_database
