@@ -198,6 +198,7 @@ class AuthConfig(BaseModel):
     # at runtime so any prefix (e.g. /api, /v1) works without hardcoding.
     exempt_paths: List[str] = Field(
         default_factory=lambda: [
+            "/",
             "/health",
             "/docs",
             "/redoc",

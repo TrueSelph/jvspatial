@@ -95,6 +95,7 @@ class Config(BaseModel):
     )
     auth_exempt_paths: List[str] = Field(
         default_factory=lambda: [
+            "/",
             "/health",
             "/docs",
             "/redoc",

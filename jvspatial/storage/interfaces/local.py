@@ -30,6 +30,30 @@ from .base import FileStorageInterface
 
 logger = logging.getLogger(__name__)
 
+# When set (1/true/yes/on), skip serverless + non-/tmp root warnings — operator asserts durable storage (e.g. EFS).
+_SERVERLESS_SHARED_ENV = "JVSPATIAL_FILE_STORAGE_SERVERLESS_SHARED"
+
+
+def _env_flag_true(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _log_serverless_non_tmp_root(root_dir: Path) -> None:
+    """Warn when local file root is not under /tmp in serverless runtimes (e.g. Lambda)."""
+    if _env_flag_true(_SERVERLESS_SHARED_ENV):
+        return
+    r = str(root_dir)
+    msg = (
+        "LocalFileInterface root_dir '%s' is outside /tmp in serverless mode. "
+        "Unless this path is on shared storage (e.g. EFS) mounted on every "
+        "invocation, files may be ephemeral or unavailable across invocations."
+    )
+    tail = " Set %s=1 after you confirm durable storage." % _SERVERLESS_SHARED_ENV
+    if r.startswith("/mnt/"):
+        logger.info(msg + tail, root_dir)
+    else:
+        logger.warning(msg + tail, root_dir)
+
 
 class LocalFileInterface(FileStorageInterface):
     """Local filesystem storage implementation.
@@ -87,12 +111,7 @@ class LocalFileInterface(FileStorageInterface):
             self.root_dir.mkdir(parents=True, exist_ok=True)
             logger.info(f"Local storage initialized at: {self.root_dir}")
         if is_serverless_mode() and not str(self.root_dir).startswith("/tmp"):
-            logger.warning(
-                "LocalFileInterface root_dir '%s' is outside /tmp in serverless mode. "
-                "Unless this path is on shared storage (e.g. EFS) mounted on every "
-                "invocation, files may be ephemeral or unavailable across invocations.",
-                self.root_dir,
-            )
+            _log_serverless_non_tmp_root(self.root_dir)
 
         # Verify root directory exists and is writable
         if not self.root_dir.exists():

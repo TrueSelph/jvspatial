@@ -109,6 +109,14 @@ class TestAuthenticationMiddleware:
         response = client.get("/health")
         assert response.status_code == 200
 
+    def test_root_path_exempt(self, client):
+        """Core GET / is public service metadata (matches register_core_routes)."""
+        response = client.get("/")
+        assert response.status_code == 200
+        body = response.json()
+        assert "service" in body
+        assert "health" in body
+
     def test_walker_endpoint_with_auth_false_allows_access(self, server):
         """Test that walker endpoint with auth=False allows access without auth."""
 
