@@ -54,8 +54,9 @@ class Node(Object):
     def _get_top_level_fields(cls: Type["Node"]) -> set:
         """Get top-level fields for Node persistence format."""
         return {
-            "edges"
-        }  # edge_ids is stored as "edges" at top level in database exports
+            "edges",
+            "id",
+        }  # edge_ids is stored as "edges" at top level; id is top-level on node docs
 
     def __init_subclass__(cls: Type["Node"]) -> None:
         """Initialize subclass by registering visit hooks."""
@@ -379,6 +380,38 @@ class Node(Object):
             edge_filter=edge,
             limit=limit,
             **kwargs,
+        )
+
+    async def count_neighbors(
+        self,
+        direction: str = "out",
+        node: Optional[
+            Union[str, type, List[Union[str, type, Dict[str, Dict[str, Any]]]]]
+        ] = None,
+        edge: Optional[
+            Union[
+                str,
+                Type["Edge"],
+                List[Union[str, Type["Edge"], Dict[str, Dict[str, Any]]]],
+            ]
+        ] = None,
+        **kwargs: Any,
+    ) -> int:
+        """Count neighbors (same filters as :meth:`nodes`).
+
+        Named ``count_neighbors`` so this does not shadow :meth:`Object.count` on
+        Node subclasses (e.g. ``User.count(query)`` remains the DB count API).
+
+        Returns:
+            Number of matching connected nodes.
+        """
+        return len(
+            await self.nodes(
+                direction=direction,
+                node=node,
+                edge=edge,
+                **kwargs,
+            )
         )
 
     async def node(

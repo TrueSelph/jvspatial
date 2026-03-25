@@ -654,11 +654,15 @@ class Object(AttributeMixin, BaseModel):
             if key == "entity":
                 # Skip entity - already handled in class_name_filter
                 continue
-            if (key in top_level_fields) or (key.startswith("context.")):
-                # For all entity types, top-level fields and context.* fields map directly
+            if (
+                key.startswith("$")
+                or (key in top_level_fields)
+                or key.startswith("context.")
+            ):
+                # $operators, declared top-level fields, and context.* keys map as-is;
+                # other field names become context.<name> in storage.
                 db_query[key] = value
             else:
-                # For all entity types, non-context fields map to context.* in database
                 db_query[f"context.{key}"] = value
 
         final_query = (

@@ -241,6 +241,39 @@ class TestGraphContextCRUD:
         assert count_kwargs == 1
 
     @pytest.mark.asyncio
+    async def test_node_count_by_top_level_id_in(self, temp_context):
+        """User.count / Node.count with id $in must use top-level id field."""
+        from jvspatial.core.context import set_default_context
+
+        set_default_context(temp_context)
+        n1 = await TestNode.create(name="n1", value=1)
+        await TestNode.create(name="n2", value=2)
+        cnt = await TestNode.count({"id": {"$in": [n1.id]}})
+        assert cnt == 1
+
+    @pytest.mark.asyncio
+    async def test_node_count_with_top_level_dollar_or(self, temp_context):
+        """Top-level $or in count query must not be prefixed as context.$or."""
+        from jvspatial.core.context import set_default_context
+
+        set_default_context(temp_context)
+        n1 = await TestNode.create(name="or1", value=1)
+        n2 = await TestNode.create(name="or2", value=2)
+        cnt = await TestNode.count(
+            {
+                "$or": [
+                    {"context.value": 1},
+                    {"context.value": 2},
+                ]
+            }
+        )
+        assert cnt == 2
+        cnt_one = await TestNode.count(
+            {"id": {"$in": [n1.id]}, "$or": [{"context.value": 1}]}
+        )
+        assert cnt_one == 1
+
+    @pytest.mark.asyncio
     async def test_edge_count_all(self, temp_context):
         """Test counting all edges of a type."""
         from jvspatial.core.context import set_default_context

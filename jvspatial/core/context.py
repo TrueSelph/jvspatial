@@ -1,5 +1,6 @@
 """GraphContext for managing database dependencies."""
 
+import inspect
 import logging
 import time
 from contextlib import asynccontextmanager, contextmanager, suppress
@@ -29,6 +30,30 @@ logger = logging.getLogger(__name__)
 
 # Global registry to track which collections have had indexes ensured
 _ensured_indexes: Set[str] = set()
+
+
+def _coerce_edge_id_list(value: Any) -> List[str]:
+    """Normalize *value* to a list of edge ID strings for persistence merge logic."""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(x) for x in value]
+    return []
+
+
+async def _unwrap_db_get_result(raw: Any) -> Optional[Dict[str, Any]]:
+    """Resolve ``await db.get(...)`` to a dict or None (handles nested AsyncMock / awaitables)."""
+    cur: Any = raw
+    for _ in range(5):
+        if cur is None:
+            return None
+        if isinstance(cur, dict):
+            return cur
+        if inspect.isawaitable(cur):
+            cur = await cur  # type: ignore[func-returns-value]
+            continue
+        return None
+    return None
 
 
 # Simple performance monitor for tracking operations
@@ -662,11 +687,15 @@ class GraphContext:
         if self._cache:
             await self._cache.delete(entity_id)
 
-    async def save(self, entity):
+    async def save(self, entity, *, merge_node_edges: bool = True):
         """Save an entity to the database.
 
         Args:
             entity: Entity instance to save
+            merge_node_edges: For nodes, whether to union persisted ``edges`` with the
+                on-disk copy so concurrent ``atomic_add_edge_id`` updates are not lost.
+                Set to False when persisting an authoritative edge list (e.g. after
+                ``atomic_remove_edge_id``) so removals are not undone by a stale read.
 
         Returns:
             The saved entity instance
@@ -741,6 +770,27 @@ class GraphContext:
                 collection = type_code.lower()
 
         db = self.database
+        # Merge node edge lists with the DB so full-document saves do not clobber
+        # edge IDs added concurrently via atomic_add_edge_id (or another writer).
+        if (
+            merge_node_edges
+            and hasattr(entity, "type_code")
+            and getattr(entity, "type_code", "") == "n"
+        ):
+            fresh = await _unwrap_db_get_result(await db.get(collection, entity.id))
+            e_mem = set(_coerce_edge_id_list(record.get("edges")))
+            e_db = set(_coerce_edge_id_list((fresh or {}).get("edges")))
+            merged = sorted(e_mem | e_db)
+            record["edges"] = merged
+            if hasattr(entity, "edge_ids"):
+                object.__setattr__(entity, "edge_ids", list(merged))
+        elif hasattr(entity, "type_code") and getattr(entity, "type_code", "") == "n":
+            # Authoritative save: keep exported edges and mirror them onto the entity.
+            merged = _coerce_edge_id_list(record.get("edges"))
+            record["edges"] = merged
+            if hasattr(entity, "edge_ids"):
+                object.__setattr__(entity, "edge_ids", list(merged))
+
         await db.save(collection, record)
         # Update cache with latest version
         await self._add_to_cache(entity.id, entity)
@@ -1031,7 +1081,7 @@ class GraphContext:
         node = await self.get(Node, node_id)
         if node and edge_id in node.edge_ids:
             node.edge_ids.remove(edge_id)
-            await self.save(node)
+            await self.save(node, merge_node_edges=False)
         return node is not None
 
     async def atomic_increment(self, node_id: str, field: str, amount: int = 1) -> bool:
@@ -1318,7 +1368,12 @@ class GraphContext:
 
     # Batch operations for improved performance
     async def save_batch(self, entities: List[Any]) -> List[Any]:
-        """Save multiple entities in a single transaction.
+        """Save multiple entities in best-effort batch (not an ACID transaction).
+
+        Persists each entity via the database adapter's ``save`` (or ``batch_write``
+        where supported). There is no cross-collection atomicity unless the
+        underlying :meth:`Database.begin_transaction` / ``commit_transaction``
+        API is used and wired through callers separately.
 
         Args:
             entities: List of entity instances to save
