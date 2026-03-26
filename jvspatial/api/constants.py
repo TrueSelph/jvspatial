@@ -23,14 +23,14 @@ class _EnvAttr:
         return getattr(load_env(), self._attr_name)
 
 
-class _StorageJoin:
-    """Append a path segment to ``load_env().storage_prefix``."""
+class _FilesJoin:
+    """Append a path segment to ``load_env().files_route_base``."""
 
     def __init__(self, suffix: str):
         self._suffix = suffix
 
     def __get__(self, obj: Any, owner: type) -> str:
-        base = load_env().storage_prefix
+        base = load_env().files_route_base
         return f"{base}{self._suffix}"
 
 
@@ -41,10 +41,9 @@ class APIRoutes:
     HEALTH = _EnvAttr("api_health")
     ROOT = _EnvAttr("api_root")
 
-    STORAGE_PREFIX = _EnvAttr("storage_prefix")
-    STORAGE_UPLOAD = _StorageJoin("/upload")
-    STORAGE_FILES = _StorageJoin("/files")
-    STORAGE_PROXY = _StorageJoin("/proxy")
+    FILES_ROOT = _EnvAttr("files_route_base")
+    FILES_UPLOAD = _FilesJoin("/upload")
+    FILES_PROXY = _FilesJoin("/proxy")
 
     PROXY_PREFIX = _EnvAttr("proxy_prefix")
 
@@ -173,6 +172,7 @@ class Defaults:
     FILE_STORAGE_ROOT = _EnvAttr("file_storage_root")
     FILE_STORAGE_MAX_SIZE = _EnvAttr("file_storage_max_size")
     FILE_STORAGE_BASE_URL = _EnvAttr("file_storage_base_url")
+    FILES_PUBLIC_READ = _EnvAttr("files_public_read")
 
     PROXY_ENABLED = _EnvAttr("proxy_enabled")
     PROXY_EXPIRATION = _EnvAttr("proxy_expiration")

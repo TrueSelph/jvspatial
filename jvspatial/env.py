@@ -12,6 +12,9 @@ days when unset in app config (``0`` = indefinite); jvagent reads the same varia
 when bootstrapping ``app.yaml``.
 ``JVSPATIAL_LOG_LEVEL`` sets API / process log verbosity; jvagent ``load_env().log_level`` reads the same variable.
 ``JVSPATIAL_JWT_SECRET_KEY`` env name for the JWT signing secret.
+``JVSPATIAL_FILES_PUBLIC_READ`` (default true) controls whether ``GET {api_prefix}/files/{path}``
+skips authentication when auth middleware is enabled; set to ``false`` to require JWT/API key for
+direct reads. ``POST`` upload and ``DELETE`` remain authenticated regardless.
 
 **Not loaded here (avoid import cycles with :func:`load_env`):**
 
@@ -75,7 +78,7 @@ def resolve_file_storage_root(
     *,
     serverless: Optional[bool] = None,
 ) -> str:
-    """Resolve local filesystem root for stored files (jvagent + /api/storage).
+    """Resolve local filesystem root for stored files (jvagent + HTTP ``/files`` routes).
 
     Precedence (matches jvagent ``get_file_storage_config``):
 
@@ -171,7 +174,8 @@ class EnvConfig:
     api_prefix: str
     api_health: str
     api_root: str
-    storage_prefix: str
+    files_route_base: str
+    files_public_read: bool
     proxy_prefix: str
 
     # Collections
@@ -314,6 +318,10 @@ def _load_env_impl() -> EnvConfig:
         log_db_path_raw or "jvspatial_logs/sqlite/jvspatial_logs.db"
     )
 
+    api_prefix_val = os.getenv("JVSPATIAL_API_PREFIX", "/api")
+    ap = (api_prefix_val or "").strip().rstrip("/")
+    files_route_base_val = f"{ap}/files" if ap else "/files"
+
     return EnvConfig(
         db_type=os.getenv("JVSPATIAL_DB_TYPE", "json"),
         jsondb_path=os.getenv("JVSPATIAL_JSONDB_PATH", default_jsondb_path),
@@ -368,10 +376,11 @@ def _load_env_impl() -> EnvConfig:
         work_claim_stale_seconds=work_claim_stale_seconds,
         deferred_invoke_disabled=deferred_invoke_disabled_flag,
         deferred_invoke_secret=deferred_invoke_secret_val,
-        api_prefix=os.getenv("JVSPATIAL_API_PREFIX", "/api"),
+        api_prefix=api_prefix_val,
         api_health=os.getenv("JVSPATIAL_API_HEALTH", "/health"),
         api_root=os.getenv("JVSPATIAL_API_ROOT", "/"),
-        storage_prefix=os.getenv("JVSPATIAL_STORAGE_PREFIX", "/storage"),
+        files_route_base=files_route_base_val,
+        files_public_read=_parse_bool(os.getenv("JVSPATIAL_FILES_PUBLIC_READ", "true")),
         proxy_prefix=os.getenv("JVSPATIAL_PROXY_PREFIX", "/p"),
         collection_users=os.getenv("JVSPATIAL_COLLECTION_USERS", "users"),
         collection_api_keys=os.getenv("JVSPATIAL_COLLECTION_API_KEYS", "api_keys"),

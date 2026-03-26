@@ -6,7 +6,7 @@ operations, separating concerns from the main Server class.
 
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import APIRouter, FastAPI, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
 
 from jvspatial.api.constants import APIRoutes, ErrorMessages
@@ -14,7 +14,19 @@ from jvspatial.api.exceptions import (
     PathTraversalError,
     ValidationError,
 )
+from jvspatial.env import load_env
 from jvspatial.storage.exceptions import StorageError
+
+_FILES_OPENAPI_TAGS = ["Files"]
+
+
+def _mark_storage_endpoint(
+    fn: Any,
+    *,
+    auth_required: bool,
+) -> None:
+    """Tag handler for AuthenticationMiddleware + OpenAPI behavior."""
+    fn._jvspatial_endpoint_config = {"auth_required": auth_required}
 
 
 class FileStorageService:
@@ -273,13 +285,21 @@ class FileStorageService:
         Synchronous: only registers route handlers (no I/O). Called from
         middleware setup where the event loop is not guaranteed.
 
+        Routes use OpenAPI tag ``Files`` under ``{api_prefix}/files`` (from
+        ``JVSPATIAL_API_PREFIX``). ``GET {FILES_ROOT}/{path}`` is public by default
+        (``JVSPATIAL_FILES_PUBLIC_READ`` true); set it false to require auth for reads.
+        ``POST`` upload, ``DELETE``, and proxy admin routes require auth when middleware is on.
+        ``GET {PROXY_PREFIX}/{code}`` stays unauthenticated (proxy code is the
+        credential).
+
         Args:
             app: FastAPI application instance
             service: FileStorageService instance with handlers
         """
+        serve_requires_auth = not load_env().files_public_read
+        router = APIRouter(tags=list(_FILES_OPENAPI_TAGS))
 
-        # File upload endpoint
-        @app.post(APIRoutes.STORAGE_UPLOAD)
+        @router.post(APIRoutes.FILES_UPLOAD)
         async def upload_file(
             file: UploadFile,
             path: str = "",
@@ -296,22 +316,11 @@ class FileStorageService:
                 proxy_one_time=proxy_one_time,
             )
 
-        # File download/serve endpoint
-        @app.get(f"{APIRoutes.STORAGE_FILES}/{{file_path:path}}")
-        async def serve_file(file_path: str):
-            """Serve a file directly."""
-            return await service.handle_serve(file_path)
+        _mark_storage_endpoint(upload_file, auth_required=True)
 
-        # File delete endpoint
-        @app.delete(f"{APIRoutes.STORAGE_FILES}/{{file_path:path}}")
-        async def delete_file(file_path: str):
-            """Delete a file."""
-            return await service.handle_delete(file_path)
-
-        # Proxy endpoints (if proxy manager is available)
         if service.proxy_manager:
-            # Create proxy for existing file
-            @app.post(APIRoutes.STORAGE_PROXY)
+
+            @router.post(APIRoutes.FILES_PROXY)
             async def create_proxy(
                 file_path: str,
                 expires_in: Optional[int] = None,
@@ -326,23 +335,45 @@ class FileStorageService:
                     metadata=metadata,
                 )
 
-            # Access file via proxy
-            @app.get(f"{APIRoutes.PROXY_PREFIX}/{{code}}")
-            async def serve_proxied_file(code: str):
-                """Serve file via proxy URL."""
-                return await service.handle_serve_proxied(code)
+            _mark_storage_endpoint(create_proxy, auth_required=True)
 
-            # Revoke proxy
-            @app.delete(f"{APIRoutes.STORAGE_PROXY}/{{code}}")
+            @router.delete(f"{APIRoutes.FILES_PROXY}/{{code}}")
             async def revoke_proxy(code: str):
                 """Revoke a proxy URL."""
                 return await service.handle_revoke_proxy(code)
 
-            # Get proxy stats
-            @app.get(f"{APIRoutes.STORAGE_PROXY}/{{code}}/stats")
+            _mark_storage_endpoint(revoke_proxy, auth_required=True)
+
+            @router.get(f"{APIRoutes.FILES_PROXY}/{{code}}/stats")
             async def get_proxy_stats(code: str):
                 """Get statistics for a proxy URL."""
                 return await service.handle_proxy_stats(code)
 
+            _mark_storage_endpoint(get_proxy_stats, auth_required=True)
 
-__all__ = ["FileStorageService"]
+            proxy_router = APIRouter(tags=list(_FILES_OPENAPI_TAGS))
+
+            @proxy_router.get(f"{APIRoutes.PROXY_PREFIX}/{{code}}")
+            async def serve_proxied_file(code: str):
+                """Serve file via proxy URL."""
+                return await service.handle_serve_proxied(code)
+
+            _mark_storage_endpoint(serve_proxied_file, auth_required=False)
+
+            app.include_router(proxy_router)
+
+        @router.get(f"{APIRoutes.FILES_ROOT}/{{file_path:path}}")
+        async def serve_file(file_path: str):
+            """Serve a file directly."""
+            return await service.handle_serve(file_path)
+
+        _mark_storage_endpoint(serve_file, auth_required=serve_requires_auth)
+
+        @router.delete(f"{APIRoutes.FILES_ROOT}/{{file_path:path}}")
+        async def delete_file(file_path: str):
+            """Delete a file."""
+            return await service.handle_delete(file_path)
+
+        _mark_storage_endpoint(delete_file, auth_required=True)
+
+        app.include_router(router)

@@ -359,10 +359,10 @@ Standard endpoint patterns follow RESTful conventions:
 /api/                   - API prefix for user endpoints
   /api/walkers/*        - Walker-based graph operations
   /api/functions/*      - Function-based operations
-/storage/               - File storage endpoints (if enabled)
-  /storage/upload       - File upload
-  /storage/files        - File listing
-  /storage/proxy        - Proxy URL generation
+/api/files/             - File HTTP routes (if enabled; OpenAPI tag Files)
+  /api/files/upload     - File upload
+  /api/files/{path}     - File serve (GET) and delete (DELETE)
+  /api/files/proxy      - Proxy URL admin (when proxy enabled)
 /p/{code}              - Proxy URL short links (if enabled)
 ```
 

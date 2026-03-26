@@ -88,10 +88,10 @@ class AppBuilder:
                     if isinstance(operation, dict) and "tags" in operation:
                         all_tags.update(operation["tags"])
 
-            # Define tag order - "default" first, then "App", then others alphabetically
-            tag_order = ["default", "App"]
-            other_tags = sorted([tag for tag in all_tags if tag not in tag_order])
-            ordered_tags = tag_order + other_tags
+            # Prefer order: default, App, Files; then any remaining tags alphabetically
+            preferred = ["default", "App", "Files"]
+            ordered_tags = [t for t in preferred if t in all_tags]
+            ordered_tags.extend(sorted(t for t in all_tags if t not in ordered_tags))
 
             # Create tag definitions in the correct order
             if "tags" not in schema:
@@ -105,6 +105,10 @@ class AppBuilder:
                     tag_def["description"] = "Default API endpoints"
                 elif tag == "App":
                     tag_def["description"] = "Application-specific endpoints"
+                elif tag == "Files":
+                    tag_def["description"] = (
+                        "File upload, serve, delete, and proxy URLs"
+                    )
                 tag_definitions.append(tag_def)
 
             schema["tags"] = tag_definitions

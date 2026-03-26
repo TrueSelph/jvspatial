@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from jvspatial.api.constants import APIRoutes
 from jvspatial.storage.exceptions import (
     AccessDeniedError,
     FileNotFoundError,
@@ -454,7 +455,7 @@ class TestLocalFileMetadataOperations:
         url = await local_storage.get_file_url("test.txt")
 
         assert url is not None
-        assert "http://localhost:8000/files/test.txt" == url
+        assert url == f"http://localhost:8000{APIRoutes.FILES_ROOT}/test.txt"
 
     @pytest.mark.asyncio
     async def test_get_file_url_without_base_url(self, temp_storage_dir, sample_files):

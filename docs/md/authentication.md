@@ -742,9 +742,10 @@ The authentication middleware uses the **endpoint registry** as the single sourc
 The authentication middleware follows a **"deny by default"** security model:
 
 1. **Exempt Paths**: Paths in `exempt_paths` bypass authentication. Built-in auth paths (`/auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/signup`, `/auth/forgot-password`, `/auth/reset-password`) are always exempt. **`/_internal/deferred`** (jvspatial deferred task / LWA pass-through) is **always** merged in as well—you cannot remove it via `exempt_paths`, because Lambda async invoke cannot send your app JWT. PathMatcher expands these using `APIRoutes.PREFIX` (default `/api`).
-2. **Registered Endpoints**: Endpoints in the registry with `auth=False` are public
-3. **Unknown Endpoints**: Endpoints not in the registry **require authentication**
-4. **Error Handling**: Any error during authentication checking **denies access**
+2. **Files HTTP routes** (`FileStorageService`): Registered under **`{JVSPATIAL_API_PREFIX}/files`** (default `/api/files`). **`POST .../files/upload`**, **`DELETE .../files/{path}`**, and proxy admin routes under **`.../files/proxy`** require JWT or API key when auth is enabled. **`GET .../files/{path}`** is **public by default**; set **`JVSPATIAL_FILES_PUBLIC_READ=false`** to require authentication for direct reads. **`GET {JVSPATIAL_PROXY_PREFIX}/{code}`** (default `/p/{code}`) is explicitly public—the proxy code is the credential. For anonymous direct file URLs when public read is off, use proxy links or add a **narrow** `exempt_paths` pattern only after security review (patterns are path-only, not per HTTP method).
+3. **Registered Endpoints**: Endpoints in the registry with `auth=False` are public
+4. **Unknown Endpoints**: Endpoints not in the registry **require authentication**
+5. **Error Handling**: Any error during authentication checking **denies access**
 
 This approach ensures that:
 - Path matching failures don't create security vulnerabilities

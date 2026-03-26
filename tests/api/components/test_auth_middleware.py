@@ -252,7 +252,7 @@ class TestAuthenticationMiddleware:
             pass
 
         server.app = server._create_app_instance()
-        request2 = MockRequest("/api/test/registered-false")
+        request2 = MockRequest("/api/test/registered-false", method="POST")
         result2 = middleware._auth_resolver.endpoint_requires_auth(request2)
         assert result2 is False
 
@@ -262,7 +262,7 @@ class TestAuthenticationMiddleware:
             pass
 
         server.app = server._create_app_instance()
-        request3 = MockRequest("/api/test/registered-true")
+        request3 = MockRequest("/api/test/registered-true", method="POST")
         result3 = middleware._auth_resolver.endpoint_requires_auth(request3)
         assert result3 is True
 

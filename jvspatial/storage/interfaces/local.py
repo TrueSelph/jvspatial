@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, cast
 
+from jvspatial.api.constants import APIRoutes
 from jvspatial.runtime.serverless import is_serverless_mode
 
 from ..exceptions import (
@@ -154,6 +155,10 @@ class LocalFileInterface(FileStorageInterface):
             raise PathTraversalError("Path escapes root directory", path=file_path)
 
         return full_path
+
+    def _http_file_url(self, file_path: str) -> str:
+        """Full URL for HTTP GET ``{FILES_ROOT}/{file_path}`` (FileStorageService)."""
+        return f"{self.base_url.rstrip('/')}{APIRoutes.FILES_ROOT}/{file_path}"
 
     async def create_version(
         self,
@@ -411,7 +416,7 @@ class LocalFileInterface(FileStorageInterface):
 
             # Add storage URL if base_url configured
             if self.base_url:
-                result["storage_url"] = f"{self.base_url}/files/{file_path}"
+                result["storage_url"] = self._http_file_url(file_path)
 
             return result
 
@@ -670,8 +675,8 @@ class LocalFileInterface(FileStorageInterface):
             logger.warning(f"Cannot generate URL for non-existent file: {file_path}")
             return None
 
-        # Generate local URL
-        url = f"{self.base_url}/files/{file_path}"
+        # Generate local URL (same path as HTTP GET ``{FILES_ROOT}/{file_path}``)
+        url = self._http_file_url(file_path)
         logger.debug(f"Generated URL: {url}")
 
         return url
