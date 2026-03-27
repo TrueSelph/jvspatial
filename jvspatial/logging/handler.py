@@ -8,6 +8,7 @@ logger with optional 'details' in the extra parameter.
 import asyncio
 import contextlib
 import logging
+import os
 import sys
 import threading
 import traceback
@@ -175,9 +176,12 @@ class DBLogHandler(logging.Handler):
         This method is called by the logging system for configured log levels.
         It extracts information from the log record and saves it to the database.
         In non-serverless mode, saves asynchronously (fire-and-forget).
-        In serverless mode, prefers ``asyncio.create_task`` when a loop is already
-        running (same thread as the request); otherwise saves in a dedicated thread
-        with ``asyncio.run`` so sync emit paths still persist (e.g. Lambda).
+        In serverless mode, defaults to a **blocking** save (dedicated thread +
+        ``asyncio.run`` + ``join``) so Lambda finishes persisting before the
+        invocation ends. Set ``JVSPATIAL_DB_LOG_SERVERLESS_ASYNC=true`` to use
+        ``asyncio.create_task`` when a loop is running (only if your host drains
+        pending tasks). Optional ``JVSPATIAL_DB_LOG_SERVERLESS_JOIN_TIMEOUT``
+        overrides the join timeout in seconds (default ``10``).
 
         Args:
             record: The log record to process
@@ -349,23 +353,36 @@ class DBLogHandler(logging.Handler):
                     with contextlib.suppress(Exception):
                         asyncio.run(save_log())
             else:
-                # Serverless: same-loop task when emit runs inside async code; else
-                # thread + asyncio.run for sync logging (no running loop).
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = None
+                # Serverless (Lambda): default blocking persist so save_log completes
+                # before the invocation returns; create_task is opt-in only.
+                use_async_task = not self._sync_emit and os.getenv(
+                    "JVSPATIAL_DB_LOG_SERVERLESS_ASYNC", ""
+                ).strip().lower() in ("1", "true", "yes")
+                if use_async_task:
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        loop = None
+                    if loop is not None and loop.is_running():
+                        asyncio.create_task(save_log())
+                    else:
+                        use_async_task = False
 
-                if loop is not None and loop.is_running() and not self._sync_emit:
-                    asyncio.create_task(save_log())
-                else:
+                if not use_async_task:
 
                     def _run_sync_save():
                         asyncio.run(save_log())
 
                     thread = threading.Thread(target=_run_sync_save, daemon=True)
                     thread.start()
-                    thread.join(timeout=10)
+                    join_timeout = 10.0
+                    raw_timeout = os.getenv(
+                        "JVSPATIAL_DB_LOG_SERVERLESS_JOIN_TIMEOUT", ""
+                    ).strip()
+                    if raw_timeout:
+                        with contextlib.suppress(ValueError):
+                            join_timeout = float(raw_timeout)
+                    thread.join(timeout=join_timeout)
 
         except Exception as e:
             # Never let logging failures break the application

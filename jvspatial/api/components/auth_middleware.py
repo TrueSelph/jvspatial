@@ -13,7 +13,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from jvspatial.api.auth.config import AuthConfig
 from jvspatial.api.auth.rbac import has_required_permissions, has_required_roles
-from jvspatial.api.components.endpoint_auth_resolver import EndpointAuthResolver
+from jvspatial.api.components.endpoint_auth_resolver import (
+    EndpointAuthResolver,
+    path_requires_admin_only_role,
+)
 from jvspatial.api.components.path_matcher import PathMatcher
 
 
@@ -127,6 +130,9 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         rbac_enabled = getattr(self.auth_config, "rbac_enabled", True)
         if rbac_enabled:
             endpoint_config = self._auth_resolver.get_endpoint_config(request)
+            endpoint_config = self._merge_admin_only_roles(
+                request.url.path, endpoint_config
+            )
             rbac_error = self._check_rbac(user, endpoint_config)
             if rbac_error:
                 return rbac_error
@@ -134,6 +140,18 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         # Set user in request state for downstream handlers
         request.state.user = user
         return await call_next(request)
+
+    def _merge_admin_only_roles(
+        self, request_path: str, endpoint_config: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Force ``roles: [admin]`` for /status, /logs, and /graph API subtrees."""
+        if not path_requires_admin_only_role(request_path):
+            return endpoint_config
+        merged: Dict[str, Any] = dict(endpoint_config) if endpoint_config else {}
+        merged["roles"] = ["admin"]
+        if merged.get("auth_required") is not False:
+            merged["auth_required"] = True
+        return merged
 
     def _check_rbac(
         self, user: Any, endpoint_config: Optional[Dict[str, Any]]

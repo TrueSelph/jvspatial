@@ -1,5 +1,6 @@
 """GraphContext for managing database dependencies."""
 
+import asyncio
 import inspect
 import logging
 import time
@@ -375,6 +376,21 @@ class GraphContext:
         else:
             self._cache = cache_backend
 
+        # Serialize node edge list persistence for a given id so merge+save does not
+        # interleave with atomic_add_edge_id / atomic_remove_edge_id (lost updates).
+        self._node_edge_write_locks: Dict[str, asyncio.Lock] = {}
+        self._node_edge_locks_creation_lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def _node_edge_write_guard(self, node_id: str):
+        async with self._node_edge_locks_creation_lock:
+            lock = self._node_edge_write_locks.get(node_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._node_edge_write_locks[node_id] = lock
+        async with lock:
+            yield
+
     @property
     def database(self) -> Database:
         """Get the database instance, initializing if needed."""
@@ -687,7 +703,13 @@ class GraphContext:
         if self._cache:
             await self._cache.delete(entity_id)
 
-    async def save(self, entity, *, merge_node_edges: bool = True):
+    async def save(
+        self,
+        entity,
+        *,
+        merge_node_edges: bool = True,
+        _holding_node_edge_lock: bool = False,
+    ):
         """Save an entity to the database.
 
         Args:
@@ -696,6 +718,8 @@ class GraphContext:
                 on-disk copy so concurrent ``atomic_add_edge_id`` updates are not lost.
                 Set to False when persisting an authoritative edge list (e.g. after
                 ``atomic_remove_edge_id``) so removals are not undone by a stale read.
+            _holding_node_edge_lock: Internal: caller already holds
+                ``_node_edge_write_guard`` for this node (avoids deadlock).
 
         Returns:
             The saved entity instance
@@ -770,28 +794,34 @@ class GraphContext:
                 collection = type_code.lower()
 
         db = self.database
-        # Merge node edge lists with the DB so full-document saves do not clobber
-        # edge IDs added concurrently via atomic_add_edge_id (or another writer).
-        if (
-            merge_node_edges
-            and hasattr(entity, "type_code")
-            and getattr(entity, "type_code", "") == "n"
-        ):
-            fresh = await _unwrap_db_get_result(await db.get(collection, entity.id))
-            e_mem = set(_coerce_edge_id_list(record.get("edges")))
-            e_db = set(_coerce_edge_id_list((fresh or {}).get("edges")))
-            merged = sorted(e_mem | e_db)
-            record["edges"] = merged
-            if hasattr(entity, "edge_ids"):
-                object.__setattr__(entity, "edge_ids", list(merged))
-        elif hasattr(entity, "type_code") and getattr(entity, "type_code", "") == "n":
-            # Authoritative save: keep exported edges and mirror them onto the entity.
-            merged = _coerce_edge_id_list(record.get("edges"))
-            record["edges"] = merged
-            if hasattr(entity, "edge_ids"):
-                object.__setattr__(entity, "edge_ids", list(merged))
+        is_node = (
+            hasattr(entity, "type_code") and getattr(entity, "type_code", "") == "n"
+        )
 
-        await db.save(collection, record)
+        async def _merge_edges_and_write() -> None:
+            # Merge node edge lists with the DB so full-document saves do not clobber
+            # edge IDs added concurrently via atomic_add_edge_id (or another writer).
+            if merge_node_edges and is_node:
+                fresh = await _unwrap_db_get_result(await db.get(collection, entity.id))
+                e_mem = set(_coerce_edge_id_list(record.get("edges")))
+                e_db = set(_coerce_edge_id_list((fresh or {}).get("edges")))
+                merged = sorted(e_mem | e_db)
+                record["edges"] = merged
+                if hasattr(entity, "edge_ids"):
+                    object.__setattr__(entity, "edge_ids", list(merged))
+            elif is_node:
+                # Authoritative save: keep exported edges and mirror them onto the entity.
+                merged = _coerce_edge_id_list(record.get("edges"))
+                record["edges"] = merged
+                if hasattr(entity, "edge_ids"):
+                    object.__setattr__(entity, "edge_ids", list(merged))
+            await db.save(collection, record)
+
+        if is_node and not _holding_node_edge_lock:
+            async with self._node_edge_write_guard(entity.id):
+                await _merge_edges_and_write()
+        else:
+            await _merge_edges_and_write()
         # Update cache with latest version
         await self._add_to_cache(entity.id, entity)
         return entity
@@ -896,6 +926,58 @@ class GraphContext:
 
         return await export_graph(
             self, format=format, output_file=output_file, **kwargs
+        )
+
+    async def expand_node(
+        self,
+        node_id: str,
+        *,
+        direction: str = "both",
+        limit: int = 50,
+        cursor: int = 0,
+        detail_level: str = "full",
+    ) -> Dict[str, Any]:
+        """Return a page of incident edges and neighbor summaries for progressive UIs.
+
+        See :func:`~jvspatial.core.graph_expansion.expand_node`.
+        """
+        from .graph_expansion import expand_node as _expand_node
+
+        if detail_level not in ("summary", "full"):
+            detail_level = "full"
+        return await _expand_node(
+            self,
+            node_id,
+            direction=direction,
+            limit=limit,
+            cursor=cursor,
+            detail_level=detail_level,  # type: ignore[arg-type]
+        )
+
+    async def subgraph_bfs(
+        self,
+        root_id: str,
+        *,
+        max_depth: int = 2,
+        max_nodes: int = 100,
+        max_edges_per_node: int = 200,
+        detail_level: str = "full",
+    ) -> Dict[str, Any]:
+        """Return a bounded BFS subgraph from ``root_id``.
+
+        See :func:`~jvspatial.core.graph_expansion.subgraph_bfs`.
+        """
+        from .graph_expansion import subgraph_bfs as _subgraph_bfs
+
+        if detail_level not in ("summary", "full"):
+            detail_level = "full"
+        return await _subgraph_bfs(
+            self,
+            root_id,
+            max_depth=max_depth,
+            max_nodes=max_nodes,
+            max_edges_per_node=max_edges_per_node,
+            detail_level=detail_level,  # type: ignore[arg-type]
         )
 
     def _get_collection_name(self, type_code: str) -> str:
@@ -1039,10 +1121,11 @@ class GraphContext:
         # Fallback: read-modify-write (used for JsonDB, SQLite, etc.)
         from .entities.node import Node
 
-        node = await self.get(Node, node_id)
-        if node and edge_id not in node.edge_ids:
-            node.edge_ids.append(edge_id)
-            await self.save(node)
+        async with self._node_edge_write_guard(node_id):
+            node = await self.get(Node, node_id)
+            if node and edge_id not in node.edge_ids:
+                node.edge_ids.append(edge_id)
+                await self.save(node, _holding_node_edge_lock=True)
         return node is not None
 
     async def atomic_remove_edge_id(self, node_id: str, edge_id: str) -> bool:
@@ -1078,10 +1161,13 @@ class GraphContext:
         # Fallback: read-modify-write
         from .entities.node import Node
 
-        node = await self.get(Node, node_id)
-        if node and edge_id in node.edge_ids:
-            node.edge_ids.remove(edge_id)
-            await self.save(node, merge_node_edges=False)
+        async with self._node_edge_write_guard(node_id):
+            node = await self.get(Node, node_id)
+            if node and edge_id in node.edge_ids:
+                node.edge_ids.remove(edge_id)
+                await self.save(
+                    node, merge_node_edges=False, _holding_node_edge_lock=True
+                )
         return node is not None
 
     async def atomic_increment(self, node_id: str, field: str, amount: int = 1) -> bool:

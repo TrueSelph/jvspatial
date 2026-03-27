@@ -29,6 +29,7 @@ from .graph import (
     generate_graph_dot,
     generate_graph_mermaid,
 )
+from .graph_expansion import expand_node, subgraph_bfs
 from .mixins import (
     DeferredSaveMixin,
     deferred_saves_globally_allowed,
@@ -65,6 +66,8 @@ __all__ = [
     "export_graph",
     "generate_graph_dot",
     "generate_graph_mermaid",
+    "expand_node",
+    "subgraph_bfs",
     # Context (advanced usage)
     "GraphContext",
     "get_default_context",

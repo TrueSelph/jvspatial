@@ -77,7 +77,11 @@ class ServerConfig(BaseModel):
 
     # Graph Visualization Endpoint Configuration
     graph_endpoint_enabled: bool = Field(
-        default=True, description="Enable /api/graph endpoint for graph visualization"
+        default=True,
+        description=(
+            "Enable graph visualization: /api/graph (DOT) plus /api/graph/expand "
+            "and /api/graph/subgraph (JSON) when the server registers them"
+        ),
     )
 
     @model_validator(mode="before")

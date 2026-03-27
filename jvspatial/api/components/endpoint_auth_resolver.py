@@ -13,6 +13,33 @@ from fastapi import Request
 from jvspatial.api.constants import APIRoutes
 
 
+def path_requires_admin_only_role(request_path: str) -> bool:
+    """True for ``/status``, ``/logs``, and ``/graph`` subtrees under :attr:`APIRoutes.PREFIX`.
+
+    Matches the first path segment after the configured API prefix (e.g. ``/api/graph/expand``,
+    ``/api/logs``, ``/api/status/health``). Used by auth middleware so these surfaces stay
+    admin-only even if a route is registered without explicit ``roles`` in config.
+    """
+    api_prefix = (APIRoutes.PREFIX or "").strip().rstrip("/")
+    if api_prefix and not api_prefix.startswith("/"):
+        api_prefix = f"/{api_prefix}"
+
+    rel = request_path
+    if api_prefix and api_prefix != "/" and request_path.startswith(api_prefix):
+        rel = request_path[len(api_prefix) :] or "/"
+    if not rel.startswith("/"):
+        rel = f"/{rel}"
+
+    return (
+        rel == "/status"
+        or rel.startswith("/status/")
+        or rel == "/logs"
+        or rel.startswith("/logs/")
+        or rel == "/graph"
+        or rel.startswith("/graph/")
+    )
+
+
 def _route_paths_for_comparison(route_path: str) -> List[str]:
     """Build list of route path variants for matching (prefixed and normalized).
 
@@ -316,4 +343,4 @@ class EndpointAuthResolver:
             return None
 
 
-__all__ = ["EndpointAuthResolver"]
+__all__ = ["EndpointAuthResolver", "path_requires_admin_only_role"]

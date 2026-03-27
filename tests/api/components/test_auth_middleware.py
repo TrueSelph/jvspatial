@@ -644,6 +644,40 @@ class TestAuthenticationMiddleware:
             assert (
                 endpoint_config.get("auth_required") is True
             ), "Graph endpoint must have auth_required=True in _jvspatial_endpoint_config"
+            assert endpoint_config.get("roles") == [
+                "admin"
+            ], "Graph endpoint must require admin role"
+
+    def test_progressive_graph_endpoints_require_authentication(self, server):
+        """Expand/subgraph require auth the same way as /api/graph when auth is enabled."""
+        server.app = server._create_app_instance()
+        from fastapi.testclient import TestClient
+
+        client = TestClient(server.app)
+        for path, params in (
+            ("/api/graph/expand", {"node_id": "n.x", "limit": 5, "cursor": 0}),
+            (
+                "/api/graph/subgraph",
+                {"root": "n.x", "max_depth": 1, "max_nodes": 10},
+            ),
+        ):
+            r = client.get(path, params=params)
+            assert r.status_code == 401, f"{path} should require auth"
+            assert "authentication_required" in r.json()["error_code"]
+
+        for path in ("/api/graph/expand", "/api/graph/subgraph"):
+            found = False
+            for (
+                func,
+                endpoint_info,
+            ) in server._endpoint_registry._function_registry.items():
+                if endpoint_info.path == path:
+                    cfg = getattr(func, "_jvspatial_endpoint_config", {})
+                    assert cfg.get("auth_required") is True, path
+                    assert cfg.get("roles") == ["admin"], path
+                    found = True
+                    break
+            assert found, f"missing registry entry for {path}"
 
     def test_register_function_with_route_config_sets_auth_required(self, server):
         """Test that register_function with route_config properly sets auth_required in endpoint config."""
