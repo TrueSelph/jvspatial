@@ -175,7 +175,9 @@ class DBLogHandler(logging.Handler):
         This method is called by the logging system for configured log levels.
         It extracts information from the log record and saves it to the database.
         In non-serverless mode, saves asynchronously (fire-and-forget).
-        In serverless mode, saves synchronously in a thread to ensure persistence.
+        In serverless mode, prefers ``asyncio.create_task`` when a loop is already
+        running (same thread as the request); otherwise saves in a dedicated thread
+        with ``asyncio.run`` so sync emit paths still persist (e.g. Lambda).
 
         Args:
             record: The log record to process
@@ -347,14 +349,23 @@ class DBLogHandler(logging.Handler):
                     with contextlib.suppress(Exception):
                         asyncio.run(save_log())
             else:
-                # Sync save in thread in serverless mode (e.g. Lambda)
-                # Ensures logs persist when DB logging is initialized (jvagent gates setup via JVSPATIAL_DB_LOGGING_ENABLED)
-                def _run_sync_save():
-                    asyncio.run(save_log())
+                # Serverless: same-loop task when emit runs inside async code; else
+                # thread + asyncio.run for sync logging (no running loop).
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
 
-                thread = threading.Thread(target=_run_sync_save, daemon=True)
-                thread.start()
-                thread.join(timeout=10)
+                if loop is not None and loop.is_running() and not self._sync_emit:
+                    asyncio.create_task(save_log())
+                else:
+
+                    def _run_sync_save():
+                        asyncio.run(save_log())
+
+                    thread = threading.Thread(target=_run_sync_save, daemon=True)
+                    thread.start()
+                    thread.join(timeout=10)
 
         except Exception as e:
             # Never let logging failures break the application
