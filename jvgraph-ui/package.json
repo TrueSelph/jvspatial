@@ -1,0 +1,32 @@
+{
+  "name": "jvgraph-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && vite build",
+    "build:embed": "npm run typecheck && cross-env VITE_BASE_PATH=/admin/graph/ vite build",
+    "preview": "vite preview",
+    "embed": "npm run build:embed && node scripts/embed.cjs"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "cytoscape": "^3.30.4",
+    "cytoscape-dagre": "^2.5.0",
+    "dagre": "^0.8.5",
+    "prism-react-renderer": "^2.4.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/cytoscape": "^3.21.9",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "cross-env": "^7.0.3",
+    "typescript": "~5.6.3",
+    "vite": "^6.0.7"
+  }
+}

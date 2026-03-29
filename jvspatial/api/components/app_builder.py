@@ -5,6 +5,7 @@ of FastAPI application instances, following the single responsibility principle.
 """
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI
@@ -169,6 +170,13 @@ class AppBuilder:
 
         from jvspatial.core.entities import Root
 
+        admin_graph_dir = self._resolve_admin_graph_static_dir()
+        mount_admin_graph = (
+            self.config.graph_endpoint_enabled
+            and admin_graph_dir is not None
+            and (admin_graph_dir / "index.html").is_file()
+        )
+
         # Add default health check endpoint
         @app.get("/health", response_model=None)
         async def health_check() -> Dict[str, Any]:
@@ -212,6 +220,8 @@ class AppBuilder:
                     "expand": "/api/graph/expand",
                     "subgraph": "/api/graph/subgraph",
                 }
+                if mount_admin_graph:
+                    info["admin_graph_ui"] = "/admin/graph/"
             return info
 
         # Add graph visualization endpoint (optional)
@@ -224,7 +234,27 @@ class AppBuilder:
 
         register_deferred_invoke_route(app)
 
+        if mount_admin_graph and admin_graph_dir is not None:
+            from fastapi.staticfiles import StaticFiles
+
+            app.mount(
+                "/admin/graph",
+                StaticFiles(directory=str(admin_graph_dir), html=True),
+                name="admin_graph_ui",
+            )
+
         # Core routes registered (no log needed)
+
+    def _resolve_admin_graph_static_dir(self) -> Optional[Path]:
+        """Directory with embedded graph UI ``index.html``, if available.
+
+        Populated by ``cd jvgraph-ui && npm run embed`` (copies the Vite build into
+        ``jvspatial/static/admin_graph/`` inside the installed package).
+        """
+        root = Path(__file__).resolve().parents[2] / "static" / "admin_graph"
+        if (root / "index.html").is_file():
+            return root
+        return None
 
     def _register_progressive_graph_endpoints(
         self,

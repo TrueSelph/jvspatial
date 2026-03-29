@@ -87,6 +87,9 @@ Documentation = "https://github.com/TrueSelph/jvspatial/tree/main/docs"
 where = ["."]
 include = ["jvspatial*"]
 
+[tool.setuptools.package-data]
+jvspatial = ["static/**/*"]
+
 [tool.pytest.ini_options]
 minversion = "7.0"
 addopts = "-ra -q --strict-markers"
@@ -131,7 +134,7 @@ warn_redundant_casts = false
 warn_unused_ignores = false
 warn_no_return = false
 show_error_codes = true  # Show error codes for better debugging
-exclude = ["examples/", "tests/"]
+exclude = ["examples/", "tests/", "jvgraph-ui/"]
 
 # Relax third-party imports that lack types
 [[tool.mypy.overrides]]

@@ -36,6 +36,7 @@ setup(
     url="https://github.com/trueselph/jvspatial",
     packages=find_packages(),
     include_package_data=True,
+    package_data={"jvspatial": ["static/**/*"]},
     install_requires=[
         "pydantic>=2.0",
         "fastapi>=0.100.0",

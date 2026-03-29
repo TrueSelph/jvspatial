@@ -1,0 +1,29 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  --jvgraph-font-sans: 'Source Sans 3', 'Segoe UI', system-ui, -apple-system,
+    sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  font-family: var(--jvgraph-font-sans);
+}
+
+.app-graph-loading {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  font: 0.9rem var(--jvgraph-font-sans);
+  color: #64748b;
+  background: #f8fafc;
+}

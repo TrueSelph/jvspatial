@@ -26,6 +26,11 @@ share/python-wheels/
 *.egg
 MANIFEST
 .DS_Store
+
+# jvgraph-ui (Node) + embedded admin graph build under jvspatial package
+jvgraph-ui/node_modules/
+jvspatial/static/admin_graph/*
+!jvspatial/static/admin_graph/README.md
 jvdb
 test_db
 test_db_*
