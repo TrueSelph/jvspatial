@@ -332,6 +332,12 @@ class Server(
     def configure_database(self, db_type: str, **db_config: Any) -> None:
         """Configure database settings using GraphContext.
 
+        For ``mongodb``, stored ``connection_string`` / ``database_name`` are used
+        when the corresponding environment variable is absent. If
+        ``JVSPATIAL_MONGODB_URI`` or ``JVSPATIAL_MONGODB_DB_NAME`` is set in the
+        process environment at GraphContext initialization time, that value
+        overrides the config field for the prime database connection.
+
         Args:
             db_type: Database type ("json", "mongodb", etc.)
             **db_config: Database-specific configuration

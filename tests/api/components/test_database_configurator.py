@@ -65,8 +65,10 @@ class TestDatabaseConfigurator:
                             )
 
     @pytest.mark.asyncio
-    async def test_initialize_graph_context_mongodb(self):
-        """Test GraphContext initialization with MongoDB."""
+    async def test_initialize_graph_context_mongodb(self, monkeypatch):
+        """Test GraphContext initialization with MongoDB (config only; env unset)."""
+        monkeypatch.delenv("JVSPATIAL_MONGODB_URI", raising=False)
+        monkeypatch.delenv("JVSPATIAL_MONGODB_DB_NAME", raising=False)
         config = ServerConfig()
         config.database.db_type = "mongodb"
         config.database.db_connection_string = "mongodb://localhost:27017"
@@ -105,6 +107,106 @@ class TestDatabaseConfigurator:
                                 db_type="mongodb",
                                 uri="mongodb://localhost:27017",
                                 db_name="testdb",
+                            )
+
+    def test_resolve_mongodb_env_uri_overrides_config(self, monkeypatch):
+        """JVSPATIAL_MONGODB_URI wins over database.db_connection_string."""
+        monkeypatch.setenv("JVSPATIAL_MONGODB_URI", "mongodb://env-host:27017")
+        monkeypatch.delenv("JVSPATIAL_MONGODB_DB_NAME", raising=False)
+        config = ServerConfig()
+        config.database.db_type = "mongodb"
+        config.database.db_connection_string = "mongodb://config-host:27017"
+        config.database.db_database_name = "configdb"
+        configurator = DatabaseConfigurator(config)
+        uri, db_name = configurator._resolve_mongodb_connection()
+        assert uri == "mongodb://env-host:27017"
+        assert db_name == "configdb"
+
+    def test_resolve_mongodb_config_only_when_env_absent(self, monkeypatch):
+        """When Mongo env vars are absent, use Server config and defaults."""
+        monkeypatch.delenv("JVSPATIAL_MONGODB_URI", raising=False)
+        monkeypatch.delenv("JVSPATIAL_MONGODB_DB_NAME", raising=False)
+        config = ServerConfig()
+        config.database.db_connection_string = "mongodb://cfg:27017"
+        config.database.db_database_name = "cfgdb"
+        configurator = DatabaseConfigurator(config)
+        uri, db_name = configurator._resolve_mongodb_connection()
+        assert uri == "mongodb://cfg:27017"
+        assert db_name == "cfgdb"
+
+    def test_resolve_mongodb_empty_config_uses_localhost_jvdb(self, monkeypatch):
+        monkeypatch.delenv("JVSPATIAL_MONGODB_URI", raising=False)
+        monkeypatch.delenv("JVSPATIAL_MONGODB_DB_NAME", raising=False)
+        config = ServerConfig()
+        configurator = DatabaseConfigurator(config)
+        uri, db_name = configurator._resolve_mongodb_connection()
+        assert uri == "mongodb://localhost:27017"
+        assert db_name == "jvdb"
+
+    def test_resolve_mongodb_db_name_from_env_uri_from_config(self, monkeypatch):
+        """JVSPATIAL_MONGODB_DB_NAME set without URI uses config URI."""
+        monkeypatch.delenv("JVSPATIAL_MONGODB_URI", raising=False)
+        monkeypatch.setenv("JVSPATIAL_MONGODB_DB_NAME", "from_env")
+        config = ServerConfig()
+        config.database.db_connection_string = "mongodb://only-config:27017"
+        config.database.db_database_name = "ignored_when_env_set"
+        configurator = DatabaseConfigurator(config)
+        uri, db_name = configurator._resolve_mongodb_connection()
+        assert uri == "mongodb://only-config:27017"
+        assert db_name == "from_env"
+
+    def test_resolve_mongodb_empty_env_uri_falls_back_to_config(self, monkeypatch):
+        monkeypatch.setenv("JVSPATIAL_MONGODB_URI", "   ")
+        monkeypatch.delenv("JVSPATIAL_MONGODB_DB_NAME", raising=False)
+        config = ServerConfig()
+        config.database.db_connection_string = "mongodb://fallback:27017"
+        configurator = DatabaseConfigurator(config)
+        uri, db_name = configurator._resolve_mongodb_connection()
+        assert uri == "mongodb://fallback:27017"
+        assert db_name == "jvdb"
+
+    @pytest.mark.asyncio
+    async def test_initialize_graph_context_mongodb_env_overrides(self, monkeypatch):
+        """Integration: create_database receives env URI when both env and config set."""
+        monkeypatch.setenv("JVSPATIAL_MONGODB_URI", "mongodb://lambda:27017")
+        monkeypatch.setenv("JVSPATIAL_MONGODB_DB_NAME", "lambdadb")
+        config = ServerConfig()
+        config.database.db_type = "mongodb"
+        config.database.db_connection_string = "mongodb://yaml:27017"
+        config.database.db_database_name = "yamldb"
+        configurator = DatabaseConfigurator(config)
+
+        with patch(
+            "jvspatial.api.components.database_configurator.create_database"
+        ) as mock_create:
+            mock_db = MagicMock()
+            mock_create.return_value = mock_db
+
+            with patch(
+                "jvspatial.api.components.database_configurator.get_database_manager"
+            ) as mock_get_manager:
+                mock_manager = MagicMock()
+                mock_manager.get_current_database.return_value = mock_db
+                mock_get_manager.side_effect = RuntimeError()
+
+                with patch(
+                    "jvspatial.api.components.database_configurator.set_database_manager"
+                ):
+                    with patch(
+                        "jvspatial.api.components.database_configurator.GraphContext"
+                    ) as mock_context:
+                        mock_ctx_instance = MagicMock()
+                        mock_context.return_value = mock_ctx_instance
+
+                        with patch(
+                            "jvspatial.api.components.database_configurator.set_default_context"
+                        ):
+                            configurator.initialize_graph_context()
+
+                            mock_create.assert_called_once_with(
+                                db_type="mongodb",
+                                uri="mongodb://lambda:27017",
+                                db_name="lambdadb",
                             )
 
     @pytest.mark.asyncio

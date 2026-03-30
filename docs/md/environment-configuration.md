@@ -55,6 +55,8 @@ jvspatial uses environment variables to configure database connections, file pat
 | `JVSPATIAL_MONGODB_MAX_POOL_SIZE` | integer | `10` | Maximum connections in pool (Lambda-friendly default) |
 | `JVSPATIAL_MONGODB_MIN_POOL_SIZE` | integer | `0` | Minimum connections in pool (Lambda-friendly default) |
 
+When the API Server initializes the prime MongoDB connection (`db_type=mongodb`), each of **`JVSPATIAL_MONGODB_URI`** and **`JVSPATIAL_MONGODB_DB_NAME`** is resolved independently. If the variable is **set** in the process environment and its value is **non-empty** after trimming, it overrides the corresponding Server config field (`database.db_connection_string` or `database.db_database_name`). If the variable is **unset** (`os.getenv` returns `None`), or set but **blank** after trimming, that field falls back to config, then to the defaults in this table (`mongodb://localhost:27017` and `jvdb`). This lets Lambda and other hosts set Mongo in env while app config still applies when those keys are not set.
+
 ### Performance & Caching Configuration
 
 | Variable | Type | Default | Description |
