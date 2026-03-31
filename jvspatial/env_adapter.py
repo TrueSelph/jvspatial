@@ -452,3 +452,22 @@ def warn_production_config_gaps(config: Any, logger: Any) -> None:
         logger.warning(
             "JVSPATIAL_FILES_ROOT_PATH is unset in production with local file storage."
         )
+    if config.auth.auth_enabled:
+        secret = (config.auth.jwt_secret or "").strip()
+        algo = (config.auth.jwt_algorithm or "HS256").strip().upper()
+        if secret and algo.startswith("HS"):
+            key_len = len(secret.encode("utf-8"))
+            min_len = 32
+            if algo == "HS384":
+                min_len = 48
+            elif algo == "HS512":
+                min_len = 64
+            if key_len < min_len:
+                logger.warning(
+                    "JWT signing secret for %s is %s bytes; PyJWT recommends at least "
+                    "%s bytes for this HMAC algorithm (RFC 7518). "
+                    "Use a longer JVSPATIAL_JWT_SECRET_KEY to avoid InsecureKeyLengthWarning.",
+                    algo,
+                    key_len,
+                    min_len,
+                )

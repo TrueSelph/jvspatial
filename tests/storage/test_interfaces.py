@@ -606,9 +606,9 @@ class TestS3FileInterfaceInit:
         os.environ,
         {
             "JVSPATIAL_S3_BUCKET_NAME": "env-bucket",
-            "JVSPATIAL_S3_REGION_NAME": "eu-west-1",
-            "JVSPATIAL_S3_ACCESS_KEY_ID": "test-key",
-            "JVSPATIAL_S3_SECRET_ACCESS_KEY": "test-secret",  # pragma: allowlist secret
+            "JVSPATIAL_S3_REGION": "eu-west-1",
+            "JVSPATIAL_S3_ACCESS_KEY": "test-key",
+            "JVSPATIAL_S3_SECRET_KEY": "test-secret",  # pragma: allowlist secret
         },
     )
     @patch("jvspatial.storage.interfaces.s3.boto3")

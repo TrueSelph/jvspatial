@@ -51,6 +51,19 @@ def _parse_bool_on(val: str) -> bool:
     return str(val).strip().lower() in ("true", "1", "yes", "on")
 
 
+def normalize_optional_secret_string(value: Optional[str]) -> Optional[str]:
+    """Treat unset, blank, and common null placeholders as no secret (webhook HMAC, etc.)."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    low = s.lower()
+    if low in ("null", "none", "undefined", "(null)", "nil"):
+        return None
+    return s
+
+
 def _split_csv_list(raw: Optional[str]) -> Optional[List[str]]:
     if not raw or not raw.strip():
         return None
@@ -333,7 +346,9 @@ def _load_env_impl() -> EnvConfig:
         dynamodb_wait_for_index=_parse_bool(
             os.getenv("JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX", "false")
         ),
-        webhook_hmac_secret=os.getenv("JVSPATIAL_WEBHOOK_HMAC_SECRET"),
+        webhook_hmac_secret=normalize_optional_secret_string(
+            os.getenv("JVSPATIAL_WEBHOOK_HMAC_SECRET")
+        ),
         webhook_hmac_algorithm=os.getenv("JVSPATIAL_WEBHOOK_HMAC_ALGORITHM", "sha256"),
         webhook_max_payload_size=int(
             os.getenv("JVSPATIAL_WEBHOOK_MAX_PAYLOAD_SIZE", "1048576")

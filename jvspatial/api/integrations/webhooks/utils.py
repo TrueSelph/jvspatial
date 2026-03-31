@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
+from jvspatial.env import normalize_optional_secret_string
+
 
 class WebhookConfig:
     """Configuration class for webhook processing."""
@@ -28,7 +30,7 @@ class WebhookConfig:
         https_required: bool = True,
         allowed_content_types: Optional[List[str]] = None,
     ):
-        self.hmac_secret = hmac_secret
+        self.hmac_secret = normalize_optional_secret_string(hmac_secret)
         self.hmac_algorithm = hmac_algorithm
         self.max_payload_size = max_payload_size
         self.idempotency_ttl = idempotency_ttl

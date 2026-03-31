@@ -64,10 +64,9 @@ class TestJWTSecretValidation:
     def test_accepts_valid_jwt_secret(self):
         """AuthenticationService accepts explicit secure secret."""
         context = MagicMock(spec=GraphContext)
-        service = AuthenticationService(
-            context, jwt_secret="secure-secret-32-chars-minimum"
-        )
-        assert service.jwt_secret == "secure-secret-32-chars-minimum"
+        secret = "0123456789abcdef0123456789abcdef"
+        service = AuthenticationService(context, jwt_secret=secret)
+        assert service.jwt_secret == secret
 
 
 class TestContextRespect:

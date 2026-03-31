@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from jvspatial.api.constants import APIRoutes
+from jvspatial.env import normalize_optional_secret_string
 from jvspatial.runtime.serverless import is_serverless_mode
 
 from .utils import (
@@ -454,7 +455,20 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         signature_required = webhook_config.get("signature_required", False)
         hmac_secret = None
         if signature_required:
-            hmac_secret = webhook_config.get("hmac_secret") or base_config.hmac_secret
+            ep_secret = normalize_optional_secret_string(
+                webhook_config.get("hmac_secret")
+            )
+            base_secret = normalize_optional_secret_string(base_config.hmac_secret)
+            hmac_secret = ep_secret or base_secret
+            if not hmac_secret:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "Webhook signature verification is required for this route but no "
+                        "HMAC secret is configured. Set JVSPATIAL_WEBHOOK_HMAC_SECRET or "
+                        "endpoint hmac_secret, or set signature_required=false."
+                    ),
+                )
 
         # Create new config with endpoint-specific overrides
         return WebhookConfig(
