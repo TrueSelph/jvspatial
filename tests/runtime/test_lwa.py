@@ -71,6 +71,41 @@ def test_apply_sets_eventbridge_default_serverless_aws(_restore_eb_env):
     ):
         reset_serverless_mode_cache()
         apply_aws_eventbridge_env_default()
+        assert os.environ[_EB_KEY] == "false"
+
+
+def test_apply_sets_eventbridge_true_when_prereqs_met(_restore_eb_env):
+    os.environ.pop(_EB_KEY, None)
+    with patch.dict(
+        os.environ,
+        {
+            "SERVERLESS_MODE": "true",
+            "AWS_LAMBDA_FUNCTION_NAME": "fn",
+            "AWS_ACCOUNT_ID": "123456789012",
+            "AWS_REGION": "us-east-2",
+            "JVSPATIAL_EVENTBRIDGE_ROLE_ARN": "arn:aws:iam::123456789012:role/eb",
+        },
+        clear=False,
+    ):
+        reset_serverless_mode_cache()
+        apply_aws_eventbridge_env_default()
+        assert os.environ[_EB_KEY] == "true"
+
+
+def test_apply_sets_eventbridge_true_with_explicit_lambda_arn_only(_restore_eb_env):
+    os.environ.pop(_EB_KEY, None)
+    with patch.dict(
+        os.environ,
+        {
+            "SERVERLESS_MODE": "true",
+            "AWS_LAMBDA_FUNCTION_NAME": "fn",
+            "JVSPATIAL_EVENTBRIDGE_ROLE_ARN": "arn:aws:iam::1:role/r",
+            "JVSPATIAL_EVENTBRIDGE_LAMBDA_ARN": "arn:aws:lambda:us-east-1:1:function:f",
+        },
+        clear=False,
+    ):
+        reset_serverless_mode_cache()
+        apply_aws_eventbridge_env_default()
         assert os.environ[_EB_KEY] == "true"
 
 

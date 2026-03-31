@@ -8,6 +8,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from jvspatial.env import load_env
+from jvspatial.runtime.eventbridge_readiness import resolve_eventbridge_lambda_arn
 
 from .base import RetryConfig, TaskScheduler
 
@@ -42,17 +43,7 @@ def _eventbridge_role_arn() -> str:
 
 
 def _eventbridge_lambda_arn() -> str:
-    e = load_env()
-    arn = e.eventbridge_lambda_arn
-    if arn:
-        return arn
-    func_name = e.aws_lambda_function_name.strip()
-    if func_name:
-        region = e.aws_region
-        account = e.aws_account_id
-        if account:
-            return f"arn:aws:lambda:{region}:{account}:function:{func_name}"
-    return ""
+    return resolve_eventbridge_lambda_arn(load_env())
 
 
 def _eventbridge_schedule_group() -> str:

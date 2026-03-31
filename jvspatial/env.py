@@ -25,10 +25,11 @@ direct reads. ``POST`` upload and ``DELETE`` remain authenticated regardless.
   :func:`jvspatial.runtime.lwa.apply_aws_lwa_env_defaults` when the Server starts on
   AWS serverless and LWA is detected; IaC is still recommended (the extension may read
   env before Python starts). Opt out with ``JVSPATIAL_LWA_ENV_DEFAULTS=false``.
-- ``JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED`` — may default to ``"true"`` via
-  ``os.environ.setdefault`` when :class:`~jvspatial.api.server.Server` starts on AWS
-  serverless; application code still reads the effective value through :func:`load_env`
-  (cached together with other EventBridge fields).
+- ``JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED`` — may default to ``"true"`` or ``"false"``
+  when :class:`~jvspatial.api.server.Server` starts on AWS serverless, depending on
+  whether EventBridge prerequisites are met (see :mod:`jvspatial.runtime.eventbridge_readiness`);
+  application code reads the effective value through :func:`load_env` (cached together
+  with other EventBridge fields).
 """
 
 from __future__ import annotations
@@ -470,7 +471,10 @@ def _load_env_impl() -> EnvConfig:
             "JVSPATIAL_EVENTBRIDGE_SCHEDULER_GROUP", "default"
         ).strip()
         or "default",
-        aws_region=os.getenv("AWS_REGION", "us-east-1").strip() or "us-east-1",
+        aws_region=(
+            os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
+        ).strip()
+        or "us-east-1",
         aws_account_id=os.getenv("AWS_ACCOUNT_ID", "").strip(),
         file_interface=os.getenv("JVSPATIAL_FILE_INTERFACE", "local").strip()
         or "local",

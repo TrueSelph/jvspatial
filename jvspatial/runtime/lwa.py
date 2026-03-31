@@ -5,9 +5,13 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
+from jvspatial.runtime.eventbridge_readiness import (
+    eventbridge_scheduler_prerequisites_met_from_environ,
+)
 from jvspatial.runtime.serverless import detect_serverless_provider, is_serverless_mode
 
 _DEFERRED_INVOKE_SUFFIX = "/_internal/deferred"
+_EB_SCHEDULER_KEY = "JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED"
 _LWA_ENV_DEFAULTS_KEY = "JVSPATIAL_LWA_ENV_DEFAULTS"
 
 
@@ -47,19 +51,28 @@ def is_lambda_web_adapter_runtime() -> bool:
 
 
 def apply_aws_eventbridge_env_default(config: Optional[Any] = None) -> None:
-    """Best-effort ``JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED=true`` on AWS serverless.
+    """Set ``JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED`` on AWS serverless when unset.
 
-    Invoked from :class:`~jvspatial.api.server.Server` after config merge so timed
-    ``run_at`` work tries EventBridge first. Set ``JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED=false``
-    in Lambda env to force Lambda-only behavior. Schedules still require
-    ``JVSPATIAL_EVENTBRIDGE_ROLE_ARN`` (and typically ``AWS_ACCOUNT_ID`` if not using
-    ``JVSPATIAL_EVENTBRIDGE_LAMBDA_ARN``).
+    If the variable is **already** in the environment, it is left unchanged.
+
+    If **absent**, sets ``true`` only when EventBridge prerequisites are met (non-empty
+    ``JVSPATIAL_EVENTBRIDGE_ROLE_ARN`` and a resolvable Lambda target: either
+    ``JVSPATIAL_EVENTBRIDGE_LAMBDA_ARN`` or ``AWS_LAMBDA_FUNCTION_NAME`` +
+    ``AWS_ACCOUNT_ID`` + region from ``AWS_REGION`` / ``AWS_DEFAULT_REGION``). Otherwise
+    sets ``false`` so startup validation does not fail; timed ``run_at`` work falls back
+    to Lambda async invoke.
+
+    To force scheduler off, set ``JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED=false`` in env.
     """
     if not is_serverless_mode(config):
         return
     if detect_serverless_provider() != "aws":
         return
-    os.environ.setdefault("JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED", "true")
+    if _EB_SCHEDULER_KEY in os.environ:
+        return
+    os.environ[_EB_SCHEDULER_KEY] = (
+        "true" if eventbridge_scheduler_prerequisites_met_from_environ() else "false"
+    )
 
 
 def apply_aws_lwa_env_defaults(config: Optional[Any] = None) -> None:

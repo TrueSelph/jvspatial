@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional
 
+from jvspatial.runtime.eventbridge_readiness import resolve_eventbridge_lambda_arn
+
 # Keys that must not appear (clean break — no aliases).
 FORBIDDEN_JVSPATIAL_KEYS: frozenset[str] = frozenset(
     {
@@ -409,13 +411,26 @@ def validate_server_config_requirements(config: Any) -> None:
 
     eb_raw = (e.eventbridge_scheduler_enabled_raw or "").strip().lower()
     if eb_raw in ("true", "1", "yes"):
-        if not (e.eventbridge_role_arn or "").strip():
+        role = (e.eventbridge_role_arn or "").strip()
+        if not role:
             raise ValueError(
                 "EventBridge scheduler enabled requires JVSPATIAL_EVENTBRIDGE_ROLE_ARN."
             )
-        if not (e.eventbridge_lambda_arn or "").strip():
+        lambda_arn = resolve_eventbridge_lambda_arn(e).strip()
+        if not lambda_arn:
             raise ValueError(
-                "EventBridge scheduler enabled requires JVSPATIAL_EVENTBRIDGE_LAMBDA_ARN."
+                "EventBridge scheduler enabled requires JVSPATIAL_EVENTBRIDGE_LAMBDA_ARN "
+                "or AWS_LAMBDA_FUNCTION_NAME with AWS_ACCOUNT_ID (and AWS_REGION)."
+            )
+        if not role.startswith("arn:") or ":iam::" not in role:
+            raise ValueError(
+                "JVSPATIAL_EVENTBRIDGE_ROLE_ARN must be a valid IAM role ARN "
+                "(expected arn:*:iam::…)."
+            )
+        if not lambda_arn.startswith("arn:") or ":lambda:" not in lambda_arn:
+            raise ValueError(
+                "Resolved EventBridge Lambda target must be a valid Lambda function ARN "
+                "(expected arn:*:lambda:…)."
             )
 
 
