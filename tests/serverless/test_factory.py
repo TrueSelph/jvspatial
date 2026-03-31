@@ -124,9 +124,9 @@ def test_get_task_scheduler_provider_override_azure():
 
 
 def test_config_deferred_task_provider_field():
-    from jvspatial.config import Config
+    from jvspatial.api.config import ServerConfig
 
-    cfg = Config(deferred_task_provider="azure")
+    cfg = ServerConfig(deferred_task_provider="azure")
     with patch.dict(os.environ, {"SERVERLESS_MODE": "true"}, clear=False):
         os.environ.pop("JVSPATIAL_DEFERRED_TASK_PROVIDER", None)
         reset_serverless_mode_cache()

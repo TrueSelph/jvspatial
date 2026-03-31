@@ -248,42 +248,20 @@ class RateLimitConfig(BaseModel):
 class FileStorageConfig(BaseModel):
     """File storage configuration group."""
 
-    model_config = ConfigDict(populate_by_name=True)
-
-    file_storage_enabled: bool = Field(
-        default=False, validation_alias="JVSPATIAL_FILE_STORAGE_ENABLED"
-    )
-    file_storage_provider: str = Field(
-        default="local", validation_alias="JVSPATIAL_FILE_STORAGE_PROVIDER"
-    )  # "local" or "s3"
+    file_storage_enabled: bool = Field(default=False)
+    file_storage_provider: str = Field(default="local")  # "local" or "s3"
     file_storage_root: str = Field(
         default_factory=lambda: "/tmp/.files" if is_serverless_mode() else "./.files",
-        validation_alias="JVSPATIAL_FILES_ROOT_PATH",
     )
-    file_storage_base_url: str = Field(
-        default="http://localhost:8000",
-        validation_alias="JVSPATIAL_FILE_STORAGE_BASE_URL",
-    )
-    file_storage_max_size: int = Field(
-        default=100 * 1024 * 1024, validation_alias="JVSPATIAL_FILE_STORAGE_MAX_SIZE"
-    )  # 100MB default
+    file_storage_base_url: str = Field(default="http://localhost:8000")
+    file_storage_max_size: int = Field(default=100 * 1024 * 1024)  # 100MB default
 
     # S3 Configuration (only used if provider is "s3")
-    s3_bucket_name: Optional[str] = Field(
-        default=None, validation_alias="JVSPATIAL_S3_BUCKET_NAME"
-    )
-    s3_region: Optional[str] = Field(
-        default=None, validation_alias="JVSPATIAL_S3_REGION"
-    )
-    s3_access_key: Optional[str] = Field(
-        default=None, validation_alias="JVSPATIAL_S3_ACCESS_KEY"
-    )
-    s3_secret_key: Optional[str] = Field(
-        default=None, validation_alias="JVSPATIAL_S3_SECRET_KEY"
-    )
-    s3_endpoint_url: Optional[str] = Field(
-        default=None, validation_alias="JVSPATIAL_S3_ENDPOINT_URL"
-    )
+    s3_bucket_name: Optional[str] = Field(default=None)
+    s3_region: Optional[str] = Field(default=None)
+    s3_access_key: Optional[str] = Field(default=None)
+    s3_secret_key: Optional[str] = Field(default=None)
+    s3_endpoint_url: Optional[str] = Field(default=None)
 
     @model_validator(mode="after")
     def _unify_file_storage_root_with_jvagent(self) -> "FileStorageConfig":
@@ -319,15 +297,9 @@ class WebhookConfig(BaseModel):
 class ProxyConfig(BaseModel):
     """URL proxy configuration group."""
 
-    proxy_enabled: bool = Field(
-        default=False, validation_alias="JVSPATIAL_PROXY_ENABLED"
-    )
-    proxy_default_expiration: int = Field(
-        default=3600, validation_alias="JVSPATIAL_PROXY_DEFAULT_EXPIRATION"
-    )  # 1 hour
-    proxy_max_expiration: int = Field(
-        default=86400, validation_alias="JVSPATIAL_PROXY_MAX_EXPIRATION"
-    )  # 24 hours
+    proxy_enabled: bool = Field(default=False)
+    proxy_default_expiration: int = Field(default=3600)  # 1 hour
+    proxy_max_expiration: int = Field(default=86400)  # 24 hours
 
 
 __all__ = [

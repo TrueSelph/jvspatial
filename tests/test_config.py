@@ -1,203 +1,52 @@
-"""Test suite for unified Config system.
-
-Tests the simplified configuration system that replaces multiple config classes.
-"""
+"""Tests for :class:`~jvspatial.api.config.ServerConfig` and serverless runtime."""
 
 import os
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
-from jvspatial.config import (
-    Config,
-    get_config,
-    set_config,
-)
+from jvspatial.api.config import ServerConfig
 from jvspatial.runtime.serverless import is_serverless_mode, reset_serverless_mode_cache
 
 
-class TestConfig:
-    """Test unified Config class."""
+class TestServerConfig:
+    """Server configuration model."""
 
-    def test_config_default_values(self):
-        """Test default configuration values."""
-        config = Config()
-
-        # Server defaults
-        assert config.host == "localhost"
-        assert config.port == 8000
-        assert config.debug == False
-
-        # Auth defaults
-        assert config.jwt_secret == "your-secret-key"  # pragma: allowlist secret
-        assert config.jwt_algorithm == "HS256"
-        assert config.jwt_expire_minutes == 30
-
-        # Database defaults
-        assert config.db_type == "json"
-        assert config.db_base_path == ".data"
-
-        # Cache defaults
-        assert config.cache_backend == "memory"
-        assert config.cache_size == 1000
-
-    def test_config_from_env(self):
-        """Test configuration from environment variables."""
-        env_vars = {
-            "JVSPATIAL_HOST": "0.0.0.0",
-            "JVSPATIAL_PORT": "9000",
-            "JVSPATIAL_DEBUG": "true",
-            "JVSPATIAL_JWT_SECRET_KEY": "test-secret",  # pragma: allowlist secret
-            "JVSPATIAL_JWT_EXPIRE_MINUTES": "60",
-            "JVSPATIAL_DB_TYPE": "mongodb",
-            "JVSPATIAL_CACHE_BACKEND": "redis",
-            "JVSPATIAL_CACHE_SIZE": "2000",
-        }
-
-        with patch.dict(os.environ, env_vars):
-            config = Config.from_env()
-
-            assert config.host == "0.0.0.0"
-            assert config.port == 9000
-            assert config.debug == True
-            assert config.jwt_secret == "test-secret"  # pragma: allowlist secret
-            assert config.jwt_expire_minutes == 60
-            assert config.db_type == "mongodb"
-            assert config.cache_backend == "redis"
-            assert config.cache_size == 2000
-
-    def test_config_update(self):
-        """Test updating configuration values."""
-        config = Config()
-
-        # Update single value
-        config.update(host="0.0.0.0")
-        assert config.host == "0.0.0.0"
-
-        # Update multiple values
-        config.update(port=9000, debug=True)
-        assert config.port == 9000
-        assert config.debug == True
-
-    def test_config_validation(self):
-        """Test configuration validation."""
-        # Valid config
-        config = Config(host="localhost", port=8000)
-        assert config.host == "localhost"
-        assert config.port == 8000
-
-        # Invalid port
-        with pytest.raises(ValueError):
-            Config(port=-1)
-
-        # Invalid host
-        with pytest.raises(ValueError):
-            Config(host="")
-
-    def test_config_dict_conversion(self):
-        """Test converting config to/from dict."""
-        config = Config(host="test", port=9000, debug=True)
-
-        # Convert to dict
-        config_dict = config.model_dump()
-        assert config_dict["host"] == "test"
-        assert config_dict["port"] == 9000
-        assert config_dict["debug"] == True
-
-        # Create from dict
-        new_config = Config(**config_dict)
-        assert new_config.host == "test"
-        assert new_config.port == 9000
-        assert new_config.debug == True
-
-    def test_global_config_functions(self):
-        """Test global config functions."""
-        # Test get_config
-        config = get_config()
-        assert isinstance(config, Config)
-
-        # Test set_config
-        new_config = Config(host="test", port=9000)
-        set_config(new_config)
-
-        retrieved_config = get_config()
-        assert retrieved_config.host == "test"
-        assert retrieved_config.port == 9000
-
-    def test_config_server_specific(self):
-        """Test server-specific configuration."""
-        config = Config(
-            host="0.0.0.0",
-            port=8000,
-            debug=True,
-            cors_origins=["http://localhost:3000"],
-            cors_methods=["GET", "POST"],
-            cors_headers=["*"],
-        )
-
+    def test_default_values(self) -> None:
+        config = ServerConfig()
         assert config.host == "0.0.0.0"
         assert config.port == 8000
-        assert config.debug == True
-        assert config.cors_origins == ["http://localhost:3000"]
-        assert config.cors_methods == ["GET", "POST"]
-        assert config.cors_headers == ["*"]
+        assert config.debug is False
+        assert config.auth.jwt_algorithm == "HS256"
+        assert config.auth.jwt_expire_minutes == 30
 
-    def test_config_auth_specific(self):
-        """Test authentication-specific configuration."""
-        config = Config(
-            jwt_secret="super-secret-key",  # pragma: allowlist secret
-            jwt_algorithm="HS512",
-            jwt_expire_minutes=60,
-            jwt_refresh_expire_days=7,
-            password_min_length=8,
-            password_require_special_chars=True,
-        )
+    def test_update_nested(self) -> None:
+        config = ServerConfig()
+        config.auth.jwt_expire_minutes = 60
+        assert config.auth.jwt_expire_minutes == 60
 
-        assert config.jwt_secret == "super-secret-key"  # pragma: allowlist secret
-        assert config.jwt_algorithm == "HS512"
-        assert config.jwt_expire_minutes == 60
-        assert config.jwt_refresh_expire_days == 7
-        assert config.password_min_length == 8
-        assert config.password_require_special_chars == True
+    def test_port_validation(self) -> None:
+        with pytest.raises(ValidationError, match="Port must be between"):
+            ServerConfig(port=-1)
 
-    def test_config_database_specific(self):
-        """Test database-specific configuration."""
-        config = Config(
-            db_type="mongodb",
-            db_connection_string="mongodb://localhost:27017/test",
-            db_base_path="/tmp/data",
-            db_pool_size=10,
-            db_max_connections=100,
-        )
+    def test_host_validation(self) -> None:
+        with pytest.raises(ValidationError, match="Host cannot be empty"):
+            ServerConfig(host="")
 
-        assert config.db_type == "mongodb"
-        assert config.db_connection_string == "mongodb://localhost:27017/test"
-        assert config.db_base_path == "/tmp/data"
-        assert config.db_pool_size == 10
-        assert config.db_max_connections == 100
-
-    def test_config_cache_specific(self):
-        """Test cache-specific configuration."""
-        config = Config(
-            cache_backend="redis",
-            cache_size=2000,
-            cache_ttl_seconds=3600,
-            cache_key_prefix="jvspatial:",
-            redis_url="redis://localhost:6379/0",
-        )
-
-        assert config.cache_backend == "redis"
-        assert config.cache_size == 2000
-        assert config.cache_ttl_seconds == 3600
-        assert config.cache_key_prefix == "jvspatial:"
-        assert config.redis_url == "redis://localhost:6379/0"
+    def test_model_dump_roundtrip(self) -> None:
+        config = ServerConfig(host="127.0.0.1", port=9000, debug=True)
+        d = config.model_dump()
+        restored = ServerConfig(**d)
+        assert restored.host == "127.0.0.1"
+        assert restored.port == 9000
+        assert restored.debug is True
 
 
 class TestServerlessRuntimeMode:
-    """Test serverless runtime detection and derived behavior."""
+    """Serverless runtime detection and derived behavior."""
 
-    def test_default_non_serverless_when_unset(self):
-        """Unset env defaults to non-serverless."""
+    def test_default_non_serverless_when_unset(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("SERVERLESS_MODE", None)
             os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
@@ -205,15 +54,13 @@ class TestServerlessRuntimeMode:
             reset_serverless_mode_cache()
             assert is_serverless_mode() is False
 
-    def test_serverless_override_true(self):
-        """Explicit SERVERLESS_MODE=true enables serverless mode."""
+    def test_serverless_override_true(self) -> None:
         for val in ("true", "1", "yes", "True", "TRUE"):
             with patch.dict(os.environ, {"SERVERLESS_MODE": val}):
                 reset_serverless_mode_cache()
                 assert is_serverless_mode() is True
 
-    def test_serverless_override_false(self):
-        """Explicit SERVERLESS_MODE=false disables serverless mode."""
+    def test_serverless_override_false(self) -> None:
         for val in ("false", "0", "no", "False", "FALSE"):
             with patch.dict(
                 os.environ, {"SERVERLESS_MODE": val, "AWS_LAMBDA_FUNCTION_NAME": "func"}
@@ -221,27 +68,24 @@ class TestServerlessRuntimeMode:
                 reset_serverless_mode_cache()
                 assert is_serverless_mode() is False
 
-    def test_lambda_auto_detection(self):
-        """AWS env vars auto-enable serverless mode."""
+    def test_lambda_auto_detection(self) -> None:
         with patch.dict(os.environ, {"AWS_LAMBDA_FUNCTION_NAME": "my-func"}):
             os.environ.pop("SERVERLESS_MODE", None)
             reset_serverless_mode_cache()
             assert is_serverless_mode() is True
 
-    def test_config_override_precedence(self):
-        """Config.serverless_mode takes precedence over env and auto-detection."""
+    def test_config_override_precedence(self) -> None:
         with patch.dict(os.environ, {"SERVERLESS_MODE": "false"}):
-            assert is_serverless_mode(Config(serverless_mode=True)) is True
-            assert is_serverless_mode(Config(serverless_mode=False)) is False
+            assert is_serverless_mode(ServerConfig(serverless_mode=True)) is True
+            assert is_serverless_mode(ServerConfig(serverless_mode=False)) is False
 
-    def test_current_server_config_used_when_no_explicit_config(self):
-        """``is_serverless_mode()`` without args uses ``get_current_server().config`` when set."""
+    def test_current_server_config_used_when_no_explicit_config(self) -> None:
         from unittest.mock import MagicMock
 
         from jvspatial.api.context import set_current_server
 
         mock_srv = MagicMock()
-        mock_srv.config = Config(serverless_mode=True)
+        mock_srv.config = ServerConfig(serverless_mode=True)
         with patch.dict(os.environ, {"SERVERLESS_MODE": "false"}):
             os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
             os.environ.pop("AWS_LAMBDA_RUNTIME_API", None)

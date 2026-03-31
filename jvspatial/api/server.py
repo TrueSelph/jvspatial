@@ -25,6 +25,13 @@ from jvspatial.api.services.discovery import EndpointDiscoveryService
 from jvspatial.api.services.lifecycle import LifecycleManager
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Node
+from jvspatial.env_adapter import (
+    deep_merge,
+    server_config_overrides_from_env,
+    validate_known_jvspatial_env_keys,
+    validate_server_config_requirements,
+    warn_production_config_gaps,
+)
 
 
 class Server(
@@ -115,9 +122,13 @@ class Server(
             )
         }
 
+        validate_known_jvspatial_env_keys()
         merged_config = self._merge_config(config, config_kwargs)
+        defaults = ServerConfig().model_dump()
+        env_overrides = server_config_overrides_from_env()
+        merged = deep_merge(deep_merge(defaults, env_overrides), merged_config)
 
-        self.config = ServerConfig(**merged_config)
+        self.config = ServerConfig(**merged)
 
         from jvspatial.runtime.lwa import (
             apply_aws_eventbridge_env_default,
@@ -126,6 +137,11 @@ class Server(
 
         apply_aws_eventbridge_env_default(self.config)
         apply_aws_lwa_env_defaults(self.config)
+
+        from jvspatial.env import clear_load_env_cache
+
+        clear_load_env_cache()
+        validate_server_config_requirements(self.config)
 
         self.app_builder = AppBuilder(self.config)
         self.endpoint_manager = EndpointManager()
@@ -138,6 +154,7 @@ class Server(
         self.endpoint_router = EndpointRouter()
         self._exception_handlers: Dict[Union[int, Type[Exception]], Callable] = {}
         self._logger = logging.getLogger(__name__)
+        warn_production_config_gaps(self.config, self._logger)
 
         self._graph_context: Optional[GraphContext] = None
 
@@ -332,11 +349,9 @@ class Server(
     def configure_database(self, db_type: str, **db_config: Any) -> None:
         """Configure database settings using GraphContext.
 
-        For ``mongodb``, stored ``connection_string`` / ``database_name`` are used
-        when the corresponding environment variable is absent. If
-        ``JVSPATIAL_MONGODB_URI`` or ``JVSPATIAL_MONGODB_DB_NAME`` is set in the
-        process environment at GraphContext initialization time, that value
-        overrides the config field for the prime database connection.
+        For ``mongodb``, use ``database.db_connection_string`` and
+        ``database.db_database_name`` (including values merged from environment
+        at :class:`Server` startup).
 
         Args:
             db_type: Database type ("json", "mongodb", etc.)

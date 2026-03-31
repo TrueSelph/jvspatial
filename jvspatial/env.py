@@ -38,6 +38,7 @@ import os
 from dataclasses import dataclass
 from typing import Callable, List, Literal, Optional
 
+from jvspatial.env_adapter import assert_no_forbidden_jvspatial_env
 from jvspatial.runtime.serverless import is_serverless_mode
 
 
@@ -257,6 +258,8 @@ class EnvConfig:
 
 
 def _load_env_impl() -> EnvConfig:
+    assert_no_forbidden_jvspatial_env()
+
     max_pool = os.getenv("JVSPATIAL_MONGODB_MAX_POOL_SIZE")
     min_pool = os.getenv("JVSPATIAL_MONGODB_MIN_POOL_SIZE")
     environment = os.getenv("JVAGENT_ENVIRONMENT") or os.getenv("JVSPATIAL_ENVIRONMENT")
@@ -279,9 +282,10 @@ def _load_env_impl() -> EnvConfig:
     default_sqlite_path = (
         "/tmp/jvdb/sqlite/jvspatial.db" if serverless else "jvdb/sqlite/jvspatial.db"
     )
-    sqlite_explicit = os.getenv("JVSPATIAL_SQLITE_PATH", "").strip()
     db_path_raw = os.getenv("JVSPATIAL_DB_PATH", "").strip()
-    resolved_db_path = sqlite_explicit or db_path_raw or default_sqlite_path
+    generic_db_path = db_path_raw or None
+    jsondb_path_val = generic_db_path or default_jsondb_path
+    resolved_db_path = generic_db_path or default_sqlite_path
 
     cors_origins = _split_csv_list(os.getenv("JVSPATIAL_CORS_ORIGINS"))
     if cors_origins is None:
@@ -289,19 +293,9 @@ def _load_env_impl() -> EnvConfig:
     cors_methods = _split_csv_list(os.getenv("JVSPATIAL_CORS_METHODS")) or ["*"]
     cors_headers = _split_csv_list(os.getenv("JVSPATIAL_CORS_HEADERS")) or ["*"]
 
-    s3_region = (
-        os.getenv("JVSPATIAL_S3_REGION_NAME", "").strip()
-        or os.getenv("JVSPATIAL_S3_REGION", "").strip()
-        or "us-east-1"
-    )
-    s3_key = (
-        os.getenv("JVSPATIAL_S3_ACCESS_KEY_ID", "").strip()
-        or os.getenv("JVSPATIAL_S3_ACCESS_KEY", "").strip()
-    )
-    s3_secret = (
-        os.getenv("JVSPATIAL_S3_SECRET_ACCESS_KEY", "").strip()
-        or os.getenv("JVSPATIAL_S3_SECRET_KEY", "").strip()
-    )
+    s3_region = os.getenv("JVSPATIAL_S3_REGION", "").strip() or "us-east-1"
+    s3_key = os.getenv("JVSPATIAL_S3_ACCESS_KEY", "").strip()
+    s3_secret = os.getenv("JVSPATIAL_S3_SECRET_KEY", "").strip()
     s3_key_final = s3_key or None
     s3_secret_final = s3_secret or None
 
@@ -324,7 +318,7 @@ def _load_env_impl() -> EnvConfig:
 
     return EnvConfig(
         db_type=os.getenv("JVSPATIAL_DB_TYPE", "json"),
-        jsondb_path=os.getenv("JVSPATIAL_JSONDB_PATH", default_jsondb_path),
+        jsondb_path=jsondb_path_val,
         db_path=resolved_db_path,
         mongodb_uri=os.getenv("JVSPATIAL_MONGODB_URI", "mongodb://localhost:27017"),
         mongodb_db_name=os.getenv("JVSPATIAL_MONGODB_DB_NAME", "jvdb"),
@@ -417,7 +411,7 @@ def _load_env_impl() -> EnvConfig:
             "JVSPATIAL_FILE_STORAGE_BASE_URL", "http://localhost:8000"
         ),
         proxy_enabled=_parse_bool(os.getenv("JVSPATIAL_PROXY_ENABLED", "false")),
-        proxy_expiration=int(os.getenv("JVSPATIAL_PROXY_EXPIRATION", "3600")),
+        proxy_expiration=int(os.getenv("JVSPATIAL_PROXY_DEFAULT_EXPIRATION", "3600")),
         proxy_max_expiration=int(os.getenv("JVSPATIAL_PROXY_MAX_EXPIRATION", "86400")),
         db_logging_enabled=_parse_bool(
             os.getenv("JVSPATIAL_DB_LOGGING_ENABLED", "true")

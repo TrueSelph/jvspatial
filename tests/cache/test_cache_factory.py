@@ -5,6 +5,7 @@ import os
 import pytest
 
 from jvspatial.cache.factory import create_cache, create_default_cache
+from jvspatial.cache.layered import LayeredCache
 from jvspatial.cache.memory import MemoryCache
 
 
@@ -105,12 +106,23 @@ async def test_get_cache_backend_explicit_overrides_env(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_cache_backend_case_insensitive(monkeypatch):
-    """Test that backend names are case-insensitive."""
+    """Backend names are normalized to lowercase (explicit and via env)."""
+    assert isinstance(create_cache("MEMORY"), MemoryCache)
+
     monkeypatch.setenv("JVSPATIAL_CACHE_BACKEND", "MEMORY")
-
-    cache = create_cache()
-
+    cache = create_default_cache()
     assert isinstance(cache, MemoryCache)
+
+
+@pytest.mark.asyncio
+async def test_create_default_cache_memory_plus_redis_url_is_layered(monkeypatch):
+    """memory + JVSPATIAL_REDIS_URL upgrades to layered in create_default_cache."""
+    monkeypatch.setenv("JVSPATIAL_CACHE_BACKEND", "memory")
+    monkeypatch.setenv("JVSPATIAL_REDIS_URL", "redis://127.0.0.1:6379/0")
+
+    cache = create_default_cache()
+
+    assert isinstance(cache, LayeredCache)
 
 
 @pytest.mark.asyncio

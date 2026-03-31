@@ -11,7 +11,7 @@ Key Features:
 - Simplified decorator system (@attribute, @endpoint)
 - Direct instantiation (no complex factories)
 - Essential CRUD operations
-- Unified configuration system
+- Server configuration (:class:`~jvspatial.api.config.ServerConfig`)
 - Async/await architecture
 
 Main Exports (Import from top level):
@@ -29,7 +29,7 @@ Main Exports (Import from top level):
 
     API:
         - Server: FastAPI server for graph operations
-        - Config: Unified configuration system
+        - ServerConfig: Server configuration model
 
     Database & Cache:
         - Database: Simplified database interface
@@ -42,7 +42,7 @@ Main Exports (Import from top level):
 
 Example:
     # Using enhanced classes with maintained hierarchy
-    from jvspatial import Node, Walker, Server, Config, create_database
+    from jvspatial import Node, Walker, Server, ServerConfig, create_database
 
     # Node inherits from Object with all original functionality
     node = Node(id="test-node")
@@ -54,12 +54,10 @@ Example:
 
 # API server
 from .api import Server
+from .api.config import ServerConfig
 from .api.decorators.route import endpoint
 from .async_utils import create_task
 from .cache import create_cache
-
-# Unified configuration
-from .config import Config
 
 # Simplified decorators
 from .core.annotations import attribute
@@ -101,8 +99,7 @@ from .version import __version__
 __all__ = [
     # Version
     "__version__",
-    # Unified configuration
-    "Config",
+    "ServerConfig",
     "is_serverless_mode",
     "detect_serverless_provider",
     "get_task_scheduler",

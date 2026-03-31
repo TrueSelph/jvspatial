@@ -6,7 +6,7 @@ database, CORS, file storage, and other server-related settings.
 
 from typing import Any, List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .config_groups import (
     AuthConfig,
@@ -83,6 +83,20 @@ class ServerConfig(BaseModel):
             "and /api/graph/subgraph (JSON) when the server registers them"
         ),
     )
+
+    @field_validator("port")
+    @classmethod
+    def _validate_port(cls, v: int) -> int:
+        if v < 1 or v > 65535:
+            raise ValueError("Port must be between 1 and 65535")
+        return v
+
+    @field_validator("host")
+    @classmethod
+    def _validate_host(cls, v: str) -> str:
+        if not v or not str(v).strip():
+            raise ValueError("Host cannot be empty")
+        return v
 
     @model_validator(mode="before")
     @classmethod

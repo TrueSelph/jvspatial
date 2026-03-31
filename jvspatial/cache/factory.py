@@ -22,17 +22,8 @@ def create_cache(
 
     Returns:
         Configured cache backend instance
-
-    Examples:
-        # Memory cache
-        cache = create_cache("memory", cache_size=1000)
-
-        # Redis cache
-        cache = create_cache("redis", redis_url="redis://localhost:6379")
-
-        # Layered cache
-        cache = create_cache("layered", l1_size=500)
     """
+    backend = str(backend).strip().lower()
     if backend == "memory":
         return MemoryCache(max_size=cache_size)
 
@@ -70,7 +61,7 @@ def create_default_cache() -> CacheBackend:
         Configured cache backend instance
     """
     e = load_env()
-    backend = e.cache_backend
+    backend = str(e.cache_backend or "memory").strip().lower()
     cache_size = e.cache_size
 
     if backend == "memory" and e.redis_url:

@@ -73,55 +73,10 @@ class DatabaseConfigurator:
         return None
 
     def _resolve_mongodb_connection(self) -> Tuple[str, str]:
-        """Resolve Mongo URI and database name for Server initialization.
-
-        If ``JVSPATIAL_MONGODB_URI`` / ``JVSPATIAL_MONGODB_DB_NAME`` are present in
-        the process environment, their non-empty stripped values override
-        ``config.database.db_connection_string`` / ``db_database_name``. When a
-        variable is absent (``os.getenv`` is ``None``), the corresponding config
-        field is used. Empty env values fall back to config (URI then localhost,
-        DB name then ``jvdb``).
-
-        ``load_env().mongodb_uri`` cannot be used alone to detect override intent
-        because it defaults when the variable is unset.
-
-        Returns:
-            ``(uri, db_name)`` for ``create_database("mongodb", ...)``.
-        """
+        """Resolve Mongo URI and database name from server configuration only."""
         db = self.config.database
-        config_uri = (db.db_connection_string or "").strip()
-        config_db_name = (db.db_database_name or "").strip()
-
-        env_uri_raw = os.getenv("JVSPATIAL_MONGODB_URI")
-        if env_uri_raw is not None:
-            env_uri = env_uri_raw.strip()
-            if env_uri:
-                uri = env_uri
-                if config_uri and config_uri != uri:
-                    self._logger.warning(
-                        "JVSPATIAL_MONGODB_URI overrides database.db_connection_string "
-                        "(values differ; using env)"
-                    )
-            else:
-                uri = config_uri or "mongodb://localhost:27017"
-        else:
-            uri = config_uri or "mongodb://localhost:27017"
-
-        env_db_raw = os.getenv("JVSPATIAL_MONGODB_DB_NAME")
-        if env_db_raw is not None:
-            env_db = env_db_raw.strip()
-            if env_db:
-                db_name = env_db
-                if config_db_name and config_db_name != db_name:
-                    self._logger.warning(
-                        "JVSPATIAL_MONGODB_DB_NAME overrides database.db_database_name "
-                        "(values differ; using env)"
-                    )
-            else:
-                db_name = config_db_name or "jvdb"
-        else:
-            db_name = config_db_name or "jvdb"
-
+        uri = (db.db_connection_string or "").strip() or "mongodb://localhost:27017"
+        db_name = (db.db_database_name or "").strip() or "jvdb"
         return uri, db_name
 
     def initialize_graph_context(self) -> Optional[GraphContext]:
@@ -146,8 +101,6 @@ class DatabaseConfigurator:
 
         try:
             # Create prime database based on configuration FIRST.
-            # For MongoDB, JVSPATIAL_MONGODB_URI / JVSPATIAL_MONGODB_DB_NAME override
-            # config when those env vars are set (see _resolve_mongodb_connection).
             prime_db = None
 
             if db_type == "json":

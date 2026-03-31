@@ -64,25 +64,24 @@ def test_deferred_invoke_secret_set():
         assert load_env().deferred_invoke_secret == "my-secret"
 
 
-def test_sqlite_path_over_db_path():
-    with patch.dict(
-        os.environ,
-        {
-            "JVSPATIAL_DB_PATH": "/from/db_path.db",
-            "JVSPATIAL_SQLITE_PATH": "/from/sqlite_path.db",
-        },
-    ):
+def test_jvspatial_db_path_sets_json_and_sqlite_paths():
+    with patch.dict(os.environ, {"JVSPATIAL_DB_PATH": "/data/dbdir"}):
         clear_load_env_cache()
-        assert load_env().db_path == "/from/sqlite_path.db"
+        e = load_env()
+        assert e.jsondb_path == "/data/dbdir"
+        assert e.db_path == "/data/dbdir"
 
 
-def test_s3_legacy_env_aliases():
-    with patch.dict(
-        os.environ,
-        {},
-        clear=True,
-    ):
+def test_forbidden_jsondb_path_raises():
+    from jvspatial.env_adapter import JvspatialConfigEnvError
+
+    with patch.dict(os.environ, {"JVSPATIAL_JSONDB_PATH": "/x"}):
         clear_load_env_cache()
+        with pytest.raises(JvspatialConfigEnvError):
+            load_env()
+
+
+def test_s3_canonical_env_keys():
     with patch.dict(
         os.environ,
         {
@@ -90,6 +89,7 @@ def test_s3_legacy_env_aliases():
             "JVSPATIAL_S3_ACCESS_KEY": "ak",
             "JVSPATIAL_S3_SECRET_KEY": "sk",
         },
+        clear=True,
     ):
         clear_load_env_cache()
         e = load_env()
