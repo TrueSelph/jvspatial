@@ -6,15 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from jvspatial.api.config import ServerConfig
-from jvspatial.env import clear_load_env_cache
 from jvspatial.env_adapter import validate_server_config_requirements
-
-
-@pytest.fixture(autouse=True)
-def _clear_env_cache():
-    clear_load_env_cache()
-    yield
-    clear_load_env_cache()
 
 
 def _minimal_server_config() -> ServerConfig:
@@ -33,7 +25,6 @@ def test_validate_eventbridge_ok_explicit_lambda_arn():
         },
         clear=False,
     ):
-        clear_load_env_cache()
         validate_server_config_requirements(cfg)
 
 
@@ -51,7 +42,6 @@ def test_validate_eventbridge_ok_composed_lambda_arn():
         },
         clear=False,
     ):
-        clear_load_env_cache()
         validate_server_config_requirements(cfg)
 
 
@@ -67,7 +57,6 @@ def test_validate_eventbridge_fails_without_resolvable_lambda():
         },
         clear=False,
     ):
-        clear_load_env_cache()
         with pytest.raises(ValueError, match="JVSPATIAL_EVENTBRIDGE_LAMBDA_ARN"):
             validate_server_config_requirements(cfg)
 
@@ -84,6 +73,5 @@ def test_validate_eventbridge_fails_malformed_role_arn():
         },
         clear=False,
     ):
-        clear_load_env_cache()
         with pytest.raises(ValueError, match="JVSPATIAL_EVENTBRIDGE_ROLE_ARN"):
             validate_server_config_requirements(cfg)

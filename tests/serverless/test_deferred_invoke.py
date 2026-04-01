@@ -6,7 +6,6 @@ from fastapi.testclient import TestClient
 
 from jvspatial.api.constants import APIRoutes
 from jvspatial.api.deferred_invoke_route import register_deferred_invoke_route
-from jvspatial.env import clear_load_env_cache
 from jvspatial.serverless.deferred_invoke import (
     MalformedDeferredInvokeError,
     UnknownDeferredTaskError,
@@ -20,10 +19,8 @@ from jvspatial.serverless.deferred_invoke import (
 @pytest.fixture(autouse=True)
 def _clear_handlers():
     clear_deferred_invoke_handlers()
-    clear_load_env_cache()
     yield
     clear_deferred_invoke_handlers()
-    clear_load_env_cache()
 
 
 def test_normalize_sqs_envelope_flattens_payload():
@@ -87,7 +84,7 @@ def test_deferred_invoke_http_route():
     async def handler(event: dict) -> dict:
         return {"ok": True, "sender": event.get("sender")}
 
-    register_deferred_invoke_handler("jvagent.whatsapp.media_batch", handler)
+    register_deferred_invoke_handler("app.whatsapp.media_batch", handler)
     register_deferred_invoke_route(app)
     register_deferred_invoke_route(app)
 
@@ -96,7 +93,7 @@ def test_deferred_invoke_http_route():
     r = client.post(
         path,
         json={
-            "task_type": "jvagent.whatsapp.media_batch",
+            "task_type": "app.whatsapp.media_batch",
             "sender": "u1",
             "media_batch_window": 1.5,
         },
@@ -117,7 +114,6 @@ def test_deferred_invoke_http_unknown_returns_404():
 
 def test_deferred_invoke_http_secret_header(monkeypatch):
     monkeypatch.setenv("JVSPATIAL_DEFERRED_INVOKE_SECRET", "test-secret-value")
-    clear_load_env_cache()
     app = FastAPI()
 
     async def handler(event: dict) -> dict:
@@ -145,7 +141,6 @@ def test_deferred_invoke_http_secret_header(monkeypatch):
 
 def test_deferred_invoke_route_skipped_when_disabled(monkeypatch):
     monkeypatch.setenv("JVSPATIAL_DEFERRED_INVOKE_DISABLED", "true")
-    clear_load_env_cache()
     app = FastAPI()
     register_deferred_invoke_route(app)
     client = TestClient(app)

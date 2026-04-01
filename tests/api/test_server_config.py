@@ -111,7 +111,7 @@ class TestServerConfigGroups:
             assert config.file_storage.file_storage_root == "./.files"
 
     def test_file_storage_root_unified_env_jvspatial_files_root_path(self):
-        """JVSPATIAL_FILES_ROOT_PATH must match jvagent and override YAML root."""
+        """JVSPATIAL_FILES_ROOT_PATH must override YAML root."""
         with patch.dict(
             os.environ,
             {"JVSPATIAL_FILES_ROOT_PATH": "/lambda/unified"},

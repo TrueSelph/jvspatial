@@ -10,7 +10,7 @@ import logging
 from asyncio import to_thread
 from typing import Any, AsyncIterator, Dict, List, Optional, cast
 
-from jvspatial.env import load_env
+from jvspatial.env import env
 
 from ..exceptions import (
     AccessDeniedError,
@@ -76,7 +76,7 @@ class S3FileInterface(FileStorageInterface):
         - Direct serve for small text files
         - Thread-safe operations
 
-    Configuration via environment variables (read via :func:`~jvspatial.env.load_env`):
+    Configuration via live environment variables:
         - JVSPATIAL_S3_BUCKET_NAME: S3 bucket name
         - JVSPATIAL_S3_REGION: AWS region (default: us-east-1)
         - JVSPATIAL_S3_ACCESS_KEY: AWS access key ID
@@ -132,12 +132,13 @@ class S3FileInterface(FileStorageInterface):
         self._ClientError = ClientError
         self._BotoCoreError = BotoCoreError
 
-        e = load_env()
-        self.bucket_name = bucket_name or e.s3_bucket_name
-        self.region_name = region_name or e.s3_region_name
-        self.access_key_id = access_key_id or e.s3_access_key_id
-        self.secret_access_key = secret_access_key or e.s3_secret_access_key
-        self.endpoint_url = endpoint_url or e.s3_endpoint_url
+        self.bucket_name = bucket_name or env("JVSPATIAL_S3_BUCKET_NAME")
+        self.region_name = region_name or env(
+            "JVSPATIAL_S3_REGION", default="us-east-1"
+        )
+        self.access_key_id = access_key_id or env("JVSPATIAL_S3_ACCESS_KEY")
+        self.secret_access_key = secret_access_key or env("JVSPATIAL_S3_SECRET_KEY")
+        self.endpoint_url = endpoint_url or env("JVSPATIAL_S3_ENDPOINT_URL")
 
         if not self.bucket_name:
             raise ValueError(

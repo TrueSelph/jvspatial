@@ -6,8 +6,7 @@ MongoDB (native operations). JSON, SQLite, and DynamoDB use the default
 read-modify-write / find-then-delete paths (best-effort under concurrency).
 
 Env:
-    ``JVSPATIAL_WORK_CLAIM_STALE_SECONDS`` — loaded via ``jvspatial.env.load_env()`` as
-    ``work_claim_stale_seconds`` (default TTL 600 seconds).
+    ``JVSPATIAL_WORK_CLAIM_STALE_SECONDS`` (default TTL 600 seconds).
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ import secrets
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from jvspatial.env import load_env
+from jvspatial.env import env
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +25,9 @@ _CLAIM_UNTIL_FIELD = "_jv_claim_until"
 
 
 def _stale_seconds() -> float:
-    return load_env().work_claim_stale_seconds
+    return (
+        env("JVSPATIAL_WORK_CLAIM_STALE_SECONDS", default=600.0, parse=float) or 600.0
+    )
 
 
 async def claim_record(

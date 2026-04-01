@@ -1,9 +1,4 @@
-"""Canonical environment → :class:`~jvspatial.api.config.ServerConfig` mapping.
-
-Strict JVSPATIAL_* validation (forbidden and unknown keys) runs when constructing
-:class:`~jvspatial.api.server.Server`. :func:`assert_no_forbidden_jvspatial_env`
-runs from :func:`~jvspatial.env.load_env` so removed keys fail even without Server.
-"""
+"""Canonical environment → :class:`~jvspatial.api.config.ServerConfig` mapping."""
 
 from __future__ import annotations
 
@@ -11,167 +6,6 @@ import os
 from typing import Any, Dict, List, Optional
 
 from jvspatial.runtime.eventbridge_readiness import resolve_eventbridge_lambda_arn
-
-# Keys that must not appear (clean break — no aliases).
-FORBIDDEN_JVSPATIAL_KEYS: frozenset[str] = frozenset(
-    {
-        "JVSPATIAL_DB_URI",
-        "JVSPATIAL_DB_NAME",
-        "JVSPATIAL_JSONDB_PATH",
-        "JVSPATIAL_SQLITE_PATH",
-        "JVSPATIAL_STORAGE_ENABLED",
-        "JVSPATIAL_STORAGE_PROVIDER",
-        "JVSPATIAL_STORAGE_ROOT",
-        "JVSPATIAL_S3_REGION_NAME",
-        "JVSPATIAL_S3_ACCESS_KEY_ID",
-        "JVSPATIAL_S3_SECRET_ACCESS_KEY",
-        "JVSPATIAL_JWT_EXPIRATION_HOURS",
-        "JVSPATIAL_JWT_REFRESH_EXPIRATION_DAYS",
-        "JVSPATIAL_L1_SIZE",
-        "JVSPATIAL_PROXY_EXPIRATION",
-    }
-)
-
-# Every JVSPATIAL_* key understood by jvspatial (library + server). Server startup
-# rejects any JVSPATIAL_* not in this set.
-ALLOWED_JVSPATIAL_KEYS: frozenset[str] = frozenset(
-    {
-        "JVSPATIAL_DB_TYPE",
-        "JVSPATIAL_DB_PATH",
-        "JVSPATIAL_MONGODB_URI",
-        "JVSPATIAL_MONGODB_DB_NAME",
-        "JVSPATIAL_MONGODB_MAX_POOL_SIZE",
-        "JVSPATIAL_MONGODB_MIN_POOL_SIZE",
-        "JVSPATIAL_DYNAMODB_TABLE_NAME",
-        "JVSPATIAL_DYNAMODB_REGION",
-        "JVSPATIAL_DYNAMODB_ENDPOINT_URL",
-        "JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX",
-        "JVSPATIAL_WEBHOOK_HMAC_SECRET",
-        "JVSPATIAL_WEBHOOK_HMAC_ALGORITHM",
-        "JVSPATIAL_WEBHOOK_MAX_PAYLOAD_SIZE",
-        "JVSPATIAL_WEBHOOK_IDEMPOTENCY_TTL",
-        "JVSPATIAL_WEBHOOK_HTTPS_REQUIRED",
-        "JVSPATIAL_WALKER_MAX_STEPS",
-        "JVSPATIAL_WALKER_MAX_VISITS_PER_NODE",
-        "JVSPATIAL_WALKER_MAX_EXECUTION_TIME",
-        "JVSPATIAL_WALKER_MAX_QUEUE_SIZE",
-        "JVSPATIAL_WALKER_PROTECTION_ENABLED",
-        "JVSPATIAL_AUTO_CREATE_INDEXES",
-        "JVSPATIAL_TEXT_NORMALIZATION_ENABLED",
-        "JVSPATIAL_S3_BUCKET_NAME",
-        "JVSPATIAL_S3_REGION",
-        "JVSPATIAL_S3_ACCESS_KEY",
-        "JVSPATIAL_S3_SECRET_KEY",
-        "JVSPATIAL_S3_ENDPOINT_URL",
-        "JVSPATIAL_WORK_CLAIM_STALE_SECONDS",
-        "JVSPATIAL_DEFERRED_INVOKE_DISABLED",
-        "JVSPATIAL_DEFERRED_INVOKE_SECRET",
-        "JVSPATIAL_API_PREFIX",
-        "JVSPATIAL_API_HEALTH",
-        "JVSPATIAL_API_ROOT",
-        "JVSPATIAL_FILES_PUBLIC_READ",
-        "JVSPATIAL_PROXY_PREFIX",
-        "JVSPATIAL_COLLECTION_USERS",
-        "JVSPATIAL_COLLECTION_API_KEYS",
-        "JVSPATIAL_COLLECTION_SESSIONS",
-        "JVSPATIAL_COLLECTION_WEBHOOKS",
-        "JVSPATIAL_COLLECTION_WEBHOOK_REQUESTS",
-        "JVSPATIAL_COLLECTION_SCHEDULED_TASKS",
-        "JVSPATIAL_API_TITLE",
-        "JVSPATIAL_API_VERSION",
-        "JVSPATIAL_API_DESCRIPTION",
-        "JVSPATIAL_HOST",
-        "JVSPATIAL_PORT",
-        "JVSPATIAL_LOG_LEVEL",
-        "JVSPATIAL_DEBUG",
-        "JVSPATIAL_CORS_ENABLED",
-        "JVSPATIAL_CORS_ORIGINS",
-        "JVSPATIAL_CORS_METHODS",
-        "JVSPATIAL_CORS_HEADERS",
-        "JVSPATIAL_FILE_STORAGE_ENABLED",
-        "JVSPATIAL_FILE_STORAGE_PROVIDER",
-        "JVSPATIAL_FILES_ROOT_PATH",
-        "JVSPATIAL_FILE_STORAGE_BASE_URL",
-        "JVSPATIAL_FILE_STORAGE_MAX_SIZE",
-        "JVSPATIAL_FILE_STORAGE_SERVERLESS_SHARED",
-        "JVSPATIAL_PROXY_ENABLED",
-        "JVSPATIAL_PROXY_DEFAULT_EXPIRATION",
-        "JVSPATIAL_PROXY_MAX_EXPIRATION",
-        "JVSPATIAL_DB_LOGGING_ENABLED",
-        "JVSPATIAL_DB_LOGGING_LEVELS",
-        "JVSPATIAL_DB_LOGGING_DB_NAME",
-        "JVSPATIAL_DB_LOGGING_API_ENABLED",
-        "JVSPATIAL_LOG_DB_TYPE",
-        "JVSPATIAL_LOG_DB_PATH",
-        "JVSPATIAL_LOG_DB_URI",
-        "JVSPATIAL_LOG_DB_NAME",
-        "JVSPATIAL_LOG_DB_TABLE_NAME",
-        "JVSPATIAL_LOG_DB_REGION",
-        "JVSPATIAL_LOG_DB_ENDPOINT_URL",
-        "JVSPATIAL_LOG_RETENTION_DEFAULT_DAYS",
-        "JVSPATIAL_CACHE_BACKEND",
-        "JVSPATIAL_CACHE_SIZE",
-        "JVSPATIAL_REDIS_URL",
-        "JVSPATIAL_REDIS_TTL",
-        "JVSPATIAL_L1_CACHE_SIZE",
-        "JVSPATIAL_AUTH_STRICT_HASHING",
-        "JVSPATIAL_BCRYPT_ROUNDS",
-        "JVSPATIAL_BCRYPT_ROUNDS_SERVERLESS",
-        "JVSPATIAL_ARGON2_TIME_COST",
-        "JVSPATIAL_ARGON2_MEMORY_COST",
-        "JVSPATIAL_ARGON2_PARALLELISM",
-        "JVSPATIAL_ENABLE_DEFERRED_SAVES",
-        "JVSPATIAL_DEFERRED_TASK_PROVIDER",
-        "JVSPATIAL_AWS_DEFERRED_TRANSPORT",
-        "JVSPATIAL_AWS_SQS_QUEUE_URL",
-        "JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED",
-        "JVSPATIAL_EVENTBRIDGE_ROLE_ARN",
-        "JVSPATIAL_EVENTBRIDGE_LAMBDA_ARN",
-        "JVSPATIAL_EVENTBRIDGE_SCHEDULER_GROUP",
-        "JVSPATIAL_FILE_INTERFACE",
-        "JVSPATIAL_LWA_ENV_DEFAULTS",
-        "JVSPATIAL_DB_LOG_SERVERLESS_ASYNC",
-        "JVSPATIAL_DB_LOG_SERVERLESS_JOIN_TIMEOUT",
-        "JVSPATIAL_AUTH_ENABLED",
-        "JVSPATIAL_JWT_SECRET_KEY",
-        "JVSPATIAL_JWT_ALGORITHM",
-        "JVSPATIAL_JWT_EXPIRE_MINUTES",
-        "JVSPATIAL_JWT_REFRESH_EXPIRE_DAYS",
-        "JVSPATIAL_RATE_LIMIT_ENABLED",
-        "JVSPATIAL_RATE_LIMIT_DEFAULT_REQUESTS",
-        "JVSPATIAL_RATE_LIMIT_DEFAULT_WINDOW",
-        "JVSPATIAL_TITLE",
-        "JVSPATIAL_DESCRIPTION",
-        "JVSPATIAL_VERSION",
-        "JVSPATIAL_GRAPH_ENDPOINT_ENABLED",
-    }
-)
-
-
-class JvspatialConfigEnvError(ValueError):
-    """Invalid or unsupported JVSPATIAL_* environment configuration."""
-
-
-def assert_no_forbidden_jvspatial_env() -> None:
-    """Raise if any forbidden ``JVSPATIAL_*`` key is set."""
-    for key in FORBIDDEN_JVSPATIAL_KEYS:
-        if key in os.environ:
-            raise JvspatialConfigEnvError(
-                f"Unsupported environment variable {key!r} was removed in this "
-                f"release; see jvspatial docs for canonical replacement keys."
-            )
-
-
-def validate_known_jvspatial_env_keys() -> None:
-    """Raise if any set ``JVSPATIAL_*`` key is not in the allowlist (Server startup)."""
-    for key in os.environ:
-        if not key.startswith("JVSPATIAL_"):
-            continue
-        if key not in ALLOWED_JVSPATIAL_KEYS:
-            raise JvspatialConfigEnvError(
-                f"Unknown environment variable {key!r}. "
-                f"See docs/md/environment-configuration.md for supported JVSPATIAL_* keys."
-            )
 
 
 def _parse_bool(val: str) -> bool:
@@ -387,12 +221,10 @@ def validate_server_config_requirements(config: Any) -> None:
                 "S3 file storage requires JVSPATIAL_S3_SECRET_KEY / s3_secret_key."
             )
 
-    # Cache: redis / layered needs Redis URL in environment (create_default_cache uses load_env).
-    from jvspatial.env import load_env
+    from jvspatial.env import env
 
-    e = load_env()
-    backend = (e.cache_backend or "memory").strip().lower()
-    redis_url_set = bool((e.redis_url or "").strip())
+    backend = env("JVSPATIAL_CACHE_BACKEND", default="memory").lower()
+    redis_url_set = bool(env("JVSPATIAL_REDIS_URL", default=""))
     needs_redis = backend in ("redis", "layered") or (
         backend == "memory" and redis_url_set
     )
@@ -402,21 +234,33 @@ def validate_server_config_requirements(config: Any) -> None:
             f"(cache backend resolves to redis/layered; JVSPATIAL_CACHE_BACKEND={backend!r})."
         )
 
-    if (e.aws_deferred_transport or "").strip().lower() == "sqs" and not (
-        e.aws_sqs_queue_url or ""
-    ).strip():
+    if env("JVSPATIAL_AWS_DEFERRED_TRANSPORT", default="").lower() == "sqs" and not env(
+        "JVSPATIAL_AWS_SQS_QUEUE_URL", default=""
+    ):
         raise ValueError(
             "JVSPATIAL_AWS_DEFERRED_TRANSPORT=sqs requires JVSPATIAL_AWS_SQS_QUEUE_URL."
         )
 
-    eb_raw = (e.eventbridge_scheduler_enabled_raw or "").strip().lower()
+    eb_raw = env("JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED", default="").lower()
     if eb_raw in ("true", "1", "yes"):
-        role = (e.eventbridge_role_arn or "").strip()
+        role = env("JVSPATIAL_EVENTBRIDGE_ROLE_ARN", default="")
         if not role:
             raise ValueError(
                 "EventBridge scheduler enabled requires JVSPATIAL_EVENTBRIDGE_ROLE_ARN."
             )
-        lambda_arn = resolve_eventbridge_lambda_arn(e).strip()
+
+        class _EnvView:
+            eventbridge_lambda_arn = env("JVSPATIAL_EVENTBRIDGE_LAMBDA_ARN", default="")
+            aws_lambda_function_name = env("AWS_LAMBDA_FUNCTION_NAME", default="")
+            aws_region = (
+                env(
+                    "AWS_REGION", default=env("AWS_DEFAULT_REGION", default="us-east-1")
+                )
+                or "us-east-1"
+            )
+            aws_account_id = env("AWS_ACCOUNT_ID", default="")
+
+        lambda_arn = resolve_eventbridge_lambda_arn(_EnvView()).strip()
         if not lambda_arn:
             raise ValueError(
                 "EventBridge scheduler enabled requires JVSPATIAL_EVENTBRIDGE_LAMBDA_ARN "

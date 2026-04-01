@@ -1,10 +1,9 @@
 """DynamoDB database implementation.
 
 Index creation policy (auto-create vs wait) is **not** read inside this module.
-``JVSPATIAL_AUTO_CREATE_INDEXES`` is loaded via ``jvspatial.env.load_env()`` and applied
-when entities use ``GraphContext`` (e.g. during ``ensure_indexes``). This class only
-consumes ``JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX`` (and related wait behavior) where
-``create_index(..., wait_for_active=...)`` defaults are resolved from ``load_env()``.
+``JVSPATIAL_AUTO_CREATE_INDEXES`` is interpreted in ``GraphContext`` (e.g. during
+``ensure_indexes``). This class only consumes ``JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX``
+for ``create_index(..., wait_for_active=...)`` defaults.
 
 Summary:
     - ``JVSPATIAL_AUTO_CREATE_INDEXES``: interpreted in ``GraphContext`` / env layer,
@@ -1221,9 +1220,13 @@ class DynamoDB(Database):
         # Determine whether to wait based on parameter or environment variable
         # Default is False to allow immediate graph usage (indexes created asynchronously)
         if wait_for_active is None:
-            from jvspatial.env import load_env
+            from jvspatial.env import env, parse_bool_basic
 
-            wait_for_active = load_env().dynamodb_wait_for_index
+            wait_for_active = env(
+                "JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX",
+                default=False,
+                parse=parse_bool_basic,
+            )
         table_name = await self._ensure_table_exists(collection)
 
         # Initialize collections in registry if needed

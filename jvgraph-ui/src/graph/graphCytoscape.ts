@@ -1,6 +1,6 @@
 /**
  * Cytoscape + dagre helpers for progressive jvspatial graph JSON payloads.
- * Ported from jvagent jvchat (graphCytoscape.ts).
+ * Ported from a prior chat graph visualization implementation.
  */
 
 import cytoscape, { type Core, type ElementDefinition } from 'cytoscape'

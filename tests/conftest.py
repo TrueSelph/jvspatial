@@ -5,14 +5,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _clear_jvspatial_load_env_cache():
-    """Invalidate :func:`jvspatial.env.load_env` cache so per-test env patches apply.
-
-    ``load_env`` is LRU-cached in production; tests that use ``monkeypatch`` or
-    ``patch.dict(os.environ, ...)`` must see updated values.
-    """
-    from jvspatial.env import clear_load_env_cache
-
-    clear_load_env_cache()
+    """Test env reads are live; keep hook for shared test setup symmetry."""
     yield
 
 

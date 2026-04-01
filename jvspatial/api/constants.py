@@ -3,49 +3,54 @@
 This module provides centralized constants for routes, HTTP methods,
 collection names, and other magic strings used throughout the API.
 
-Values resolve from :func:`jvspatial.env.load_env` on each attribute read so
-environment changes take effect after :func:`~jvspatial.env.clear_load_env_cache`.
+Values resolve from live environment reads on each attribute access.
 """
 
 from http import HTTPStatus
 from typing import Any, List
 
-from jvspatial.env import load_env
+from jvspatial.env import (
+    env,
+    parse_bool_basic,
+    parse_csv,
+    resolve_cors_origins,
+    resolve_files_route_base,
+)
 
 
 class _EnvAttr:
-    """Descriptor: return ``getattr(load_env(), attr_name)``."""
+    """Descriptor: return transformed environment value on each access."""
 
-    def __init__(self, attr_name: str):
-        self._attr_name = attr_name
+    def __init__(self, resolver):
+        self._resolver = resolver
 
     def __get__(self, obj: Any, owner: type) -> Any:
-        return getattr(load_env(), self._attr_name)
+        return self._resolver()
 
 
 class _FilesJoin:
-    """Append a path segment to ``load_env().files_route_base``."""
+    """Append a path segment to files route base."""
 
     def __init__(self, suffix: str):
         self._suffix = suffix
 
     def __get__(self, obj: Any, owner: type) -> str:
-        base = load_env().files_route_base
+        base = resolve_files_route_base()
         return f"{base}{self._suffix}"
 
 
 class APIRoutes:
-    """API route path constants (resolved via load_env on access)."""
+    """API route path constants (resolved from env on access)."""
 
-    PREFIX = _EnvAttr("api_prefix")
-    HEALTH = _EnvAttr("api_health")
-    ROOT = _EnvAttr("api_root")
+    PREFIX = _EnvAttr(lambda: env("JVSPATIAL_API_PREFIX", default="/api"))
+    HEALTH = _EnvAttr(lambda: env("JVSPATIAL_API_HEALTH", default="/health"))
+    ROOT = _EnvAttr(lambda: env("JVSPATIAL_API_ROOT", default="/"))
 
-    FILES_ROOT = _EnvAttr("files_route_base")
+    FILES_ROOT = _EnvAttr(resolve_files_route_base)
     FILES_UPLOAD = _FilesJoin("/upload")
     FILES_PROXY = _FilesJoin("/proxy")
 
-    PROXY_PREFIX = _EnvAttr("proxy_prefix")
+    PROXY_PREFIX = _EnvAttr(lambda: env("JVSPATIAL_PROXY_PREFIX", default="/p"))
 
     DEFERRED_INVOKE_SUFFIX = "/_internal/deferred"
 
@@ -70,14 +75,24 @@ class HTTPMethods:
 
 
 class Collections:
-    """Database collection names (resolved via load_env on access)."""
+    """Database collection names (resolved from env on access)."""
 
-    USERS = _EnvAttr("collection_users")
-    API_KEYS = _EnvAttr("collection_api_keys")  # pragma: allowlist secret
-    SESSIONS = _EnvAttr("collection_sessions")
-    WEBHOOKS = _EnvAttr("collection_webhooks")
-    WEBHOOK_REQUESTS = _EnvAttr("collection_webhook_requests")
-    SCHEDULED_TASKS = _EnvAttr("collection_scheduled_tasks")
+    USERS = _EnvAttr(lambda: env("JVSPATIAL_COLLECTION_USERS", default="users"))
+    API_KEYS = _EnvAttr(
+        lambda: env("JVSPATIAL_COLLECTION_API_KEYS", default="api_keys")
+    )  # pragma: allowlist secret
+    SESSIONS = _EnvAttr(
+        lambda: env("JVSPATIAL_COLLECTION_SESSIONS", default="sessions")
+    )
+    WEBHOOKS = _EnvAttr(
+        lambda: env("JVSPATIAL_COLLECTION_WEBHOOKS", default="webhooks")
+    )
+    WEBHOOK_REQUESTS = _EnvAttr(
+        lambda: env("JVSPATIAL_COLLECTION_WEBHOOK_REQUESTS", default="webhook_requests")
+    )
+    SCHEDULED_TASKS = _EnvAttr(
+        lambda: env("JVSPATIAL_COLLECTION_SCHEDULED_TASKS", default="scheduled_tasks")
+    )
 
 
 class LogIcons:
@@ -137,49 +152,81 @@ class ErrorMessages:
 
 class _CorsListCopy:
     def __get__(self, obj: Any, owner: type) -> List[str]:
-        return list(load_env().cors_origins)
+        return list(resolve_cors_origins())
 
 
 class _CorsMethodsCopy:
     def __get__(self, obj: Any, owner: type) -> List[str]:
-        return list(load_env().cors_methods)
+        return list(env("JVSPATIAL_CORS_METHODS", default=["*"], parse=parse_csv))
 
 
 class _CorsHeadersCopy:
     def __get__(self, obj: Any, owner: type) -> List[str]:
-        return list(load_env().cors_headers)
+        return list(env("JVSPATIAL_CORS_HEADERS", default=["*"], parse=parse_csv))
 
 
 class Defaults:
-    """Default configuration values (resolved via load_env on access)."""
+    """Default configuration values (resolved from env on access)."""
 
-    API_TITLE = _EnvAttr("api_title")
-    API_VERSION = _EnvAttr("api_version")
-    API_DESCRIPTION = _EnvAttr("api_description")
+    API_TITLE = _EnvAttr(lambda: env("JVSPATIAL_API_TITLE", default="jvspatial API"))
+    API_VERSION = _EnvAttr(lambda: env("JVSPATIAL_API_VERSION", default="1.0.0"))
+    API_DESCRIPTION = _EnvAttr(
+        lambda: env(
+            "JVSPATIAL_API_DESCRIPTION", default="API built with jvspatial framework"
+        )
+    )
 
-    HOST = _EnvAttr("host")
-    PORT = _EnvAttr("port")
-    LOG_LEVEL = _EnvAttr("log_level")
-    DEBUG = _EnvAttr("debug")
+    HOST = _EnvAttr(lambda: env("JVSPATIAL_HOST", default="0.0.0.0"))
+    PORT = _EnvAttr(lambda: env("JVSPATIAL_PORT", default=8000, parse=int))
+    LOG_LEVEL = _EnvAttr(lambda: env("JVSPATIAL_LOG_LEVEL", default="info"))
+    DEBUG = _EnvAttr(
+        lambda: env("JVSPATIAL_DEBUG", default=False, parse=parse_bool_basic)
+    )
 
-    CORS_ENABLED = _EnvAttr("cors_enabled")
+    CORS_ENABLED = _EnvAttr(
+        lambda: env("JVSPATIAL_CORS_ENABLED", default=True, parse=parse_bool_basic)
+    )
     CORS_ORIGINS = _CorsListCopy()
     CORS_METHODS = _CorsMethodsCopy()
     CORS_HEADERS = _CorsHeadersCopy()
 
-    FILE_STORAGE_ENABLED = _EnvAttr("file_storage_enabled")
-    FILE_STORAGE_PROVIDER = _EnvAttr("file_storage_provider")
-    FILE_STORAGE_ROOT = _EnvAttr("file_storage_root")
-    FILE_STORAGE_MAX_SIZE = _EnvAttr("file_storage_max_size")
-    FILE_STORAGE_BASE_URL = _EnvAttr("file_storage_base_url")
-    FILES_PUBLIC_READ = _EnvAttr("files_public_read")
+    FILE_STORAGE_ENABLED = _EnvAttr(
+        lambda: env(
+            "JVSPATIAL_FILE_STORAGE_ENABLED", default=False, parse=parse_bool_basic
+        )
+    )
+    FILE_STORAGE_PROVIDER = _EnvAttr(
+        lambda: env("JVSPATIAL_FILE_STORAGE_PROVIDER", default="local")
+    )
+    FILE_STORAGE_ROOT = _EnvAttr(
+        lambda: env("JVSPATIAL_FILES_ROOT_PATH", default="./.files")
+    )
+    FILE_STORAGE_MAX_SIZE = _EnvAttr(
+        lambda: env(
+            "JVSPATIAL_FILE_STORAGE_MAX_SIZE", default=100 * 1024 * 1024, parse=int
+        )
+    )
+    FILE_STORAGE_BASE_URL = _EnvAttr(
+        lambda: env("JVSPATIAL_FILE_STORAGE_BASE_URL", default="http://localhost:8000")
+    )
+    FILES_PUBLIC_READ = _EnvAttr(
+        lambda: env("JVSPATIAL_FILES_PUBLIC_READ", default=True, parse=parse_bool_basic)
+    )
 
-    PROXY_ENABLED = _EnvAttr("proxy_enabled")
-    PROXY_EXPIRATION = _EnvAttr("proxy_expiration")
-    PROXY_MAX_EXPIRATION = _EnvAttr("proxy_max_expiration")
+    PROXY_ENABLED = _EnvAttr(
+        lambda: env("JVSPATIAL_PROXY_ENABLED", default=False, parse=parse_bool_basic)
+    )
+    PROXY_EXPIRATION = _EnvAttr(
+        lambda: env("JVSPATIAL_PROXY_DEFAULT_EXPIRATION", default=3600, parse=int)
+    )
+    PROXY_MAX_EXPIRATION = _EnvAttr(
+        lambda: env("JVSPATIAL_PROXY_MAX_EXPIRATION", default=86400, parse=int)
+    )
 
-    DB_TYPE = _EnvAttr("db_type")
-    DB_PATH = _EnvAttr("db_path")
+    DB_TYPE = _EnvAttr(lambda: env("JVSPATIAL_DB_TYPE", default="json"))
+    DB_PATH = _EnvAttr(
+        lambda: env("JVSPATIAL_DB_PATH", default="jvdb/sqlite/jvspatial.db")
+    )
 
 
 __all__ = [

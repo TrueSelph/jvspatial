@@ -2,6 +2,8 @@
 
 This guide provides comprehensive information about configuring jvspatial using environment variables.
 
+For a compact canonical inventory of valid keys, see [environment-keys-reference.md](environment-keys-reference.md).
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -17,7 +19,7 @@ This guide provides comprehensive information about configuring jvspatial using 
 
 jvspatial uses environment variables to configure database connections, file paths, and other runtime settings. This approach provides flexibility for different deployment environments without requiring code changes.
 
-**Strict `JVSPATIAL_*` names:** Any variable starting with `JVSPATIAL_` must be in the library allowlist, or :class:`~jvspatial.api.server.Server` raises :class:`~jvspatial.env_adapter.JvspatialConfigEnvError` at startup. A separate set of names is **forbidden** (removed in recent releases); those fail as soon as :func:`~jvspatial.env.load_env` runs. See ``jvspatial/env_adapter.py`` for the authoritative sets.
+`JVSPATIAL_*` variables are read live where supported by jvspatial components. Unknown keys are ignored by default.
 
 ### Key Benefits
 
@@ -51,7 +53,7 @@ Removed keys (do not use): `JVSPATIAL_JSONDB_PATH`, `JVSPATIAL_SQLITE_PATH` — 
 | `JVSPATIAL_MONGODB_MAX_POOL_SIZE` | integer | `10` | Maximum connections in pool (Lambda-friendly default) |
 | `JVSPATIAL_MONGODB_MIN_POOL_SIZE` | integer | `0` | Minimum connections in pool (Lambda-friendly default) |
 
-Mongo connection string and database name are **`ServerConfig.database`** fields (`db_connection_string`, `db_database_name`). Allowlisted env vars **`JVSPATIAL_MONGODB_URI`** and **`JVSPATIAL_MONGODB_DB_NAME`** are merged into that nested config when `Server` starts (same merge order as other settings: defaults → env → explicit `Server(...)` / `config=`). The database configurator reads **`ServerConfig` only**, not `os.environ`, after merge.
+Mongo connection string and database name are **`ServerConfig.database`** fields (`db_connection_string`, `db_database_name`). Env vars **`JVSPATIAL_MONGODB_URI`** and **`JVSPATIAL_MONGODB_DB_NAME`** are merged into that nested config when `Server` starts (same merge order as other settings: defaults → env → explicit `Server(...)` / `config=`). The database configurator reads **`ServerConfig` only**, not `os.environ`, after merge.
 
 ### Performance & Caching Configuration
 
@@ -59,7 +61,7 @@ Mongo connection string and database name are **`ServerConfig.database`** fields
 |----------|------|---------|-------------|
 | `JVSPATIAL_CACHE_BACKEND` | string | `memory` | `memory`, `redis`, or `layered` (case-insensitive). |
 | `JVSPATIAL_CACHE_SIZE` | integer | `1000` | Memory cache size (memory backend, or default L1 size for layered when `JVSPATIAL_L1_CACHE_SIZE` is unset). |
-| `JVSPATIAL_L1_CACHE_SIZE` | integer | `500` | L1 size for layered cache (via `load_env()` / `LayeredCache`). Do **not** use removed `JVSPATIAL_L1_SIZE`. |
+| `JVSPATIAL_L1_CACHE_SIZE` | integer | `500` | L1 size for layered cache (`LayeredCache`). Do **not** use removed `JVSPATIAL_L1_SIZE`. |
 | `JVSPATIAL_REDIS_URL` | string | — | Redis URL for `redis` / `layered`. If backend is `memory` **and** this is set, `create_default_cache()` upgrades to **layered** (L1 memory + L2 Redis). |
 | `JVSPATIAL_REDIS_TTL` | integer | `3600` | Default TTL (seconds) for Redis entries. |
 
@@ -369,9 +371,9 @@ stringData:
 
 ## Server config vs environment
 
-When constructing :class:`~jvspatial.api.server.Server`, effective settings are **`ServerConfig` defaults → allowlisted `JVSPATIAL_*` (via :func:`~jvspatial.env_adapter.server_config_overrides_from_env`) → `config=` dict and keyword arguments** (each step overwrites the previous). Code wins over env for any field you pass explicitly.
+When constructing :class:`~jvspatial.api.server.Server`, effective settings are **`ServerConfig` defaults → recognized `JVSPATIAL_*` env overrides (via :func:`~jvspatial.env_adapter.server_config_overrides_from_env`) → `config=` dict and keyword arguments** (each step overwrites the previous). Code wins over env for any field you pass explicitly.
 
-:func:`~jvspatial.env.load_env` is separate: it exposes a flat dataclass for library internals (cache, logging, deferred tasks, etc.) and still enforces **forbidden** `JVSPATIAL_*` keys. Use the environment reference above and ``ALLOWED_JVSPATIAL_KEYS`` in code for parity.
+Library internals now read environment values live via canonical `jvspatial.env.env(name, default=None, parse=...)` (no cached `EnvConfig` snapshot). For `Server` settings, jvspatial applies recognized env keys via :func:`~jvspatial.env_adapter.server_config_overrides_from_env`; unrecognized `JVSPATIAL_*` keys are ignored.
 
 ## Path Resolution
 

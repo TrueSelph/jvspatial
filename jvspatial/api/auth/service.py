@@ -28,7 +28,7 @@ from jvspatial.api.auth.rbac import get_effective_permissions
 from jvspatial.api.exceptions import RegistrationDisabledError
 from jvspatial.core.context import GraphContext
 from jvspatial.db import get_prime_database
-from jvspatial.env import load_env
+from jvspatial.env import env, parse_bool
 from jvspatial.runtime.serverless import is_serverless_mode
 
 _argon2_hasher_singleton = None
@@ -39,11 +39,11 @@ def _get_argon2_hasher():
     if _argon2_hasher_singleton is None:
         from argon2 import PasswordHasher
 
-        e = load_env()
         _argon2_hasher_singleton = PasswordHasher(
-            time_cost=e.argon2_time_cost,
-            memory_cost=e.argon2_memory_cost,
-            parallelism=e.argon2_parallelism,
+            time_cost=env("JVSPATIAL_ARGON2_TIME_COST", default=2, parse=int) or 2,
+            memory_cost=env("JVSPATIAL_ARGON2_MEMORY_COST", default=19456, parse=int)
+            or 19456,
+            parallelism=env("JVSPATIAL_ARGON2_PARALLELISM", default=2, parse=int) or 2,
         )
     return _argon2_hasher_singleton
 
@@ -153,10 +153,12 @@ class AuthenticationService:
         self._blacklist_cache: Dict[str, Tuple[bool, float]] = {}
         self._logger = logging.getLogger(__name__)
         self._serverless_mode = is_serverless_mode()
-        _e = load_env()
         self._bcrypt_rounds = (
-            _e.bcrypt_rounds_serverless if self._serverless_mode else _e.bcrypt_rounds
+            env("JVSPATIAL_BCRYPT_ROUNDS_SERVERLESS", default=10, parse=int)
+            if self._serverless_mode
+            else env("JVSPATIAL_BCRYPT_ROUNDS", default=12, parse=int)
         )
+        self._bcrypt_rounds = self._bcrypt_rounds or 12
         if self._serverless_mode:
             self._logger.info(
                 "AuthenticationService using serverless hashing profile (bcrypt rounds=%s).",
@@ -219,7 +221,7 @@ class AuthenticationService:
         if _HASHING_AVAILABLE and _HASHING_LIB == "passlib":
             return _passlib_context.hash(password)
         # Fallback when no secure library available
-        if load_env().auth_strict_hashing:
+        if env("JVSPATIAL_AUTH_STRICT_HASHING", default=False, parse=parse_bool):
             raise RuntimeError(
                 "Secure hashing library required but unavailable. "
                 "Install bcrypt/argon2/passlib or disable JVSPATIAL_AUTH_STRICT_HASHING."
@@ -307,7 +309,7 @@ class AuthenticationService:
             elif _HASHING_LIB == "passlib":
                 return _passlib_context.hash(token)
         else:
-            if load_env().auth_strict_hashing:
+            if env("JVSPATIAL_AUTH_STRICT_HASHING", default=False, parse=parse_bool):
                 raise RuntimeError(
                     "Secure hashing library required but unavailable. "
                     "Install bcrypt/argon2/passlib or disable JVSPATIAL_AUTH_STRICT_HASHING."

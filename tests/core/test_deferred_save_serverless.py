@@ -10,7 +10,6 @@ from jvspatial.core.mixins.deferred_save import (
     deferred_saves_globally_allowed,
     flush_deferred_entities,
 )
-from jvspatial.env import clear_load_env_cache
 from jvspatial.runtime.serverless import reset_serverless_mode_cache
 
 
@@ -38,16 +37,13 @@ class _DeferredNoAutoInit(DeferredSaveMixin, _SaveCounterBase):
 @pytest.fixture(autouse=True)
 def _reset_serverless_cache():
     reset_serverless_mode_cache()
-    clear_load_env_cache()
     yield
     reset_serverless_mode_cache()
-    clear_load_env_cache()
 
 
 def test_deferred_saves_globally_allowed_false_in_serverless():
     with patch.dict(os.environ, {"SERVERLESS_MODE": "true"}, clear=False):
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         assert deferred_saves_globally_allowed() is False
 
 
@@ -60,7 +56,6 @@ def test_deferred_saves_globally_allowed_respects_env_off():
         os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
         os.environ.pop("AWS_LAMBDA_RUNTIME_API", None)
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         assert deferred_saves_globally_allowed() is False
 
 
@@ -73,7 +68,6 @@ def test_deferred_saves_globally_allowed_true_when_env_on_and_not_serverless():
         os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
         os.environ.pop("AWS_LAMBDA_RUNTIME_API", None)
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         assert deferred_saves_globally_allowed() is True
 
 
@@ -86,7 +80,6 @@ def test_deferred_mode_on_at_construct_when_globally_allowed():
         os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
         os.environ.pop("AWS_LAMBDA_RUNTIME_API", None)
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         entity = _DeferredEntity()
         assert entity.deferred_saves_enabled is True
 
@@ -100,7 +93,6 @@ def test_deferred_auto_init_disabled_class_opt_out():
         os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
         os.environ.pop("AWS_LAMBDA_RUNTIME_API", None)
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         entity = _DeferredNoAutoInit()
         assert entity.deferred_saves_enabled is False
 
@@ -113,7 +105,6 @@ async def test_save_immediate_in_serverless():
         clear=False,
     ):
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         entity = _DeferredEntity()
         entity.enable_deferred_saves()
         assert entity.deferred_saves_enabled is False
@@ -132,7 +123,6 @@ async def test_save_deferred_when_allowed_and_enabled():
         os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
         os.environ.pop("AWS_LAMBDA_RUNTIME_API", None)
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         entity = _DeferredEntity()
         assert entity.deferred_saves_enabled is True
         await entity.save()
@@ -153,7 +143,6 @@ async def test_enable_deferred_saves_after_flush_restores_batching():
         os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
         os.environ.pop("AWS_LAMBDA_RUNTIME_API", None)
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         entity = _DeferredEntity()
         assert entity.deferred_saves_enabled is True
         await entity.flush()
@@ -174,7 +163,6 @@ async def test_flush_clears_deferred_mode_when_not_dirty():
         os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
         os.environ.pop("AWS_LAMBDA_RUNTIME_API", None)
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         entity = _DeferredEntity()
         assert entity.deferred_saves_enabled is True
         await entity.flush()
@@ -199,7 +187,6 @@ async def test_flush_deferred_entities_non_strict_continues_after_failure():
         os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
         os.environ.pop("AWS_LAMBDA_RUNTIME_API", None)
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         bad = _Flaky()
         good = _DeferredEntity()
         ok = await flush_deferred_entities(bad, good, strict=False)
@@ -221,7 +208,6 @@ async def test_flush_deferred_entities_strict_raises():
         os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
         os.environ.pop("AWS_LAMBDA_RUNTIME_API", None)
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         bad = _Flaky()
         good = _DeferredEntity()
         with pytest.raises(RuntimeError, match="flush fail"):

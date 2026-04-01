@@ -1266,9 +1266,11 @@ class GraphContext:
         """
         # Check if automatic index creation is enabled
         # Default is False - indexes must be created explicitly
-        from jvspatial.env import load_env
+        from jvspatial.env import env, parse_bool_basic
 
-        auto_create = load_env().auto_create_indexes
+        auto_create = env(
+            "JVSPATIAL_AUTO_CREATE_INDEXES", default=False, parse=parse_bool_basic
+        )
         if not auto_create:
             return  # Automatic index creation is disabled
 

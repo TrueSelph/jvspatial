@@ -48,7 +48,7 @@ import inspect
 import logging
 from typing import Any, ClassVar, Optional, Protocol
 
-from jvspatial.env import load_env
+from jvspatial.env import env, parse_bool_basic
 from jvspatial.runtime.serverless import is_serverless_mode
 
 logger = logging.getLogger(__name__)
@@ -63,16 +63,15 @@ class _SaveableProtocol(Protocol):
 
 
 def _env_allows_deferred_saves() -> bool:
-    """Whether JVSPATIAL_ENABLE_DEFERRED_SAVES permits deferred saves (via load_env cache)."""
-    return load_env().enable_deferred_saves
+    """Whether JVSPATIAL_ENABLE_DEFERRED_SAVES permits deferred saves."""
+    return env("JVSPATIAL_ENABLE_DEFERRED_SAVES", default=True, parse=parse_bool_basic)
 
 
 def deferred_saves_globally_allowed(config: Optional[Any] = None) -> bool:
     """Return True if deferred batching is allowed (env on and not serverless).
 
-    Reflects both ``JVSPATIAL_ENABLE_DEFERRED_SAVES`` (via :func:`load_env`) and
-    :func:`is_serverless_mode`. ``EnvConfig.enable_deferred_saves`` is the raw env
-    flag only; use this function for effective batching policy at runtime.
+    Reflects both ``JVSPATIAL_ENABLE_DEFERRED_SAVES`` and
+    :func:`is_serverless_mode`; use this for effective batching policy.
     """
     return _env_allows_deferred_saves() and not is_serverless_mode(config)
 

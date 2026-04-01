@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
-from jvspatial.env import normalize_optional_secret_string
+from jvspatial.env import env, normalize_optional_secret_string, parse_bool_basic
 
 
 class WebhookConfig:
@@ -432,15 +432,22 @@ def get_webhook_config_from_env() -> WebhookConfig:
     Returns:
         WebhookConfig instance
     """
-    from jvspatial.env import load_env
-
-    env = load_env()
     return WebhookConfig(
-        hmac_secret=env.webhook_hmac_secret,
-        hmac_algorithm=env.webhook_hmac_algorithm,
-        max_payload_size=env.webhook_max_payload_size,
-        idempotency_ttl=env.webhook_idempotency_ttl,
-        https_required=env.webhook_https_required,
+        hmac_secret=normalize_optional_secret_string(
+            env("JVSPATIAL_WEBHOOK_HMAC_SECRET", default="")
+        ),
+        hmac_algorithm=env("JVSPATIAL_WEBHOOK_HMAC_ALGORITHM", default="sha256"),
+        max_payload_size=env(
+            "JVSPATIAL_WEBHOOK_MAX_PAYLOAD_SIZE", default=1048576, parse=int
+        )
+        or 1048576,
+        idempotency_ttl=env(
+            "JVSPATIAL_WEBHOOK_IDEMPOTENCY_TTL", default=3600, parse=int
+        )
+        or 3600,
+        https_required=env(
+            "JVSPATIAL_WEBHOOK_HTTPS_REQUIRED", default=True, parse=parse_bool_basic
+        ),
     )
 
 

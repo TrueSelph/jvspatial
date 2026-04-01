@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
-from jvspatial.env import load_env
+from jvspatial.env import env, parse_bool, resolve_aws_region
 from jvspatial.runtime.eventbridge_readiness import resolve_eventbridge_lambda_arn
 
 from .base import RetryConfig, TaskScheduler
@@ -35,19 +35,27 @@ def _get_scheduler_client() -> Any:
 
 
 def _eventbridge_enabled() -> bool:
-    return load_env().eventbridge_scheduler_enabled_raw.strip().lower() == "true"
+    return env(
+        "JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED", default=False, parse=parse_bool
+    )
 
 
 def _eventbridge_role_arn() -> str:
-    return load_env().eventbridge_role_arn
+    return env("JVSPATIAL_EVENTBRIDGE_ROLE_ARN", default="")
 
 
 def _eventbridge_lambda_arn() -> str:
-    return resolve_eventbridge_lambda_arn(load_env())
+    class _EnvView:
+        eventbridge_lambda_arn = env("JVSPATIAL_EVENTBRIDGE_LAMBDA_ARN", default="")
+        aws_lambda_function_name = env("AWS_LAMBDA_FUNCTION_NAME", default="")
+        aws_region = resolve_aws_region()
+        aws_account_id = env("AWS_ACCOUNT_ID", default="")
+
+    return resolve_eventbridge_lambda_arn(_EnvView())
 
 
 def _eventbridge_schedule_group() -> str:
-    return load_env().eventbridge_scheduler_group
+    return env("JVSPATIAL_EVENTBRIDGE_SCHEDULER_GROUP", default="default") or "default"
 
 
 def _build_invoke_body(
@@ -129,7 +137,7 @@ class AwsLambdaDeferredTaskScheduler(TaskScheduler):
         lambda_client: Any = None,
     ):
         self._function_name = (
-            function_name or load_env().aws_lambda_function_name
+            function_name or env("AWS_LAMBDA_FUNCTION_NAME") or ""
         ).strip()
         self._lambda_client = lambda_client
 

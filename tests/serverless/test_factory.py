@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jvspatial.env import clear_load_env_cache
 from jvspatial.runtime.serverless import (
     detect_serverless_provider,
     reset_serverless_mode_cache,
@@ -20,10 +19,8 @@ from jvspatial.serverless.tasks.sync import NoopOrSyncScheduler
 @pytest.fixture(autouse=True)
 def _clear_serverless_caches():
     reset_serverless_mode_cache()
-    clear_load_env_cache()
     yield
     reset_serverless_mode_cache()
-    clear_load_env_cache()
 
 
 def test_detect_serverless_provider_aws_lambda():
@@ -33,7 +30,6 @@ def test_detect_serverless_provider_aws_lambda():
         clear=False,
     ):
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         assert detect_serverless_provider() == "aws"
 
 
@@ -46,7 +42,6 @@ def test_detect_serverless_provider_azure():
         os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
         os.environ.pop("AWS_LAMBDA_RUNTIME_API", None)
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         assert detect_serverless_provider() == "azure"
 
 
@@ -67,7 +62,6 @@ def test_get_task_scheduler_non_serverless_is_noop():
         os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
         os.environ.pop("AWS_LAMBDA_RUNTIME_API", None)
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         s = get_task_scheduler()
         assert isinstance(s, NoopOrSyncScheduler)
 
@@ -83,7 +77,6 @@ def test_get_task_scheduler_serverless_aws_lambda():
         clear=False,
     ):
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         s = get_task_scheduler()
         assert isinstance(s, AwsLambdaDeferredTaskScheduler)
 
@@ -102,7 +95,6 @@ def test_get_task_scheduler_serverless_aws_sqs_transport():
         os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
         os.environ.pop("AWS_LAMBDA_RUNTIME_API", None)
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         with patch(
             "jvspatial.serverless.factory._make_sqs_scheduler",
             side_effect=lambda url: AwsSqsTaskScheduler(MagicMock(), url),
@@ -118,7 +110,6 @@ def test_get_task_scheduler_provider_override_azure():
         clear=False,
     ):
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         s = get_task_scheduler()
         assert isinstance(s, LoggingNoopTaskScheduler)
 
@@ -130,7 +121,6 @@ def test_config_deferred_task_provider_field():
     with patch.dict(os.environ, {"SERVERLESS_MODE": "true"}, clear=False):
         os.environ.pop("JVSPATIAL_DEFERRED_TASK_PROVIDER", None)
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         s = get_task_scheduler(cfg)
         assert isinstance(s, LoggingNoopTaskScheduler)
 
@@ -144,6 +134,5 @@ def test_dispatch_deferred_task_strict_raises_on_noop_scheduler():
         os.environ.pop("AWS_LAMBDA_FUNCTION_NAME", None)
         os.environ.pop("AWS_LAMBDA_RUNTIME_API", None)
         reset_serverless_mode_cache()
-        clear_load_env_cache()
         with pytest.raises(RuntimeError, match="no-op"):
             dispatch_deferred_task("task.x", {}, strict=True)

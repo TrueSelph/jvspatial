@@ -28,7 +28,6 @@ from jvspatial.core.entities import Node
 from jvspatial.env_adapter import (
     deep_merge,
     server_config_overrides_from_env,
-    validate_known_jvspatial_env_keys,
     validate_server_config_requirements,
     warn_production_config_gaps,
 )
@@ -122,7 +121,6 @@ class Server(
             )
         }
 
-        validate_known_jvspatial_env_keys()
         merged_config = self._merge_config(config, config_kwargs)
         defaults = ServerConfig().model_dump()
         env_overrides = server_config_overrides_from_env()
@@ -138,9 +136,6 @@ class Server(
         apply_aws_eventbridge_env_default(self.config)
         apply_aws_lwa_env_defaults(self.config)
 
-        from jvspatial.env import clear_load_env_cache
-
-        clear_load_env_cache()
         validate_server_config_requirements(self.config)
 
         self.app_builder = AppBuilder(self.config)

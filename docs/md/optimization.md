@@ -243,7 +243,7 @@ JVSPATIAL_ENABLE_DEFERRED_SAVES=false
 
 When disabled globally, `save()` always writes immediately (construction does not enable batching).
 
-**Serverless mode:** When `is_serverless_mode()` is true (e.g. AWS Lambda or `SERVERLESS_MODE=true`), deferred saves are **always off**, even if `JVSPATIAL_ENABLE_DEFERRED_SAVES=true`. Use `deferred_saves_globally_allowed()` for the effective runtime check. `EnvConfig.enable_deferred_saves` reflects the raw env flag only; it does not imply serverless is off.
+**Serverless mode:** When `is_serverless_mode()` is true (e.g. AWS Lambda or `SERVERLESS_MODE=true`), deferred saves are **always off**, even if `JVSPATIAL_ENABLE_DEFERRED_SAVES=true`. Use `deferred_saves_globally_allowed()` for the effective runtime check.
 
 ### Complete Example
 

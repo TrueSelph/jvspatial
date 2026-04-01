@@ -6,7 +6,7 @@ of in-memory caching with the distributed capabilities of Redis.
 
 from typing import Any, Dict, Optional
 
-from jvspatial.env import load_env
+from jvspatial.env import env
 
 from .base import CacheBackend
 from .memory import MemoryCache
@@ -52,7 +52,9 @@ class LayeredCache(CacheBackend):
             fallback_to_l1: Continue with L1 only if Redis unavailable
         """
         # Initialize L1 cache (fast local memory)
-        l1_size = l1_size or load_env().l1_cache_size
+        l1_size = (
+            l1_size or env("JVSPATIAL_L1_CACHE_SIZE", default=500, parse=int) or 500
+        )
         self.l1 = MemoryCache(max_size=l1_size)
 
         # Initialize L2 cache (shared Redis)

@@ -308,7 +308,7 @@ def deferred_saves_enabled() -> bool
 **Environment and serverless:**
 
 - `JVSPATIAL_ENABLE_DEFERRED_SAVES` - Raw env preference (default: `true`). When `false`, batching is never allowed.
-- `deferred_saves_globally_allowed()` - Effective runtime check: raw env allows **and** not `is_serverless_mode()`. Use this (or rely on the mixin) when you need to branch; `EnvConfig.enable_deferred_saves` is the raw flag only.
+- `deferred_saves_globally_allowed()` - Effective runtime check: raw env allows **and** not `is_serverless_mode()`. Use this (or rely on the mixin) when you need to branch.
 - `flush()` - Ends deferred batching for the entity and persists when dirty (safe to call when deferral was never active).
 - `flush_deferred_entities(*entities, strict=False)` - Calls `flush()` on each non-`None` argument; with `strict=False`, logs and continues on failure; with `strict=True`, re-raises after logging.
 

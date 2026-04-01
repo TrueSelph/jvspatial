@@ -24,7 +24,7 @@ class MalformedDeferredInvokeError(ValueError):
 
 
 def register_deferred_invoke_handler(task_type: str, fn: DeferredHandler) -> None:
-    """Register an async handler for ``task_type`` (e.g. ``jvagent.whatsapp.media_batch``)."""
+    """Register an async handler for ``task_type`` (e.g. ``app.whatsapp.media_batch``)."""
     if task_type in _handlers:
         logger.warning(
             "Overwriting deferred invoke handler for task_type=%s", task_type

@@ -8,7 +8,7 @@ integrated connection pooling and cache invalidation strategies.
 import pickle
 from typing import Any, Dict, List, Optional
 
-from jvspatial.env import load_env
+from jvspatial.env import env
 
 from .base import CacheBackend, CacheStats
 
@@ -54,10 +54,15 @@ class RedisCache(CacheBackend):
                 "Install with: pip install redis[hiredis]"
             )
 
-        e = load_env()
-        self.redis_url = redis_url or e.redis_url or "redis://localhost:6379"
+        self.redis_url = (
+            redis_url or env("JVSPATIAL_REDIS_URL") or "redis://localhost:6379"
+        )
 
-        self.default_ttl = ttl if ttl is not None else e.redis_ttl
+        self.default_ttl = (
+            ttl
+            if ttl is not None
+            else (env("JVSPATIAL_REDIS_TTL", default=3600, parse=int) or 3600)
+        )
         self.prefix = prefix
         self._stats = CacheStats()
         self._client = None

@@ -63,16 +63,17 @@ class DatabaseManager:
 
         # Initialize prime database
         if prime_database is None:
-            from jvspatial.env import load_env
+            from jvspatial.env import env, resolve_db_paths
 
             from .factory import create_database
             from .jsondb import JsonDB
 
-            env = load_env()
+            db_type = env("JVSPATIAL_DB_TYPE", default="json")
+            jsondb_path, _ = resolve_db_paths()
             try:
-                self._prime_database = create_database(env.db_type, env=env)
+                self._prime_database = create_database(db_type)
             except ValueError:
-                self._prime_database = JsonDB(str(env.jsondb_path))
+                self._prime_database = JsonDB(str(jsondb_path))
         else:
             self._prime_database = prime_database
 

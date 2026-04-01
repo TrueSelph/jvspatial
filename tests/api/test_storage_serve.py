@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 from jvspatial.api.constants import APIRoutes
 from jvspatial.api.context import set_current_server
 from jvspatial.api.server import Server
-from jvspatial.env import clear_load_env_cache
 
 
 @pytest.mark.asyncio
@@ -55,7 +54,6 @@ async def test_openapi_files_delete_has_security_when_get_is_public(monkeypatch)
     root = base / "vault"
     db_path = base / f"db_{tid}"
     monkeypatch.delenv("JVSPATIAL_FILES_PUBLIC_READ", raising=False)
-    clear_load_env_cache()
     try:
         server = Server(
             title="files-openapi-security",
@@ -83,7 +81,6 @@ async def test_openapi_files_delete_has_security_when_get_is_public(monkeypatch)
         assert not schema["paths"][path_key]["get"].get("security")
     finally:
         shutil.rmtree(base, ignore_errors=True)
-        clear_load_env_cache()
 
 
 @pytest.mark.asyncio
@@ -94,7 +91,6 @@ async def test_get_files_open_by_default_when_auth_enabled(monkeypatch):
     root = base / "vault"
     db_path = base / f"db_{tid}"
     monkeypatch.delenv("JVSPATIAL_FILES_PUBLIC_READ", raising=False)
-    clear_load_env_cache()
     try:
         server = Server(
             title="files-open-get-test",
@@ -124,7 +120,6 @@ async def test_get_files_open_by_default_when_auth_enabled(monkeypatch):
         assert r.content == b"open-bytes"
     finally:
         shutil.rmtree(base, ignore_errors=True)
-        clear_load_env_cache()
 
 
 @pytest.mark.asyncio
@@ -134,7 +129,6 @@ async def test_get_files_requires_auth_when_files_public_read_false(monkeypatch)
     root = base / "vault"
     db_path = base / f"db_{tid}"
     monkeypatch.setenv("JVSPATIAL_FILES_PUBLIC_READ", "false")
-    clear_load_env_cache()
     try:
         server = Server(
             title="files-auth-test",
@@ -165,7 +159,6 @@ async def test_get_files_requires_auth_when_files_public_read_false(monkeypatch)
     finally:
         shutil.rmtree(base, ignore_errors=True)
         monkeypatch.delenv("JVSPATIAL_FILES_PUBLIC_READ", raising=False)
-        clear_load_env_cache()
 
 
 @pytest.mark.asyncio
@@ -176,7 +169,6 @@ async def test_post_files_upload_requires_auth_when_get_is_public(monkeypatch):
     root = base / "vault"
     db_path = base / f"db_{tid}"
     monkeypatch.delenv("JVSPATIAL_FILES_PUBLIC_READ", raising=False)
-    clear_load_env_cache()
     try:
         server = Server(
             title="files-post-auth-test",
@@ -203,7 +195,6 @@ async def test_post_files_upload_requires_auth_when_get_is_public(monkeypatch):
         assert r.json().get("error_code") == "authentication_required"
     finally:
         shutil.rmtree(base, ignore_errors=True)
-        clear_load_env_cache()
 
 
 @pytest.mark.asyncio
@@ -214,7 +205,6 @@ async def test_delete_files_requires_auth_when_get_is_public(monkeypatch):
     root = base / "vault"
     db_path = base / f"db_{tid}"
     monkeypatch.delenv("JVSPATIAL_FILES_PUBLIC_READ", raising=False)
-    clear_load_env_cache()
     try:
         server = Server(
             title="files-delete-auth-test",
@@ -247,4 +237,3 @@ async def test_delete_files_requires_auth_when_get_is_public(monkeypatch):
         assert r_del.json().get("error_code") == "authentication_required"
     finally:
         shutil.rmtree(base, ignore_errors=True)
-        clear_load_env_cache()

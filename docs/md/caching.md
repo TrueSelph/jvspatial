@@ -50,7 +50,7 @@ The caching system works completely transparently - you use the same entity oper
 
 ### Environment-Based Configuration
 
-Configure caching via allowlisted environment variables (see [environment-configuration.md](environment-configuration.md)):
+Configure caching via environment variables (see [environment-configuration.md](environment-configuration.md)):
 
 ```env
 # In-memory (default backend name from env)

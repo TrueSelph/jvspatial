@@ -311,17 +311,23 @@ class Walker(AttributeMixin, BaseModel):
             kwargs["entity"] = self.__class__.__name__
 
         # Extract component configuration from kwargs (before super().__init__)
-        from jvspatial.env import load_env
+        from jvspatial.env import env, parse_bool_basic
 
-        env = load_env()
-        max_steps = kwargs.pop("max_steps", env.walker_max_steps)
+        max_steps = kwargs.pop(
+            "max_steps", int(env("JVSPATIAL_WALKER_MAX_STEPS", default="10000"))
+        )
         max_visits_per_node = kwargs.pop(
-            "max_visits_per_node", env.walker_max_visits_per_node
+            "max_visits_per_node",
+            int(env("JVSPATIAL_WALKER_MAX_VISITS_PER_NODE", default="100")),
         )
         max_execution_time = kwargs.pop(
-            "max_execution_time", env.walker_max_execution_time
+            "max_execution_time",
+            float(env("JVSPATIAL_WALKER_MAX_EXECUTION_TIME", default="300.0")),
         )
-        max_queue_size = kwargs.pop("max_queue_size", env.walker_max_queue_size)
+        max_queue_size = kwargs.pop(
+            "max_queue_size",
+            int(env("JVSPATIAL_WALKER_MAX_QUEUE_SIZE", default="1000")),
+        )
         paused = kwargs.pop("paused", False)
 
         super().__init__(**kwargs)
@@ -346,7 +352,11 @@ class Walker(AttributeMixin, BaseModel):
             max_steps=max_steps,
             max_visits_per_node=max_visits_per_node,
             max_execution_time=max_execution_time,
-            enabled=env.walker_protection_enabled,
+            enabled=env(
+                "JVSPATIAL_WALKER_PROTECTION_ENABLED",
+                default=True,
+                parse=parse_bool_basic,
+            ),
         )
         self._walker_events = WalkerEventSystem()
 

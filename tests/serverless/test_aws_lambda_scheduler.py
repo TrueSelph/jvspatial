@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jvspatial.env import clear_load_env_cache
 from jvspatial.runtime.serverless import reset_serverless_mode_cache
 from jvspatial.serverless.tasks.aws_lambda import AwsLambdaDeferredTaskScheduler
 
@@ -15,10 +14,8 @@ from jvspatial.serverless.tasks.aws_lambda import AwsLambdaDeferredTaskScheduler
 @pytest.fixture(autouse=True)
 def _clear_serverless_caches():
     reset_serverless_mode_cache()
-    clear_load_env_cache()
     yield
     reset_serverless_mode_cache()
-    clear_load_env_cache()
 
 
 def test_schedule_invoke_without_function_name_logs():
@@ -34,7 +31,7 @@ def test_schedule_lambda_invoke_payload_merges_dict():
         lambda_client=mock_client,
     )
     sched.schedule(
-        "jvagent.whatsapp.media_batch",
+        "app.whatsapp.media_batch",
         {"sender": "u1", "media_batch_window": 1.5},
         run_at=12345.0,
     )
@@ -43,7 +40,7 @@ def test_schedule_lambda_invoke_payload_merges_dict():
     assert call_kw["FunctionName"] == "fn"
     assert call_kw["InvocationType"] == "Event"
     body = json.loads(call_kw["Payload"])
-    assert body["task_type"] == "jvagent.whatsapp.media_batch"
+    assert body["task_type"] == "app.whatsapp.media_batch"
     assert body["sender"] == "u1"
     assert body["media_batch_window"] == 1.5
     assert body["process_at"] == 12345.0
@@ -62,7 +59,6 @@ def test_schedule_prefers_eventbridge_when_enabled():
         },
         clear=False,
     ):
-        clear_load_env_cache()
         with patch(
             "jvspatial.serverless.tasks.aws_lambda._get_scheduler_client",
             return_value=mock_sched_client,

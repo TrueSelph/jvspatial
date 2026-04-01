@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from jvspatial.api.constants import APIRoutes
-from jvspatial.env import clear_load_env_cache
 from jvspatial.runtime.lwa import (
     apply_aws_eventbridge_env_default,
     apply_aws_lwa_env_defaults,
@@ -152,7 +151,6 @@ def test_apply_skips_when_serverless_but_not_aws(_restore_eb_env):
 
 def test_deferred_invoke_full_path_respects_api_prefix(_restore_eb_env):
     with patch.dict(os.environ, {"JVSPATIAL_API_PREFIX": "/v1"}, clear=False):
-        clear_load_env_cache()
         assert APIRoutes.deferred_invoke_full_path() == "/v1/_internal/deferred"
 
 

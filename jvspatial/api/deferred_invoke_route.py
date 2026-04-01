@@ -8,7 +8,7 @@ from typing import Any, Dict
 from fastapi import FastAPI, HTTPException, Request
 
 from jvspatial.api.constants import APIRoutes
-from jvspatial.env import load_env
+from jvspatial.env import env, parse_bool
 from jvspatial.serverless.deferred_invoke import (
     MalformedDeferredInvokeError,
     UnknownDeferredTaskError,
@@ -21,11 +21,11 @@ _DEFERRED_INVOKE_REGISTERED_ATTR = "_jvspatial_deferred_invoke_route_registered"
 
 
 def _deferred_invoke_disabled() -> bool:
-    return load_env().deferred_invoke_disabled
+    return env("JVSPATIAL_DEFERRED_INVOKE_DISABLED", default=False, parse=parse_bool)
 
 
 def _deferred_invoke_secret_ok(request: Request) -> bool:
-    secret = (load_env().deferred_invoke_secret or "").strip()
+    secret = env("JVSPATIAL_DEFERRED_INVOKE_SECRET") or ""
     if not secret:
         return True
     hdr = (request.headers.get("X-JVSPATIAL-Deferred-Authorize") or "").strip()

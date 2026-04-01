@@ -31,7 +31,7 @@ class TaskScheduler(ABC):
         """Schedule a task and return provider reference id.
 
         Args:
-            task_type: Stable namespaced task id (e.g. ``jvagent.whatsapp.media_batch``).
+            task_type: Stable namespaced task id (e.g. ``app.whatsapp.media_batch``).
             payload: JSON-serializable task input.
             delay_seconds: Minimum delay before execution (relative), when ``run_at`` unset.
             retry_config: Optional retry metadata for queue-based backends.

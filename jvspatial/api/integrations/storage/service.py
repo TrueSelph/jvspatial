@@ -14,7 +14,7 @@ from jvspatial.api.exceptions import (
     PathTraversalError,
     ValidationError,
 )
-from jvspatial.env import load_env
+from jvspatial.env import env, parse_bool_basic
 from jvspatial.storage.exceptions import StorageError
 
 _FILES_OPENAPI_TAGS = ["Files"]
@@ -296,7 +296,9 @@ class FileStorageService:
             app: FastAPI application instance
             service: FileStorageService instance with handlers
         """
-        serve_requires_auth = not load_env().files_public_read
+        serve_requires_auth = not env(
+            "JVSPATIAL_FILES_PUBLIC_READ", default=True, parse=parse_bool_basic
+        )
         router = APIRouter(tags=list(_FILES_OPENAPI_TAGS))
 
         @router.post(APIRoutes.FILES_UPLOAD)

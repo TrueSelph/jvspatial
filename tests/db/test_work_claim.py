@@ -99,10 +99,7 @@ async def test_delete_claimed_record_exception():
 
 @pytest.mark.asyncio
 async def test_custom_stale_seconds(monkeypatch):
-    from jvspatial.env import clear_load_env_cache
-
     monkeypatch.setenv("JVSPATIAL_WORK_CLAIM_STALE_SECONDS", "42")
-    clear_load_env_cache()
     now = time.time()
     raw = {"_id": "r", "data": 1}
     db = _make_db(raw)

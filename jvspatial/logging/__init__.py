@@ -360,7 +360,7 @@ def configure_logging(enable_json: bool = True, enable_colors: bool = True) -> N
 
 
 # --------------------------------------------------------------------------- #
-# Standard console logging (shared across jvspatial and consumers like jvagent)
+# Standard console logging (shared across jvspatial and consumer applications)
 # --------------------------------------------------------------------------- #
 def configure_standard_logging(
     level: str = "INFO",

@@ -8,8 +8,6 @@ Supports custom database registration for seamless extension.
 
 from typing import Any, Callable, Dict, Optional
 
-from jvspatial.env import EnvConfig, load_env
-
 from .database import Database
 from .jsondb import JsonDB
 from .manager import get_database_manager
@@ -122,13 +120,15 @@ def list_database_types() -> Dict[str, str]:
 
 
 def _instantiate_builtin_database(
-    env: EnvConfig,
     db_type: str,
     **kwargs: Any,
 ) -> Database:
-    """Create a built-in database backend from ``env`` defaults merged with ``kwargs``."""
+    """Create a built-in database backend from env/defaults merged with ``kwargs``."""
+    from jvspatial.env import env, resolve_db_paths
+
     if db_type == "json":
-        base_path = kwargs.get("base_path") or kwargs.get("db_path") or env.jsondb_path
+        jsondb_path, _ = resolve_db_paths()
+        base_path = kwargs.get("base_path") or kwargs.get("db_path") or jsondb_path
         return JsonDB(str(base_path))
 
     if db_type == "mongodb":
@@ -142,13 +142,15 @@ def _instantiate_builtin_database(
         if "db_name" not in kw:
             kw["db_name"] = kw.pop("database_name", None)
         if "uri" not in kw:
-            kw["uri"] = env.mongodb_uri
+            kw["uri"] = env(
+                "JVSPATIAL_MONGODB_URI", default="mongodb://localhost:27017"
+            )
         if "db_name" not in kw:
-            kw["db_name"] = env.mongodb_db_name
+            kw["db_name"] = env("JVSPATIAL_MONGODB_DB_NAME", default="jvdb")
         if "max_pool_size" not in kw:
-            kw["max_pool_size"] = env.mongodb_max_pool
+            kw["max_pool_size"] = env("JVSPATIAL_MONGODB_MAX_POOL_SIZE", parse=int)
         if "min_pool_size" not in kw:
-            kw["min_pool_size"] = env.mongodb_min_pool
+            kw["min_pool_size"] = env("JVSPATIAL_MONGODB_MIN_POOL_SIZE", parse=int)
 
         return MongoDB(**kw)
 
@@ -159,10 +161,11 @@ def _instantiate_builtin_database(
             )
 
         sqlite_kwargs = dict(kwargs)
+        _, sqlite_default = resolve_db_paths()
         db_path = (
             sqlite_kwargs.pop("db_path", None)
             or sqlite_kwargs.pop("path", None)
-            or env.db_path
+            or sqlite_default
         )
         return SQLiteDB(db_path=db_path, **sqlite_kwargs)
 
@@ -176,15 +179,19 @@ def _instantiate_builtin_database(
 
         dynamodb_kwargs = dict(kwargs)
         if "table_name" not in dynamodb_kwargs:
-            dynamodb_kwargs["table_name"] = env.dynamodb_table_name
+            dynamodb_kwargs["table_name"] = env(
+                "JVSPATIAL_DYNAMODB_TABLE_NAME", default="jvspatial"
+            )
         if "region_name" not in dynamodb_kwargs:
-            dynamodb_kwargs["region_name"] = env.dynamodb_region
+            dynamodb_kwargs["region_name"] = env(
+                "JVSPATIAL_DYNAMODB_REGION", default="us-east-1"
+            )
         if "endpoint_url" not in dynamodb_kwargs:
-            dynamodb_kwargs["endpoint_url"] = env.dynamodb_endpoint_url
+            dynamodb_kwargs["endpoint_url"] = env("JVSPATIAL_DYNAMODB_ENDPOINT_URL")
         if "aws_access_key_id" not in dynamodb_kwargs:
-            dynamodb_kwargs["aws_access_key_id"] = env.dynamodb_access_key_id
+            dynamodb_kwargs["aws_access_key_id"] = env("AWS_ACCESS_KEY_ID")
         if "aws_secret_access_key" not in dynamodb_kwargs:
-            dynamodb_kwargs["aws_secret_access_key"] = env.dynamodb_secret_access_key
+            dynamodb_kwargs["aws_secret_access_key"] = env("AWS_SECRET_ACCESS_KEY")
 
         return DynamoDB(**dynamodb_kwargs)
 
@@ -195,7 +202,6 @@ def create_database(
     db_type: str = "json",
     register: bool = False,
     name: Optional[str] = None,
-    env: Optional[EnvConfig] = None,
     **kwargs: Any,
 ) -> Database:
     """Create a database instance with direct instantiation.
@@ -207,8 +213,6 @@ def create_database(
         db_type: Database type ('json', 'mongodb', 'sqlite', 'dynamodb', or a registered custom type)
         register: If True, register the database with DatabaseManager
         name: Database name for registration (required if register=True)
-        env: Optional :class:`~jvspatial.env.EnvConfig` to use for defaults. When omitted,
-            :func:`~jvspatial.env.load_env` is used (cached).
         **kwargs: Database-specific configuration passed to the database constructor
 
     Returns:
@@ -241,11 +245,9 @@ def create_database(
     Raises:
         ValueError: If db_type is not supported or registration fails
     """
-    resolved_env = env if env is not None else load_env()
-
     db: Database
     if db_type in ("json", "mongodb", "sqlite", "dynamodb"):
-        db = _instantiate_builtin_database(resolved_env, db_type, **kwargs)
+        db = _instantiate_builtin_database(db_type, **kwargs)
     elif db_type in _DATABASE_REGISTRY:
         factory = _DATABASE_REGISTRY[db_type]
         db = factory(**kwargs)

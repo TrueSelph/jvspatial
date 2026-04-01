@@ -19,9 +19,13 @@ def is_text_normalization_enabled() -> bool:
     Returns:
         True if text normalization should be applied, False otherwise
     """
-    from jvspatial.env import load_env
+    from jvspatial.env import env, parse_bool_basic
 
-    return load_env().text_normalization_enabled
+    return env(
+        "JVSPATIAL_TEXT_NORMALIZATION_ENABLED",
+        default=True,
+        parse=parse_bool_basic,
+    )
 
 
 def normalize_text_to_ascii(text: str) -> str:

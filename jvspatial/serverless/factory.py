@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from jvspatial.env import load_env
+from jvspatial.env import env
 from jvspatial.runtime.serverless import detect_serverless_provider, is_serverless_mode
 
 from .tasks.aws_lambda import AwsLambdaDeferredTaskScheduler
@@ -20,7 +20,7 @@ _NOOP_DEFERRED_LOGGED = False
 
 
 def _resolve_provider(config: Optional[Any]) -> str:
-    raw = load_env().deferred_task_provider.strip().lower()
+    raw = env("JVSPATIAL_DEFERRED_TASK_PROVIDER", default="").lower()
     if raw and raw != "auto":
         return raw
     if config is not None:
@@ -45,10 +45,9 @@ def _make_sqs_scheduler(queue_url: str) -> TaskScheduler:
 
 
 def _aws_task_scheduler() -> TaskScheduler:
-    e = load_env()
-    transport = e.aws_deferred_transport.strip().lower()
-    fn = e.aws_lambda_function_name.strip()
-    queue_url = e.aws_sqs_queue_url.strip()
+    transport = env("JVSPATIAL_AWS_DEFERRED_TRANSPORT", default="").lower()
+    fn = env("AWS_LAMBDA_FUNCTION_NAME", default="")
+    queue_url = env("JVSPATIAL_AWS_SQS_QUEUE_URL", default="")
 
     if transport == "sqs":
         if queue_url:

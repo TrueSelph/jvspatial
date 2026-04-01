@@ -7,7 +7,7 @@ import logging
 from typing import Any, Dict, Optional, Set
 
 from jvspatial.db import create_database, get_database_manager
-from jvspatial.env import load_env
+from jvspatial.env import env, parse_bool_basic
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +21,9 @@ def get_logging_config() -> Dict[str, Any]:
     Environment Variables:
         See :mod:`jvspatial.env` (JVSPATIAL_DB_LOGGING_*, JVSPATIAL_LOG_DB_*).
     """
-    e = load_env()
+    enabled = env("JVSPATIAL_DB_LOGGING_ENABLED", default=True, parse=parse_bool_basic)
 
-    enabled = e.db_logging_enabled
-
-    log_levels_str = e.db_logging_levels
+    log_levels_str = env("JVSPATIAL_DB_LOGGING_LEVELS", default="ERROR,CRITICAL")
     log_level_names = [level.strip().upper() for level in log_levels_str.split(",")]
 
     log_levels: Set[int] = set()
@@ -39,13 +37,16 @@ def get_logging_config() -> Dict[str, Any]:
     if not log_levels:
         log_levels = {logging.ERROR, logging.CRITICAL}
 
-    database_name = e.db_logging_db_name
-    enable_api_endpoints = e.db_logging_api_enabled
+    database_name = env("JVSPATIAL_DB_LOGGING_DB_NAME", default="logs")
+    enable_api_endpoints = env(
+        "JVSPATIAL_DB_LOGGING_API_ENABLED", default=True, parse=parse_bool_basic
+    )
 
-    db_type = e.log_db_type or e.db_type
+    db_type = env("JVSPATIAL_LOG_DB_TYPE") or env("JVSPATIAL_DB_TYPE", default="json")
 
     if db_type == "json":
-        db_path = e.log_db_path_json
+        log_db_path_raw = env("JVSPATIAL_LOG_DB_PATH")
+        db_path = log_db_path_raw or "./jvspatial_logs"
         config = {
             "enabled": enabled,
             "log_levels": log_levels,
@@ -56,7 +57,8 @@ def get_logging_config() -> Dict[str, Any]:
             "db_path": db_path,
         }
     elif db_type == "sqlite":
-        db_path = e.log_db_path_sqlite
+        log_db_path_raw = env("JVSPATIAL_LOG_DB_PATH")
+        db_path = log_db_path_raw or "jvspatial_logs/sqlite/jvspatial_logs.db"
         config = {
             "enabled": enabled,
             "log_levels": log_levels,
@@ -67,8 +69,10 @@ def get_logging_config() -> Dict[str, Any]:
             "db_path": db_path,
         }
     elif db_type == "mongodb":
-        db_uri = e.log_db_uri or e.mongodb_uri
-        db_name = e.log_db_name
+        db_uri = env("JVSPATIAL_LOG_DB_URI") or env(
+            "JVSPATIAL_MONGODB_URI", default="mongodb://localhost:27017"
+        )
+        db_name = env("JVSPATIAL_LOG_DB_NAME", default="jvspatial_logs")
         config = {
             "enabled": enabled,
             "log_levels": log_levels,
@@ -80,11 +84,15 @@ def get_logging_config() -> Dict[str, Any]:
             "db_name": db_name,
         }
     elif db_type == "dynamodb":
-        table_name = e.log_db_table_name
-        region_name = e.log_db_region or e.dynamodb_region
-        endpoint_url = e.log_db_endpoint_url or e.dynamodb_endpoint_url
-        aws_access_key_id = e.dynamodb_access_key_id
-        aws_secret_access_key = e.dynamodb_secret_access_key
+        table_name = env("JVSPATIAL_LOG_DB_TABLE_NAME", default="jvspatial_logs")
+        region_name = env("JVSPATIAL_LOG_DB_REGION") or env(
+            "JVSPATIAL_DYNAMODB_REGION", default="us-east-1"
+        )
+        endpoint_url = env("JVSPATIAL_LOG_DB_ENDPOINT_URL") or env(
+            "JVSPATIAL_DYNAMODB_ENDPOINT_URL"
+        )
+        aws_access_key_id = env("AWS_ACCESS_KEY_ID")
+        aws_secret_access_key = env("AWS_SECRET_ACCESS_KEY")
         config = {
             "enabled": enabled,
             "log_levels": log_levels,
@@ -99,7 +107,7 @@ def get_logging_config() -> Dict[str, Any]:
             "aws_secret_access_key": aws_secret_access_key,
         }
     else:
-        db_path = e.log_db_path_json
+        db_path = env("JVSPATIAL_LOG_DB_PATH") or "./jvspatial_logs"
         config = {
             "enabled": enabled,
             "log_levels": log_levels,

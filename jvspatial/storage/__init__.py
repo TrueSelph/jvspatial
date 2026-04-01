@@ -54,7 +54,7 @@ For detailed documentation, see:
 import logging
 from typing import Any, Dict
 
-from jvspatial.env import load_env
+from jvspatial.env import env
 
 # Import core components
 from .interfaces import FileStorageInterface, LocalFileInterface
@@ -180,18 +180,18 @@ def create_storage(provider: str = "local", **kwargs: Any) -> FileStorageInterfa
                 "S3 storage requires boto3. Install it with: pip install boto3"
             )
 
-        env = load_env()
-        bucket_name = kwargs.get("bucket_name") or env.s3_bucket_name
+        bucket_name = kwargs.get("bucket_name") or env("JVSPATIAL_S3_BUCKET_NAME")
         if not bucket_name:
             raise ValueError("S3 bucket_name is required")
 
         return S3FileInterface(
             bucket_name=bucket_name,
-            region_name=kwargs.get("region_name") or env.s3_region_name,
-            access_key_id=kwargs.get("access_key_id") or env.s3_access_key_id,
+            region_name=kwargs.get("region_name")
+            or env("JVSPATIAL_S3_REGION", default="us-east-1"),
+            access_key_id=kwargs.get("access_key_id") or env("JVSPATIAL_S3_ACCESS_KEY"),
             secret_access_key=kwargs.get("secret_access_key")
-            or env.s3_secret_access_key,
-            endpoint_url=kwargs.get("endpoint_url") or env.s3_endpoint_url,
+            or env("JVSPATIAL_S3_SECRET_KEY"),
+            endpoint_url=kwargs.get("endpoint_url") or env("JVSPATIAL_S3_ENDPOINT_URL"),
             url_expiration=kwargs.get("url_expiration", 3600),
         )
 
@@ -205,7 +205,7 @@ def create_default_storage() -> FileStorageInterface:
     Returns:
         Configured storage interface
     """
-    return create_storage(load_env().file_interface)
+    return create_storage(env("JVSPATIAL_FILE_INTERFACE", default="local"))
 
 
 def get_default_config() -> Dict[str, Any]:

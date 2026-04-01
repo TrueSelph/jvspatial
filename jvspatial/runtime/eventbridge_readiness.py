@@ -7,7 +7,7 @@ from typing import Any
 
 
 def aws_region_from_environ() -> str:
-    """Region for composed Lambda ARNs; mirrors :class:`~jvspatial.env.EnvConfig` merge order."""
+    """Region for composed Lambda ARNs from environment."""
     return (
         os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
     ).strip() or "us-east-1"
@@ -33,7 +33,7 @@ def resolve_eventbridge_lambda_arn_from_values(
 
 
 def resolve_eventbridge_lambda_arn(e: Any) -> str:
-    """Resolve target Lambda ARN from a loaded :func:`~jvspatial.env.load_env` config object."""
+    """Resolve target Lambda ARN from an object carrying env-like fields."""
     return resolve_eventbridge_lambda_arn_from_values(
         getattr(e, "eventbridge_lambda_arn", "") or "",
         getattr(e, "aws_lambda_function_name", "") or "",
@@ -51,7 +51,7 @@ def eventbridge_scheduler_prerequisites_met(e: Any) -> bool:
 
 
 def eventbridge_scheduler_prerequisites_met_from_environ() -> bool:
-    """Prerequisites using ``os.environ`` only (before/without ``load_env`` cache)."""
+    """Prerequisites using ``os.environ`` only."""
     role = os.getenv("JVSPATIAL_EVENTBRIDGE_ROLE_ARN", "").strip()
     if not role:
         return False
