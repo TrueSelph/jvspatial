@@ -14,7 +14,18 @@ from typing import Any, Dict, List, Optional, Set, Union
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from jvspatial.env import env, parse_bool
 from jvspatial.exceptions import JVSpatialAPIException
+
+_GENERIC_INTERNAL_ERROR_MESSAGE = (
+    "An unexpected error occurred. Please contact support if this persists."
+)
+
+
+def _expose_error_details_to_clients() -> bool:
+    """When true, unhandled 500 responses may include exception text (dev only)."""
+    return bool(env("JVSPATIAL_EXPOSE_ERROR_DETAILS", default=False, parse=parse_bool))
+
 
 # Context variable to track exceptions that have been logged by our handler
 # This prevents duplicate logging even if exceptions propagate through multiple layers
@@ -753,11 +764,15 @@ class APIErrorHandler:
                 traceback_str=clean_traceback,
             )
 
-        # Always return proper error response structure
+        # Always return proper error response structure (never leak str(exc) unless explicitly enabled)
         try:
+            if _expose_error_details_to_clients():
+                public_message = f"An unexpected error occurred: {str(exc)}"
+            else:
+                public_message = _GENERIC_INTERNAL_ERROR_MESSAGE
             content = {
                 "error_code": "internal_error",
-                "message": f"An unexpected error occurred: {str(exc)}",
+                "message": public_message,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "path": request.url.path,
             }

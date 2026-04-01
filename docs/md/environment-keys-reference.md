@@ -4,6 +4,7 @@ This is the single reference for **valid environment keys consumed by jvspatial*
 
 For full examples and default values, see:
 - `docs/md/environment-configuration.md`
+- `docs/md/security-operational-notes.md` (Redis, webhooks, blacklist, rate limits)
 - `.env.example` at the repository root
 
 ## Scope
@@ -25,6 +26,7 @@ For full examples and default values, see:
 - `JVSPATIAL_PORT` - Port bind value.
 - `JVSPATIAL_LOG_LEVEL` - Logging level.
 - `JVSPATIAL_DEBUG` - Debug mode toggle.
+- `JVSPATIAL_EXPOSE_ERROR_DETAILS` - When true, unhandled 500 JSON may include exception text (dev only).
 - `JVSPATIAL_API_PREFIX` - API route prefix.
 - `JVSPATIAL_API_HEALTH` - Health route path.
 - `JVSPATIAL_API_ROOT` - Root route path.
@@ -114,6 +116,7 @@ For full examples and default values, see:
 - `JVSPATIAL_L1_CACHE_SIZE` - Layered cache L1 size.
 - `JVSPATIAL_REDIS_URL` - Redis URL.
 - `JVSPATIAL_REDIS_TTL` - Redis default TTL.
+- `JVSPATIAL_REDIS_SERIALIZATION` - `json` (default) or `pickle` for Redis cache value encoding.
 
 ### Webhooks
 - `JVSPATIAL_WEBHOOK_HMAC_SECRET` - Global webhook secret.

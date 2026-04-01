@@ -64,8 +64,15 @@ Mongo connection string and database name are **`ServerConfig.database`** fields
 | `JVSPATIAL_L1_CACHE_SIZE` | integer | `500` | L1 size for layered cache (`LayeredCache`). Do **not** use removed `JVSPATIAL_L1_SIZE`. |
 | `JVSPATIAL_REDIS_URL` | string | — | Redis URL for `redis` / `layered`. If backend is `memory` **and** this is set, `create_default_cache()` upgrades to **layered** (L1 memory + L2 Redis). |
 | `JVSPATIAL_REDIS_TTL` | integer | `3600` | Default TTL (seconds) for Redis entries. |
+| `JVSPATIAL_REDIS_SERIALIZATION` | string | `json` | `json` (default) writes JSON-safe cache values and avoids pickle RCE if Redis is ever writable by an attacker. `pickle` restores the legacy format. In `json` mode, existing pickle blobs are still read. Only JSON-serializable values can be stored when using `json`. |
 
 See the [Caching Documentation](caching.md) for detailed information about cache backends and configuration.
+
+### API error responses
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `JVSPATIAL_EXPOSE_ERROR_DETAILS` | boolean | `false` | When `true`, unhandled exceptions return `str(exc)` in the JSON `message` (development only). Production should leave this unset or `false` so clients only see a generic internal error message. Full detail remains in server logs and the error-logging pipeline. |
 
 ### Serverless Mode Configuration
 

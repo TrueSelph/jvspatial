@@ -442,9 +442,13 @@ class AuthenticationService:
                 return False  # Token without JTI cannot be blacklisted
 
             return await self._is_token_blacklisted_by_jti(token_id)
-        except Exception:
-            # If there's an error checking blacklist, assume not blacklisted
-            # (fail open for availability)
+        except Exception as e:
+            # Fail-open for availability; operators must see failures in logs.
+            self._logger.error(
+                "JWT blacklist check failed (fail-open; token not treated as blacklisted): %s",
+                e,
+                exc_info=True,
+            )
             return False
 
     async def _is_token_blacklisted_by_jti(self, token_id: str) -> bool:
@@ -495,9 +499,13 @@ class AuthenticationService:
             )
             return is_blacklisted
         except Exception as e:
-            # If there's an error checking blacklist, assume not blacklisted
-            # (fail open for availability)
-            self._logger.warning(f"Error checking blacklist for token {token_id}: {e}")
+            # Fail-open for availability
+            self._logger.error(
+                "Error checking blacklist for token %s (fail-open): %s",
+                token_id,
+                e,
+                exc_info=True,
+            )
             return False
 
     async def _blacklist_token(self, token: str) -> bool:
