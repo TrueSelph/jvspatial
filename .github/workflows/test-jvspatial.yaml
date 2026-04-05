@@ -29,7 +29,14 @@ jobs:
     - name: Install jvspatial package with test and lambda dependencies
       run: pip install -e '.[test,lambda]'
 
-    - name: Run tests
-      # Phased raise: was 50; next step is 60+ once gaps are closed
+    # Coverage on every matrix Python version spikes memory (~1.6k tests); the runner often OOM-kills
+    # the process (shown as "The operation was canceled"). Run full suite everywhere; enforce
+    # coverage threshold once on 3.12.
+    - name: Run tests (with coverage)
+      if: matrix.python-version == '3.12'
       run: pytest tests/ -v --tb=short --cov=jvspatial --cov-report=xml --cov-report=term-missing --cov-fail-under=55
+
+    - name: Run tests (no coverage)
+      if: matrix.python-version != '3.12'
+      run: pytest tests/ -v --tb=short
     # Pre-commit runs once in .github/workflows/pre-commit.yaml (same triggers); omit here to avoid 3× duplicate work.
