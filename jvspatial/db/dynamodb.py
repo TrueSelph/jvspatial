@@ -1,28 +1,21 @@
 """DynamoDB database implementation.
 
-Index Creation Behavior:
-    By default, indexes are NOT created automatically. To enable automatic index creation,
-    set the environment variable:
+Index creation policy (auto-create vs wait) is **not** read inside this module.
+``JVSPATIAL_AUTO_CREATE_INDEXES`` is interpreted in ``GraphContext`` (e.g. during
+``ensure_indexes``). This class only consumes ``JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX``
+for ``create_index(..., wait_for_active=...)`` defaults.
 
-        JVSPATIAL_AUTO_CREATE_INDEXES=true
-
-    When automatic index creation is enabled, indexes are created asynchronously and do NOT
-    wait for Global Secondary Indexes (GSI) to become active by default, allowing immediate
-    graph usage. Indexes will be available for queries once they become active (typically
-    a few minutes).
-
-    To enable waiting for index activation (when auto-create is enabled), set:
-
-        JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX=true
-
-    When set to true, the system will wait up to 5 minutes per index for activation before
-    proceeding, which can cause significant delays during initialization.
+Summary:
+    - ``JVSPATIAL_AUTO_CREATE_INDEXES``: interpreted in ``GraphContext`` / env layer,
+      not in ``DynamoDB`` methods directly.
+    - ``JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX``: when auto-creation is enabled elsewhere,
+      set to ``true`` to wait for GSI activation (up to ~5 minutes per index), which
+      can delay startup; default is non-blocking creation for faster cold starts.
 """
 
 import asyncio
 import json
 import logging
-import os
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 try:
@@ -85,7 +78,7 @@ class DynamoDB(Database):
         if not _BOTO3_AVAILABLE:
             raise ImportError(
                 "aioboto3 is required for DynamoDB support. "
-                "Install it with: pip install aioboto3>=12.0.0"
+                "Install it with: pip install jvspatial[lambda]"
             )
 
         self.table_name = table_name
@@ -645,38 +638,6 @@ class DynamoDB(Database):
             results = await process_batch(batches[0] if batches else [])
 
         return results
-
-    async def find_one_and_update(
-        self,
-        collection: str,
-        query: Dict[str, Any],
-        update: Dict[str, Any],
-        upsert: bool = False,
-    ) -> Optional[Dict[str, Any]]:
-        """Find and update the first record matching a query.
-
-        Uses find_one + QueryEngine.apply_update + save. Not atomic.
-        Supports $set, $unset, $inc, $push, $addToSet, $setOnInsert (on upsert).
-        """
-        doc = await self.find_one(collection, query)
-        is_new = doc is None
-        if is_new:
-            if not upsert:
-                return None
-            doc = {}
-            doc_id = query.get("_id", query.get("id"))
-            if doc_id is not None:
-                doc["_id"] = doc_id
-                doc["id"] = str(doc_id)
-            QueryEngine.apply_update(doc, update, apply_set_on_insert=True)
-        else:
-            QueryEngine.apply_update(doc, update, apply_set_on_insert=False)
-
-        record_id = doc.get("id", doc.get("_id"))
-        if record_id is not None:
-            doc["id"] = str(record_id)
-        await self.save(collection, doc)
-        return doc
 
     async def batch_write(self, collection: str, items: List[Dict[str, Any]]) -> None:
         """Write multiple records using batch_write_item.
@@ -1259,9 +1220,12 @@ class DynamoDB(Database):
         # Determine whether to wait based on parameter or environment variable
         # Default is False to allow immediate graph usage (indexes created asynchronously)
         if wait_for_active is None:
-            wait_for_active = (
-                os.getenv("JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX", "false").lower()
-                == "true"
+            from jvspatial.env import env, parse_bool_basic
+
+            wait_for_active = env(
+                "JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX",
+                default=False,
+                parse=parse_bool_basic,
             )
         table_name = await self._ensure_table_exists(collection)
 

@@ -241,11 +241,24 @@ class TestErrorHandler:
         # Handle exception
         response = await APIErrorHandler.handle_exception(request, exc)
 
-        # Verify response
+        # Verify response (client body must not echo exception text by default)
         assert response.status_code == 500
         data = response.body.decode()
         assert "internal_error" in data
-        assert "unexpected error" in data
+        assert "contact support" in data.lower()
+        assert "Generic error" not in data
+
+    async def test_handle_exception_generic_error_expose_details_env(self, monkeypatch):
+        """Optional JVSPATIAL_EXPOSE_ERROR_DETAILS restores exception text in JSON."""
+        monkeypatch.setenv("JVSPATIAL_EXPOSE_ERROR_DETAILS", "true")
+        request = MagicMock()
+        request.state.request_id = None
+        request.url.path = "/test/path"
+        exc = ValueError("Generic error")
+        response = await APIErrorHandler.handle_exception(request, exc)
+        assert response.status_code == 500
+        data = response.body.decode()
+        assert "Generic error" in data
 
     async def test_handle_exception_without_request_id(self):
         """Test handling exceptions without request ID."""

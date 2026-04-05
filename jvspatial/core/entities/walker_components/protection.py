@@ -33,6 +33,7 @@ class TraversalProtection:
         max_steps: int = 10000,
         max_visits_per_node: int = 100,
         max_execution_time: float = 300.0,
+        enabled: bool = True,
     ):
         """Initialize traversal protection.
 
@@ -40,7 +41,9 @@ class TraversalProtection:
             max_steps: Maximum number of traversal steps
             max_visits_per_node: Maximum visits to any single node
             max_execution_time: Maximum execution time in seconds
+            enabled: When False, limits are not enforced (JVSPATIAL_WALKER_PROTECTION_ENABLED)
         """
+        self._enabled = enabled
         self._max_steps = max_steps
         self._max_visits_per_node = max_visits_per_node
         self._max_execution_time = max_execution_time
@@ -54,6 +57,9 @@ class TraversalProtection:
     async def increment_step(self) -> None:
         """Increment the step counter and check protection limits."""
         self._steps += 1
+
+        if not self._enabled:
+            return
 
         # Check timeout first if enabled
         self._check_timeout()
@@ -77,6 +83,9 @@ class TraversalProtection:
         Raises:
             ProtectionViolation: If visit limit is exceeded
         """
+        if not self._enabled:
+            return
+
         count = self._visit_counts.get(node_id, 0) + 1
         self._visit_counts[node_id] = count
         if count >= self._max_visits_per_node:
@@ -93,7 +102,7 @@ class TraversalProtection:
 
     def _check_timeout(self) -> None:
         """Check if execution time has exceeded the limit."""
-        if self._start_time is None:
+        if not self._enabled or self._start_time is None:
             return
 
         elapsed = time.time() - self._start_time
@@ -166,6 +175,8 @@ class TraversalProtection:
         This method uses O(1) checks by leveraging the violation flag set
         during record_visit() instead of iterating through all visit counts.
         """
+        if not self._enabled:
+            return True
         # O(1) step count check
         if self._steps >= self._max_steps:
             return False

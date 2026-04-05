@@ -2,7 +2,6 @@
 
 import asyncio
 import inspect
-import os
 from collections import deque
 from typing import (
     TYPE_CHECKING,
@@ -312,19 +311,22 @@ class Walker(AttributeMixin, BaseModel):
             kwargs["entity"] = self.__class__.__name__
 
         # Extract component configuration from kwargs (before super().__init__)
+        from jvspatial.env import env, parse_bool_basic
+
         max_steps = kwargs.pop(
-            "max_steps", int(os.getenv("JVSPATIAL_WALKER_MAX_STEPS", "10000"))
+            "max_steps", int(env("JVSPATIAL_WALKER_MAX_STEPS", default="10000"))
         )
         max_visits_per_node = kwargs.pop(
             "max_visits_per_node",
-            int(os.getenv("JVSPATIAL_WALKER_MAX_VISITS_PER_NODE", "100")),
+            int(env("JVSPATIAL_WALKER_MAX_VISITS_PER_NODE", default="100")),
         )
         max_execution_time = kwargs.pop(
             "max_execution_time",
-            float(os.getenv("JVSPATIAL_WALKER_MAX_EXECUTION_TIME", "300.0")),
+            float(env("JVSPATIAL_WALKER_MAX_EXECUTION_TIME", default="300.0")),
         )
         max_queue_size = kwargs.pop(
-            "max_queue_size", int(os.getenv("JVSPATIAL_WALKER_MAX_QUEUE_SIZE", "1000"))
+            "max_queue_size",
+            int(env("JVSPATIAL_WALKER_MAX_QUEUE_SIZE", default="1000")),
         )
         paused = kwargs.pop("paused", False)
 
@@ -350,6 +352,11 @@ class Walker(AttributeMixin, BaseModel):
             max_steps=max_steps,
             max_visits_per_node=max_visits_per_node,
             max_execution_time=max_execution_time,
+            enabled=env(
+                "JVSPATIAL_WALKER_PROTECTION_ENABLED",
+                default=True,
+                parse=parse_bool_basic,
+            ),
         )
         self._walker_events = WalkerEventSystem()
 

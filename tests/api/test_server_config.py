@@ -1,5 +1,8 @@
 """Tests for ServerConfig grouped configuration structure."""
 
+import os
+from unittest.mock import patch
+
 import pytest
 
 from jvspatial.api.config import ServerConfig
@@ -100,6 +103,27 @@ class TestServerConfigGroups:
         assert config.rate_limit.rate_limit_overrides == {
             "/api/expensive": {"requests": 10, "window": 60}
         }
+
+    def test_file_storage_root_default_non_serverless(self):
+        """Empty env yields ./.files when not in serverless mode."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = ServerConfig()
+            assert config.file_storage.file_storage_root == "./.files"
+
+    def test_file_storage_root_unified_env_jvspatial_files_root_path(self):
+        """JVSPATIAL_FILES_ROOT_PATH must override YAML root."""
+        with patch.dict(
+            os.environ,
+            {"JVSPATIAL_FILES_ROOT_PATH": "/lambda/unified"},
+            clear=True,
+        ):
+            config = ServerConfig(
+                file_storage={
+                    "file_storage_root": "./would_be_yaml",
+                    "file_storage_enabled": True,
+                }
+            )
+            assert config.file_storage.file_storage_root == "/lambda/unified"
 
     def test_config_file_storage_group(self):
         """Test FileStorage configuration group."""

@@ -13,6 +13,33 @@ from fastapi import Request
 from jvspatial.api.constants import APIRoutes
 
 
+def path_requires_admin_only_role(request_path: str) -> bool:
+    """True for ``/status``, ``/logs``, and ``/graph`` subtrees under :attr:`APIRoutes.PREFIX`.
+
+    Matches the first path segment after the configured API prefix (e.g. ``/api/graph/expand``,
+    ``/api/logs``, ``/api/status/health``). Used by auth middleware so these surfaces stay
+    admin-only even if a route is registered without explicit ``roles`` in config.
+    """
+    api_prefix = (APIRoutes.PREFIX or "").strip().rstrip("/")
+    if api_prefix and not api_prefix.startswith("/"):
+        api_prefix = f"/{api_prefix}"
+
+    rel = request_path
+    if api_prefix and api_prefix != "/" and request_path.startswith(api_prefix):
+        rel = request_path[len(api_prefix) :] or "/"
+    if not rel.startswith("/"):
+        rel = f"/{rel}"
+
+    return (
+        rel == "/status"
+        or rel.startswith("/status/")
+        or rel == "/logs"
+        or rel.startswith("/logs/")
+        or rel == "/graph"
+        or rel.startswith("/graph/")
+    )
+
+
 def _route_paths_for_comparison(route_path: str) -> List[str]:
     """Build list of route path variants for matching (prefixed and normalized).
 
@@ -32,11 +59,42 @@ def _route_paths_for_comparison(route_path: str) -> List[str]:
 
 
 def _path_matches(pattern: str, path: str) -> bool:
-    """Check if a request path matches a route pattern with path parameters."""
-    escaped = re.escape(pattern)
-    regex = re.sub(r"\\\{(\w+)\\\}", r"[^/]+", escaped)
-    regex = re.sub(r"\{(\w+)\}", r"[^/]+", regex)
-    return bool(re.match(f"^{regex}$", path))
+    """Check if a request path matches a route pattern with path parameters.
+
+    Supports single-segment params ``{name}`` / ``{name:int}`` and Starlette/FastAPI
+    ``{name:path}`` (slashes allowed in the capture).
+    """
+    if pattern == path:
+        return True
+    segments = [s for s in pattern.split("/") if s]
+    if not segments:
+        return path == "/"
+    regex_parts: List[str] = []
+    for seg in segments:
+        if seg.startswith("{") and seg.endswith("}"):
+            inner = seg[1:-1]
+            if ":" in inner:
+                _, conv = inner.split(":", 1)
+                regex_parts.append("(.+)" if conv == "path" else r"[^/]+")
+            else:
+                regex_parts.append(r"[^/]+")
+        else:
+            regex_parts.append(re.escape(seg))
+    regex = "^/" + "/".join(regex_parts) + "$"
+    return bool(re.match(regex, path))
+
+
+def _endpoint_info_matches_method(
+    endpoint_info: Any, request_method: Optional[str]
+) -> bool:
+    """True if the request method is allowed for this registry entry (or method unknown)."""
+    if not request_method:
+        return True
+    methods = getattr(endpoint_info, "methods", None) or []
+    if not methods:
+        return True
+    upper = request_method.upper()
+    return upper in {m.upper() for m in methods}
 
 
 class EndpointAuthResolver:
@@ -79,7 +137,11 @@ class EndpointAuthResolver:
             ]
             paths_to_check = [p for p in paths_to_check if p is not None]
 
+            req_method = getattr(request, "method", None)
+
             for func, endpoint_info in registry._function_registry.items():
+                if not _endpoint_info_matches_method(endpoint_info, req_method):
+                    continue
                 func_path = endpoint_info.path
                 if func_path in paths_to_check or any(
                     _path_matches(func_path, p) for p in paths_to_check
@@ -93,6 +155,8 @@ class EndpointAuthResolver:
                     return cfg.get("auth_required", False)
 
             for walker_class, endpoint_info in registry._walker_registry.items():
+                if not _endpoint_info_matches_method(endpoint_info, req_method):
+                    continue
                 walker_path = endpoint_info.path
                 if walker_path in paths_to_check or any(
                     _path_matches(walker_path, p) for p in paths_to_check
@@ -236,13 +300,19 @@ class EndpointAuthResolver:
                 if p not in paths:
                     paths.append(p)
 
+            req_method = getattr(request, "method", None)
+
             for func, endpoint_info in registry._function_registry.items():
+                if not _endpoint_info_matches_method(endpoint_info, req_method):
+                    continue
                 if endpoint_info.path in paths or any(
                     _path_matches(endpoint_info.path, x) for x in paths
                 ):
                     return getattr(func, "_jvspatial_endpoint_config", None)
 
             for walker_class, endpoint_info in registry._walker_registry.items():
+                if not _endpoint_info_matches_method(endpoint_info, req_method):
+                    continue
                 if endpoint_info.path in paths or any(
                     _path_matches(endpoint_info.path, x) for x in paths
                 ):
@@ -264,6 +334,8 @@ class EndpointAuthResolver:
                         )
                     ):
                         continue
+                    if req_method is not None and req_method not in route.methods:
+                        continue
                     if hasattr(route.endpoint, "_jvspatial_endpoint_config"):
                         return route.endpoint._jvspatial_endpoint_config  # type: ignore[attr-defined]
             return None
@@ -271,4 +343,4 @@ class EndpointAuthResolver:
             return None
 
 
-__all__ = ["EndpointAuthResolver"]
+__all__ = ["EndpointAuthResolver", "path_requires_admin_only_role"]

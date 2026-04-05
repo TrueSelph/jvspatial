@@ -8,14 +8,18 @@ logger with optional 'details' in the extra parameter.
 import asyncio
 import contextlib
 import logging
+import os
 import sys
+import threading
 import traceback
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Set
+from typing import Any, Callable, Dict, Optional, Set
 
 from jvspatial.core.context import GraphContext
 from jvspatial.db import get_database_manager
+from jvspatial.db.database import Database
 from jvspatial.logging.models import DBLog
+from jvspatial.runtime.serverless import is_serverless_mode
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +79,10 @@ class DBLogHandler(logging.Handler):
         Custom log levels are fully supported. Use add_custom_log_level() to register
         custom levels, then include them in the log_levels parameter when creating
         the handler.
+
+        **Tests:** In async tests, ``emit`` may schedule ``asyncio.create_task`` for the
+        save coroutine; await pending tasks (or use ``sync_emit=True``) before tearing
+        down the event loop to avoid "Task was destroyed but it is pending" warnings.
     """
 
     def __init__(
@@ -82,6 +90,10 @@ class DBLogHandler(logging.Handler):
         database_name: str = "logs",
         enabled: bool = True,
         log_levels: Optional[Set[int]] = None,
+        *,
+        database: Optional[Database] = None,
+        database_getter: Optional[Callable[[], Optional[Database]]] = None,
+        sync_emit: bool = False,
     ):
         """Initialize the database log handler.
 
@@ -89,6 +101,12 @@ class DBLogHandler(logging.Handler):
             database_name: Name of the logging database (default: "logs")
             enabled: Whether the handler is enabled (default: True)
             log_levels: Set of log levels to capture (default: {ERROR, CRITICAL})
+            database: Optional fixed database instance for log persistence (skips manager
+                lookup by name when set).
+            database_getter: Optional callable returning the log database; overrides
+                manager lookup when provided (and ``database`` is not set).
+            sync_emit: If True, always persist via ``asyncio.run`` in the emitting thread
+                instead of ``create_task`` when a loop is running (useful in tests).
         """
         # Default to ERROR and CRITICAL if no levels specified
         if log_levels is None:
@@ -101,47 +119,69 @@ class DBLogHandler(logging.Handler):
         self._database_name = database_name
         self._enabled = enabled
         self._log_levels = log_levels
-        self._log_db = None
+        self._log_db = database
+        self._database_getter = database_getter
+        self._sync_emit = sync_emit
 
-    def _get_log_database(self):
+    def _get_log_database(self) -> Optional[Database]:
         """Get the logging database instance.
 
         Returns:
             Database instance or None if not available
         """
-        if self._log_db is None:
+        if self._log_db is not None:
+            return self._log_db
+        if self._database_getter is not None:
+            if self._log_db is not None:
+                return self._log_db
             try:
-                manager = get_database_manager()
-                registered_dbs = manager.list_databases()
-
-                if self._database_name in registered_dbs:
-                    self._log_db = manager.get_database(self._database_name)
-                    return self._log_db
-                else:
-                    if not getattr(self, "_warned_db_not_found", False):
-                        self._warned_db_not_found = True
-                        logger.warning(
-                            "DBLogHandler: database '%s' not found in manager. "
-                            "Registered: %s. DB logs will not be persisted.",
-                            self._database_name,
-                            list(registered_dbs.keys()),
-                        )
-                    return None
+                db = self._database_getter()
             except Exception as e:
                 if not getattr(self, "_warned_db_not_found", False):
                     self._warned_db_not_found = True
                     logger.warning(
-                        "DBLogHandler: failed to get log database: %s", e, exc_info=True
+                        "DBLogHandler: database_getter failed: %s", e, exc_info=True
                     )
                 return None
-        return self._log_db
+            if db is not None:
+                self._log_db = db
+            return db
+        try:
+            manager = get_database_manager()
+            registered_dbs = manager.list_databases()
+
+            if self._database_name in registered_dbs:
+                self._log_db = manager.get_database(self._database_name)
+                return self._log_db
+            if not getattr(self, "_warned_db_not_found", False):
+                self._warned_db_not_found = True
+                logger.warning(
+                    "DBLogHandler: database '%s' not found in manager. "
+                    "Registered: %s. DB logs will not be persisted.",
+                    self._database_name,
+                    list(registered_dbs.keys()),
+                )
+            return None
+        except Exception as e:
+            if not getattr(self, "_warned_db_not_found", False):
+                self._warned_db_not_found = True
+                logger.warning(
+                    "DBLogHandler: failed to get log database: %s", e, exc_info=True
+                )
+            return None
 
     def emit(self, record: logging.LogRecord) -> None:
         """Emit a log record to the database.
 
         This method is called by the logging system for configured log levels.
-        It extracts information from the log record and saves it to the database
-        asynchronously (fire-and-forget).
+        It extracts information from the log record and saves it to the database.
+        In non-serverless mode, saves asynchronously (fire-and-forget).
+        In serverless mode, defaults to a **blocking** save (dedicated thread +
+        ``asyncio.run`` + ``join``) so Lambda finishes persisting before the
+        invocation ends. Set ``JVSPATIAL_DB_LOG_SERVERLESS_ASYNC=true`` to use
+        ``asyncio.create_task`` when a loop is running (only if your host drains
+        pending tasks). Optional ``JVSPATIAL_DB_LOG_SERVERLESS_JOIN_TIMEOUT``
+        overrides the join timeout in seconds (default ``10``).
 
         Args:
             record: The log record to process
@@ -286,7 +326,7 @@ class DBLogHandler(logging.Handler):
                 logged_at=datetime.now(timezone.utc),
             )
 
-            # Save to database asynchronously (fire-and-forget)
+            # Save to database
             async def save_log():
                 """Save log entry to database."""
                 try:
@@ -302,19 +342,47 @@ class DBLogHandler(logging.Handler):
                         exc_info=True,
                     )
 
-            # Create task for async save (fire-and-forget)
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # Event loop is running, create task
-                    asyncio.create_task(save_log())
-                else:
-                    # No event loop running, run synchronously
-                    asyncio.run(save_log())
-            except RuntimeError:
-                # No event loop running (e.g. sync context or different thread)
-                with contextlib.suppress(Exception):
-                    asyncio.run(save_log())
+            if not is_serverless_mode():
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running() and not self._sync_emit:
+                        asyncio.create_task(save_log())
+                    else:
+                        asyncio.run(save_log())
+                except RuntimeError:
+                    with contextlib.suppress(Exception):
+                        asyncio.run(save_log())
+            else:
+                # Serverless (Lambda): default blocking persist so save_log completes
+                # before the invocation returns; create_task is opt-in only.
+                use_async_task = not self._sync_emit and os.getenv(
+                    "JVSPATIAL_DB_LOG_SERVERLESS_ASYNC", ""
+                ).strip().lower() in ("1", "true", "yes")
+                if use_async_task:
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        loop = None
+                    if loop is not None and loop.is_running():
+                        asyncio.create_task(save_log())
+                    else:
+                        use_async_task = False
+
+                if not use_async_task:
+
+                    def _run_sync_save():
+                        asyncio.run(save_log())
+
+                    thread = threading.Thread(target=_run_sync_save, daemon=True)
+                    thread.start()
+                    join_timeout = 10.0
+                    raw_timeout = os.getenv(
+                        "JVSPATIAL_DB_LOG_SERVERLESS_JOIN_TIMEOUT", ""
+                    ).strip()
+                    if raw_timeout:
+                        with contextlib.suppress(ValueError):
+                            join_timeout = float(raw_timeout)
+                    thread.join(timeout=join_timeout)
 
         except Exception as e:
             # Never let logging failures break the application
@@ -371,6 +439,10 @@ def install_db_log_handler(
     database_name: str = "logs",
     enabled: bool = True,
     log_levels: Optional[Set[int]] = None,
+    *,
+    database: Optional[Database] = None,
+    database_getter: Optional[Callable[[], Optional[Database]]] = None,
+    sync_emit: bool = False,
 ) -> bool:
     """Install the database log handler to the root logger.
 
@@ -378,6 +450,9 @@ def install_db_log_handler(
         database_name: Name of the logging database (default: "logs")
         enabled: Whether the handler is enabled (default: True)
         log_levels: Set of log levels to capture (default: {ERROR, CRITICAL})
+        database: Optional explicit database for persistence (see :class:`DBLogHandler`).
+        database_getter: Optional callable to resolve the log database.
+        sync_emit: When True, avoid fire-and-forget tasks when a loop is running.
 
     Returns:
         True if handler was installed, False if already exists
@@ -399,6 +474,9 @@ def install_db_log_handler(
             database_name=database_name,
             enabled=enabled,
             log_levels=log_levels,
+            database=database,
+            database_getter=database_getter,
+            sync_emit=sync_emit,
         )
         root_logger.addHandler(handler)
 

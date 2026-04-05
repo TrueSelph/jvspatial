@@ -5,12 +5,16 @@ of FastAPI application instances, following the single responsibility principle.
 """
 
 import logging
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI
 
 from jvspatial.api.config import ServerConfig
 from jvspatial.api.constants import LogIcons
+
+# RBAC: graph and progressive JSON graph APIs are admin-only (see also auth middleware path rules).
+_ADMIN_API_ROLES: List[str] = ["admin"]
 
 
 class AppBuilder:
@@ -88,10 +92,10 @@ class AppBuilder:
                     if isinstance(operation, dict) and "tags" in operation:
                         all_tags.update(operation["tags"])
 
-            # Define tag order - "default" first, then "App", then others alphabetically
-            tag_order = ["default", "App"]
-            other_tags = sorted([tag for tag in all_tags if tag not in tag_order])
-            ordered_tags = tag_order + other_tags
+            # Prefer order: default, App, Files; then any remaining tags alphabetically
+            preferred = ["default", "App", "Files"]
+            ordered_tags = [t for t in preferred if t in all_tags]
+            ordered_tags.extend(sorted(t for t in all_tags if t not in ordered_tags))
 
             # Create tag definitions in the correct order
             if "tags" not in schema:
@@ -105,6 +109,10 @@ class AppBuilder:
                     tag_def["description"] = "Default API endpoints"
                 elif tag == "App":
                     tag_def["description"] = "Application-specific endpoints"
+                elif tag == "Files":
+                    tag_def["description"] = (
+                        "File upload, serve, delete, and proxy URLs"
+                    )
                 tag_definitions.append(tag_def)
 
             schema["tags"] = tag_definitions
@@ -162,6 +170,13 @@ class AppBuilder:
 
         from jvspatial.core.entities import Root
 
+        admin_graph_dir = self._resolve_admin_graph_static_dir()
+        mount_admin_graph = (
+            self.config.graph_endpoint_enabled
+            and admin_graph_dir is not None
+            and (admin_graph_dir / "index.html").is_file()
+        )
+
         # Add default health check endpoint
         @app.get("/health", response_model=None)
         async def health_check() -> Dict[str, Any]:
@@ -192,7 +207,7 @@ class AppBuilder:
         @app.get("/")
         async def root_info() -> Dict[str, Any]:
             """Root endpoint with API information."""
-            info = {
+            info: Dict[str, Any] = {
                 "service": self.config.title,
                 "description": self.config.description,
                 "version": self.config.version,
@@ -201,13 +216,156 @@ class AppBuilder:
             }
             if self.config.graph_endpoint_enabled:
                 info["graph"] = "/api/graph"
+                info["graph_progressive"] = {
+                    "expand": "/api/graph/expand",
+                    "subgraph": "/api/graph/subgraph",
+                }
+                if mount_admin_graph:
+                    info["admin_graph_ui"] = "/admin/graph/"
             return info
 
         # Add graph visualization endpoint (optional)
         if self.config.graph_endpoint_enabled:
             self._register_graph_endpoint(app, graph_context, server)
+            if server and hasattr(server, "_endpoint_registry"):
+                self._register_progressive_graph_endpoints(app, graph_context, server)
+
+        from jvspatial.api.deferred_invoke_route import register_deferred_invoke_route
+
+        register_deferred_invoke_route(app)
+
+        if mount_admin_graph and admin_graph_dir is not None:
+            from fastapi.staticfiles import StaticFiles
+
+            app.mount(
+                "/admin/graph",
+                StaticFiles(directory=str(admin_graph_dir), html=True),
+                name="admin_graph_ui",
+            )
 
         # Core routes registered (no log needed)
+
+    def _resolve_admin_graph_static_dir(self) -> Optional[Path]:
+        """Directory with embedded graph UI ``index.html``, if available.
+
+        Populated by ``cd jvgraph-ui && npm run embed`` (copies the Vite build into
+        ``jvspatial/static/admin_graph/`` inside the installed package).
+        """
+        root = Path(__file__).resolve().parents[2] / "static" / "admin_graph"
+        if (root / "index.html").is_file():
+            return root
+        return None
+
+    def _register_progressive_graph_endpoints(
+        self,
+        app: FastAPI,
+        graph_context: Optional[Any] = None,
+        server: Optional[Any] = None,
+    ) -> None:
+        """Register JSON graph expand + subgraph endpoints (bounded, merge-friendly).
+
+        Paths (relative to API prefix): ``/graph/expand``, ``/graph/subgraph``.
+        Same policy as ``/api/graph``: authentication required and **admin** role
+        (see ``_ADMIN_API_ROLES``; middleware also enforces admin for ``/graph/*``).
+        """
+        from contextlib import suppress
+
+        from fastapi.routing import APIRoute
+
+        from jvspatial.api.endpoints.factory import ParameterModelFactory
+        from jvspatial.api.endpoints.graph_visualization import (
+            make_graph_expand_handler,
+            make_graph_subgraph_handler,
+        )
+
+        expand_path_full = "/api/graph/expand"
+        subgraph_path_full = "/api/graph/subgraph"
+
+        def _already_registered(path_full: str) -> bool:
+            if server._endpoint_registry.has_path(path_full):
+                for ep in server._endpoint_registry.get_by_path(path_full):
+                    if "GET" in ep.methods:
+                        return True
+            if any(
+                isinstance(route, APIRoute)
+                and route.path == path_full
+                and "GET" in route.methods
+                for route in app.routes
+            ):
+                return True
+            return False
+
+        if _already_registered(expand_path_full) and _already_registered(
+            subgraph_path_full
+        ):
+            return
+
+        get_expand = make_graph_expand_handler(graph_context)
+        get_subgraph = make_graph_subgraph_handler(graph_context)
+        tags = ["App"]
+        registered_any = False
+
+        for path_full, rel_path, source_fn, op_id in (
+            (expand_path_full, "/graph/expand", get_expand, "get_graph_expand"),
+            (subgraph_path_full, "/graph/subgraph", get_subgraph, "get_graph_subgraph"),
+        ):
+            if _already_registered(path_full):
+                continue
+
+            param_model = ParameterModelFactory.create_model(source_fn, path=path_full)
+            if param_model is not None:
+                from jvspatial.api.decorators.function_wrappers import (
+                    wrap_function_with_params,
+                )
+
+                wrapped = wrap_function_with_params(
+                    source_fn, param_model, ["GET"], path=path_full
+                )
+            else:
+                wrapped = source_fn
+
+            source_fn._auth_required = True  # type: ignore[attr-defined]
+            wrapped._auth_required = True  # type: ignore[attr-defined]
+            source_fn._required_roles = _ADMIN_API_ROLES  # type: ignore[attr-defined]
+            wrapped._required_roles = _ADMIN_API_ROLES  # type: ignore[attr-defined]
+            if not hasattr(wrapped, "_jvspatial_endpoint_config"):
+                wrapped._jvspatial_endpoint_config = {}  # type: ignore[attr-defined]
+            wrapped._jvspatial_endpoint_config["tags"] = tags  # type: ignore[attr-defined]
+            wrapped._jvspatial_endpoint_config["auth_required"] = True  # type: ignore[attr-defined]
+            wrapped._jvspatial_endpoint_config["roles"] = _ADMIN_API_ROLES  # type: ignore[attr-defined]
+
+            with suppress(Exception):
+                server._endpoint_registry.register_function(
+                    source_fn,
+                    path_full,
+                    methods=["GET"],
+                    route_config={
+                        "path": path_full,
+                        "endpoint": wrapped,
+                        "methods": ["GET"],
+                        "auth_required": True,
+                        "tags": tags,
+                        "roles": _ADMIN_API_ROLES,
+                    },
+                    auth_required=True,
+                    tags=tags,
+                    roles=_ADMIN_API_ROLES,
+                )
+
+            server.endpoint_router.add_route(
+                path=rel_path,
+                endpoint=wrapped,
+                methods=["GET"],
+                source_obj=source_fn,
+                auth=True,
+                roles=_ADMIN_API_ROLES,
+                tags=tags,
+                operation_id=op_id,
+            )
+            registered_any = True
+
+        if registered_any:
+            server._has_auth_endpoints = True
 
     def _register_graph_endpoint(
         self,
@@ -379,11 +537,11 @@ class AppBuilder:
 
                 # Wrap function with parameter handling if needed
                 if param_model is not None:
-                    from jvspatial.api.decorators.route import (
-                        _wrap_function_with_params,
+                    from jvspatial.api.decorators.function_wrappers import (
+                        wrap_function_with_params,
                     )
 
-                    wrapped_func = _wrap_function_with_params(
+                    wrapped_func = wrap_function_with_params(
                         get_graph, param_model, ["GET"], path="/api/graph"
                     )
                 else:
@@ -392,6 +550,8 @@ class AppBuilder:
                 # Set auth attributes on the function
                 get_graph._auth_required = True  # type: ignore[attr-defined]
                 wrapped_func._auth_required = True  # type: ignore[attr-defined]
+                get_graph._required_roles = _ADMIN_API_ROLES  # type: ignore[attr-defined]
+                wrapped_func._required_roles = _ADMIN_API_ROLES  # type: ignore[attr-defined]
 
                 # Explicitly set tags to only ["App"] - no default tag
                 tags = ["App"]
@@ -401,6 +561,7 @@ class AppBuilder:
                     wrapped_func._jvspatial_endpoint_config = {}  # type: ignore[attr-defined]
                 wrapped_func._jvspatial_endpoint_config["tags"] = tags  # type: ignore[attr-defined]
                 wrapped_func._jvspatial_endpoint_config["auth_required"] = True  # type: ignore[attr-defined]
+                wrapped_func._jvspatial_endpoint_config["roles"] = _ADMIN_API_ROLES  # type: ignore[attr-defined]
 
                 # Register with endpoint registry using full path
                 # Check if already registered to avoid duplicates
@@ -418,10 +579,12 @@ class AppBuilder:
                             "auth_required": True,
                             "response_class": PlainTextResponse,
                             "tags": tags,  # Explicitly ["App"] only
+                            "roles": _ADMIN_API_ROLES,
                         },
                         auth_required=True,
                         response_class=PlainTextResponse,
                         tags=tags,  # Explicitly ["App"] only
+                        roles=_ADMIN_API_ROLES,
                     )
 
                 # Register with endpoint router - path is relative to router prefix (/api)
@@ -432,6 +595,7 @@ class AppBuilder:
                     methods=["GET"],
                     source_obj=get_graph,
                     auth=True,
+                    roles=_ADMIN_API_ROLES,
                     response_class=PlainTextResponse,
                     tags=tags,  # Explicitly set to only ["App"] - prevents default tag
                     operation_id="get_graph_visualization",  # Explicit operation_id to prevent duplicates
@@ -467,6 +631,11 @@ class AppBuilder:
                         operation_id="get_graph_visualization",  # Explicit operation_id to prevent duplicates
                     )(get_graph)
                     get_graph._auth_required = True  # type: ignore[attr-defined]
+                    get_graph._required_roles = _ADMIN_API_ROLES  # type: ignore[attr-defined]
+                    if not hasattr(get_graph, "_jvspatial_endpoint_config"):
+                        get_graph._jvspatial_endpoint_config = {}  # type: ignore[attr-defined]
+                    get_graph._jvspatial_endpoint_config["auth_required"] = True  # type: ignore[attr-defined]
+                    get_graph._jvspatial_endpoint_config["roles"] = _ADMIN_API_ROLES  # type: ignore[attr-defined]
 
 
 __all__ = ["AppBuilder"]

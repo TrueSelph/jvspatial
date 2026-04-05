@@ -7,9 +7,10 @@ with lazy boto3 import, streaming support, and pre-signed URLs.
 import asyncio
 import hashlib
 import logging
-import os
 from asyncio import to_thread
 from typing import Any, AsyncIterator, Dict, List, Optional, cast
+
+from jvspatial.env import env
 
 from ..exceptions import (
     AccessDeniedError,
@@ -75,11 +76,11 @@ class S3FileInterface(FileStorageInterface):
         - Direct serve for small text files
         - Thread-safe operations
 
-    Configuration via environment variables:
+    Configuration via live environment variables:
         - JVSPATIAL_S3_BUCKET_NAME: S3 bucket name
-        - JVSPATIAL_S3_REGION_NAME: AWS region (default: us-east-1)
-        - JVSPATIAL_S3_ACCESS_KEY_ID: AWS access key ID
-        - JVSPATIAL_S3_SECRET_ACCESS_KEY: AWS secret access key
+        - JVSPATIAL_S3_REGION: AWS region (default: us-east-1)
+        - JVSPATIAL_S3_ACCESS_KEY: AWS access key ID
+        - JVSPATIAL_S3_SECRET_KEY: AWS secret access key
         - JVSPATIAL_S3_ENDPOINT_URL: Custom endpoint URL (for S3-compatible services)
 
     Args:
@@ -131,16 +132,13 @@ class S3FileInterface(FileStorageInterface):
         self._ClientError = ClientError
         self._BotoCoreError = BotoCoreError
 
-        # Get configuration from environment variables if not provided
-        self.bucket_name = bucket_name or os.getenv("JVSPATIAL_S3_BUCKET_NAME")
-        self.region_name = region_name or os.getenv(
-            "JVSPATIAL_S3_REGION_NAME", "us-east-1"
+        self.bucket_name = bucket_name or env("JVSPATIAL_S3_BUCKET_NAME")
+        self.region_name = region_name or env(
+            "JVSPATIAL_S3_REGION", default="us-east-1"
         )
-        self.access_key_id = access_key_id or os.getenv("JVSPATIAL_S3_ACCESS_KEY_ID")
-        self.secret_access_key = secret_access_key or os.getenv(
-            "JVSPATIAL_S3_SECRET_ACCESS_KEY"
-        )
-        self.endpoint_url = endpoint_url or os.getenv("JVSPATIAL_S3_ENDPOINT_URL")
+        self.access_key_id = access_key_id or env("JVSPATIAL_S3_ACCESS_KEY")
+        self.secret_access_key = secret_access_key or env("JVSPATIAL_S3_SECRET_KEY")
+        self.endpoint_url = endpoint_url or env("JVSPATIAL_S3_ENDPOINT_URL")
 
         if not self.bucket_name:
             raise ValueError(

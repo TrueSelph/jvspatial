@@ -21,6 +21,10 @@ _BUILTIN_AUTH_EXEMPT = [
     "/auth/reset-password",
 ]
 
+# LWA / Lambda async invoke → POST; cannot send JWT. Must not require app auth
+# (optional JVSPATIAL_DEFERRED_INVOKE_SECRET is enforced on the route itself).
+_BUILTIN_DEFERRED_INVOKE_EXEMPT = "/_internal/deferred"
+
 
 class PathMatcher:
     """Optimized path matching with pre-compiled patterns.
@@ -39,6 +43,8 @@ class PathMatcher:
         for p in _BUILTIN_AUTH_EXEMPT:
             if p not in merged:
                 merged.append(p)
+        if _BUILTIN_DEFERRED_INVOKE_EXEMPT not in merged:
+            merged.append(_BUILTIN_DEFERRED_INVOKE_EXEMPT)
         self.exempt_paths = self._expand_api_variants(merged)
         self._compiled_patterns = self._compile_exempt_patterns()
 

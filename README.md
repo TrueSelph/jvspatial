@@ -33,7 +33,7 @@ Inspired by [Jaseci's](https://jaseci.org) object-spatial paradigm and leveragin
 - **Unified Decorators**: `@attribute` for entity attributes, `@endpoint` for API endpoints
 - **Automatic Context**: Server automatically provides database context to entities
 - **Essential CRUD**: Core database operations with pagination support
-- **Unified Configuration**: Single `Config` class for all settings
+- **Unified Configuration**: Pydantic `ServerConfig` merged at `Server` startup (constructor kwargs / `config` dict override allowlisted `JVSPATIAL_*` env, which override library defaults)
 - **Async-First**: Built for modern Python async/await patterns
 
 ## Key Features
@@ -59,9 +59,9 @@ Inspired by [Jaseci's](https://jaseci.org) object-spatial paradigm and leveragin
 - Pagination with `ObjectPager`
 
 ### ⚙️ Unified Configuration
-- Single `Config` class for all settings
-- Environment variable support
-- Type-safe configuration
+- Canonical `ServerConfig` (Pydantic) for all server settings
+- Allowlisted `JVSPATIAL_*` env vars merged before explicit `Server(...)` / `config=` overrides
+- Unknown or removed `JVSPATIAL_*` keys are rejected (see `docs/md/environment-configuration.md`)
 
 ### 🚀 FastAPI Integration
 - Built-in FastAPI server with automatic OpenAPI documentation
@@ -72,7 +72,7 @@ Inspired by [Jaseci's](https://jaseci.org) object-spatial paradigm and leveragin
 
 ### ⚡ Performance Mixins
 - **DeferredSaveMixin**: Batch multiple `save()` calls into a single database write
-- Configurable via `JVSPATIAL_ENABLE_DEFERRED_SAVES` environment variable
+- Configurable via `JVSPATIAL_ENABLE_DEFERRED_SAVES`; **disabled automatically in serverless mode** (`deferred_saves_globally_allowed()`)
 - Ideal for entities with rapid, sequential updates
 
 ## Installation
@@ -201,7 +201,15 @@ active_users = await User.count(active=True)  # Count filtered users using keywo
 
 ## Configuration
 
-### Server Configuration
+### Serverless Mode
+
+Set `SERVERLESS_MODE=true` to force serverless-safe behavior (strict synchronous request lifecycle, no fire-and-forget background task assumptions). When unset, jvspatial auto-detects AWS Lambda via runtime environment variables. Use `is_serverless_mode()` from `jvspatial.runtime.serverless` to check mode at runtime.
+
+For deferred work across invocations, use `dispatch_deferred_task()` from `jvspatial.serverless`. On AWS, Lambda async invoke and optional EventBridge deliver JSON to your app; with the Lambda Web Adapter, **`Server`** applies best-effort **`AWS_LWA_PASS_THROUGH_PATH`** / **`AWS_LWA_INVOKE_MODE`** defaults when LWA is detected (see [docs/md/serverless-mode.md](docs/md/serverless-mode.md)); set them in IaC when the extension must read them before Python starts. Register task handlers with `register_deferred_invoke_handler()` in `jvspatial.serverless.deferred_invoke`.
+
+### Server configuration
+
+Merge order when constructing `Server` is: **`ServerConfig` defaults → allowlisted `JVSPATIAL_*` environment → `config=` dict or keyword arguments** (later wins). Import `ServerConfig` from `jvspatial.api` when you need the schema outside `Server`.
 
 ```python
 from jvspatial.api import Server
@@ -254,6 +262,7 @@ server = Server(
 - [Entity Reference](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/entity-reference.md) - Node, Edge, Walker classes
 
 ### Advanced Topics
+- [Serverless mode](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/serverless-mode.md) - Deferred tasks, Lambda Web Adapter, and LWA env defaults
 - [Production Deployment](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/production-deployment.md) - Production checklist and security
 - [API Architecture](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/api-architecture.md) - System architecture
 - [Graph Context Guide](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/graph-context.md) - Context management and multi-database support

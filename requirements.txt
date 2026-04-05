@@ -13,7 +13,7 @@ typing-extensions>=4.6.0  # For @override decorator and enhanced typing
 motor>=3.0.0  # Async MongoDB driver
 pymongo>=4.3.3  # MongoDB support
 aiosqlite>=0.19.0  # SQLite database backend
-aioboto3>=15.5.0  # DynamoDB support
+# AWS Lambda / DynamoDB: pip install -e ".[lambda]" or see requirements-lambda.txt
 
 # Authentication
 PyJWT>=2.7.0  # JWT token handling

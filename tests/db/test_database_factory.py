@@ -74,8 +74,11 @@ class TestDatabaseFactory:
         """Test default database creation defaults to JSON."""
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch.dict(os.environ, {"JVSPATIAL_DB_TYPE": "json"}):
-                db = create_default_database()
-                assert isinstance(db, JsonDB)
+                try:
+                    db = create_default_database()
+                    assert isinstance(db, JsonDB)
+                finally:
+                    pass
 
     def test_create_database_default_mongodb(self):
         """Test default database creation with MongoDB."""
@@ -90,8 +93,11 @@ class TestDatabaseFactory:
 
             with patch("jvspatial.db.mongodb.AsyncIOMotorClient"):
                 with patch.dict(os.environ, {"JVSPATIAL_DB_TYPE": "mongodb"}):
-                    db = create_default_database()
-                    assert isinstance(db, MongoDB)
+                    try:
+                        db = create_default_database()
+                        assert isinstance(db, MongoDB)
+                    finally:
+                        pass
         finally:
             # Restore original instance
             DatabaseManager._instance = original_instance
@@ -118,11 +124,14 @@ class TestDatabaseFactory:
                     },
                     clear=False,
                 ):
-                    database = create_default_database()
-                    assert isinstance(database, SQLiteDB)
-                    db = database
-                    # Compare resolved paths for consistency
-                    assert db.db_path.resolve() == Path(db_path).resolve()
+                    try:
+                        database = create_default_database()
+                        assert isinstance(database, SQLiteDB)
+                        db = database
+                        # Compare resolved paths for consistency
+                        assert db.db_path.resolve() == Path(db_path).resolve()
+                    finally:
+                        pass
         finally:
             if db is not None and hasattr(db, "close"):
                 await db.close()

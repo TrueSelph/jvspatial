@@ -39,7 +39,7 @@ if __name__ == "__main__":
 1. **Import triggers decorators** – When `import app.api` runs, Python loads each module in the package. Every `@endpoint` decorator executes at import time.
 2. **Auto-registration** – When a decorator runs, it either registers immediately with the current server (if one exists) or defers. The deferred registry is flushed when `Server()` is created.
 3. **Module tracker** – The decorator records each module's name in a persistent set. At app build time, `sync_endpoint_modules` walks that set and re-registers any endpoints from cached modules (handles uvicorn `--reload` double-load).
-4. **No package list** – You no longer need to tell the server which packages to import. The `packages=` parameter is deprecated.
+4. **No package list** – Import your API modules directly; endpoints auto-register via the module tracker.
 
 ---
 
@@ -175,28 +175,14 @@ flowchart TD
 
 ---
 
-## Deprecated: packages= and register_package
+## Import Before Server
 
-The `packages` parameter and `register_package()` method are deprecated. They remain functional for backward compatibility but will be removed in a future release.
-
-**Old pattern (deprecated):**
-
-```python
-server = Server(
-    title="My API",
-    packages=["app.api"],
-)
-```
-
-**New pattern (recommended):**
+Import your API modules before creating the server so endpoints register automatically:
 
 ```python
 import app.api
 
-server = Server(
-    title="My API",
-    # No packages= needed
-)
+server = Server(title="My API")
 ```
 
 ---

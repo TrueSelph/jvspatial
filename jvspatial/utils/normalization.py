@@ -6,7 +6,6 @@ preventing encoding issues when persisting data to databases.
 
 from __future__ import annotations
 
-import os
 import unicodedata
 from typing import Any
 
@@ -20,7 +19,13 @@ def is_text_normalization_enabled() -> bool:
     Returns:
         True if text normalization should be applied, False otherwise
     """
-    return os.getenv("JVSPATIAL_TEXT_NORMALIZATION_ENABLED", "true").lower() == "true"
+    from jvspatial.env import env, parse_bool_basic
+
+    return env(
+        "JVSPATIAL_TEXT_NORMALIZATION_ENABLED",
+        default=True,
+        parse=parse_bool_basic,
+    )
 
 
 def normalize_text_to_ascii(text: str) -> str:

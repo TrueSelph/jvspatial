@@ -121,7 +121,7 @@ See the [Endpoint Registration Guide](endpoint-registration-guide.md) for:
 - Minimal entrypoint setup
 - How "decorate + import" auto-registration works
 - Conditional imports (e.g., optional logging endpoints)
-- Migration from deprecated `packages=` and `register_package()`
+- Import patterns for endpoint auto-registration
 
 ## Server Class Overview
 
@@ -225,7 +225,7 @@ server = Server(config=config)
 
 ### Logging (Colorized, Consistent Console Output)
 
-jvspatial ships with a shared console logger that apps (including jvagent) can inherit:
+jvspatial ships with a shared console logger that consumer applications can inherit:
 
 ```python
 from jvspatial.logging import configure_standard_logging
@@ -236,9 +236,9 @@ configure_standard_logging(level="INFO", enable_colors=True)
 
 - Format: `HH:MM:SS | LEVEL | logger | message`
 - Colors: only the level name is colorized for readability; set `enable_colors=False` to disable.
-- The `Server.run()` path applies this format and passes a matching `log_config` to uvicorn so startup/access logs stay aligned. Consumers like `jvagent/cli.py` also call `configure_standard_logging` to inherit the same format.
+- The `Server.run()` path applies this format and passes a matching `log_config` to uvicorn so startup/access logs stay aligned. Consumer CLIs can also call `configure_standard_logging` to inherit the same format.
 
-**Tip:** set `log_level` in `ServerConfig` or `JVAGENT_LOG_LEVEL` to control verbosity.
+**Tip:** set `log_level` in `ServerConfig` or `JVSPATIAL_LOG_LEVEL` to control verbosity.
 
 ## Walker Endpoints
 

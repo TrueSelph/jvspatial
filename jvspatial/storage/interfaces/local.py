@@ -13,6 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, cast
 
+from jvspatial.api.constants import APIRoutes
+from jvspatial.runtime.serverless import is_serverless_mode
+
 from ..exceptions import (
     AccessDeniedError,
     FileNotFoundError,
@@ -27,6 +30,30 @@ from .base import FileStorageInterface
 
 
 logger = logging.getLogger(__name__)
+
+# When set (1/true/yes/on), skip serverless + non-/tmp root warnings — operator asserts durable storage (e.g. EFS).
+_SERVERLESS_SHARED_ENV = "JVSPATIAL_FILE_STORAGE_SERVERLESS_SHARED"
+
+
+def _env_flag_true(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _log_serverless_non_tmp_root(root_dir: Path) -> None:
+    """Warn when local file root is not under /tmp in serverless runtimes (e.g. Lambda)."""
+    if _env_flag_true(_SERVERLESS_SHARED_ENV):
+        return
+    r = str(root_dir)
+    msg = (
+        "LocalFileInterface root_dir '%s' is outside /tmp in serverless mode. "
+        "Unless this path is on shared storage (e.g. EFS) mounted on every "
+        "invocation, files may be ephemeral or unavailable across invocations."
+    )
+    tail = " Set %s=1 after you confirm durable storage." % _SERVERLESS_SHARED_ENV
+    if r.startswith("/mnt/"):
+        logger.info(msg + tail, root_dir)
+    else:
+        logger.warning(msg + tail, root_dir)
 
 
 class LocalFileInterface(FileStorageInterface):
@@ -84,6 +111,8 @@ class LocalFileInterface(FileStorageInterface):
         if create_root:
             self.root_dir.mkdir(parents=True, exist_ok=True)
             logger.info(f"Local storage initialized at: {self.root_dir}")
+        if is_serverless_mode() and not str(self.root_dir).startswith("/tmp"):
+            _log_serverless_non_tmp_root(self.root_dir)
 
         # Verify root directory exists and is writable
         if not self.root_dir.exists():
@@ -126,6 +155,10 @@ class LocalFileInterface(FileStorageInterface):
             raise PathTraversalError("Path escapes root directory", path=file_path)
 
         return full_path
+
+    def _http_file_url(self, file_path: str) -> str:
+        """Full URL for HTTP GET ``{FILES_ROOT}/{file_path}`` (FileStorageService)."""
+        return f"{self.base_url.rstrip('/')}{APIRoutes.FILES_ROOT}/{file_path}"
 
     async def create_version(
         self,
@@ -383,7 +416,7 @@ class LocalFileInterface(FileStorageInterface):
 
             # Add storage URL if base_url configured
             if self.base_url:
-                result["storage_url"] = f"{self.base_url}/files/{file_path}"
+                result["storage_url"] = self._http_file_url(file_path)
 
             return result
 
@@ -642,8 +675,8 @@ class LocalFileInterface(FileStorageInterface):
             logger.warning(f"Cannot generate URL for non-existent file: {file_path}")
             return None
 
-        # Generate local URL
-        url = f"{self.base_url}/files/{file_path}"
+        # Generate local URL (same path as HTTP GET ``{FILES_ROOT}/{file_path}``)
+        url = self._http_file_url(file_path)
         logger.debug(f"Generated URL: {url}")
 
         return url

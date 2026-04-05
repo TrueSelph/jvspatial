@@ -27,6 +27,12 @@ The jvspatial file storage system provides secure, scalable file management with
 - **Async operations** - Non-blocking file operations and streaming support
 - **Seamless integration** - Works with Server, Walker, and GraphContext
 
+### HTTP paths, OpenAPI, and authentication
+
+- **HTTP paths** are **`{JVSPATIAL_API_PREFIX}/files/...`** (default **`/api/files/...`**): upload is **`POST /api/files/upload`**, direct file access is **`GET /api/files/{file_path}`**, proxy admin is under **`/api/files/proxy`**. There is no separate storage prefix env var.
+- **OpenAPI** groups these operations under the **`Files`** tag.
+- **Authentication**: When `auth` middleware is enabled, **`POST /api/files/upload`**, **`DELETE /api/files/{path}`**, and proxy admin routes require a JWT or API key. **`GET /api/files/{path}`** is **public by default**; set **`JVSPATIAL_FILES_PUBLIC_READ=false`** to require auth for direct reads. **`GET {JVSPATIAL_PROXY_PREFIX}/{code}`** (default `/p/{code}`) stays public: the opaque code and expiry act as the credential. For anonymous third-party fetch when public read is off, use **proxy URLs** or add a **narrow** `auth.exempt_paths` entry (path-only patterns cannot distinguish GET vs POST; review security before exempting broad prefixes).
+
 ### Key Features
 
 Security First
@@ -80,13 +86,13 @@ if __name__ == "__main__":
 ```bash
 # Upload a file
 curl -X POST -F "file=@document.pdf" \
-  http://localhost:8000/storage/upload
+  http://localhost:8000/api/files/upload
 
 # Response:
 {
   "success": true,
   "file_path": "2025/01/05/document-abc123.pdf",
-  "file_url": "http://localhost:8000/storage/files/2025/01/05/document-abc123.pdf",
+  "file_url": "http://localhost:8000/api/files/2025/01/05/document-abc123.pdf",
   "file_size": 102400,
   "content_type": "application/pdf"
 }
@@ -96,7 +102,7 @@ curl -X POST -F "file=@document.pdf" \
 
 ```bash
 # Create shareable link (expires in 1 hour)
-curl -X POST http://localhost:8000/storage/proxy \
+curl -X POST http://localhost:8000/api/files/proxy \
   -H "Content-Type: application/json" \
   -d '{
     "file_path": "2025/01/05/document-abc123.pdf",
@@ -189,7 +195,7 @@ All configuration can be set via environment variables:
 # File Storage
 JVSPATIAL_FILE_STORAGE_ENABLED=true
 JVSPATIAL_FILE_STORAGE_PROVIDER=local
-JVSPATIAL_FILE_STORAGE_ROOT=.files
+JVSPATIAL_FILES_ROOT_PATH=./.files
 JVSPATIAL_FILE_STORAGE_MAX_SIZE=10485760
 
 # S3 Configuration
@@ -411,7 +417,7 @@ async for chunk in storage.stream_file("documents/large-file.zip"):
 
 ### Upload File
 
-**Endpoint:** `POST /storage/upload`
+**Endpoint:** `POST /api/files/upload`
 
 Upload a file to storage.
 
@@ -420,7 +426,7 @@ Upload a file to storage.
 ```bash
 curl -X POST -F "file=@document.pdf" \
   -F "custom_path=reports/Q1-2025.pdf" \
-  http://localhost:8000/storage/upload
+  http://localhost:8000/api/files/upload
 ```
 
 **With Proxy:**
@@ -429,7 +435,7 @@ curl -X POST -F "file=@document.pdf" \
 curl -X POST -F "file=@document.pdf" \
   -F "create_proxy=true" \
   -F "proxy_ttl=7200" \
-  http://localhost:8000/storage/upload
+  http://localhost:8000/api/files/upload
 ```
 
 **Response:**
@@ -438,7 +444,7 @@ curl -X POST -F "file=@document.pdf" \
 {
   "success": true,
   "file_path": "reports/Q1-2025.pdf",
-  "file_url": "http://localhost:8000/storage/files/reports/Q1-2025.pdf",
+  "file_url": "http://localhost:8000/api/files/reports/Q1-2025.pdf",
   "file_size": 245760,
   "content_type": "application/pdf",
   "checksum": "abc123def456",
@@ -451,14 +457,14 @@ curl -X POST -F "file=@document.pdf" \
 
 ### Download File
 
-**Endpoint:** `GET /storage/files/{path}`
+**Endpoint:** `GET /api/files/{path}`
 
 Download or stream a file.
 
 **Request:**
 
 ```bash
-curl http://localhost:8000/storage/files/reports/Q1-2025.pdf \
+curl http://localhost:8000/api/files/reports/Q1-2025.pdf \
   -o downloaded.pdf
 ```
 
@@ -473,7 +479,7 @@ File content with appropriate headers:
 
 ### Delete File
 
-**Endpoint:** `DELETE /storage/files/{path}`
+**Endpoint:** `DELETE /api/files/{path}`
 
 Delete a file from storage.
 
@@ -481,7 +487,7 @@ Delete a file from storage.
 
 ```bash
 curl -X DELETE \
-  http://localhost:8000/storage/files/reports/Q1-2025.pdf
+  http://localhost:8000/api/files/reports/Q1-2025.pdf
 ```
 
 **Response:**
@@ -498,21 +504,19 @@ curl -X DELETE \
 
 ### List Files
 
-**Endpoint:** `GET /storage/files`
+*The default `FileStorageService` does not register a list-files HTTP route; use the storage interface or custom endpoints. The examples below are illustrative only.*
 
-List files in storage.
+**Endpoint (illustrative):** `GET /api/files`
 
 **Request:**
 
 ```bash
-# List all files
-curl http://localhost:8000/storage/files
+# Illustrative — not provided by default FileStorageService
+curl http://localhost:8000/api/files
 
-# List with prefix filter
-curl "http://localhost:8000/storage/files?prefix=reports/"
+curl "http://localhost:8000/api/files?prefix=reports/"
 
-# List with pagination
-curl "http://localhost:8000/storage/files?page=1&page_size=20"
+curl "http://localhost:8000/api/files?page=1&page_size=20"
 ```
 
 **Response:**
@@ -544,14 +548,16 @@ curl "http://localhost:8000/storage/files?page=1&page_size=20"
 
 ### Get File Metadata
 
-**Endpoint:** `GET /storage/files/{path}/metadata`
+*The default `FileStorageService` does not expose a separate metadata HTTP route; use programmatic `get_metadata` on the storage interface. The example below is illustrative.*
+
+**Endpoint (illustrative):** `GET /api/files/{path}/metadata`
 
 Get file metadata without downloading.
 
 **Request:**
 
 ```bash
-curl http://localhost:8000/storage/files/reports/Q1-2025.pdf/metadata
+curl http://localhost:8000/api/files/reports/Q1-2025.pdf/metadata
 ```
 
 **Response:**
@@ -716,7 +722,7 @@ The URL proxy system provides secure, temporary file access through short URLs.
 #### Via API Endpoint
 
 ```bash
-curl -X POST http://localhost:8000/storage/proxy \
+curl -X POST http://localhost:8000/api/files/proxy \
   -H "Content-Type: application/json" \
   -d '{
     "file_path": "documents/report.pdf",
@@ -784,7 +790,7 @@ The proxy system:
 #### Get Proxy Info
 
 ```bash
-curl http://localhost:8000/storage/proxy/a1b2c3d4/info
+curl http://localhost:8000/api/files/proxy/a1b2c3d4/stats
 ```
 
 **Response:**
@@ -804,7 +810,7 @@ curl http://localhost:8000/storage/proxy/a1b2c3d4/info
 #### Delete Proxy
 
 ```bash
-curl -X DELETE http://localhost:8000/storage/proxy/a1b2c3d4
+curl -X DELETE http://localhost:8000/api/files/proxy/a1b2c3d4
 ```
 
 #### Cleanup Expired Proxies
@@ -1168,7 +1174,7 @@ await storage.save_file("/etc/passwd", content)  # Error
 **Problem:**
 ```bash
 curl -X POST -F "file=@huge-file.zip" \
-  http://localhost:8000/storage/upload
+  http://localhost:8000/api/files/upload
 # Error: File size exceeds maximum allowed
 ```
 
@@ -1624,7 +1630,7 @@ async def upload_user_file(file: UploadFile, endpoint):
         data={
             "path": user_path,
             "size": len(content),
-            "file_url": f"/storage/files/{user_path}"
+            "file_url": f"/api/files/{user_path}"
         }
     )
 ```

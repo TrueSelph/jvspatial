@@ -275,6 +275,8 @@ class MyEntity(DeferredSaveMixin, Node):
 
 **Important**: Place `DeferredSaveMixin` before `Node` in the inheritance list.
 
+**Construction:** When `deferred_saves_globally_allowed()` is true, new instances start with deferred batching **on** (no need to call `enable_deferred_saves()` first). Set class attribute `deferred_saves_auto_on_init = False` on a subclass to disable that default.
+
 **Methods:**
 
 ```python
@@ -303,14 +305,18 @@ def deferred_saves_enabled() -> bool
     """True if deferred mode is active"""
 ```
 
-**Environment Variable:**
+**Environment and serverless:**
 
-- `JVSPATIAL_ENABLE_DEFERRED_SAVES` - Global control (default: `true`)
+- `JVSPATIAL_ENABLE_DEFERRED_SAVES` - Raw env preference (default: `true`). When `false`, batching is never allowed.
+- `deferred_saves_globally_allowed()` - Effective runtime check: raw env allows **and** not `is_serverless_mode()`. Use this (or rely on the mixin) when you need to branch.
+- `flush()` - Ends deferred batching for the entity and persists when dirty (safe to call when deferral was never active).
+- `flush_deferred_entities(*entities, strict=False)` - Calls `flush()` on each non-`None` argument; with `strict=False`, logs and continues on failure; with `strict=True`, re-raises after logging.
 
 **Usage Example:**
 
 ```python
-entity.enable_deferred_saves()
+# Deferred mode is already on when globally allowed; optional:
+# entity.enable_deferred_saves()
 
 entity.counter = 1
 await entity.save()  # Marks dirty only
@@ -371,7 +377,7 @@ async def cleanup(self):
 - [Object Pagination Guide](pagination.md) - Detailed pagination documentation
 - [Walker Queue Operations](walker-queue-operations.md) - Walker queue management
 - [Examples](examples.md) - Practical usage examples
-- [GraphContext & Database Management](graph-context.md) - Database integration
+- [GraphContext & Database Management](graph-context.md) - Database integration (includes `find_one_and_update` / `find_one_and_delete` on all adapters)
 
 ---
 

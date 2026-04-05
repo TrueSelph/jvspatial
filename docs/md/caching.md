@@ -50,26 +50,31 @@ The caching system works completely transparently - you use the same entity oper
 
 ### Environment-Based Configuration
 
-Configure caching behavior via environment variables in `.env` file:
+Configure caching via environment variables (see [environment-configuration.md](environment-configuration.md)):
 
 ```env
-# Use in-memory caching (default)
+# In-memory (default backend name from env)
 JVSPATIAL_CACHE_BACKEND=memory
 JVSPATIAL_CACHE_SIZE=1000
 
 # Disable caching completely
 JVSPATIAL_CACHE_SIZE=0
 
-# Use Redis caching for distributed deployments
+# Redis — URL must include auth/db index if needed (no separate JVSPATIAL_REDIS_* password/DB vars)
 JVSPATIAL_CACHE_BACKEND=redis
-JVSPATIAL_REDIS_URL=redis://localhost:6379
-JVSPATIAL_REDIS_DB=0
+JVSPATIAL_REDIS_URL=redis://localhost:6379/0
 
-# Use layered caching (fast local + shared Redis)
+# Layered L1+L2 — canonical L1 size env name
 JVSPATIAL_CACHE_BACKEND=layered
-JVSPATIAL_L1_SIZE=500
-JVSPATIAL_REDIS_URL=redis://localhost:6379
+JVSPATIAL_L1_CACHE_SIZE=500
+JVSPATIAL_REDIS_URL=redis://localhost:6379/0
+
+# Same as layered: memory backend + Redis URL → jvspatial.cache.factory.create_default_cache() uses layered
+JVSPATIAL_CACHE_BACKEND=memory
+JVSPATIAL_REDIS_URL=redis://localhost:6379/0
 ```
+
+Backend strings are matched case-insensitively. Removed names: `JVSPATIAL_L1_SIZE`.
 
 ## Cache Backends
 
@@ -133,11 +138,10 @@ Distributed Redis-backed cache for multi-instance deployments requiring shared c
 
 ```env
 JVSPATIAL_CACHE_BACKEND=redis
-JVSPATIAL_REDIS_URL=redis://localhost:6379
-JVSPATIAL_REDIS_DB=0
-JVSPATIAL_REDIS_PASSWORD=your-redis-password
-JVSPATIAL_REDIS_PREFIX=jvspatial  # Optional key prefix
+JVSPATIAL_REDIS_URL=redis://:your-password@localhost:6379/0
 ```
+
+Optional key prefix and extra client kwargs are only supported when constructing `RedisCache` or `create_cache("redis", …)` in code, not via `JVSPATIAL_*` env vars.
 
 **Example Usage:**
 
@@ -186,9 +190,8 @@ Two-tier cache combining fast local memory (L1) with shared Redis (L2) for optim
 
 ```env
 JVSPATIAL_CACHE_BACKEND=layered
-JVSPATIAL_L1_SIZE=500              # L1 memory cache size
-JVSPATIAL_REDIS_URL=redis://localhost:6379
-JVSPATIAL_REDIS_DB=0
+JVSPATIAL_L1_CACHE_SIZE=500
+JVSPATIAL_REDIS_URL=redis://localhost:6379/0
 ```
 
 **Example Usage:**
@@ -391,10 +394,8 @@ For multi-server deployments, use Redis or LayeredCache:
 ```env
 # Production configuration
 JVSPATIAL_CACHE_BACKEND=layered
-JVSPATIAL_L1_SIZE=500              # Local cache per instance
-JVSPATIAL_REDIS_URL=redis://redis-cluster:6379
-JVSPATIAL_REDIS_DB=0
-JVSPATIAL_REDIS_PASSWORD=${REDIS_PASSWORD}
+JVSPATIAL_L1_CACHE_SIZE=500
+JVSPATIAL_REDIS_URL=redis://:${REDIS_PASSWORD}@redis-cluster:6379/0
 ```
 
 ### Cache Invalidation
@@ -472,7 +473,7 @@ If experiencing memory pressure:
 2. **Use layered cache** (smaller local cache)
    ```env
    JVSPATIAL_CACHE_BACKEND=layered
-   JVSPATIAL_L1_SIZE=200
+   JVSPATIAL_L1_CACHE_SIZE=200
    ```
 
 3. **Disable caching if not beneficial**
@@ -518,13 +519,11 @@ except Exception as e:
 
 | Variable | Description | Default | Values |
 |----------|-------------|---------|--------|
-| `JVSPATIAL_CACHE_BACKEND` | Cache backend type | `memory` | `memory`, `redis`, `layered` |
+| `JVSPATIAL_CACHE_BACKEND` | Cache backend type | `memory` | `memory`, `redis`, `layered` (case-insensitive) |
 | `JVSPATIAL_CACHE_SIZE` | Maximum cache size (0=disabled) | `1000` | Any positive integer |
-| `JVSPATIAL_REDIS_URL` | Redis connection URL | `redis://localhost:6379` | Any valid Redis URL |
-| `JVSPATIAL_REDIS_DB` | Redis database number | `0` | 0-15 (typically) |
-| `JVSPATIAL_REDIS_PASSWORD` | Redis password | None | Any string |
-| `JVSPATIAL_REDIS_PREFIX` | Redis key prefix | `jvspatial` | Any string |
-| `JVSPATIAL_L1_SIZE` | L1 cache size (layered) | `500` | Any positive integer |
+| `JVSPATIAL_REDIS_URL` | Redis connection URL (include `/db` and credentials in URL if needed) | — | Any valid Redis URL |
+| `JVSPATIAL_REDIS_TTL` | Default TTL for Redis entries (seconds) | `3600` | Positive integer |
+| `JVSPATIAL_L1_CACHE_SIZE` | L1 size when using layered / `LayeredCache` | `500` | Positive integer |
 
 ### Example Configurations
 
@@ -543,9 +542,8 @@ JVSPATIAL_CACHE_SIZE=10000
 **Production (distributed):**
 ```env
 JVSPATIAL_CACHE_BACKEND=layered
-JVSPATIAL_L1_SIZE=500
-JVSPATIAL_REDIS_URL=redis://redis.prod:6379
-JVSPATIAL_REDIS_PASSWORD=${REDIS_PASSWORD}
+JVSPATIAL_L1_CACHE_SIZE=500
+JVSPATIAL_REDIS_URL=redis://:${REDIS_PASSWORD}@redis.prod:6379/0
 ```
 
 **Testing (caching disabled):**

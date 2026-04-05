@@ -3,6 +3,12 @@
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _clear_jvspatial_load_env_cache():
+    """Test env reads are live; keep hook for shared test setup symmetry."""
+    yield
+
+
 def pytest_collection_modifyitems(config, items):
     """
     Automatically skip tests that use obsolete/removed API.

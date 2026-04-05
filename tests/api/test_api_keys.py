@@ -25,19 +25,15 @@ class TestAPIKeyService:
     """Test API key service functionality."""
 
     def test_hash_key(self, api_key_service):
-        """Test API key hashing with bcrypt/argon2."""
+        """Test API key hashing with SHA-256."""
         key = "test_key_12345"
         hash1 = api_key_service._hash_key(key)
         hash2 = api_key_service._hash_key(key)
 
-        # Same key should produce same hash (deterministic for bcrypt/argon2)
-        # Note: bcrypt includes salt, so same key may produce different hashes
-        # But verification should work
-        assert (
-            len(hash1) > 20
-        )  # Reasonable minimum (bcrypt ~60, argon2 ~97, SHA-256 fallback 64)
+        # SHA-256 is deterministic - same key produces same hash
+        assert hash1 == hash2
+        assert len(hash1) == 64  # SHA-256 hex digest
 
-        # Verify that the hash can be used for verification
         assert api_key_service._verify_key(key, hash1) is True
         assert api_key_service._verify_key("wrong_key", hash1) is False
 
@@ -86,47 +82,41 @@ class TestAPIKeyService:
 
     @pytest.mark.asyncio
     async def test_validate_key(self, api_key_service):
-        """Test API key validation with new verification logic."""
+        """Test API key validation with O(1) lookup by hash."""
         test_key = "sk_live_test123456789"
 
-        # Create mock key with hashed key
         mock_key = MagicMock()
         mock_key.is_active = True
         mock_key.expires_at = None
-        mock_key.key_hash = api_key_service._hash_key(test_key)  # Hash the test key
+        mock_key.key_hash = api_key_service._hash_key(test_key)
         mock_key._graph_context = api_key_service.context
 
-        # Mock context methods since we're using context directly
+        raw_data = {
+            "id": "o.APIKey.test123",
+            "entity": "APIKey",
+            "context": {
+                "key_hash": mock_key.key_hash,
+                "is_active": True,
+                "expires_at": None,
+            },
+        }
+
         api_key_service.context.ensure_indexes = AsyncMock()
-        api_key_service.context.database.find = AsyncMock(
-            return_value=[
-                {
-                    "id": "o.APIKey.test123",
-                    "entity": "APIKey",
-                    "context": {
-                        "key_hash": mock_key.key_hash,
-                        "is_active": True,
-                        "expires_at": None,
-                    },
-                }
-            ]
-        )
+        api_key_service.context.database.find_one = AsyncMock(return_value=raw_data)
         api_key_service.context._deserialize_entity = AsyncMock(return_value=mock_key)
         api_key_service.context.save = AsyncMock()
 
         result = await api_key_service.validate_key(test_key)
         assert result == mock_key
-        # Should find all active keys, then verify against them
-        api_key_service.context.database.find.assert_called_once()
+        api_key_service.context.database.find_one.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_validate_key_inactive(self, api_key_service):
-        """Test validation of inactive API key."""
+        """Test validation when key not found (O(1) lookup returns None)."""
         test_key = "sk_live_test123456789"
 
-        # Mock context methods - return empty list (no active keys)
         api_key_service.context.ensure_indexes = AsyncMock()
-        api_key_service.context.database.find = AsyncMock(return_value=[])
+        api_key_service.context.database.find_one = AsyncMock(return_value=None)
 
         result = await api_key_service.validate_key(test_key)
         assert result is None
@@ -142,25 +132,21 @@ class TestAPIKeyService:
         mock_key.key_hash = api_key_service._hash_key(test_key)
         mock_key._graph_context = api_key_service.context
 
-        # Mock context methods
+        raw_data = {
+            "id": "o.APIKey.test123",
+            "entity": "APIKey",
+            "context": {
+                "key_hash": mock_key.key_hash,
+                "is_active": True,
+                "expires_at": mock_key.expires_at.isoformat(),
+            },
+        }
+
         api_key_service.context.ensure_indexes = AsyncMock()
-        api_key_service.context.database.find = AsyncMock(
-            return_value=[
-                {
-                    "id": "o.APIKey.test123",
-                    "entity": "APIKey",
-                    "context": {
-                        "key_hash": mock_key.key_hash,
-                        "is_active": True,
-                        "expires_at": mock_key.expires_at.isoformat(),
-                    },
-                }
-            ]
-        )
+        api_key_service.context.database.find_one = AsyncMock(return_value=raw_data)
         api_key_service.context._deserialize_entity = AsyncMock(return_value=mock_key)
 
         result = await api_key_service.validate_key(test_key)
-        # Should return None because key is expired (checked after verification)
         assert result is None
 
     @pytest.mark.asyncio
@@ -210,17 +196,14 @@ class TestAPIKeyService:
         assert api_key_service._verify_key(test_key, other_hash) is False
 
     def test_verify_key_with_different_hashes(self, api_key_service):
-        """Test that verification works with same key hashed multiple times."""
+        """Test that SHA-256 produces deterministic hashes for same key."""
         test_key = "sk_live_test123456789"
 
-        # Hash the same key multiple times
-        # Note: bcrypt includes salt, so hashes will differ, but verification should work
         hash1 = api_key_service._hash_key(test_key)
         hash2 = api_key_service._hash_key(test_key)
 
-        # Both hashes should verify correctly
+        assert hash1 == hash2
         assert api_key_service._verify_key(test_key, hash1) is True
-        assert api_key_service._verify_key(test_key, hash2) is True
 
 
 class TestAPIKeyIntegration:

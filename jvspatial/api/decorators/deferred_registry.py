@@ -197,7 +197,7 @@ def _register_deferred_endpoint(server: "Server", deferred: DeferredEndpoint) ->
 
     else:
         # Register function endpoint
-        from jvspatial.api.decorators.route import _wrap_function_with_params
+        from jvspatial.api.decorators.function_wrappers import wrap_function_with_params
         from jvspatial.api.endpoints.factory import ParameterModelFactory
 
         func = cast(Callable[..., Any], target)
@@ -205,7 +205,7 @@ def _register_deferred_endpoint(server: "Server", deferred: DeferredEndpoint) ->
 
         # Wrap function with parameter handling if needed
         if param_model is not None:
-            wrapped_func = _wrap_function_with_params(
+            wrapped_func = wrap_function_with_params(
                 func, param_model, methods, path=path
             )
         else:

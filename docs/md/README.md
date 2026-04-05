@@ -107,6 +107,7 @@ Welcome to the jvspatial documentation! This guide will help you understand and 
 | [Walker Trail](walker-trail-tracking.md) | Trail tracking | Advanced |
 | [Pagination](pagination.md) | Paginating results | Intermediate |
 | [Environment Config](environment-configuration.md) | Configuration options | All levels |
+| [Environment Keys Reference](environment-keys-reference.md) | Canonical valid env key inventory | All levels |
 | [Infinite Walk Protection](infinite-walk-protection.md) | Preventing infinite loops | Advanced |
 
 ---

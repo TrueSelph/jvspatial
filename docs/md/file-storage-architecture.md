@@ -53,7 +53,7 @@ This document defines the complete architecture for integrating a secure, scalab
 ### 1.3 Architectural Issues
 
 1. **Location:** Currently in `jvspatial/api/` - should be in dedicated `jvspatial/storage/` module
-2. **Code Duplication:** Nearly identical implementation exists in `jv/jvagent/lib/file_interface.py`
+2. **Code Duplication:** Nearly identical implementation exists in downstream application code
 3. **No URL Proxy:** Missing short URL generation with MongoDB backend
 4. **Limited Integration:** Not integrated with Server or GraphContext
 5. **No Streaming:** All files loaded into memory

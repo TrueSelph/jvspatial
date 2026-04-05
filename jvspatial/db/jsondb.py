@@ -3,11 +3,13 @@
 import asyncio
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from jvspatial.db.database import Database
 from jvspatial.db.query import QueryEngine
+from jvspatial.runtime.serverless import is_serverless_mode
 
 logger = logging.getLogger(__name__)
 
@@ -30,24 +32,24 @@ class JsonDB(Database):
             base_path: Base directory for JSON files
         """
         self.base_path = Path(base_path).resolve()
-        # Don't create directory immediately - create it lazily on first use
-        # This prevents 'jvdb' from being created when DatabaseManager is auto-created
-        # before Server initializes with the correct database path
-        self._lock: Optional[asyncio.Lock] = None
-
-    def _ensure_lock(self) -> asyncio.Lock:
-        """Ensure lock is initialized (lazy initialization for async context)."""
-        if self._lock is None:
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            self._lock = asyncio.Lock()
-        return self._lock
+        self._warned_non_tmp_serverless = False
+        # Threading lock: save/delete must work from any OS thread / event loop
+        # (e.g. DBLogHandler serverless path uses asyncio.run in a side thread).
+        self._file_lock = threading.Lock()
 
     def _get_collection_dir(self, collection: str) -> Path:
         """Get the directory path for a collection."""
+        if (
+            is_serverless_mode()
+            and not self._warned_non_tmp_serverless
+            and not str(self.base_path).startswith("/tmp")
+        ):
+            self._warned_non_tmp_serverless = True
+            logger.warning(
+                "JsonDB is using '%s' in serverless mode. "
+                "Use a /tmp path or a durable external database backend.",
+                self.base_path,
+            )
         # Create base directory lazily (only when actually used)
         # This prevents 'jvdb' from being created when DatabaseManager is auto-created
         # before Server initializes with the correct database path
@@ -118,17 +120,27 @@ class JsonDB(Database):
         except Exception:
             return None
 
+    def _sync_write_record(self, collection: str, data: Dict[str, Any]) -> None:
+        """Write one record under _file_lock (sync I/O for any thread/loop)."""
+        with self._file_lock:
+            record_path = self._get_record_path(collection, data["id"])
+            record_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def _sync_delete_record(self, collection: str, record_id: str) -> None:
+        """Delete one record under _file_lock (sync I/O for any thread/loop)."""
+        with self._file_lock:
+            record_path = self._get_record_path(collection, record_id)
+            if record_path.exists():
+                record_path.unlink()
+
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Save a record to the database.
 
         Note: Entities should always have IDs set by their __init__ methods.
         This method expects the ID to already be present in the data.
         """
-        async with self._ensure_lock():
-            # Save the record to its own file
-            record_path = self._get_record_path(collection, data["id"])
-            await self._async_write_json(record_path, data)
-            return data
+        await asyncio.to_thread(self._sync_write_record, collection, dict(data))
+        return data
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a record by ID."""
@@ -137,12 +149,7 @@ class JsonDB(Database):
 
     async def delete(self, collection: str, id: str) -> None:
         """Delete a record by ID."""
-        async with self._ensure_lock():
-            record_path = self._get_record_path(collection, id)
-
-            if record_path.exists():
-                # Use asyncio.to_thread for file deletion to avoid blocking
-                await asyncio.to_thread(record_path.unlink)
+        await asyncio.to_thread(self._sync_delete_record, collection, id)
 
     async def find(
         self, collection: str, query: Dict[str, Any]
@@ -196,38 +203,6 @@ class JsonDB(Database):
                 return None
 
         return current
-
-    async def find_one_and_update(
-        self,
-        collection: str,
-        query: Dict[str, Any],
-        update: Dict[str, Any],
-        upsert: bool = False,
-    ) -> Optional[Dict[str, Any]]:
-        """Find and update the first record matching a query.
-
-        Uses find_one + QueryEngine.apply_update + save. Not atomic.
-        Supports $set, $unset, $inc, $push, $addToSet, $setOnInsert (on upsert).
-        """
-        doc = await self.find_one(collection, query)
-        is_new = doc is None
-        if is_new:
-            if not upsert:
-                return None
-            doc = {}
-            doc_id = query.get("_id", query.get("id"))
-            if doc_id is not None:
-                doc["_id"] = doc_id
-                doc["id"] = str(doc_id)
-            QueryEngine.apply_update(doc, update, apply_set_on_insert=True)
-        else:
-            QueryEngine.apply_update(doc, update, apply_set_on_insert=False)
-
-        record_id = doc.get("id", doc.get("_id"))
-        if record_id is not None:
-            doc["id"] = str(record_id)
-        await self.save(collection, doc)
-        return doc
 
     async def create_index(
         self,

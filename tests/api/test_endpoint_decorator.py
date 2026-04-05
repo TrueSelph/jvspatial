@@ -10,7 +10,6 @@ from fastapi import FastAPI
 
 from jvspatial.api.decorators.route import endpoint
 from jvspatial.api.server import Server
-from jvspatial.config import Config
 
 
 class TestEndpointDecorator:

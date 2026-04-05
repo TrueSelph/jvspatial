@@ -4,10 +4,17 @@ This module provides OpenAPI security scheme configuration for authentication
 endpoints, including JWT Bearer tokens and API key authentication.
 """
 
+import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
+from fastapi.routing import APIRoute
+
+
+def _normalize_path_template(path: str) -> str:
+    """Align FastAPI route paths with OpenAPI path keys (strip ``{name:converter}``)."""
+    return re.sub(r"\{([^:}]+):[^}]+\}", r"{\1}", path)
 
 
 def configure_openapi_security(app: FastAPI) -> None:
@@ -67,14 +74,18 @@ def configure_openapi_security(app: FastAPI) -> None:
             if method in ["get", "post", "put", "delete", "patch"]:
                 # Check if this endpoint requires authentication
                 endpoint_func = None
+                method_upper = method.upper()
                 for route in app.routes:
-                    if (
-                        hasattr(route, "path")
-                        and route.path == path
-                        and hasattr(route, "endpoint")
+                    if not isinstance(route, APIRoute) or not hasattr(
+                        route, "endpoint"
                     ):
-                        endpoint_func = route.endpoint
-                        break
+                        continue
+                    if _normalize_path_template(route.path) != path:
+                        continue
+                    if method_upper not in route.methods:
+                        continue
+                    endpoint_func = route.endpoint
+                    break
 
                 if endpoint_func:
                     # Check for endpoint configuration on the function

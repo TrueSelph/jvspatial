@@ -25,8 +25,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import Field, PrivateAttr
 
+from jvspatial.api.config import ServerConfig
 from jvspatial.api.server import Server
-from jvspatial.config import Config
 from jvspatial.core import on_exit, on_visit
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import (
@@ -742,8 +742,8 @@ class TestRecoveryAndResilience:
         from pydantic import ValidationError
 
         # Should raise ValidationError for invalid port
-        with pytest.raises(ValidationError, match="Port must be between 1 and 65535"):
-            config = Config(port=-1)  # Invalid port
+        with pytest.raises(ValidationError, match="Port must be between"):
+            ServerConfig(port=-1)
 
         # Test database configuration
         from jvspatial.db.jsondb import JsonDB

@@ -293,7 +293,7 @@ server = Server(
     db_path="./data",
     auth=dict(
         auth_enabled=True,
-        jwt_secret=os.getenv("JWT_SECRET_KEY"),
+        jwt_secret=os.getenv("JVSPATIAL_JWT_SECRET_KEY"),
         jwt_expire_minutes=1440,
     ),
 )
@@ -301,7 +301,7 @@ server = Server(
 
 Environment variables:
 ```bash
-export JWT_SECRET_KEY="your-256-bit-secret-generated-key"
+export JVSPATIAL_JWT_SECRET_KEY="your-256-bit-secret-generated-key"
 export JVSPATIAL_DB_PATH="./data"
 ```
 

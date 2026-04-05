@@ -1,5 +1,7 @@
 """API Key service for managing API key authentication."""
 
+import hashlib
+import hmac
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -7,30 +9,6 @@ from typing import List, Optional, Tuple
 
 from jvspatial.api.auth.models import APIKey
 from jvspatial.core.context import GraphContext
-
-# Try to import bcrypt, fallback to argon2, then to passlib
-try:
-    import bcrypt
-
-    _HASHING_AVAILABLE = True
-    _HASHING_LIB = "bcrypt"
-except ImportError:
-    try:
-        from argon2 import PasswordHasher
-
-        _HASHING_AVAILABLE = True
-        _HASHING_LIB = "argon2"
-        _argon2_hasher = PasswordHasher()
-    except ImportError:
-        try:
-            from passlib.context import CryptContext
-
-            _HASHING_AVAILABLE = True
-            _HASHING_LIB = "passlib"
-            _passlib_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-        except ImportError:
-            _HASHING_AVAILABLE = False
-            _HASHING_LIB = None
 
 
 class APIKeyService:
@@ -55,71 +33,31 @@ class APIKeyService:
         self.key_length = 32  # Length of random part after prefix
 
     def _hash_key(self, key: str) -> str:
-        """Hash an API key using secure password hashing (bcrypt/argon2).
+        """Hash an API key using SHA-256.
 
-        Uses bcrypt if available, falls back to argon2, then passlib.
-        If none are available, falls back to SHA-256 with a warning.
+        API keys are high-entropy; SHA-256 enables O(1) lookup by hash.
+        Industry standard for API keys (Stripe, GitHub, etc.).
 
         Args:
             key: Plaintext API key
 
         Returns:
-            Hashed key string
+            Hex-encoded SHA-256 hash
         """
-        if _HASHING_AVAILABLE:
-            if _HASHING_LIB == "bcrypt":
-                # bcrypt requires bytes and returns bytes
-                salt = bcrypt.gensalt()
-                hashed = bcrypt.hashpw(key.encode("utf-8"), salt)
-                return hashed.decode("utf-8")
-            elif _HASHING_LIB == "argon2":
-                # argon2 returns a string directly
-                return _argon2_hasher.hash(key)
-            elif _HASHING_LIB == "passlib":
-                # passlib returns a string
-                return _passlib_context.hash(key)
-        else:
-            # Fallback to SHA-256 if no secure hashing available
-            import hashlib
-
-            self._logger.warning(
-                "No secure hashing library available (bcrypt/argon2/passlib). "
-                "Using SHA-256. Install bcrypt for production: pip install bcrypt"
-            )
-            return hashlib.sha256(key.encode()).hexdigest()
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def _verify_key(self, key: str, hashed: str) -> bool:
-        """Verify an API key against its hash.
+        """Verify an API key against its hash using constant-time comparison.
 
         Args:
             key: Plaintext API key to verify
-            hashed: Stored hash to verify against
+            hashed: Stored SHA-256 hash (hex) to verify against
 
         Returns:
             True if key matches hash, False otherwise
         """
-        if _HASHING_AVAILABLE:
-            if _HASHING_LIB == "bcrypt":
-                try:
-                    return bcrypt.checkpw(key.encode("utf-8"), hashed.encode("utf-8"))
-                except Exception:
-                    return False
-            elif _HASHING_LIB == "argon2":
-                try:
-                    _argon2_hasher.verify(hashed, key)
-                    return True
-                except Exception:
-                    return False
-            elif _HASHING_LIB == "passlib":
-                try:
-                    return _passlib_context.verify(key, hashed)
-                except Exception:
-                    return False
-        else:
-            # Fallback to SHA-256 comparison
-            import hashlib
-
-            return hashlib.sha256(key.encode()).hexdigest() == hashed
+        computed = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        return hmac.compare_digest(computed, hashed)
 
     def _generate_key_string(self, prefix: Optional[str] = None) -> str:
         """Generate a new API key string.
@@ -230,55 +168,37 @@ class APIKeyService:
     async def validate_key(self, key: str) -> Optional[APIKey]:
         """Validate an API key and return the entity if valid.
 
-        Args:
-            key: Plaintext API key to validate
-
-        Returns:
-            APIKey entity if valid, None otherwise
+        O(1) lookup by SHA-256 hash. No iteration, no blocking.
         """
         if not key or len(key) < 10:
             return None
 
-        # Store the plaintext key to avoid variable name collision
-        plaintext_key = key
-
-        # Get all active API keys for the user (we need to verify against all)
-        # This is necessary because we can't reverse the hash to find the key
-        # In production, you might want to add an index or use a different lookup strategy
-        # Use service's context instead of get_default_context()
+        key_hash = self._hash_key(key)
         await self.context.ensure_indexes(APIKey)
         collection, final_query = await APIKey._build_database_query(
-            self.context, {"context.is_active": True}, {}
+            self.context,
+            {"context.is_active": True, "key_hash": key_hash},
+            {},
         )
-        results = await self.context.database.find(collection, final_query)
-        all_keys = []
-        for data in results:
-            try:
-                api_key_entity = await self.context._deserialize_entity(APIKey, data)
-                if api_key_entity:
-                    api_key_entity._graph_context = self.context
-                    all_keys.append(api_key_entity)
-            except Exception:
-                continue
+        data = await self.context.database.find_one(collection, final_query)
+        if not data:
+            return None
 
-        # Check each key's hash
-        for api_key in all_keys:
-            # Verify the plaintext key against the stored hash
-            if self._verify_key(plaintext_key, api_key.key_hash):
-                # Check expiration
-                if api_key.expires_at and api_key.expires_at < datetime.now(
-                    timezone.utc
-                ):
-                    self._logger.debug(f"API key {api_key.id} has expired")
-                    continue
+        try:
+            api_key = await self.context._deserialize_entity(APIKey, data)
+        except Exception:
+            return None
 
-                # Update last used timestamp
-                # Ensure context is set before saving
-                api_key._graph_context = self.context
-                await self.update_key_usage(api_key)
-                return api_key
+        if not api_key:
+            return None
 
-        return None
+        if api_key.expires_at and api_key.expires_at < datetime.now(timezone.utc):
+            self._logger.debug(f"API key {api_key.id} has expired")
+            return None
+
+        api_key._graph_context = self.context
+        await self.update_key_usage(api_key)
+        return api_key
 
     async def revoke_key(self, key_id: str, user_id: str) -> bool:
         """Revoke an API key.

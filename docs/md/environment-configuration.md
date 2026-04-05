@@ -2,6 +2,8 @@
 
 This guide provides comprehensive information about configuring jvspatial using environment variables.
 
+For a compact canonical inventory of valid keys, see [environment-keys-reference.md](environment-keys-reference.md).
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -17,6 +19,8 @@ This guide provides comprehensive information about configuring jvspatial using 
 
 jvspatial uses environment variables to configure database connections, file paths, and other runtime settings. This approach provides flexibility for different deployment environments without requiring code changes.
 
+`JVSPATIAL_*` variables are read live where supported by jvspatial components. Unknown keys are ignored by default.
+
 ### Key Benefits
 
 - **Environment-specific configuration**: Different settings for development, testing, and production
@@ -30,21 +34,15 @@ jvspatial uses environment variables to configure database connections, file pat
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `JVSPATIAL_DB_TYPE` | string | `json` | Database backend to use (`json`, `sqlite`, `mongodb`) |
+| `JVSPATIAL_DB_TYPE` | string | `json` | Database backend: `json`, `sqlite`, `mongodb`, `dynamodb` |
 
-### JSON Database Configuration
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `JVSPATIAL_JSONDB_PATH` | string | `jvdb` | Base directory path for JSON database files |
-| `JVSPATIAL_DB_PATH` | string | — | Generic path for JSON/SQLite when using env-only config. Server config (`db_path`) overrides env when both are set. |
-
-### SQLite Configuration
+### Filesystem path (`JVSPATIAL_DB_PATH`)
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `JVSPATIAL_SQLITE_PATH` | string | `jvdb/sqlite/jvspatial.db` | SQLite database file location (directories are created automatically) |
-| `JVSPATIAL_DB_PATH` | string | — | Alternative; used when `db_type` is sqlite and no explicit path is set. Server config overrides env. |
+| `JVSPATIAL_DB_PATH` | string | — | **JSON:** base directory for collection files. **SQLite:** path to the `.db` file. Set via env and/or `Server(db_path=…)`; explicit `Server` / `config=` values override env (see [priority](#environment-variable-priority)). |
+
+Removed keys (do not use): `JVSPATIAL_JSONDB_PATH`, `JVSPATIAL_SQLITE_PATH` — use `JVSPATIAL_DB_PATH` only.
 
 ### MongoDB Configuration
 
@@ -55,17 +53,48 @@ jvspatial uses environment variables to configure database connections, file pat
 | `JVSPATIAL_MONGODB_MAX_POOL_SIZE` | integer | `10` | Maximum connections in pool (Lambda-friendly default) |
 | `JVSPATIAL_MONGODB_MIN_POOL_SIZE` | integer | `0` | Minimum connections in pool (Lambda-friendly default) |
 
+Mongo connection string and database name are **`ServerConfig.database`** fields (`db_connection_string`, `db_database_name`). Env vars **`JVSPATIAL_MONGODB_URI`** and **`JVSPATIAL_MONGODB_DB_NAME`** are merged into that nested config when `Server` starts (same merge order as other settings: defaults → env → explicit `Server(...)` / `config=`). The database configurator reads **`ServerConfig` only**, not `os.environ`, after merge.
+
 ### Performance & Caching Configuration
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `JVSPATIAL_CACHE_BACKEND` | string | auto | Cache backend to use: `memory`, `redis`, or `layered`. Auto-detected based on Redis URL availability. |
-| `JVSPATIAL_CACHE_SIZE` | integer | `1000` | Number of entities to cache in memory (for memory backend or L1 in layered cache). |
-| `JVSPATIAL_L1_CACHE_SIZE` | integer | `500` | Size of L1 (memory) cache when using layered caching. |
-| `JVSPATIAL_REDIS_URL` | string | `redis://localhost:6379` | Redis connection URL for redis/layered cache backends. |
-| `JVSPATIAL_REDIS_TTL` | integer | `3600` | Time-to-live in seconds for Redis cache entries. |
+| `JVSPATIAL_CACHE_BACKEND` | string | `memory` | `memory`, `redis`, or `layered` (case-insensitive). |
+| `JVSPATIAL_CACHE_SIZE` | integer | `1000` | Memory cache size (memory backend, or default L1 size for layered when `JVSPATIAL_L1_CACHE_SIZE` is unset). |
+| `JVSPATIAL_L1_CACHE_SIZE` | integer | `500` | L1 size for layered cache (`LayeredCache`). Do **not** use removed `JVSPATIAL_L1_SIZE`. |
+| `JVSPATIAL_REDIS_URL` | string | — | Redis URL for `redis` / `layered`. If backend is `memory` **and** this is set, `create_default_cache()` upgrades to **layered** (L1 memory + L2 Redis). |
+| `JVSPATIAL_REDIS_TTL` | integer | `3600` | Default TTL (seconds) for Redis entries. |
+| `JVSPATIAL_REDIS_SERIALIZATION` | string | `json` | `json` (default) writes JSON-safe cache values and avoids pickle RCE if Redis is ever writable by an attacker. `pickle` restores the legacy format. In `json` mode, existing pickle blobs are still read. Only JSON-serializable values can be stored when using `json`. |
 
 See the [Caching Documentation](caching.md) for detailed information about cache backends and configuration.
+
+### API error responses
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `JVSPATIAL_EXPOSE_ERROR_DETAILS` | boolean | `false` | When `true`, unhandled exceptions return `str(exc)` in the JSON `message` (development only). Production should leave this unset or `false` so clients only see a generic internal error message. Full detail remains in server logs and the error-logging pipeline. |
+
+### Serverless Mode Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `SERVERLESS_MODE` | boolean | auto | Force serverless-safe runtime behavior. When unset, auto-detects AWS Lambda (`AWS_LAMBDA_RUNTIME_API` / `AWS_LAMBDA_FUNCTION_NAME`) and other common serverless runtimes. |
+| `JVSPATIAL_DEFERRED_INVOKE_DISABLED` | boolean | `false` | When true, `register_deferred_invoke_route` does not mount `POST …/_internal/deferred`. |
+| `JVSPATIAL_DEFERRED_INVOKE_SECRET` | string | _(empty)_ | When set, deferred-invoke HTTP requests must send this value via `X-JVSPATIAL-Deferred-Authorize` or `Authorization: Bearer …`. |
+| `JVSPATIAL_WORK_CLAIM_STALE_SECONDS` | float | `600` | Default TTL for work-claim leases (`claim_record`). After this many seconds another worker can re-claim the document. |
+
+Use `is_serverless_mode()` from `jvspatial` or `jvspatial.runtime.serverless` to check at runtime. With no argument, `is_serverless_mode()` uses `get_current_server().config` when the server context is set (see serverless-mode docs):
+
+```python
+from jvspatial import is_serverless_mode
+
+if is_serverless_mode():
+    await some_coro()
+else:
+    asyncio.create_task(some_coro())
+```
+
+`BACKGROUND_PROCESSING` is removed. Runtime behavior is derived from serverless mode only.
 
 ### Text Normalization Configuration
 
@@ -93,8 +122,17 @@ export JVSPATIAL_TEXT_NORMALIZATION_ENABLED=false
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `JVSPATIAL_JWT_SECRET_KEY` | string | — | JWT secret (required when auth enabled). Must be cryptographically secure, 32+ chars. |
+| `JVSPATIAL_AUTH_ENABLED` | boolean | `false` | Enables auth middleware and JWT/API-key flows when true. |
+| `JVSPATIAL_JWT_SECRET_KEY` | string | — | JWT signing secret (required when auth enabled). |
+| `JVSPATIAL_JWT_ALGORITHM` | string | `HS256` | JWT algorithm. |
+| `JVSPATIAL_JWT_EXPIRE_MINUTES` | integer | — | Access token lifetime in minutes. |
+| `JVSPATIAL_JWT_REFRESH_EXPIRE_DAYS` | integer | — | Refresh token lifetime in days. |
 | `JVSPATIAL_API_PREFIX` | string | `/api` | URL prefix for API routes. Auth endpoints become `{prefix}/auth/...`. Affects exempt path expansion. |
+| `JVSPATIAL_RATE_LIMIT_ENABLED` | boolean | — | Rate limiting toggle. |
+| `JVSPATIAL_RATE_LIMIT_DEFAULT_REQUESTS` | integer | — | Default request budget per window. |
+| `JVSPATIAL_RATE_LIMIT_DEFAULT_WINDOW` | integer | — | Window length in **seconds**. |
+
+Removed JWT env names (do not use): `JVSPATIAL_JWT_EXPIRATION_HOURS`, `JVSPATIAL_JWT_REFRESH_EXPIRATION_DAYS`.
 | `ADMIN_EMAIL` | string | — | Admin email for bootstrap. When set with `ADMIN_PASSWORD`, creates an admin user on first run. Pass to `auth.bootstrap_admin_email`. |
 | `ADMIN_PASSWORD` | string | — | Admin password for bootstrap (min 6 chars). Pass to `auth.bootstrap_admin_password`. |
 | `ADMIN_NAME` | string | — | Admin display name for bootstrap. Defaults to email. Pass to `auth.bootstrap_admin_name`. |
@@ -107,7 +145,7 @@ import os
 server = Server(
     auth=dict(
         auth_enabled=True,
-        jwt_secret=os.getenv("JWT_SECRET_KEY"),
+        jwt_secret=os.getenv("JVSPATIAL_JWT_SECRET_KEY"),
         bootstrap_admin_email=os.getenv("ADMIN_EMAIL"),
         bootstrap_admin_password=os.getenv("ADMIN_PASSWORD"),
         bootstrap_admin_name=os.getenv("ADMIN_NAME"),
@@ -128,7 +166,7 @@ export JVSPATIAL_MONGODB_DB_NAME=my_spatial_db
 
 # SQLite example
 export JVSPATIAL_DB_TYPE=sqlite
-export JVSPATIAL_SQLITE_PATH=/var/data/jvspatial/app.db
+export JVSPATIAL_DB_PATH=/var/data/jvspatial/app.db
 ```
 
 ### 2. .env Files
@@ -179,22 +217,22 @@ The JSON database stores data in local files and is ideal for development, testi
 
 ```env
 JVSPATIAL_DB_TYPE=json
-JVSPATIAL_JSONDB_PATH=./jvdb
+JVSPATIAL_DB_PATH=./jvdb
 ```
 
 #### Path Examples
 
 ```bash
 # Relative paths (relative to application working directory)
-JVSPATIAL_JSONDB_PATH=./jvdb
-JVSPATIAL_JSONDB_PATH=../shared/db
+JVSPATIAL_DB_PATH=./jvdb
+JVSPATIAL_DB_PATH=../shared/db
 
 # Absolute paths
-JVSPATIAL_JSONDB_PATH=/var/lib/jvspatial
-JVSPATIAL_JSONDB_PATH=/home/user/spatial_data
+JVSPATIAL_DB_PATH=/var/lib/jvspatial
+JVSPATIAL_DB_PATH=/home/user/spatial_data
 
 # Home directory paths
-JVSPATIAL_JSONDB_PATH=~/spatial_db_data
+JVSPATIAL_DB_PATH=~/spatial_db_data
 ```
 
 #### Directory Structure
@@ -202,7 +240,7 @@ JVSPATIAL_JSONDB_PATH=~/spatial_db_data
 The JSON database creates the following structure:
 
 ```
-{JVSPATIAL_JSONDB_PATH}/
+{JVSPATIAL_DB_PATH}/
 ├── node/
 │   ├── user_123.json
 │   └── city_456.json
@@ -280,7 +318,7 @@ JVSPATIAL_MONGODB_MAX_POOL_SIZE=10
 ```env
 # .env.development
 JVSPATIAL_DB_TYPE=json
-JVSPATIAL_JSONDB_PATH=./jvdb/dev
+JVSPATIAL_DB_PATH=./jvdb/dev
 ```
 
 ### Testing Environment
@@ -288,7 +326,7 @@ JVSPATIAL_JSONDB_PATH=./jvdb/dev
 ```env
 # .env.test
 JVSPATIAL_DB_TYPE=json
-JVSPATIAL_JSONDB_PATH=./jvdb/test
+JVSPATIAL_DB_PATH=./jvdb/test
 ```
 
 ### Staging Environment
@@ -338,9 +376,11 @@ stringData:
   JVSPATIAL_MONGODB_URI: "mongodb+srv://user:password@cluster.mongodb.net/"
 ```
 
-## Server Config vs Environment
+## Server config vs environment
 
-When using `Server(db_type=..., db_path=...)`, the Server configuration **overrides** environment variables. Environment variables apply when no explicit config is passed (e.g. when using `create_database()` directly or when Server is configured via env-only).
+When constructing :class:`~jvspatial.api.server.Server`, effective settings are **`ServerConfig` defaults → recognized `JVSPATIAL_*` env overrides (via :func:`~jvspatial.env_adapter.server_config_overrides_from_env`) → `config=` dict and keyword arguments** (each step overwrites the previous). Code wins over env for any field you pass explicitly.
+
+Library internals now read environment values live via canonical `jvspatial.env.env(name, default=None, parse=...)` (no cached `EnvConfig` snapshot). For `Server` settings, jvspatial applies recognized env keys via :func:`~jvspatial.env_adapter.server_config_overrides_from_env`; unrecognized `JVSPATIAL_*` keys are ignored.
 
 ## Path Resolution
 
@@ -358,30 +398,15 @@ Relative `db_path` values resolve against the **current working directory** (cwd
   )
   ```
 
-## Environment Variable Priority
+## Environment variable priority
 
-Environment variables are resolved in the following order (highest to lowest priority):
+For **`Server`**-merged :class:`~jvspatial.api.config.ServerConfig` (highest to lowest):
 
-1. **Server config** - `Server(db_path="...")` overrides env
-2. **Runtime environment variables** - Set directly in the process environment
-3. **System environment variables** - Set at the OS level
-4. **Default values** - Built-in defaults in the library
+1. **Explicit `Server(...)` kwargs and `config=` dict**
+2. **Allowlisted `JVSPATIAL_*`** present in the process environment
+3. **Pydantic defaults** on `ServerConfig`
 
-### Example Priority Resolution
-
-```python
-import os
-from jvspatial.db import create_database
-
-# 1. System/shell environment (lowest priority)
-# export JVSPATIAL_DB_TYPE=json
-
-# 2. Runtime override (highest priority)
-os.environ['JVSPATIAL_DB_TYPE'] = 'mongodb'
-
-# Result: Uses 'mongodb' (runtime override wins)
-db = create_database(os.getenv("JVSPATIAL_DB_TYPE", "json"))
-```
+For **low-level helpers** that only read `os.environ` (for example `create_database(...)` driven solely by env), the effective order is whatever your process environment provides plus library defaults inside that helper — it does not automatically apply explicit `Server` kwargs unless you pass them through.
 
 ## Troubleshooting
 
@@ -449,7 +474,7 @@ logging.basicConfig(level=logging.DEBUG)
 # Check current configuration
 print(f"DB_TYPE: {os.getenv('JVSPATIAL_DB_TYPE', 'not set')}")
 print(f"MONGODB_URI: {os.getenv('JVSPATIAL_MONGODB_URI', 'not set')}")
-print(f"JSONDB_PATH: {os.getenv('JVSPATIAL_JSONDB_PATH', 'not set')}")
+print(f"DB_PATH: {os.getenv('JVSPATIAL_DB_PATH', 'not set')}")
 
 # Test database connection
 try:

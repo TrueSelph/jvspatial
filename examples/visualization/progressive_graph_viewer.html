@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>jvspatial progressive graph</title>
+  <!-- Full admin login + graph UI: see repo jvgraph-ui/ (npm) and jvspatial/static/admin_graph after npm run embed, or /admin/graph/ -->
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e7ecf3;
+      --accent: #3d9cfd;
+      --muted: #8b9cb3;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 0.75rem 1.25rem;
+      background: var(--panel);
+      border-bottom: 1px solid #2a3545;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+    }
+    header label { color: var(--muted); font-size: 0.85rem; }
+    input[type="url"] {
+      flex: 1;
+      min-width: 220px;
+      padding: 0.45rem 0.6rem;
+      border-radius: 6px;
+      border: 1px solid #2a3545;
+      background: var(--bg);
+      color: var(--text);
+    }
+    button {
+      padding: 0.45rem 1rem;
+      border-radius: 6px;
+      border: none;
+      background: var(--accent);
+      color: #061018;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { filter: brightness(1.08); }
+    #cy {
+      flex: 1;
+      min-height: 420px;
+      background: radial-gradient(ellipse at 30% 20%, #1a2838 0%, var(--bg) 55%);
+    }
+    #status {
+      padding: 0.5rem 1.25rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <label for="apiBase">API base</label>
+    <input id="apiBase" type="url" value="http://127.0.0.1:8000" />
+    <label for="rootId">Root id</label>
+    <input id="rootId" type="text" value="n.Root.root" style="width:14rem;padding:0.45rem;border-radius:6px;border:1px solid #2a3545;background:var(--bg);color:var(--text);" />
+    <label for="bearer">JWT bearer</label>
+    <input id="bearer" type="password" placeholder="Required when API auth is enabled (same as GET /api/graph)" autocomplete="off" style="flex:1;min-width:160px;max-width:28rem;padding:0.45rem;border-radius:6px;border:1px solid #2a3545;background:var(--bg);color:var(--text);" />
+    <button type="button" id="btnLoad">Load subgraph</button>
+    <button type="button" id="btnClear">Clear</button>
+  </header>
+  <div id="cy"></div>
+  <div id="status">Double-click a node to expand its neighborhood (paginated merge).</div>
+  <script>
+    cytoscape.use(cytoscapeDagre);
+
+    const TOKEN_KEY = "jvspatial_progressive_graph_demo_jwt";
+
+    const apiBase = () => document.getElementById("apiBase").value.replace(/\/$/, "");
+    const rootField = () => document.getElementById("rootId").value.trim() || "n.Root.root";
+
+    (function restoreToken() {
+      try {
+        const s = sessionStorage.getItem(TOKEN_KEY);
+        if (s) document.getElementById("bearer").value = s;
+      } catch (_) {}
+    })();
+
+    const cy = cytoscape({
+      container: document.getElementById("cy"),
+      elements: [],
+      style: [
+        {
+          selector: "node",
+          style: {
+            "label": "data(label)",
+            "text-valign": "center",
+            "text-halign": "center",
+            "font-size": "11px",
+            "color": "#e7ecf3",
+            "background-color": "#2d3d52",
+            "border-width": 1,
+            "border-color": "#3d9cfd",
+            "width": 100,
+            "height": 36,
+            "shape": "roundrectangle",
+          },
+        },
+        {
+          selector: "node[missing]",
+          style: { "background-color": "#5c2d2d", "border-color": "#c94c4c" },
+        },
+        {
+          selector: "edge",
+          style: {
+            "width": 2,
+            "line-color": "#4a6278",
+            "target-arrow-color": "#4a6278",
+            "target-arrow-shape": "triangle",
+            "curve-style": "bezier",
+            "arrow-scale": 0.9,
+            label: "data(elabel)",
+            "font-size": "8px",
+            color: "#8b9cb3",
+            "text-background-color": "#0f1419",
+            "text-background-opacity": 0.92,
+            "text-background-padding": "2px",
+          },
+        },
+        {
+          selector: "edge[bidirectional = 'true']",
+          style: { "target-arrow-shape": "none" },
+        },
+      ],
+      layout: { name: "dagre", rankDir: "LR", spacingFactor: 1.2 },
+      wheelSensitivity: 0.25,
+    });
+
+    function setStatus(msg) {
+      document.getElementById("status").textContent = msg;
+    }
+
+    function contextPreview(ctx) {
+      if (!ctx || typeof ctx !== "object") return "";
+      try {
+        return JSON.stringify(ctx).slice(0, 480);
+      } catch (_) {
+        return "";
+      }
+    }
+
+    function payloadToElements(payload) {
+      const nodes = (payload.nodes || []).map((n) => {
+        const tip = contextPreview(n.context);
+        return {
+          data: {
+            id: n.id,
+            label: (n.label || n.entity || n.id).slice(0, 40),
+            missing: n.missing ? true : undefined,
+            ctxTip: tip || undefined,
+          },
+        };
+      });
+      const edges = (payload.edges || []).map((e) => {
+        const ent = (e.entity && String(e.entity).trim()) || "Edge";
+        const elab = (e.label && String(e.label).trim()) || ent;
+        return {
+          data: {
+            id: e.id,
+            source: e.source,
+            target: e.target,
+            bidirectional: String(!!e.bidirectional),
+            elabel: elab.slice(0, 36),
+            direction: e.direction != null ? String(e.direction) : undefined,
+            edgeCtxTip: contextPreview(e.context) || undefined,
+          },
+        };
+      });
+      return [...nodes, ...edges];
+    }
+
+    function mergePayload(payload) {
+      const nodeIds = new Set(cy.nodes().map((n) => n.id()));
+      const edgeIds = new Set(cy.edges().map((e) => e.id()));
+      const els = payloadToElements(payload).filter((el) => {
+        if (el.data.source) return !edgeIds.has(el.data.id);
+        return !nodeIds.has(el.data.id);
+      });
+      if (els.length) cy.add(els);
+      cy.layout({ name: "dagre", rankDir: "LR", animate: true, animationDuration: 350 }).run();
+      setStatus("Nodes: " + cy.nodes().length + " · Edges: " + cy.edges().length);
+    }
+
+    function authHeaders() {
+      const t = document.getElementById("bearer").value.trim();
+      return t ? { Authorization: "Bearer " + t } : {};
+    }
+
+    function persistToken() {
+      try {
+        const t = document.getElementById("bearer").value.trim();
+        if (t) sessionStorage.setItem(TOKEN_KEY, t);
+        else sessionStorage.removeItem(TOKEN_KEY);
+      } catch (_) {}
+    }
+
+    async function fetchJson(path) {
+      const r = await fetch(apiBase() + path, {
+        credentials: "omit",
+        headers: { ...authHeaders() },
+      });
+      const bodyText = await r.text();
+      if (r.ok) {
+        persistToken();
+        try {
+          return JSON.parse(bodyText);
+        } catch (e) {
+          throw new Error("Invalid JSON from server");
+        }
+      }
+      let hint = bodyText.slice(0, 280);
+      try {
+        const j = JSON.parse(bodyText);
+        if (j.detail != null) hint = String(j.detail);
+        else if (j.error_code) hint = j.error_code + (j.message ? ": " + j.message : "");
+      } catch (_) {}
+      if (r.status === 401) {
+        throw new Error(
+          "401 authentication required — paste a valid JWT in JWT bearer (same as for GET /api/graph)."
+        );
+      }
+      if (r.status === 404) {
+        throw new Error(
+          "404 — route not found. If graph is disabled (graph_endpoint_enabled=false), /api/graph/subgraph and /api/graph/expand are not registered."
+        );
+      }
+      throw new Error(r.status + " " + hint);
+    }
+
+    document.getElementById("btnLoad").addEventListener("click", async () => {
+      try {
+        setStatus("Loading subgraph…");
+        const root = encodeURIComponent(rootField());
+        const data = await fetchJson(
+          "/api/graph/subgraph?root=" +
+            root +
+            "&max_depth=2&max_nodes=150&max_edges_per_node=100&detail_level=full"
+        );
+        cy.elements().remove();
+        mergePayload(data);
+      } catch (e) {
+        setStatus(
+          "Error: " +
+            e.message +
+            " — use a local HTTP server (not file://); CORS must allow the Authorization header for cross-origin JWT."
+        );
+      }
+    });
+
+    document.getElementById("btnClear").addEventListener("click", () => {
+      cy.elements().remove();
+      setStatus("Cleared.");
+    });
+
+    cy.on("dbltap", "node", async (evt) => {
+      const id = evt.target.id();
+      try {
+        setStatus("Expanding " + id + "…");
+        const q =
+          "/api/graph/expand?node_id=" +
+          encodeURIComponent(id) +
+          "&limit=40&cursor=0&detail_level=full";
+        const data = await fetchJson(q);
+        if (!data.found) {
+          setStatus("Node not found: " + id);
+          return;
+        }
+        mergePayload(data);
+        if (data.pagination && data.pagination.has_more) {
+          setStatus(
+            "Merged expand; more edges available (cursor " +
+              data.pagination.next_cursor +
+              ")."
+          );
+        }
+      } catch (e) {
+        setStatus("Expand failed: " + e.message);
+      }
+    });
+
+    cy.on("tap", "node", function (evt) {
+      const d = evt.target.data();
+      if (d.ctxTip) setStatus(d.id + " — " + d.ctxTip);
+    });
+    cy.on("tap", "edge", function (evt) {
+      const d = evt.target.data();
+      const parts = [d.id, d.elabel || ""];
+      if (d.direction) parts.push("dir=" + d.direction);
+      if (d.edgeCtxTip) parts.push(d.edgeCtxTip);
+      setStatus(parts.filter(Boolean).join(" · "));
+    });
+
+    setStatus(
+      "Tap node/edge for context preview. Default detail_level=full (class labels + context). JWT same as GET /api/graph when auth is on. " +
+        "CORS: allow Authorization. Demo: python -m http.server in this folder."
+    );
+  </script>
+</body>
+</html>

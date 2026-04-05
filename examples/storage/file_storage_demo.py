@@ -17,11 +17,11 @@ Run this example:
 
 Then test the endpoints:
     # Upload a file
-    curl -X POST -F "file=@test.pdf" http://localhost:8000/api/storage/upload
+    curl -X POST -F "file=@test.pdf" http://localhost:8000/api/files/upload
 
     # Upload with proxy
     curl -X POST -F "file=@test.pdf" \
-         http://localhost:8000/api/storage/upload?create_proxy=true
+         http://localhost:8000/api/files/upload?create_proxy=true
 
     # Access via proxy
     curl http://localhost:8000/p/{code}
@@ -323,13 +323,13 @@ if __name__ == "__main__":
     print(f"   Proxy Enabled: {server.config.proxy.proxy_enabled}")
 
     print("\n🔗 Available Endpoints:")
-    print("   POST   /api/storage/upload")
-    print("   GET    /api/storage/files/{path}")
-    print("   DELETE /api/storage/files/{path}")
-    print("   POST   /api/storage/proxy")
+    print("   POST   /api/files/upload")
+    print("   GET    /api/files/{path}")
+    print("   DELETE /api/files/{path}")
+    print("   POST   /api/files/proxy")
     print("   GET    /p/{code}")
-    print("   DELETE /api/storage/proxy/{code}")
-    print("   GET    /api/storage/proxy/{code}/stats")
+    print("   DELETE /api/files/proxy/{code}")
+    print("   GET    /api/files/proxy/{code}/stats")
 
     print("\n🎯 Walker Endpoints:")
     print("   POST   /api/upload-document")
@@ -343,14 +343,14 @@ if __name__ == "__main__":
         """
     # Upload a file
     curl -X POST -F "file=@document.pdf" \\
-         http://localhost:8000/api/storage/upload
+         http://localhost:8000/api/files/upload
 
     # Upload with auto proxy
     curl -X POST -F "file=@document.pdf" \\
-         "http://localhost:8000/api/storage/upload?create_proxy=true&proxy_expires_in=7200"
+         "http://localhost:8000/api/files/upload?create_proxy=true&proxy_expires_in=7200"
 
     # Create share link for existing file
-    curl -X POST http://localhost:8000/api/storage/proxy \\
+    curl -X POST http://localhost:8000/api/files/proxy \\
          -H "Content-Type: application/json" \\
          -d '{"file_path": "uploads/document.pdf", "expires_in": 7200}'
 
@@ -358,7 +358,7 @@ if __name__ == "__main__":
     curl http://localhost:8000/p/abc123XY
 
     # Get proxy statistics
-    curl http://localhost:8000/api/storage/proxy/abc123XY/stats
+    curl http://localhost:8000/api/files/proxy/abc123XY/stats
 
     # Use Walker to create share link
     curl -X POST http://localhost:8000/api/create-share-link \\

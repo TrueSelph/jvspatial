@@ -8,7 +8,10 @@ This middleware handles all webhook-specific processing including:
 - Route parameter extraction
 """
 
+import asyncio
+import json
 import logging
+import time
 from typing import Any, Callable, Dict, Optional
 
 from fastapi import HTTPException, Request, Response
@@ -16,13 +19,17 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from jvspatial.api.constants import APIRoutes
+from jvspatial.env import normalize_optional_secret_string
+from jvspatial.runtime.serverless import is_serverless_mode
 
 from .utils import (
     WebhookConfig,
+    extract_idempotency_key,
     get_webhook_config_from_env,
     store_idempotent_response,
     validate_and_process_webhook,
 )
+from .webhook_auth import authenticate_webhook_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +88,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
     ) -> Optional[Dict[str, Any]]:
         """Extract webhook configuration from endpoint metadata.
 
-        Uses registry-based pattern matching to support parameterized paths
-        (e.g. /integrations/{service}/webhook/{resource_id}).
+        Uses cached registry result from dispatch when available.
 
         Args:
             request: FastAPI request object
@@ -93,13 +99,14 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         if not self.server:
             return None
 
-        path = request.url.path
-        method = request.method
-
-        # Use registry-based matching for parameterized paths
-        endpoints = self.server._endpoint_registry.get_webhook_endpoints_matching_path(
-            path, method
-        )
+        # Use cached registry result from dispatch
+        endpoints = getattr(request.state, "_webhook_endpoints_match", None)
+        if endpoints is None:
+            endpoints = (
+                self.server._endpoint_registry.get_webhook_endpoints_matching_path(
+                    request.url.path, request.method
+                )
+            )
 
         if endpoints:
             first_match = endpoints[0]
@@ -166,31 +173,51 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         Returns:
             Response object
         """
+        # Cache registry lookup once for both _is_webhook_request and _get_endpoint_webhook_config
+        if self.server and request.method in ["GET", "POST", "PUT", "PATCH"]:
+            request.state._webhook_endpoints_match = (
+                self.server._endpoint_registry.get_webhook_endpoints_matching_path(
+                    request.url.path, request.method
+                )
+            )
+        else:
+            request.state._webhook_endpoints_match = None  # Fallback uses path check
+
         # Check if this is a webhook request
         if not self._is_webhook_request(request):
             # Not a webhook request, pass through normally
             return await call_next(request)
 
-        logger.debug(f"Processing webhook request: {request.url.path}")
+        t0 = time.perf_counter()
+        logger.info(f"Processing webhook request: {request.url.path}")
+        request.state.webhook_start = t0
 
         try:
-            # Get endpoint-specific webhook configuration
+            # Get endpoint-specific webhook configuration (uses cached match)
             webhook_config = self._get_endpoint_webhook_config(request)
             request.state.webhook_config = webhook_config
 
             # Process the webhook request with endpoint-specific config
             await self._process_webhook_request(request, webhook_config)
+            logger.debug(
+                f"Webhook: middleware done in {int((time.perf_counter() - t0) * 1000)}ms"
+            )
 
             # Check for duplicate requests
             if getattr(request.state, "is_duplicate_request", False):
                 cached_response = getattr(request.state, "cached_response", {})
-                logger.info(
+                logger.debug(
                     f"Returning cached response for duplicate request: {request.state.idempotency_key}"
                 )
                 return JSONResponse(content=cached_response, status_code=200)
 
-            # Handle async processing if enabled
-            if webhook_config and webhook_config.get("async_processing", False):
+            # Handle async processing if enabled and background tasks allowed
+            serverless_mode = is_serverless_mode(getattr(self.server, "config", None))
+            if (
+                webhook_config
+                and webhook_config.get("async_processing", False)
+                and not serverless_mode
+            ):
                 # Queue for async processing and return immediate response
                 task_id = self._queue_async_processing(request, call_next)
                 from datetime import datetime
@@ -210,20 +237,16 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             idempotency_key = getattr(request.state, "idempotency_key", None)
             if idempotency_key and isinstance(response, JSONResponse):
                 try:
-                    # Extract response content for caching
                     response_content = (
                         response.body.decode("utf-8") if response.body else "{}"
                     )
-                    import json
-
                     response_data = json.loads(response_content)
-                    # Note: This should be awaited in an async context, but response processing
-                    # happens after the main request handling, so we'll use create_task
-                    import asyncio
-
-                    asyncio.create_task(
-                        store_idempotent_response(idempotency_key, response_data)
-                    )
+                    if not serverless_mode:
+                        asyncio.create_task(
+                            store_idempotent_response(idempotency_key, response_data)
+                        )
+                    else:
+                        await store_idempotent_response(idempotency_key, response_data)
                 except Exception as e:
                     logger.warning(f"Failed to cache response for idempotency: {e}")
 
@@ -275,7 +298,12 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         if request.method not in ["GET", "POST", "PUT", "PATCH"]:
             return False
 
-        # Registry-based detection: match any endpoint with webhook=True
+        # Use cached registry result when available (set in dispatch)
+        endpoints = getattr(request.state, "_webhook_endpoints_match", None)
+        if endpoints is not None:
+            return len(endpoints) > 0
+
+        # Registry-based detection when cache not set (e.g. server added mid-request)
         if self.server:
             endpoints = (
                 self.server._endpoint_registry.get_webhook_endpoints_matching_path(
@@ -285,7 +313,8 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             if endpoints:
                 return True
 
-        # Fallback: path-prefix check for tests or when server is None
+        # Fallback: path check for tests or when server is None.
+        # Match paths containing /webhook/ or /webhook (e.g. /api/whatsapp/interact/webhook/{id})
         path = request.url.path
         api_prefix = (APIRoutes.PREFIX or "").rstrip("/")
         prefixed_pattern = (
@@ -293,8 +322,11 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             if api_prefix
             else None
         )
-        return path.startswith(self.webhook_path_pattern) or (
-            prefixed_pattern is not None and path.startswith(prefixed_pattern)
+        return (
+            path.startswith(self.webhook_path_pattern)
+            or (prefixed_pattern is not None and path.startswith(prefixed_pattern))
+            or "/webhook" in path
+            or path.endswith("/webhook")
         )
 
     async def _process_webhook_request(
@@ -318,8 +350,8 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                 webhook_config.get("webhook_auth") if webhook_config else None
             )
             if webhook_auth == "api_key" or webhook_auth == "api_key_path":
-                await self._authenticate_webhook_api_key(
-                    request, webhook_auth, webhook_config
+                await authenticate_webhook_api_key(
+                    request, webhook_auth, webhook_config, self.server
                 )
 
             if request.method == "GET":
@@ -338,8 +370,16 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                 request.state.webhook_route = self._extract_route_parameter(request)
             else:
                 # Full path for POST/PUT/PATCH
+                # Skip idempotency for api_key webhooks without X-Idempotency-Key
+                # (e.g. WhatsApp) to avoid unnecessary DB round-trips on Lambda
+                skip_idempotency = (
+                    webhook_config is not None
+                    and webhook_config.get("webhook_auth")
+                    in ("api_key", "api_key_path")
+                    and extract_idempotency_key(request) is None
+                )
                 processed_data, cached_response = await validate_and_process_webhook(
-                    request, config
+                    request, config, skip_idempotency=skip_idempotency
                 )
 
                 # Populate request.state with processed data
@@ -415,7 +455,20 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         signature_required = webhook_config.get("signature_required", False)
         hmac_secret = None
         if signature_required:
-            hmac_secret = webhook_config.get("hmac_secret") or base_config.hmac_secret
+            ep_secret = normalize_optional_secret_string(
+                webhook_config.get("hmac_secret")
+            )
+            base_secret = normalize_optional_secret_string(base_config.hmac_secret)
+            hmac_secret = ep_secret or base_secret
+            if not hmac_secret:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "Webhook signature verification is required for this route but no "
+                        "HMAC secret is configured. Set JVSPATIAL_WEBHOOK_HMAC_SECRET or "
+                        "endpoint hmac_secret, or set signature_required=false."
+                    ),
+                )
 
         # Create new config with endpoint-specific overrides
         return WebhookConfig(
@@ -427,190 +480,6 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             https_required=https_required,
             allowed_content_types=base_config.allowed_content_types,
         )
-
-    async def _authenticate_webhook_api_key(
-        self,
-        request: Request,
-        auth_mode: str,
-        webhook_config: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Authenticate webhook request using API key.
-
-        Supports:
-        - Query parameter: ?api_key=sk_live_...
-        - Header: X-API-Key: sk_live_...
-        - Path parameter: /webhook/{api_key}/trigger
-
-        Args:
-            request: FastAPI request object
-            auth_mode: Authentication mode ("api_key" or "api_key_path")
-            webhook_config: Webhook configuration dictionary
-
-        Raises:
-            HTTPException: If authentication fails
-        """
-        from jvspatial.api.auth.api_key_service import APIKeyService
-        from jvspatial.core.context import GraphContext
-        from jvspatial.db import get_prime_database
-
-        api_key = None
-        source = None
-
-        # Get configuration with defaults
-        api_key_header = "x-api-key"  # pragma: allowlist secret
-        api_key_query_param = "api_key"  # pragma: allowlist secret
-        require_https = True
-
-        if webhook_config:
-            api_key_header = webhook_config.get("api_key_header", api_key_header)
-            api_key_query_param = webhook_config.get(
-                "api_key_query_param", api_key_query_param
-            )
-            require_https = webhook_config.get(
-                "api_key_query_param_require_https", require_https
-            )
-
-        # Try to get server config for defaults
-        if self.server:
-            server_config = getattr(self.server, "config", None)
-            if server_config:
-                api_key_header = (
-                    server_config.webhook.webhook_api_key_header or api_key_header
-                )
-                api_key_query_param = (
-                    server_config.webhook.webhook_api_key_query_param
-                    or api_key_query_param
-                )
-                require_https = server_config.webhook.webhook_api_key_require_https
-
-        if auth_mode == "api_key_path":
-            # Extract API key from URL path
-            # Pattern: /webhook/{api_key}/... or /api/webhook/{api_key}/...
-            path = request.url.path
-            path_parts = [p for p in path.split("/") if p]  # Remove empty parts
-
-            # Find webhook segment and extract next segment as API key
-            # Handle both /webhook/... and /api/webhook/... patterns
-            try:
-                webhook_idx = None
-                for i, part in enumerate(path_parts):
-                    if part == "webhook":
-                        webhook_idx = i
-                        break
-
-                if webhook_idx is not None and webhook_idx + 1 < len(path_parts):
-                    api_key = path_parts[webhook_idx + 1]
-                    source = "path"
-                else:
-                    # If webhook not found, try to extract from path directly
-                    # This handles edge cases where path structure is different
-                    pass
-            except (ValueError, IndexError):
-                pass
-
-        # Try query parameter (if not found in path or mode is "api_key")
-        if not api_key and auth_mode == "api_key":
-            api_key = request.query_params.get(api_key_query_param)
-            if api_key:
-                source = "query_param"
-
-                # Security check: require HTTPS for query parameters
-                if require_https:
-                    is_https = (
-                        request.url.scheme == "https"
-                        or request.headers.get("x-forwarded-proto") == "https"
-                        or request.headers.get("x-forwarded-ssl") == "on"
-                    )
-                    if not is_https:
-                        logger.warning(
-                            f"Webhook API key authentication via query parameter rejected: "
-                            f"HTTPS required but request was {request.url.scheme}"
-                        )
-                        raise HTTPException(
-                            status_code=400,
-                            detail="HTTPS required for query parameter authentication",
-                        )
-
-        # Try header (preferred method, always allowed)
-        if not api_key:
-            api_key = request.headers.get(api_key_header)
-            if api_key:
-                source = "header"
-
-        if not api_key:
-            raise HTTPException(
-                status_code=401, detail="API key required for webhook authentication"
-            )
-
-        # Validate API key using database-backed service
-        # Use prime database for API key validation (consistent with auth service)
-        try:
-            prime_ctx = GraphContext(database=get_prime_database())
-            service = APIKeyService(prime_ctx)
-            api_key_entity = await service.validate_key(api_key)
-
-            if not api_key_entity:
-                raise HTTPException(
-                    status_code=401, detail="Invalid or expired API key"
-                )
-
-            # Check IP restrictions
-            client_ip = request.client.host if request.client else None
-            if (
-                api_key_entity.allowed_ips
-                and client_ip
-                and client_ip not in api_key_entity.allowed_ips
-            ):
-                logger.debug(
-                    f"Webhook API key {api_key_entity.id} rejected: IP {client_ip} not in whitelist"
-                )
-                raise HTTPException(status_code=403, detail="IP address not allowed")
-
-            # Check endpoint restrictions
-            if api_key_entity.allowed_endpoints:
-                request_path = request.url.path
-
-                def _endpoint_allowed(ep: str) -> bool:
-                    # Support wildcard: /api/webhook/* matches /api/webhook/xyz
-                    if ep.endswith("*"):
-                        prefix = ep[:-1]
-                        return request_path.startswith(prefix)
-                    return request_path.startswith(ep)
-
-                if not any(
-                    _endpoint_allowed(ep) for ep in api_key_entity.allowed_endpoints
-                ):
-                    logger.debug(
-                        f"Webhook API key {api_key_entity.id} rejected: endpoint {request_path} not in whitelist"
-                    )
-                    raise HTTPException(
-                        status_code=403, detail="Endpoint not allowed for this API key"
-                    )
-
-            # Set authenticated user in request state (consistent with auth middleware)
-            request.state.user = {
-                "user_id": api_key_entity.user_id,
-                "api_key_id": api_key_entity.id,
-                "permissions": api_key_entity.permissions,
-                "rate_limit_override": api_key_entity.rate_limit_override,
-                "auth_source": source,  # Track authentication source
-            }
-
-            # Update last used timestamp
-            try:
-                await service.update_key_usage(api_key_entity)
-            except Exception as e:
-                logger.warning(f"Failed to update API key usage: {e}")
-
-            logger.debug(
-                f"Webhook API key authentication successful: key_id={api_key_entity.id}, source={source}"
-            )
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Webhook API key authentication error: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Authentication error")
 
     async def _queue_async_processing(
         self, request: Request, call_next: Callable
@@ -633,7 +502,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         async def process_async():
             try:
                 response = await call_next(request)
-                logger.info(f"Async webhook processing completed: {task_id}")
+                logger.debug(f"Async webhook processing completed: {task_id}")
                 return response
             except Exception as e:
                 logger.error(
@@ -644,7 +513,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         # Queue the task (in production, use proper task queue like Celery)
         asyncio.create_task(process_async())
 
-        logger.info(f"Webhook queued for async processing: {task_id}")
+        logger.debug(f"Webhook queued for async processing: {task_id}")
         return task_id
 
     def _extract_route_parameter(self, request: Request) -> Optional[str]:
@@ -652,6 +521,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
 
         Attempts to extract route from patterns like:
         - /webhook/{route}/{auth_token}
+        - /webhooks/{route}/{auth_token}
         - /webhook/process/{route}/{auth_token}
 
         Args:
@@ -664,18 +534,26 @@ class WebhookMiddleware(BaseHTTPMiddleware):
         path_parts = [p for p in path.split("/") if p]  # Remove empty parts
 
         try:
-            # Look for common webhook patterns
-            if len(path_parts) >= 3 and path_parts[0] == "webhooks":
-                # Pattern: /webhook/{route}/{auth_token}
-                if len(path_parts) == 3:
-                    return str(path_parts[1])  # route is second part
+            # Find webhook segment (support both "webhook" and "webhooks")
+            webhook_idx = None
+            for i, part in enumerate(path_parts):
+                if part in ("webhook", "webhooks"):
+                    webhook_idx = i
+                    break
+
+            if webhook_idx is not None and len(path_parts) >= webhook_idx + 3:
+                # Pattern: /webhook/{route}/{auth_token} or /webhooks/{route}/{auth_token}
+                if len(path_parts) == webhook_idx + 3:
+                    return str(path_parts[webhook_idx + 1])
                 # Pattern: /webhook/process/{route}/{auth_token}
-                elif len(path_parts) == 4 and path_parts[1] == "process":
-                    return str(path_parts[2])  # route is third part
+                if (
+                    len(path_parts) >= webhook_idx + 4
+                    and path_parts[webhook_idx + 1] == "process"
+                ):
+                    return str(path_parts[webhook_idx + 2])
                 # Pattern: /webhook/{service}/{route}/{auth_token}
-                elif len(path_parts) >= 4:
-                    # Could be service or route - prefer route (second-to-last non-token)
-                    return str(path_parts[-2])  # Second to last (before auth_token)
+                if len(path_parts) >= webhook_idx + 4:
+                    return str(path_parts[-2])
 
             return None
 

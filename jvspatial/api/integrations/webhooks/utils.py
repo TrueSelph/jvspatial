@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
+from jvspatial.env import env, normalize_optional_secret_string, parse_bool_basic
+
 
 class WebhookConfig:
     """Configuration class for webhook processing."""
@@ -28,7 +30,7 @@ class WebhookConfig:
         https_required: bool = True,
         allowed_content_types: Optional[List[str]] = None,
     ):
-        self.hmac_secret = hmac_secret
+        self.hmac_secret = normalize_optional_secret_string(hmac_secret)
         self.hmac_algorithm = hmac_algorithm
         self.max_payload_size = max_payload_size
         self.idempotency_ttl = idempotency_ttl
@@ -377,9 +379,7 @@ async def check_idempotency(
             from typing import cast as _cast
 
             existing = _cast(WebhookIdempotencyKey, existing)
-            # Update last accessed time
-            existing.last_accessed_at = datetime.now()
-            await existing.save()
+            # Return cached response without save (avoids extra DB write on duplicate)
             return True, _cast(Dict[str, Any], existing.cached_response)
 
         return False, None
@@ -432,31 +432,39 @@ def get_webhook_config_from_env() -> WebhookConfig:
     Returns:
         WebhookConfig instance
     """
-    import os
-
     return WebhookConfig(
-        hmac_secret=os.getenv("JVSPATIAL_WEBHOOK_HMAC_SECRET"),
-        hmac_algorithm=os.getenv("JVSPATIAL_WEBHOOK_HMAC_ALGORITHM", "sha256"),
-        max_payload_size=int(
-            os.getenv("JVSPATIAL_WEBHOOK_MAX_PAYLOAD_SIZE", "1048576")
-        ),  # 1MB
-        idempotency_ttl=int(
-            os.getenv("JVSPATIAL_WEBHOOK_IDEMPOTENCY_TTL", "3600")
-        ),  # 1 hour
-        https_required=os.getenv("JVSPATIAL_WEBHOOK_HTTPS_REQUIRED", "true").lower()
-        == "true",
+        hmac_secret=normalize_optional_secret_string(
+            env("JVSPATIAL_WEBHOOK_HMAC_SECRET", default="")
+        ),
+        hmac_algorithm=env("JVSPATIAL_WEBHOOK_HMAC_ALGORITHM", default="sha256"),
+        max_payload_size=env(
+            "JVSPATIAL_WEBHOOK_MAX_PAYLOAD_SIZE", default=1048576, parse=int
+        )
+        or 1048576,
+        idempotency_ttl=env(
+            "JVSPATIAL_WEBHOOK_IDEMPOTENCY_TTL", default=3600, parse=int
+        )
+        or 3600,
+        https_required=env(
+            "JVSPATIAL_WEBHOOK_HTTPS_REQUIRED", default=True, parse=parse_bool_basic
+        ),
     )
 
 
 # Convenience function for common webhook validation workflow
 async def validate_and_process_webhook(
-    request: Request, config: Optional[WebhookConfig] = None
+    request: Request,
+    config: Optional[WebhookConfig] = None,
+    skip_idempotency: bool = False,
 ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
     """Complete webhook validation and processing workflow.
 
     Args:
         request: FastAPI request object
         config: Webhook configuration (uses env defaults if None)
+        skip_idempotency: When True, skip idempotency check and storage.
+            Use for api_key webhooks (e.g. WhatsApp) that do not send
+            X-Idempotency-Key, to avoid unnecessary DB round-trips on Lambda.
 
     Returns:
         Tuple of (processed_data_dict, cached_response_if_duplicate)
@@ -484,17 +492,19 @@ async def validate_and_process_webhook(
         if not verify_hmac_signature(raw_body, signature, config.hmac_secret):
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
 
-    # Check idempotency
-    idempotency_key = extract_idempotency_key(request)
-    is_duplicate, cached_response = await check_idempotency(idempotency_key)
-
-    if is_duplicate:
-        return {
-            "raw_body": raw_body,
-            "content_type": content_type,
-            "idempotency_key": idempotency_key,
-            "is_duplicate": True,
-        }, cached_response
+    # Check idempotency (skip for api_key webhooks without idempotency key)
+    idempotency_key = None if skip_idempotency else extract_idempotency_key(request)
+    is_duplicate = False
+    cached_response = None
+    if not skip_idempotency:
+        is_duplicate, cached_response = await check_idempotency(idempotency_key)
+        if is_duplicate:
+            return {
+                "raw_body": raw_body,
+                "content_type": content_type,
+                "idempotency_key": idempotency_key,
+                "is_duplicate": True,
+            }, cached_response
 
     # Parse payload
     try:

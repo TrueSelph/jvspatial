@@ -42,10 +42,13 @@ dependencies = [
     "typing-extensions>=4.0.0",  # For @override decorator and enhanced typing
     "aiosqlite>=0.19.0",  # SQLite database backend
     "aiofiles>=23.0.0",  # Async file operations for JsonDB
-    "aioboto3>=15.5.0",  # DynamoDB support
 ]
 
 [project.optional-dependencies]
+lambda = [
+    "aioboto3>=15.5.0",  # DynamoDB (async) + AWS SDK stack
+    "boto3>=1.28.0",  # Sync Lambda / EventBridge / SQS clients in serverless tasks
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21.0",
@@ -70,7 +73,8 @@ all = [
     "pre-commit>=3.0.0",
     "python-dotenv>=1.0.0",
     "psutil>=5.9.0",
-    "aioboto3>=12.0.0",
+    "aioboto3>=15.5.0",
+    "boto3>=1.28.0",
 ]
 
 [project.urls]
@@ -82,6 +86,9 @@ Documentation = "https://github.com/TrueSelph/jvspatial/tree/main/docs"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["jvspatial*"]
+
+[tool.setuptools.package-data]
+jvspatial = ["static/**/*"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
@@ -127,7 +134,7 @@ warn_redundant_casts = false
 warn_unused_ignores = false
 warn_no_return = false
 show_error_codes = true  # Show error codes for better debugging
-exclude = ["examples/", "tests/"]
+exclude = ["examples/", "tests/", "jvgraph-ui/"]
 
 # Relax third-party imports that lack types
 [[tool.mypy.overrides]]
@@ -155,6 +162,21 @@ disallow_subclassing_any = false
 warn_return_any = false
 no_implicit_optional = false
 ignore_errors = true
+
+# Mixins rely on attributes supplied by Server; suppress structural false positives.
+[[tool.mypy.overrides]]
+module = [
+    "jvspatial.api.server_app_factory",
+    "jvspatial.api.server_registration",
+    "jvspatial.api.server_lifecycle",
+    "jvspatial.api.server_run",
+]
+disable_error_code = ["attr-defined", "has-type", "arg-type", "misc"]
+
+# Stricter checking for the shared DB factory (use with ``mypy --follow-imports=skip jvspatial/db/factory.py`` locally).
+[[tool.mypy.overrides]]
+module = ["jvspatial.db.factory"]
+check_untyped_defs = true
 
 [tool.coverage.run]
 source = ["jvspatial"]

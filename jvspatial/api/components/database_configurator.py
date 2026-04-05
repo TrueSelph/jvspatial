@@ -8,7 +8,7 @@ import inspect
 import logging
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from jvspatial.core.context import GraphContext, set_default_context
 from jvspatial.db.factory import create_database
@@ -17,6 +17,7 @@ from jvspatial.db.manager import (
     get_database_manager,
     set_database_manager,
 )
+from jvspatial.runtime.serverless import is_serverless_mode
 
 
 class DatabaseConfigurator:
@@ -71,6 +72,13 @@ class DatabaseConfigurator:
             del frame
         return None
 
+    def _resolve_mongodb_connection(self) -> Tuple[str, str]:
+        """Resolve Mongo URI and database name from server configuration only."""
+        db = self.config.database
+        uri = (db.db_connection_string or "").strip() or "mongodb://localhost:27017"
+        db_name = (db.db_database_name or "").strip() or "jvdb"
+        return uri, db_name
+
     def initialize_graph_context(self) -> Optional[GraphContext]:
         """Initialize GraphContext with current database configuration.
 
@@ -92,13 +100,15 @@ class DatabaseConfigurator:
             return None
 
         try:
-            # Create prime database based on configuration FIRST
-            # This ensures we use the server's configuration, not default environment variables
+            # Create prime database based on configuration FIRST.
             prime_db = None
 
             if db_type == "json":
                 # Check if db_path is an S3 path (not supported for file-based databases)
-                db_path = self.config.database.db_path or "./jvdb"
+                default_json_path = (
+                    "/tmp/jvdb" if is_serverless_mode(self.config) else "./jvdb"
+                )
+                db_path = self.config.database.db_path or default_json_path
                 db_path = self._resolve_db_path(db_path)
                 if db_path.startswith("s3://"):
                     raise ValueError(
@@ -113,15 +123,20 @@ class DatabaseConfigurator:
                     base_path=db_path,
                 )
             elif db_type == "mongodb":
+                mongo_uri, mongo_db_name = self._resolve_mongodb_connection()
                 prime_db = create_database(
                     db_type="mongodb",
-                    uri=self.config.database.db_connection_string
-                    or "mongodb://localhost:27017",
-                    db_name=self.config.database.db_database_name or "jvdb",
+                    uri=mongo_uri,
+                    db_name=mongo_db_name,
                 )
             elif db_type == "sqlite":
                 # Check if db_path is an S3 path (not supported for file-based databases)
-                db_path = self.config.database.db_path or "jvdb/sqlite/jvspatial.db"
+                default_sqlite_path = (
+                    "/tmp/jvdb/sqlite/jvspatial.db"
+                    if is_serverless_mode(self.config)
+                    else "jvdb/sqlite/jvspatial.db"
+                )
+                db_path = self.config.database.db_path or default_sqlite_path
                 db_path = self._resolve_db_path(db_path)
                 if db_path.startswith("s3://"):
                     raise ValueError(

@@ -1,5 +1,6 @@
 """Base Object class for jvspatial entities."""
 
+import inspect
 from typing import Any, Dict, List, Optional, Set, Type, Union
 
 from pydantic import BaseModel, ConfigDict
@@ -127,6 +128,11 @@ class Object(AttributeMixin, BaseModel):
     async def create(cls: Type["Object"], **kwargs: Any) -> "Object":
         """Create and save a new object instance.
 
+        For types using :class:`~jvspatial.core.mixins.DeferredSaveMixin`, the
+        first ``save()`` may only mark the instance dirty. An immediate
+        ``await flush()`` ensures the row exists in the store so ``get(id)``
+        succeeds in the same request
+
         Args:
             **kwargs: Object attributes
 
@@ -135,6 +141,13 @@ class Object(AttributeMixin, BaseModel):
         """
         obj = cls(**kwargs)
         await obj.save()
+        flush_fn = getattr(obj, "flush", None)
+        if (
+            flush_fn is not None
+            and callable(flush_fn)
+            and inspect.iscoroutinefunction(flush_fn)
+        ):
+            await flush_fn()
         return obj
 
     async def update(
@@ -641,11 +654,15 @@ class Object(AttributeMixin, BaseModel):
             if key == "entity":
                 # Skip entity - already handled in class_name_filter
                 continue
-            if (key in top_level_fields) or (key.startswith("context.")):
-                # For all entity types, top-level fields and context.* fields map directly
+            if (
+                key.startswith("$")
+                or (key in top_level_fields)
+                or key.startswith("context.")
+            ):
+                # $operators, declared top-level fields, and context.* keys map as-is;
+                # other field names become context.<name> in storage.
                 db_query[key] = value
             else:
-                # For all entity types, non-context fields map to context.* in database
                 db_query[f"context.{key}"] = value
 
         final_query = (

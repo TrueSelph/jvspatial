@@ -6,7 +6,6 @@ Includes integration with DatabaseManager for multi-database support.
 Supports custom database registration for seamless extension.
 """
 
-import os
 from typing import Any, Callable, Dict, Optional
 
 from .database import Database
@@ -18,7 +17,7 @@ try:  # Optional dependency (requires aiosqlite)
 
     _SQLITE_AVAILABLE = True
 except ImportError:  # pragma: no cover - dependency missing
-    SQLiteDB = None  # type: ignore[misc]
+    SQLiteDB = None  # type: ignore[misc,assignment]
     _SQLITE_AVAILABLE = False
 
 try:  # Optional dependency (requires aioboto3)
@@ -26,7 +25,7 @@ try:  # Optional dependency (requires aioboto3)
 
     _DYNAMODB_AVAILABLE = True
 except ImportError:  # pragma: no cover - dependency missing
-    DynamoDB = None  # type: ignore[misc]
+    DynamoDB = None  # type: ignore[misc,assignment]
     _DYNAMODB_AVAILABLE = False
 
 # Registry for custom database implementations
@@ -120,6 +119,85 @@ def list_database_types() -> Dict[str, str]:
     return types
 
 
+def _instantiate_builtin_database(
+    db_type: str,
+    **kwargs: Any,
+) -> Database:
+    """Create a built-in database backend from env/defaults merged with ``kwargs``."""
+    from jvspatial.env import env, resolve_db_paths
+
+    if db_type == "json":
+        jsondb_path, _ = resolve_db_paths()
+        base_path = kwargs.get("base_path") or kwargs.get("db_path") or jsondb_path
+        return JsonDB(str(base_path))
+
+    if db_type == "mongodb":
+        from .mongodb import MongoDB
+
+        kw = dict(kwargs)
+        if "uri" not in kw:
+            kw["uri"] = kw.pop("connection_string", None) or kw.pop(
+                "db_connection_string", None
+            )
+        if "db_name" not in kw:
+            kw["db_name"] = kw.pop("database_name", None)
+        if "uri" not in kw:
+            kw["uri"] = env(
+                "JVSPATIAL_MONGODB_URI", default="mongodb://localhost:27017"
+            )
+        if "db_name" not in kw:
+            kw["db_name"] = env("JVSPATIAL_MONGODB_DB_NAME", default="jvdb")
+        if "max_pool_size" not in kw:
+            kw["max_pool_size"] = env("JVSPATIAL_MONGODB_MAX_POOL_SIZE", parse=int)
+        if "min_pool_size" not in kw:
+            kw["min_pool_size"] = env("JVSPATIAL_MONGODB_MIN_POOL_SIZE", parse=int)
+
+        return MongoDB(**kw)
+
+    if db_type == "sqlite":
+        if not _SQLITE_AVAILABLE:
+            raise ImportError(
+                "aiosqlite is required for SQLite support. Install it with: pip install aiosqlite"
+            )
+
+        sqlite_kwargs = dict(kwargs)
+        _, sqlite_default = resolve_db_paths()
+        db_path = (
+            sqlite_kwargs.pop("db_path", None)
+            or sqlite_kwargs.pop("path", None)
+            or sqlite_default
+        )
+        return SQLiteDB(db_path=db_path, **sqlite_kwargs)
+
+    if db_type == "dynamodb":
+        if not _DYNAMODB_AVAILABLE:
+            raise ImportError(
+                "aioboto3 is required for DynamoDB support. Install it with: pip install jvspatial[lambda]"
+            )
+
+        from .dynamodb import DynamoDB
+
+        dynamodb_kwargs = dict(kwargs)
+        if "table_name" not in dynamodb_kwargs:
+            dynamodb_kwargs["table_name"] = env(
+                "JVSPATIAL_DYNAMODB_TABLE_NAME", default="jvspatial"
+            )
+        if "region_name" not in dynamodb_kwargs:
+            dynamodb_kwargs["region_name"] = env(
+                "JVSPATIAL_DYNAMODB_REGION", default="us-east-1"
+            )
+        if "endpoint_url" not in dynamodb_kwargs:
+            dynamodb_kwargs["endpoint_url"] = env("JVSPATIAL_DYNAMODB_ENDPOINT_URL")
+        if "aws_access_key_id" not in dynamodb_kwargs:
+            dynamodb_kwargs["aws_access_key_id"] = env("AWS_ACCESS_KEY_ID")
+        if "aws_secret_access_key" not in dynamodb_kwargs:
+            dynamodb_kwargs["aws_secret_access_key"] = env("AWS_SECRET_ACCESS_KEY")
+
+        return DynamoDB(**dynamodb_kwargs)
+
+    raise ValueError(f"Not a built-in database type: {db_type!r}")
+
+
 def create_database(
     db_type: str = "json",
     register: bool = False,
@@ -167,95 +245,12 @@ def create_database(
     Raises:
         ValueError: If db_type is not supported or registration fails
     """
-    # Check built-in types first
     db: Database
-    if db_type == "json":
-        # Accept base_path or db_path
-        base_path = (
-            kwargs.get("base_path")
-            or kwargs.get("db_path")
-            or os.getenv("JVSPATIAL_JSONDB_PATH", "jvdb")
-        )
-        db = JsonDB(str(base_path))
-
-    elif db_type == "mongodb":
-        from .mongodb import MongoDB
-
-        # Normalize aliases: connection_string/db_connection_string -> uri, database_name -> db_name
-        if "uri" not in kwargs:
-            kwargs["uri"] = kwargs.pop("connection_string", None) or kwargs.pop(
-                "db_connection_string", None
-            )
-        if "db_name" not in kwargs:
-            kwargs["db_name"] = kwargs.pop("database_name", None)
-        # Provide defaults from environment
-        if "uri" not in kwargs:
-            kwargs["uri"] = os.getenv(
-                "JVSPATIAL_MONGODB_URI", "mongodb://localhost:27017"
-            )
-        if "db_name" not in kwargs:
-            kwargs["db_name"] = os.getenv("JVSPATIAL_MONGODB_DB_NAME", "jvdb")
-        if "max_pool_size" not in kwargs:
-            max_pool = os.getenv("JVSPATIAL_MONGODB_MAX_POOL_SIZE")
-            if max_pool is not None:
-                kwargs["max_pool_size"] = int(max_pool)
-        if "min_pool_size" not in kwargs:
-            min_pool = os.getenv("JVSPATIAL_MONGODB_MIN_POOL_SIZE")
-            if min_pool is not None:
-                kwargs["min_pool_size"] = int(min_pool)
-
-        db = MongoDB(**kwargs)
-
-    elif db_type == "sqlite":
-        if not _SQLITE_AVAILABLE:
-            raise ImportError(
-                "aiosqlite is required for SQLite support. Install it with: pip install aiosqlite"
-            )
-
-        sqlite_kwargs = kwargs.copy()
-        db_path = (
-            sqlite_kwargs.pop("db_path", None)
-            or sqlite_kwargs.pop("path", None)
-            or os.getenv("JVSPATIAL_DB_PATH", "jvdb/sqlite/jvspatial.db")
-        )
-        db = SQLiteDB(db_path=db_path, **sqlite_kwargs)
-
-    elif db_type == "dynamodb":
-        if not _DYNAMODB_AVAILABLE:
-            raise ImportError(
-                "aioboto3 is required for DynamoDB support. Install it with: pip install aioboto3"
-            )
-
-        from .dynamodb import DynamoDB
-
-        # Provide defaults from environment
-        dynamodb_kwargs = kwargs.copy()
-        if "table_name" not in dynamodb_kwargs:
-            dynamodb_kwargs["table_name"] = os.getenv(
-                "JVSPATIAL_DYNAMODB_TABLE_NAME", "jvspatial"
-            )
-        if "region_name" not in dynamodb_kwargs:
-            dynamodb_kwargs["region_name"] = os.getenv(
-                "JVSPATIAL_DYNAMODB_REGION", "us-east-1"
-            )
-        if "endpoint_url" not in dynamodb_kwargs:
-            dynamodb_kwargs["endpoint_url"] = os.getenv(
-                "JVSPATIAL_DYNAMODB_ENDPOINT_URL"
-            )
-        if "aws_access_key_id" not in dynamodb_kwargs:
-            dynamodb_kwargs["aws_access_key_id"] = os.getenv("AWS_ACCESS_KEY_ID")
-        if "aws_secret_access_key" not in dynamodb_kwargs:
-            dynamodb_kwargs["aws_secret_access_key"] = os.getenv(
-                "AWS_SECRET_ACCESS_KEY"
-            )
-
-        db = DynamoDB(**dynamodb_kwargs)
-
-    # Check registered custom types
+    if db_type in ("json", "mongodb", "sqlite", "dynamodb"):
+        db = _instantiate_builtin_database(db_type, **kwargs)
     elif db_type in _DATABASE_REGISTRY:
         factory = _DATABASE_REGISTRY[db_type]
         db = factory(**kwargs)
-
     else:
         available = ", ".join(list_database_types().keys())
         raise ValueError(

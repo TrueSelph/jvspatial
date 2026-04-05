@@ -6,7 +6,7 @@ database, CORS, file storage, and other server-related settings.
 
 from typing import Any, List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .config_groups import (
     AuthConfig,
@@ -55,6 +55,8 @@ class ServerConfig(BaseModel):
     port: int = 8000
     docs_url: Optional[str] = "/docs"
     redoc_url: Optional[str] = "/redoc"
+    serverless_mode: Optional[bool] = None
+    deferred_task_provider: Optional[str] = None
 
     # Configuration Groups (using composition)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
@@ -75,8 +77,26 @@ class ServerConfig(BaseModel):
 
     # Graph Visualization Endpoint Configuration
     graph_endpoint_enabled: bool = Field(
-        default=True, description="Enable /api/graph endpoint for graph visualization"
+        default=True,
+        description=(
+            "Enable graph visualization: /api/graph (DOT) plus /api/graph/expand "
+            "and /api/graph/subgraph (JSON) when the server registers them"
+        ),
     )
+
+    @field_validator("port")
+    @classmethod
+    def _validate_port(cls, v: int) -> int:
+        if v < 1 or v > 65535:
+            raise ValueError("Port must be between 1 and 65535")
+        return v
+
+    @field_validator("host")
+    @classmethod
+    def _validate_host(cls, v: str) -> str:
+        if not v or not str(v).strip():
+            raise ValueError("Host cannot be empty")
+        return v
 
     @model_validator(mode="before")
     @classmethod

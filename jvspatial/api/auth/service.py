@@ -28,6 +28,25 @@ from jvspatial.api.auth.rbac import get_effective_permissions
 from jvspatial.api.exceptions import RegistrationDisabledError
 from jvspatial.core.context import GraphContext
 from jvspatial.db import get_prime_database
+from jvspatial.env import env, parse_bool
+from jvspatial.runtime.serverless import is_serverless_mode
+
+_argon2_hasher_singleton = None
+
+
+def _get_argon2_hasher():
+    global _argon2_hasher_singleton
+    if _argon2_hasher_singleton is None:
+        from argon2 import PasswordHasher
+
+        _argon2_hasher_singleton = PasswordHasher(
+            time_cost=env("JVSPATIAL_ARGON2_TIME_COST", default=2, parse=int) or 2,
+            memory_cost=env("JVSPATIAL_ARGON2_MEMORY_COST", default=19456, parse=int)
+            or 19456,
+            parallelism=env("JVSPATIAL_ARGON2_PARALLELISM", default=2, parse=int) or 2,
+        )
+    return _argon2_hasher_singleton
+
 
 # Try to import secure hashing libraries for refresh tokens
 try:
@@ -37,11 +56,10 @@ try:
     _HASHING_LIB = "bcrypt"
 except ImportError:
     try:
-        from argon2 import PasswordHasher
+        import argon2  # noqa: F401
 
         _HASHING_AVAILABLE = True
         _HASHING_LIB = "argon2"
-        _argon2_hasher = PasswordHasher()
     except ImportError:
         try:
             from passlib.context import CryptContext
@@ -134,6 +152,18 @@ class AuthenticationService:
         # In-memory cache for blacklist checks: {jti: (is_blacklisted, timestamp)}
         self._blacklist_cache: Dict[str, Tuple[bool, float]] = {}
         self._logger = logging.getLogger(__name__)
+        self._serverless_mode = is_serverless_mode()
+        self._bcrypt_rounds = (
+            env("JVSPATIAL_BCRYPT_ROUNDS_SERVERLESS", default=10, parse=int)
+            if self._serverless_mode
+            else env("JVSPATIAL_BCRYPT_ROUNDS", default=12, parse=int)
+        )
+        self._bcrypt_rounds = self._bcrypt_rounds or 12
+        if self._serverless_mode:
+            self._logger.info(
+                "AuthenticationService using serverless hashing profile (bcrypt rounds=%s).",
+                self._bcrypt_rounds,
+            )
 
     def _get_user_roles(self, user: User) -> List[str]:
         """Get user roles with backward compatibility for existing users."""
@@ -162,6 +192,14 @@ class AuthenticationService:
         collection, final_query = await User._build_database_query(self.context, {}, {})
         return await self.context.database.count(collection, final_query)
 
+    async def count_users(self) -> int:
+        """Return the number of users in the auth database (public API)."""
+        return await self._user_count()
+
+    async def find_user_by_email(self, email: str) -> Optional[User]:
+        """Find a user by email (public API)."""
+        return await self._find_user_by_email(email)
+
     def _hash_password(self, password: str) -> str:
         """Hash a password using bcrypt when available, else SHA-256 with salt.
 
@@ -175,17 +213,22 @@ class AuthenticationService:
             Hashed password string
         """
         if _HASHING_AVAILABLE and _HASHING_LIB == "bcrypt":
-            salt = bcrypt.gensalt()
+            salt = bcrypt.gensalt(rounds=self._bcrypt_rounds)
             hashed = bcrypt.hashpw(password.encode("utf-8"), salt)
             return hashed.decode("utf-8")
         if _HASHING_AVAILABLE and _HASHING_LIB == "argon2":
-            return _argon2_hasher.hash(password)
+            return _get_argon2_hasher().hash(password)
         if _HASHING_AVAILABLE and _HASHING_LIB == "passlib":
             return _passlib_context.hash(password)
         # Fallback when no secure library available
+        if env("JVSPATIAL_AUTH_STRICT_HASHING", default=False, parse=parse_bool):
+            raise RuntimeError(
+                "Secure hashing library required but unavailable. "
+                "Install bcrypt/argon2/passlib or disable JVSPATIAL_AUTH_STRICT_HASHING."
+            )
         self._logger.warning(
             "No secure hashing library (bcrypt/argon2/passlib). "
-            "Using SHA-256 for passwords. Install bcrypt for production."
+            "Using SHA-256 fallback for passwords. This is not recommended for production."
         )
         salt = secrets.token_hex(16)
         password_hash = hashlib.sha256((password + salt).encode()).hexdigest()
@@ -217,7 +260,7 @@ class AuthenticationService:
             if password_hash.startswith("$argon2"):
                 if _HASHING_AVAILABLE and _HASHING_LIB == "argon2":
                     try:
-                        _argon2_hasher.verify(password_hash, password)
+                        _get_argon2_hasher().verify(password_hash, password)
                         return True
                     except Exception:
                         return False
@@ -258,17 +301,23 @@ class AuthenticationService:
                     # Hash with SHA-256 first, then bcrypt the hash
                     token_hash = hashlib.sha256(token_bytes).hexdigest()
                     token_bytes = token_hash.encode("utf-8")
-                salt = bcrypt.gensalt()
+                salt = bcrypt.gensalt(rounds=self._bcrypt_rounds)
                 hashed = bcrypt.hashpw(token_bytes, salt)
                 return hashed.decode("utf-8")
             elif _HASHING_LIB == "argon2":
-                return _argon2_hasher.hash(token)
+                return _get_argon2_hasher().hash(token)
             elif _HASHING_LIB == "passlib":
                 return _passlib_context.hash(token)
         else:
+            if env("JVSPATIAL_AUTH_STRICT_HASHING", default=False, parse=parse_bool):
+                raise RuntimeError(
+                    "Secure hashing library required but unavailable. "
+                    "Install bcrypt/argon2/passlib or disable JVSPATIAL_AUTH_STRICT_HASHING."
+                )
             self._logger.warning(
                 "No secure hashing library available (bcrypt/argon2/passlib). "
-                "Using SHA-256 for refresh tokens. Install bcrypt for production: pip install bcrypt"
+                "Using SHA-256 fallback for refresh tokens. "
+                "Install bcrypt for production: pip install bcrypt"
             )
             return hashlib.sha256(token.encode()).hexdigest()
 
@@ -296,7 +345,7 @@ class AuthenticationService:
                     return False
             elif _HASHING_LIB == "argon2":
                 try:
-                    _argon2_hasher.verify(hashed, token)
+                    _get_argon2_hasher().verify(hashed, token)
                     return True
                 except Exception:
                     return False
@@ -393,9 +442,13 @@ class AuthenticationService:
                 return False  # Token without JTI cannot be blacklisted
 
             return await self._is_token_blacklisted_by_jti(token_id)
-        except Exception:
-            # If there's an error checking blacklist, assume not blacklisted
-            # (fail open for availability)
+        except Exception as e:
+            # Fail-open for availability; operators must see failures in logs.
+            self._logger.error(
+                "JWT blacklist check failed (fail-open; token not treated as blacklisted): %s",
+                e,
+                exc_info=True,
+            )
             return False
 
     async def _is_token_blacklisted_by_jti(self, token_id: str) -> bool:
@@ -446,9 +499,13 @@ class AuthenticationService:
             )
             return is_blacklisted
         except Exception as e:
-            # If there's an error checking blacklist, assume not blacklisted
-            # (fail open for availability)
-            self._logger.warning(f"Error checking blacklist for token {token_id}: {e}")
+            # Fail-open for availability
+            self._logger.error(
+                "Error checking blacklist for token %s (fail-open): %s",
+                token_id,
+                e,
+                exc_info=True,
+            )
             return False
 
     async def _blacklist_token(self, token: str) -> bool:

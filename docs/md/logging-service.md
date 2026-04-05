@@ -120,6 +120,17 @@ JVSPATIAL_DB_LOGGING_ENABLED=false
 JVSPATIAL_DB_LOGGING_DB_NAME=logs
 ```
 
+### Default retention (app bootstrap)
+
+Optional default for how long interaction logs are retained when not set in `app.yaml` (`context.log_retention_days`). Applications can read `JVSPATIAL_LOG_RETENTION_DEFAULT_DAYS`; jvspatial reads the same value through live env helpers.
+
+```bash
+# Optional: default retention in days (0 = indefinite)
+JVSPATIAL_LOG_RETENTION_DEFAULT_DAYS=60
+```
+
+If unset, fall back to `context.log_retention_days` in `app.yaml`, then `60`.
+
 ### API Endpoints
 
 ```bash
@@ -239,7 +250,7 @@ GET /api/logs?category=ERROR&page=1&page_size=50
 curl -H "Authorization: Bearer $TOKEN" \
   "http://localhost:8000/api/logs?category=ERROR"
 
-# Get logs for specific agent (jvagent)
+# Get logs for a specific agent
 curl -H "Authorization: Bearer $TOKEN" \
   "http://localhost:8000/api/logs?filter=%7B%22context.log_data.agent_id%22%3A%22agent_123%22%7D"
 

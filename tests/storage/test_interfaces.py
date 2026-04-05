@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from jvspatial.api.constants import APIRoutes
 from jvspatial.storage.exceptions import (
     AccessDeniedError,
     FileNotFoundError,
@@ -454,7 +455,7 @@ class TestLocalFileMetadataOperations:
         url = await local_storage.get_file_url("test.txt")
 
         assert url is not None
-        assert "http://localhost:8000/files/test.txt" == url
+        assert url == f"http://localhost:8000{APIRoutes.FILES_ROOT}/test.txt"
 
     @pytest.mark.asyncio
     async def test_get_file_url_without_base_url(self, temp_storage_dir, sample_files):
@@ -605,9 +606,9 @@ class TestS3FileInterfaceInit:
         os.environ,
         {
             "JVSPATIAL_S3_BUCKET_NAME": "env-bucket",
-            "JVSPATIAL_S3_REGION_NAME": "eu-west-1",
-            "JVSPATIAL_S3_ACCESS_KEY_ID": "test-key",
-            "JVSPATIAL_S3_SECRET_ACCESS_KEY": "test-secret",  # pragma: allowlist secret
+            "JVSPATIAL_S3_REGION": "eu-west-1",
+            "JVSPATIAL_S3_ACCESS_KEY": "test-key",
+            "JVSPATIAL_S3_SECRET_KEY": "test-secret",  # pragma: allowlist secret
         },
     )
     @patch("jvspatial.storage.interfaces.s3.boto3")
