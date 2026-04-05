@@ -1,9 +1,10 @@
 """Tests for LoggingConfigurator component."""
 
 import logging
+import sys
+import uuid
 from unittest.mock import MagicMock, patch
 
-import pytest
 from fastapi import HTTPException
 
 from jvspatial.api.components.logging_config import (
@@ -12,7 +13,17 @@ from jvspatial.api.components.logging_config import (
     KnownErrorFormatter,
     LoggingConfigurator,
 )
-from jvspatial.exceptions import JVSpatialAPIException
+
+
+def _isolated_named_loggers():
+    """Unique logger objects so configure_exception_logging never touches real uvicorn/starlette."""
+    u = uuid.uuid4().hex[:12]
+    return {
+        "starlette.error": logging.getLogger(f"jv.isolated.{u}.starlette.error"),
+        "uvicorn.error": logging.getLogger(f"jv.isolated.{u}.uvicorn.error"),
+        "uvicorn.access": logging.getLogger(f"jv.isolated.{u}.uvicorn.access"),
+        "root": logging.getLogger(f"jv.isolated.{u}.root"),
+    }
 
 
 class TestLoggingFilters:
@@ -74,43 +85,51 @@ class TestLoggingFilters:
         assert result == ""
 
     def test_known_error_formatter_shows_server_errors(self):
-        """Test that server errors get stack traces."""
+        """Test that server errors get stack traces.
+
+        Do not pass MagicMock as traceback: traceback.format_exception walks tb_next and
+        can follow mocks indefinitely (hang / extreme slowdown in CI).
+        """
         formatter = KnownErrorFormatter()
-
-        # Mock exception info for ValueError (5xx equivalent)
-        exc_info = (
-            ValueError,
-            ValueError("Internal error"),
-            MagicMock(),
-        )
-
-        # Should return stack trace
+        try:
+            raise ValueError("Internal error")
+        except ValueError:
+            exc_info = sys.exc_info()
         result = formatter.formatException(exc_info)
-        # Should not be empty (has traceback)
         assert result != ""
 
 
 class TestLoggingConfigurator:
-    """Test LoggingConfigurator functionality."""
+    """Test LoggingConfigurator without mutating real framework loggers."""
 
     def test_configure_exception_logging(self):
-        """Test that configure_exception_logging sets up filters."""
-        # Get loggers before configuration
-        starlette_logger = logging.getLogger("starlette.error")
-        uvicorn_logger = logging.getLogger("uvicorn.error")
-        uvicorn_access_logger = logging.getLogger("uvicorn.access")
+        """configure_exception_logging sets levels and attaches filters on target loggers."""
+        loggers = _isolated_named_loggers()
 
-        initial_starlette_level = starlette_logger.level
-        initial_uvicorn_level = uvicorn_logger.level
+        def get_logger(name=None):
+            if name == "starlette.error":
+                return loggers["starlette.error"]
+            if name == "uvicorn.error":
+                return loggers["uvicorn.error"]
+            if name == "uvicorn.access":
+                return loggers["uvicorn.access"]
+            if name is None:
+                return loggers["root"]
+            return logging.getLogger(name)
 
-        # Configure logging
-        LoggingConfigurator.configure_exception_logging()
+        with patch(
+            "jvspatial.api.components.logging_config.logging.getLogger",
+            side_effect=get_logger,
+        ):
+            LoggingConfigurator.configure_exception_logging()
 
-        # Verify loggers are configured
+        starlette_logger = loggers["starlette.error"]
+        uvicorn_logger = loggers["uvicorn.error"]
+        uvicorn_access_logger = loggers["uvicorn.access"]
+
         assert starlette_logger.level == logging.CRITICAL
         assert uvicorn_logger.level == logging.CRITICAL
 
-        # Verify filters are added
         starlette_filters = [
             f for f in starlette_logger.filters if isinstance(f, CentralizedErrorFilter)
         ]
@@ -129,13 +148,27 @@ class TestLoggingConfigurator:
         assert len(access_filters) > 0
 
     def test_configure_exception_logging_idempotent(self):
-        """Test that configure can be called multiple times safely."""
-        LoggingConfigurator.configure_exception_logging()
-        first_count = len(logging.getLogger("starlette.error").filters)
+        """Calling configure twice should not break (still using isolated loggers)."""
+        loggers = _isolated_named_loggers()
 
-        LoggingConfigurator.configure_exception_logging()
-        second_count = len(logging.getLogger("starlette.error").filters)
+        def get_logger(name=None):
+            if name == "starlette.error":
+                return loggers["starlette.error"]
+            if name == "uvicorn.error":
+                return loggers["uvicorn.error"]
+            if name == "uvicorn.access":
+                return loggers["uvicorn.access"]
+            if name is None:
+                return loggers["root"]
+            return logging.getLogger(name)
 
-        # Should not duplicate filters (filters are deduplicated in implementation)
-        # Count may be same or filters may be replaced
+        with patch(
+            "jvspatial.api.components.logging_config.logging.getLogger",
+            side_effect=get_logger,
+        ):
+            LoggingConfigurator.configure_exception_logging()
+            first_count = len(loggers["starlette.error"].filters)
+            LoggingConfigurator.configure_exception_logging()
+            second_count = len(loggers["starlette.error"].filters)
+
         assert second_count >= first_count
