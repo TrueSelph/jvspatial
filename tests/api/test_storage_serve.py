@@ -47,6 +47,43 @@ async def test_get_files_serves_from_configured_root():
 
 
 @pytest.mark.asyncio
+async def test_get_files_content_type_from_extension():
+    """GET uses guessed MIME type so third-party fetches (e.g. Resolv) see image/jpeg not octet-stream."""
+    tid = uuid.uuid4().hex[:8]
+    base = Path(tempfile.mkdtemp(prefix=f"jvsp_mime_{tid}_"))
+    root = base / "vault"
+    db_path = base / f"db_{tid}"
+    try:
+        server = Server(
+            title="storage-mime-test",
+            db_type="json",
+            db_path=str(db_path),
+            auth=dict(auth_enabled=False),
+            webhook=dict(webhook_https_required=False),
+            file_storage=dict(
+                file_storage_enabled=True,
+                file_storage_provider="local",
+                file_storage_root=str(root),
+            ),
+        )
+        set_current_server(server)
+        assert server._file_interface is not None
+        await server._file_interface.save_file(
+            "whatsapp_media/uid/20260410_x.jpg", b"jpeg-bytes"
+        )
+
+        app = server.get_app()
+        url = f"{APIRoutes.FILES_ROOT}/whatsapp_media/uid/20260410_x.jpg"
+        with TestClient(app) as client:
+            r = client.get(url)
+        assert r.status_code == 200
+        assert r.content == b"jpeg-bytes"
+        assert r.headers.get("content-type", "").split(";")[0].strip() == "image/jpeg"
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+@pytest.mark.asyncio
 async def test_openapi_files_delete_has_security_when_get_is_public(monkeypatch):
     """DELETE must show OpenAPI security (padlock) even when GET shares the same path template."""
     tid = uuid.uuid4().hex[:8]
