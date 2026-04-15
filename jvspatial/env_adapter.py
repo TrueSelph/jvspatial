@@ -87,6 +87,11 @@ def server_config_overrides_from_env() -> Dict[str, Any]:
         if raw:
             o["deferred_task_provider"] = raw
 
+    if "JVSPATIAL_SCHEDULER_ENABLED" in os.environ:
+        o["scheduler_enabled"] = _parse_bool(os.environ["JVSPATIAL_SCHEDULER_ENABLED"])
+    if (n := _opt_int("JVSPATIAL_SCHEDULER_INTERVAL")) is not None:
+        o["scheduler_interval"] = n
+
     db: Dict[str, Any] = {}
     if (t := _opt_str("JVSPATIAL_DB_TYPE")) is not None:
         db["db_type"] = t
