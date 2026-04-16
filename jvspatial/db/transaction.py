@@ -6,7 +6,7 @@ different database implementations.
 
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class Transaction(ABC):
@@ -68,7 +68,12 @@ class Transaction(ABC):
 
     @abstractmethod
     async def find(
-        self, collection: str, query: Dict[str, Any]
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find records matching query within this transaction.
 
@@ -136,11 +141,20 @@ class MongoDBTransaction(Transaction):
         return result.deleted_count > 0
 
     async def find(
-        self, collection: str, query: Dict[str, Any]
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find records matching query within this MongoDB transaction."""
         coll = self._db[collection]
         cursor = coll.find(query, session=self.session)
+        if sort:
+            cursor = cursor.sort(sort)
+        if limit is not None:
+            cursor = cursor.limit(limit)
         return await cursor.to_list(length=None)
 
     async def commit(self) -> None:
@@ -190,11 +204,16 @@ class JsonDBTransaction(Transaction):
         return await self.database.delete(collection, id)
 
     async def find(
-        self, collection: str, query: Dict[str, Any]
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find records matching query within this JsonDB transaction (simulated)."""
         # For JsonDB, we just delegate to the database since it doesn't support transactions
-        return await self.database.find(collection, query)
+        return await self.database.find(collection, query, limit=limit, sort=sort)
 
     async def commit(self) -> None:
         """Commit this JsonDB transaction (simulated)."""
@@ -238,7 +257,12 @@ class JSONTransaction(Transaction):
         raise NotImplementedError("JSON transaction delete not implemented")
 
     async def find(
-        self, collection: str, query: Dict[str, Any]
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find records matching query within this JSON transaction (simulated)."""
         # For JSON database, we just track operations but don't implement true transactions

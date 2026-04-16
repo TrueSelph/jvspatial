@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
 
-from .database import Database
+from .database import Database, finalize_find_results
 from .query import QueryEngine
 
 logger = logging.getLogger(__name__)
@@ -304,7 +304,12 @@ class SQLiteDB(Database):
             await connection.commit()
 
     async def find(
-        self, collection: str, query: Dict[str, Any]
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find records matching the query.
 
@@ -331,7 +336,7 @@ class SQLiteDB(Database):
             record = json.loads(row["data"])
             if not query or QueryEngine.match(record, query):
                 results.append(record)
-        return results
+        return finalize_find_results(results, sort=sort, limit=limit)
 
     # Context manager helpers for convenience
     async def __aenter__(self) -> "SQLiteDB":

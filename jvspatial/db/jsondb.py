@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from jvspatial.db.database import Database
+from jvspatial.db.database import Database, finalize_find_results
 from jvspatial.db.query import QueryEngine
 from jvspatial.runtime.serverless import is_serverless_mode
 
@@ -152,7 +152,12 @@ class JsonDB(Database):
         await asyncio.to_thread(self._sync_delete_record, collection, id)
 
     async def find(
-        self, collection: str, query: Dict[str, Any]
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find records matching a query.
 
@@ -189,7 +194,7 @@ class JsonDB(Database):
             ):
                 results.append(record)
 
-        return results
+        return finalize_find_results(results, sort=sort, limit=limit)
 
     def _get_nested_value(self, data: Dict[str, Any], key: str) -> Any:
         """Get a nested value using dot notation."""

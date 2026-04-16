@@ -2,6 +2,7 @@
 
 # Web framework and async server
 fastapi>=0.100.0  # Web framework
+starlette>=0.40.0,<1.0.0  # Avoid Starlette 1.x until FastAPI stack matches (Router API)
 uvicorn>=0.23.0  # ASGI server
 python-multipart>=0.0.6  # Form data parsing
 

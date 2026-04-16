@@ -12,10 +12,11 @@ Demonstrates various ways to dynamically switch databases in jvspatial:
 
 import asyncio
 import os
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 
 from jvspatial.core import Edge, GraphContext, Node, set_default_context
 from jvspatial.db import Database
+from jvspatial.db.database import finalize_find_results
 
 
 # Simple mock database for demonstration
@@ -47,14 +48,22 @@ class MockDatabase(Database):
         self._data.pop(key, None)
         print(f"🗑️  Deleted from {self.name}: {key}")
 
-    async def find(self, collection: str, query: Dict[str, Any]):
+    async def find(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+    ):
         results = []
         prefix = f"{collection}:"
         for key, doc in self._data.items():
             if key.startswith(prefix):
                 results.append(doc)
-        print(f"🔍 Found {len(results)} items in {self.name}")
-        return results
+        out = finalize_find_results(results, sort=sort, limit=limit)
+        print(f"🔍 Found {len(out)} items in {self.name}")
+        return out
 
 
 class Person(Node):

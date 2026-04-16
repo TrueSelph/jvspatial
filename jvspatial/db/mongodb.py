@@ -324,7 +324,12 @@ class MongoDB(Database):
             raise DatabaseError(f"MongoDB delete error: {e}") from e
 
     async def find(
-        self, collection: str, query: Dict[str, Any]
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find records matching a query."""
         await self._ensure_connected()
@@ -335,6 +340,10 @@ class MongoDB(Database):
         try:
             collection_obj = self._db[collection]
             cursor = collection_obj.find(query)
+            if sort:
+                cursor = cursor.sort(sort)
+            if limit is not None:
+                cursor = cursor.limit(limit)
             results = await cursor.to_list(length=None)
             return results
         except RuntimeError as e:
@@ -353,6 +362,10 @@ class MongoDB(Database):
                     )
                 collection_obj = self._db[collection]
                 cursor = collection_obj.find(query)
+                if sort:
+                    cursor = cursor.sort(sort)
+                if limit is not None:
+                    cursor = cursor.limit(limit)
                 results = await cursor.to_list(length=None)
                 return results
             raise DatabaseError(f"MongoDB find error: {e}") from e
@@ -371,6 +384,10 @@ class MongoDB(Database):
                     )
                 collection_obj = self._db[collection]
                 cursor = collection_obj.find(query)
+                if sort:
+                    cursor = cursor.sort(sort)
+                if limit is not None:
+                    cursor = cursor.limit(limit)
                 return await cursor.to_list(length=None)
             raise DatabaseError(f"MongoDB find error: {e}") from e
 

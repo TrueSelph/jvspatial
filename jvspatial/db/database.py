@@ -6,11 +6,43 @@ unnecessary complexity while maintaining core functionality.
 
 import logging
 from abc import ABC, abstractmethod
+from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from jvspatial.db.query import QueryEngine
 
 logger = logging.getLogger(__name__)
+
+
+def _find_sort_key(record: Dict[str, Any], field: str) -> Tuple[bool, Any]:
+    """Sort key: non-``None`` values first, then by value (with ``None`` last)."""
+    value = record.get(field)
+    return (value is None, value)
+
+
+def finalize_find_results(
+    records: List[Dict[str, Any]],
+    *,
+    sort: Optional[List[Tuple[str, int]]] = None,
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Apply optional Mongo-style sort and limit in memory.
+
+    ``sort`` is a list of ``(field, direction)`` with ``direction`` ``1`` for
+    ascending and ``-1`` for descending. Sorting is stable; compound sorts are
+    applied from the last key to the first.
+    """
+    out = records
+    if sort:
+        out = list(records)
+        for field, direction in reversed(sort):
+            out.sort(
+                key=partial(_find_sort_key, field=field),
+                reverse=(direction == -1),
+            )
+    if limit is not None:
+        out = out[:limit]
+    return out
 
 
 class Database(ABC):
@@ -75,13 +107,20 @@ class Database(ABC):
 
     @abstractmethod
     async def find(
-        self, collection: str, query: Dict[str, Any]
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find records matching a query.
 
         Args:
             collection: Collection name
             query: Query parameters (empty dict for all records)
+            limit: Optional maximum number of documents to return after matching
+            sort: Optional list of ``(field, direction)`` tuples (``1`` asc, ``-1`` desc)
 
         Returns:
             List of matching records

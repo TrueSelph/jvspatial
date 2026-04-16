@@ -6,12 +6,12 @@ Tests the simplified database creation functionality and custom database registr
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import patch
 
 import pytest
 
-from jvspatial.db.database import Database
+from jvspatial.db.database import Database, finalize_find_results
 from jvspatial.db.factory import (
     create_database,
     create_default_database,
@@ -264,18 +264,24 @@ class TestCustomDatabaseRegistration:
                 self._data[collection].pop(id, None)
 
         async def find(
-            self, collection: str, query: Dict[str, Any]
+            self,
+            collection: str,
+            query: Dict[str, Any],
+            *,
+            limit: Optional[int] = None,
+            sort: Optional[List[Tuple[str, int]]] = None,
         ) -> List[Dict[str, Any]]:
             """Find records."""
             if collection not in self._data:
                 return []
             if not query:
-                return list(self._data[collection].values())
-            results = []
-            for record in self._data[collection].values():
-                if all(record.get(k) == v for k, v in query.items()):
-                    results.append(record)
-            return results
+                results = list(self._data[collection].values())
+            else:
+                results = []
+                for record in self._data[collection].values():
+                    if all(record.get(k) == v for k, v in query.items()):
+                        results.append(record)
+            return finalize_find_results(results, sort=sort, limit=limit)
 
     def test_register_database_type(self):
         """Test registering a custom database type."""

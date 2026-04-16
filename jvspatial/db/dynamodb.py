@@ -35,7 +35,7 @@ except ImportError:
     ClientError = Exception  # type: ignore[assignment, misc]
     Config = None  # type: ignore[assignment, misc]
 
-from jvspatial.db.database import Database
+from jvspatial.db.database import Database, finalize_find_results
 from jvspatial.db.query import QueryEngine
 from jvspatial.exceptions import DatabaseError
 
@@ -838,7 +838,12 @@ class DynamoDB(Database):
         return filter_expression, attr_names, attr_values
 
     async def find(
-        self, collection: str, query: Dict[str, Any], limit: Optional[int] = None
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find records matching a query.
 
@@ -850,6 +855,8 @@ class DynamoDB(Database):
             collection: Collection name
             query: Query parameters (empty dict for all records)
             limit: Optional maximum number of results to return
+            sort: Optional sort spec; when set, matching rows are collected without
+                an early DynamoDB ``Limit`` (then sorted and truncated in memory).
 
         Returns:
             List of matching records
@@ -863,6 +870,7 @@ class DynamoDB(Database):
         table_name = await self._ensure_table_exists(collection)
 
         try:
+            fetch_limit = None if sort else limit
             client = await self._get_client()
             # Try to use GSI if query matches an indexed field
             gsi_match = self._find_matching_gsi(collection, query)
@@ -907,8 +915,8 @@ class DynamoDB(Database):
                         "ExpressionAttributeNames": expr_attr_names,
                         "ExpressionAttributeValues": expr_attr_values,
                     }
-                    if limit:
-                        query_params["Limit"] = limit
+                    if fetch_limit:
+                        query_params["Limit"] = fetch_limit
                     if filter_expr:
                         query_params["FilterExpression"] = filter_expr
 
@@ -926,16 +934,16 @@ class DynamoDB(Database):
                         ):
                             continue
                         results.append(data)
-                        if limit and len(results) >= limit:
+                        if fetch_limit and len(results) >= fetch_limit:
                             break
 
                     # Handle pagination (only if limit not reached)
                     while "LastEvaluatedKey" in response and (
-                        not limit or len(results) < limit
+                        not fetch_limit or len(results) < fetch_limit
                     ):
                         query_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
-                        if limit:
-                            query_params["Limit"] = limit - len(results)
+                        if fetch_limit:
+                            query_params["Limit"] = fetch_limit - len(results)
                         response = await client.query(**query_params)
 
                         for item in response.get("Items", []):
@@ -947,15 +955,15 @@ class DynamoDB(Database):
                             ):
                                 continue
                             results.append(data)
-                            if limit and len(results) >= limit:
+                            if fetch_limit and len(results) >= fetch_limit:
                                 break
-                        if limit and len(results) >= limit:
+                        if fetch_limit and len(results) >= fetch_limit:
                             break
 
                     logger.debug(
                         f"Used GSI '{gsi_match['gsi_name']}' for query on '{gsi_match['field_path']}'"
                     )
-                    return results[:limit] if limit else results
+                    return finalize_find_results(results, sort=sort, limit=limit)
 
                 except ClientError as e:
                     # If GSI query fails, fall back to scan
@@ -989,8 +997,8 @@ class DynamoDB(Database):
                 "ExpressionAttributeNames": scan_attr_names,
                 "ExpressionAttributeValues": scan_attr_values,
             }
-            if limit:
-                scan_params["Limit"] = limit
+            if fetch_limit:
+                scan_params["Limit"] = fetch_limit
 
             response = await client.scan(**scan_params)
 
@@ -1003,16 +1011,16 @@ class DynamoDB(Database):
                 if not filter_expr and query and not QueryEngine.match(data, query):
                     continue
                 results.append(data)
-                if limit and len(results) >= limit:
+                if fetch_limit and len(results) >= fetch_limit:
                     break
 
             # Handle pagination (only if limit not reached)
             while "LastEvaluatedKey" in response and (
-                not limit or len(results) < limit
+                not fetch_limit or len(results) < fetch_limit
             ):
                 scan_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
-                if limit:
-                    scan_params["Limit"] = limit - len(results)
+                if fetch_limit:
+                    scan_params["Limit"] = fetch_limit - len(results)
                 response = await client.scan(**scan_params)
 
                 for item in response.get("Items", []):
@@ -1020,12 +1028,12 @@ class DynamoDB(Database):
                     if not filter_expr and query and not QueryEngine.match(data, query):
                         continue
                     results.append(data)
-                    if limit and len(results) >= limit:
+                    if fetch_limit and len(results) >= fetch_limit:
                         break
-                if limit and len(results) >= limit:
+                if fetch_limit and len(results) >= fetch_limit:
                     break
 
-            return results[:limit] if limit else results
+            return finalize_find_results(results, sort=sort, limit=limit)
         except ClientError as e:
             raise DatabaseError(f"DynamoDB find error: {e}") from e
 

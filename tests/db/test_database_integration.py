@@ -14,7 +14,7 @@ This module implements comprehensive tests for:
 import asyncio
 import os
 import tempfile
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -23,7 +23,7 @@ from pydantic import Field
 from jvspatial.core.context import GraphContext
 from jvspatial.core.entities import Edge, Node, Walker
 from jvspatial.core.pager import ObjectPager
-from jvspatial.db.database import Database, VersionConflictError
+from jvspatial.db.database import Database, VersionConflictError, finalize_find_results
 from jvspatial.db.factory import create_database
 from jvspatial.db.jsondb import JsonDB
 from jvspatial.db.query import QueryBuilder, query
@@ -127,7 +127,12 @@ class MockDatabase(Database):
             del self.data[collection][id]
 
     async def find(
-        self, collection: str, query: Dict[str, Any]
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find records matching a query."""
         self.call_log.append(
@@ -141,7 +146,7 @@ class MockDatabase(Database):
         for record in self.data[collection].values():
             if self._matches_query(record, query):
                 results.append(record.copy())
-        return results
+        return finalize_find_results(results, sort=sort, limit=limit)
 
     async def count(
         self, collection: str, query: Optional[Dict[str, Any]] = None
@@ -819,7 +824,7 @@ class TestDatabaseErrorHandling:
             async def delete(self, collection, id):
                 raise ConnectionError("Database connection failed")
 
-            async def find(self, collection, query):
+            async def find(self, collection, query, *, limit=None, sort=None):
                 raise ConnectionError("Database connection failed")
 
             async def begin_transaction(self):

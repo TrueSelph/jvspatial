@@ -31,6 +31,8 @@ classifiers = [
 dependencies = [
     "pydantic>=2.0",
     "fastapi>=0.100.0",
+    # Starlette 1.0 drops Router(on_startup/on_shutdown); older FastAPI APIRouter still passes them.
+    "starlette>=0.40.0,<1.0.0",
     "uvicorn>=0.23.0",
     "python-multipart>=0.0.6",
     "motor>=3.0.0",

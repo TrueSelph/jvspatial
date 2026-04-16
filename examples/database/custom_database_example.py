@@ -11,7 +11,7 @@ For comprehensive documentation, see: docs/md/custom-database-guide.md
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from jvspatial.core.context import GraphContext, set_default_context
 from jvspatial.core.entities import Node
@@ -21,6 +21,7 @@ from jvspatial.db import (
     list_database_types,
     register_database_type,
 )
+from jvspatial.db.database import finalize_find_results
 
 
 class MemoryDatabase(Database):
@@ -85,7 +86,12 @@ class MemoryDatabase(Database):
             self._collections[collection].pop(id, None)
 
     async def find(
-        self, collection: str, query: Dict[str, Any]
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find documents matching query."""
         if collection not in self._collections:
@@ -95,7 +101,7 @@ class MemoryDatabase(Database):
         for doc in self._collections[collection].values():
             if self._matches_simple_query(doc, query):
                 results.append(doc.copy())
-        return results
+        return finalize_find_results(results, sort=sort, limit=limit)
 
     def _matches_simple_query(self, doc: Dict[str, Any], query: Dict[str, Any]) -> bool:
         """Simple query matching (for demo purposes)."""
