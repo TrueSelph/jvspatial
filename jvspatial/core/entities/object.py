@@ -690,13 +690,16 @@ class Object(AttributeMixin, BaseModel):
         for field_name, index_config in indexed_fields.items():
             # Map field name to context.field_name for database
             db_field = f"context.{field_name}"
-            indexes.append(
-                {
-                    "field": db_field,
-                    "unique": index_config.get("unique", False),
-                    "direction": index_config.get("direction", 1),
-                }
-            )
+            single_entry: Dict[str, Any] = {
+                "field": db_field,
+                "unique": index_config.get("unique", False),
+                "direction": index_config.get("direction", 1),
+            }
+            if "partial_filter_expression" in index_config:
+                single_entry["partialFilterExpression"] = index_config[
+                    "partial_filter_expression"
+                ]
+            indexes.append(single_entry)
 
         # Get compound indexes from class decorators
         compound_indexes = get_compound_indexes(cls)
@@ -706,13 +709,15 @@ class Object(AttributeMixin, BaseModel):
                 (f"context.{field_name}", direction)
                 for field_name, direction in comp_index["fields"]
             ]
-            indexes.append(
-                {
-                    "fields": mapped_fields,
-                    "unique": comp_index.get("unique", False),
-                    "name": comp_index.get("name"),
-                }
-            )
+            entry: Dict[str, Any] = {
+                "fields": mapped_fields,
+                "unique": comp_index.get("unique", False),
+                "sparse": comp_index.get("sparse", False),
+                "name": comp_index.get("name"),
+            }
+            if "partialFilterExpression" in comp_index:
+                entry["partialFilterExpression"] = comp_index["partialFilterExpression"]
+            indexes.append(entry)
 
         return indexes
 

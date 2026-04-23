@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Database.drop_deprecated_indexes()` optional hook (default no-op) for named-index cleanup; MongoDB implementation drops listed names. Documented in [Custom Database guide](docs/md/custom-database-guide.md) and [optimization](docs/md/optimization.md#declarative-database-indexing) (index migration, partial indexes, jvagent `run_index_migration`).
 - `SecurityConfig` with `security_headers_enabled` option.
 - [Production Deployment Guide](docs/md/production-deployment.md) with security checklist.
 - CI now runs test coverage with `--cov-fail-under=50`.

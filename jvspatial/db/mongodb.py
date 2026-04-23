@@ -1,11 +1,20 @@
 """Simplified MongoDB database implementation.
 
-Index Creation Behavior:
+Index creation
     By default, index creation uses background mode to avoid blocking database operations.
     This allows the database to remain operational during index creation, which is especially
     important for large collections. Background index creation is slower but non-blocking.
+    Pass ``background=False`` to ``create_index()`` for foreground (blocking) builds.
 
-    To use foreground (blocking) index creation, pass background=False when calling create_index().
+    When ``create_index`` fails with MongoDB error **85** (IndexOptionsConflict — same index
+    name, different options) or **86** (IndexKeySpecsConflict — same key pattern, different
+    name), this implementation drops the conflicting index and retries, so schema changes
+    in code can migrate existing databases without manual ``dropIndex`` steps.
+
+    ``drop_deprecated_indexes(deprecated)`` removes named indexes listed by collection
+    (e.g. orphan names from earlier releases). It is invoked from jvagent startup via
+    ``jvagent.core.index_bootstrap.run_index_migration`` together with eager
+    ``ensure_indexes`` for entity classes.
 """
 
 import contextlib
@@ -15,6 +24,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import (
     ConnectionFailure,
+    OperationFailure,
     PyMongoError,
     ServerSelectionTimeoutError,
 )
@@ -440,6 +450,45 @@ class MongoDB(Database):
                 return await collection_obj.find_one_and_delete(query)
             raise DatabaseError(f"MongoDB find_one_and_delete error: {e}") from e
 
+    async def count(
+        self,
+        collection: str,
+        query: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Count records using MongoDB's native count_documents / estimated_document_count.
+
+        This is an O(1) server-side operation rather than the base-class
+        ``find + len`` fallback.
+        """
+        await self._ensure_connected()
+        if self._db is None:
+            raise DatabaseError("MongoDB database connection not established")
+        q = query or {}
+        try:
+            collection_obj = self._db[collection]
+            if not q:
+                # estimated_document_count is the fastest path for full counts.
+                return await collection_obj.estimated_document_count()
+            return await collection_obj.count_documents(q)
+        except PyMongoError as e:
+            if _is_connection_error(e):
+                logger.debug(
+                    "MongoDB connection error during count, recreating and retrying: %s",
+                    e,
+                )
+                self._client = None
+                self._db = None
+                await self._ensure_connected()
+                if self._db is None:
+                    raise DatabaseError(
+                        "Failed to establish MongoDB connection after retry"
+                    )
+                collection_obj = self._db[collection]
+                if not q:
+                    return await collection_obj.estimated_document_count()
+                return await collection_obj.count_documents(q)
+            raise DatabaseError(f"MongoDB count error: {e}") from e
+
     async def find_one_and_update(
         self,
         collection: str,
@@ -543,17 +592,25 @@ class MongoDB(Database):
             if collection not in self._created_indexes:
                 self._created_indexes[collection] = set()
 
+            kwargs = dict(kwargs)
+            # Custom index name (e.g. from @compound_index name=) so partial indexes
+            # do not collide with legacy auto-generated names in MongoDB.
+            name_override = kwargs.pop("name", None)
+
             # Build index specification
             if isinstance(field_or_fields, str):
                 # Single field index
                 index_spec = [(field_or_fields, 1)]
-                index_name = f"{field_or_fields}_1"
+                index_name = name_override or f"{field_or_fields}_1"
             else:
                 # Compound index
                 index_spec = field_or_fields
-                index_name = "_".join(
-                    f"{field}_{direction}" for field, direction in index_spec
-                )
+                if name_override:
+                    index_name = name_override
+                else:
+                    index_name = "_".join(
+                        f"{field}_{direction}" for field, direction in index_spec
+                    )
 
             # Check if index already exists
             if index_name in self._created_indexes[collection]:
@@ -576,10 +633,58 @@ class MongoDB(Database):
                 if key not in ("expireAfterSeconds", "background"):  # Already handled
                     index_options[key] = value
 
-            # Create the index
-            await collection_obj.create_index(
-                index_spec, name=index_name, **index_options
-            )
+            # Create the index, auto-dropping if options have changed since last run
+            try:
+                await collection_obj.create_index(
+                    index_spec, name=index_name, **index_options
+                )
+            except OperationFailure as e:
+                if e.code == 85:  # IndexOptionsConflict: same name, different options
+                    logger.info(
+                        f"Index '{index_name}' on '{collection}' exists with "
+                        f"different options; dropping and recreating"
+                    )
+                    try:
+                        await collection_obj.drop_index(index_name)
+                    except OperationFailure as drop_err:
+                        if drop_err.code != 27:  # 27 = IndexNotFound — already gone
+                            raise DatabaseError(
+                                f"MongoDB index drop error: {drop_err}"
+                            ) from drop_err
+                    await collection_obj.create_index(
+                        index_spec, name=index_name, **index_options
+                    )
+                elif (
+                    e.code == 86
+                ):  # IndexKeySpecsConflict: same key pattern, different name
+                    # The conflicting index has the same key pattern but a different
+                    # name. Scan index_information() to find it and drop by actual name.
+                    existing_indexes = await collection_obj.index_information()
+                    spec_keys = [(f, d) for f, d in index_spec]
+                    conflicting_name = None
+                    for ex_name, ex_info in existing_indexes.items():
+                        ex_keys = list(ex_info.get("key", {}).items())
+                        if ex_keys == spec_keys and ex_name != index_name:
+                            conflicting_name = ex_name
+                            break
+                    if conflicting_name:
+                        logger.info(
+                            f"Index '{conflicting_name}' on '{collection}' has the "
+                            f"same key pattern as '{index_name}'; replacing with "
+                            f"updated definition"
+                        )
+                        await collection_obj.drop_index(conflicting_name)
+                    else:
+                        logger.warning(
+                            f"IndexKeySpecsConflict for '{index_name}' on "
+                            f"'{collection}' but no conflicting index found by key "
+                            f"scan; attempting create anyway"
+                        )
+                    await collection_obj.create_index(
+                        index_spec, name=index_name, **index_options
+                    )
+                else:
+                    raise DatabaseError(f"MongoDB index creation error: {e}") from e
 
             # Track that we created this index
             self._created_indexes[collection].add(index_name)
@@ -627,6 +732,34 @@ class MongoDB(Database):
         if txn is not None:
             await txn.rollback()
             txn.session.end_session()
+
+    async def drop_deprecated_indexes(self, deprecated: Dict[str, List[str]]) -> None:
+        """Drop indexes that have been removed or renamed in code.
+
+        Silently skips indexes that no longer exist (IndexNotFound). Any other
+        error is logged as a warning so that startup can continue.
+
+        Args:
+            deprecated: Mapping of collection name to list of index names to drop.
+                        Example: ``{"node": ["conv_id_only", "context.session_id_1"]}``
+        """
+        await self._ensure_connected()
+        if self._db is None:
+            return
+        for collection, names in deprecated.items():
+            coll = self._db[collection]
+            for name in names:
+                try:
+                    await coll.drop_index(name)
+                    logger.info(f"Dropped deprecated index '{name}' on '{collection}'")
+                except OperationFailure as ex:
+                    if ex.code == 27:  # IndexNotFound — already removed, fine
+                        pass
+                    else:
+                        logger.warning(
+                            f"Could not drop deprecated index '{name}' on "
+                            f"'{collection}': {ex}"
+                        )
 
     async def close(self) -> None:
         """Close the database connection."""

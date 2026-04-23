@@ -149,6 +149,18 @@ class Database(ABC):
             this can be a no-op that logs a debug message.
         """
         pass
+
+    async def drop_deprecated_indexes(
+        self, deprecated: Dict[str, List[str]]
+    ) -> None:
+        """Drop indexes that were removed or renamed in application code.
+
+        The base class default is a no-op. jvagent calls this at startup with a
+        map of collection name → former index names (MongoDB-oriented). Override
+        if your backend supports named indexes and you want migration cleanup;
+        otherwise leave the default.
+        """
+        pass
 ```
 
 ### Key Requirements
@@ -158,7 +170,7 @@ class Database(ABC):
 3. **ID-based operations** - Records must have an `id` field (string)
 4. **Dictionary-based data** - All data is passed as dictionaries
 5. **Query matching** - The `find()` method should support simple dictionary-based queries
-6. **Index support** - Implement `create_index()` for query optimization (can be no-op for databases without indexing)
+6. **Index support** - Implement `create_index()` for query optimization (can be no-op for databases without indexing). Optionally override `drop_deprecated_indexes()` for named-index orphan cleanup (default no-op).
 
 ---
 
@@ -661,6 +673,8 @@ class MyDatabase(Database):
         # logger = logging.getLogger(__name__)
         # logger.debug(f"Index creation requested for {collection} (not supported)")
 ```
+
+If your backend supports **named** indexes and you deploy jvagent, also override `drop_deprecated_indexes(self, deprecated)` to remove old index names listed in `jvagent.core.index_bootstrap.DEPRECATED_INDEXES` (or ignore the call if not applicable). The MongoDB adapter implements both methods; the base `Database` class provides no-op defaults.
 
 **Index Creation Examples:**
 

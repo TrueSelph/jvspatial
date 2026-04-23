@@ -56,6 +56,7 @@ def attribute(
     indexed: bool = False,
     index_unique: bool = False,
     index_direction: int = 1,
+    index_partial_filter_expression: Optional[Dict[str, Any]] = None,
     # Standard Pydantic Field parameters
     description: Optional[str] = None,
     title: Optional[str] = None,
@@ -81,6 +82,11 @@ def attribute(
         indexed: If True, create a single-field index on this field (maps to context.field_name)
         index_unique: If True, create a unique index (requires indexed=True)
         index_direction: Index direction for sorting (1=ascending, -1=descending, default=1)
+        index_partial_filter_expression: MongoDB partialFilterExpression dict to scope the
+                index to a subset of documents. Field paths must use the full
+                ``context.<field>`` DB path. Use this with ``index_unique=True`` to avoid
+                null/empty-value conflicts in shared collections (e.g.
+                ``{"context.name": {"$gt": ""}}``). Supersedes sparse behavior.
         description: Description for the attribute
         title: Title for the attribute
         examples: Example values for documentation
@@ -153,6 +159,10 @@ def attribute(
                 json_extra["index_unique"] = True
             if index_direction != 1:
                 json_extra["index_direction"] = index_direction
+            if index_partial_filter_expression is not None:
+                json_extra["index_partial_filter_expression"] = (
+                    index_partial_filter_expression
+                )
         field_kwargs["json_schema_extra"] = json_extra
 
     return Field(**field_kwargs)
@@ -256,25 +266,47 @@ def get_indexed_fields(cls: Type) -> Dict[str, Dict[str, Any]]:
                     json_extra(schema, klass)
                     json_extra = schema
                 if json_extra and json_extra.get("indexed", False):
-                    indexed_fields[field_name] = {
+                    field_config: Dict[str, Any] = {
                         "indexed": True,
                         "unique": json_extra.get("index_unique", False),
                         "direction": json_extra.get("index_direction", 1),
                     }
+                    if "index_partial_filter_expression" in json_extra:
+                        field_config["partial_filter_expression"] = json_extra[
+                            "index_partial_filter_expression"
+                        ]
+                    indexed_fields[field_name] = field_config
 
     return indexed_fields
 
 
 def compound_index(
-    fields: List[Tuple[str, int]], name: Optional[str] = None, unique: bool = False
+    fields: List[Tuple[str, int]],
+    name: Optional[str] = None,
+    unique: bool = False,
+    sparse: bool = False,
+    partial_filter_expression: Optional[Dict[str, Any]] = None,
 ):
     """Class decorator for declaring compound indexes.
 
     Args:
         fields: List of (field_name, direction) tuples. Field names are automatically
-                mapped to context.field_name in the database.
+                mapped to context.field_name in the database. Do NOT include the
+                ``context.`` prefix here — get_indexes() adds it automatically.
         name: Optional name for the index (auto-generated if not provided)
         unique: Whether the compound index should enforce uniqueness
+        sparse: Whether the index should be sparse (only index documents that
+                contain the indexed fields). Use with unique=True on shared
+                collections where not all documents have the indexed fields.
+                NOTE: ``sparse`` and ``partial_filter_expression`` are mutually
+                exclusive in MongoDB — do not use both together.
+        partial_filter_expression: MongoDB partial index filter expression dict.
+                Only documents matching this expression will be included in the
+                index. Stored as ``partialFilterExpression`` and passed directly
+                to PyMongo. Supersedes ``sparse`` for use-cases that need to scope
+                a unique index to a specific document sub-type within a shared
+                collection. Field paths in the expression must use the full
+                ``context.<field>`` DB path (they are NOT auto-prefixed).
 
     Returns:
         Class decorator function
@@ -291,11 +323,14 @@ def compound_index(
         if cls not in _COMPOUND_INDEXES:
             _COMPOUND_INDEXES[cls] = []
 
-        index_def = {
+        index_def: Dict[str, Any] = {
             "fields": fields,
             "unique": unique,
+            "sparse": sparse,
             "name": name or f"idx_{'_'.join(f[0] for f in fields)}",
         }
+        if partial_filter_expression is not None:
+            index_def["partialFilterExpression"] = partial_filter_expression
         _COMPOUND_INDEXES[cls].append(index_def)
         return cls
 

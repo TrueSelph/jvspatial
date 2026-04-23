@@ -1264,12 +1264,18 @@ class GraphContext:
         Args:
             entity_class: Entity class to ensure indexes for
         """
-        # Check if automatic index creation is enabled
-        # Default is False - indexes must be created explicitly
+        # Check if automatic index creation is enabled.
+        # Default is True in non-serverless environments so deployments get the
+        # indexes they need without manual configuration.  Serverless runtimes
+        # (Lambda, Cloud Functions) default to False to avoid cold-start penalty.
         from jvspatial.env import env, parse_bool_basic
+        from jvspatial.runtime.serverless import is_serverless_mode
 
+        serverless = is_serverless_mode()
         auto_create = env(
-            "JVSPATIAL_AUTO_CREATE_INDEXES", default=False, parse=parse_bool_basic
+            "JVSPATIAL_AUTO_CREATE_INDEXES",
+            default=not serverless,
+            parse=parse_bool_basic,
         )
         if not auto_create:
             return  # Automatic index creation is disabled
@@ -1301,18 +1307,30 @@ class GraphContext:
         for index_def in indexes:
             try:
                 if "field" in index_def:
-                    # Single-field index
+                    # Single-field index; pass through name and extra kwargs
+                    extra = {
+                        k: v
+                        for k, v in index_def.items()
+                        if k not in ("field", "unique", "direction")
+                    }
                     await self.database.create_index(
                         collection,
                         index_def["field"],
                         unique=index_def.get("unique", False),
+                        **extra,
                     )
                 elif "fields" in index_def:
-                    # Compound index
+                    # Compound index; pass through name and other create_index kwargs
+                    extra = {
+                        k: v
+                        for k, v in index_def.items()
+                        if k not in ("fields", "unique")
+                    }
                     await self.database.create_index(
                         collection,
                         index_def["fields"],
                         unique=index_def.get("unique", False),
+                        **extra,
                     )
             except Exception as e:
                 # Log error but continue with other indexes
@@ -1753,22 +1771,35 @@ async def async_graph_context(database: Optional[Database] = None):
 async def async_transaction_context(database: Optional[Database] = None):
     """Async context manager for database transactions.
 
+    Captures the transaction object returned by ``begin_transaction()`` and
+    passes it to ``commit_transaction``/``rollback_transaction`` so that the
+    MongoDB session handle is not lost between calls.
+
     Usage:
         async with async_transaction_context(my_db) as ctx:
             node = await ctx.create_node(name="Test")
             # All operations are automatically committed
     """
     ctx = GraphContext(database)
+    txn = None
     try:
-        # Start transaction if database supports it
         if hasattr(ctx.database, "begin_transaction"):
-            await ctx.database.begin_transaction()
+            txn = await ctx.database.begin_transaction()
         yield ctx
-        # Commit transaction
-        if hasattr(ctx.database, "commit_transaction"):
-            await ctx.database.commit_transaction()
+        if txn is not None and hasattr(ctx.database, "commit_transaction"):
+            await ctx.database.commit_transaction(txn)
+        elif txn is None and hasattr(ctx.database, "commit_transaction"):
+            # Backend's commit_transaction accepts no txn argument (non-Mongo)
+            try:
+                await ctx.database.commit_transaction()
+            except TypeError:
+                await ctx.database.commit_transaction(None)
     except Exception:
-        # Rollback transaction on error
-        if hasattr(ctx.database, "rollback_transaction"):
-            await ctx.database.rollback_transaction()
+        if txn is not None and hasattr(ctx.database, "rollback_transaction"):
+            await ctx.database.rollback_transaction(txn)
+        elif txn is None and hasattr(ctx.database, "rollback_transaction"):
+            try:
+                await ctx.database.rollback_transaction()
+            except TypeError:
+                await ctx.database.rollback_transaction(None)
         raise

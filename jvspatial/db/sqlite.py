@@ -338,6 +338,31 @@ class SQLiteDB(Database):
                 results.append(record)
         return finalize_find_results(results, sort=sort, limit=limit)
 
+    async def count(
+        self,
+        collection: str,
+        query: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Count records using SQL COUNT(*) for an empty query, or filter in Python.
+
+        For an empty query this issues ``SELECT COUNT(*) … WHERE collection = ?``
+        which is far cheaper than loading all rows.  For non-empty queries we
+        still load and match in Python (SQLite JSON indexing is limited), but
+        this is a future optimisation target.
+        """
+        q = query or {}
+        connection = await self._get_connection()
+        if not q:
+            cursor = await connection.execute(
+                "SELECT COUNT(*) FROM records WHERE collection = ?", (collection,)
+            )
+            row = await cursor.fetchone()
+            await cursor.close()
+            return row[0] if row else 0
+        # Fall back to match-in-Python for filtered queries.
+        rows = await self.find(collection, q)
+        return len(rows)
+
     # Context manager helpers for convenience
     async def __aenter__(self) -> "SQLiteDB":
         """Async context manager entry."""

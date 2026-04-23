@@ -257,6 +257,23 @@ class Database(ABC):
             f"Index creation for collection '{collection}' on field(s) '{field_or_fields}' was ignored."
         )
 
+    async def drop_deprecated_indexes(self, deprecated: Dict[str, List[str]]) -> None:
+        """Drop indexes that were removed or renamed in code (orphan cleanup).
+
+        Called once at startup with a map of collection name → list of old index
+        names to remove.  The default implementation is a no-op so that adapters
+        which do not use named indexes (e.g. in-memory) can ignore it.
+
+        Adapters that do support named indexes (MongoDB, PostgreSQL with explicit
+        index names, etc.) should override this to silently skip missing indexes
+        and log a warning for any other errors.
+
+        Args:
+            deprecated: Mapping of collection name to old index names.
+                        Example: ``{"node": ["conv_id_only", "context.session_id_1"]}``
+        """
+        return None
+
 
 class DatabaseError(Exception):
     """Base exception for database operations."""

@@ -12,17 +12,11 @@ from jvspatial.core import Object
 from jvspatial.core.annotations import attribute, compound_index
 
 
-@compound_index([("context.logged_at", -1)], name="logged_at")
-@compound_index(
-    [("context.status_code", 1), ("context.logged_at", -1)], name="status_logged_at"
-)
-@compound_index(
-    [("context.event_code", 1), ("context.logged_at", -1)], name="event_code_logged_at"
-)
-@compound_index([("context.path", 1), ("context.logged_at", -1)], name="path_logged_at")
-@compound_index(
-    [("context.log_level", 1), ("context.logged_at", -1)], name="log_level_logged_at"
-)
+@compound_index([("logged_at", -1)], name="logged_at")
+@compound_index([("status_code", 1), ("logged_at", -1)], name="status_logged_at")
+@compound_index([("event_code", 1), ("logged_at", -1)], name="event_code_logged_at")
+@compound_index([("path", 1), ("logged_at", -1)], name="path_logged_at")
+@compound_index([("log_level", 1), ("logged_at", -1)], name="log_level_logged_at")
 class DBLog(Object):
     """Base log entry for database logging.
 

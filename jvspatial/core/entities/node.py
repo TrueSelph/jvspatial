@@ -402,9 +402,52 @@ class Node(Object):
         Named ``count_neighbors`` so this does not shadow :meth:`Object.count` on
         Node subclasses (e.g. ``User.count(query)`` remains the DB count API).
 
+        Fast path: when ``node`` is a single entity name/class and no ``edge``
+        filter or extra ``kwargs`` are provided, this issues a single
+        ``count("edge", {direction: self.id, "target_entity": entity_name})``
+        query instead of hydrating all neighbor objects.
+
         Returns:
             Number of matching connected nodes.
         """
+        # Fast-path: single entity type filter, no edge filter or property kwargs.
+        if (
+            not kwargs
+            and edge is None
+            and node is not None
+            and not isinstance(node, list)
+        ):
+            entity_name: Optional[str] = None
+            if isinstance(node, str):
+                entity_name = node
+            elif isinstance(node, type):
+                entity_name = node.__name__
+            if entity_name is not None:
+                try:
+                    from ..context import get_default_context
+
+                    ctx = get_default_context()
+                    db = ctx.database
+                    if direction in ("out", "both"):
+                        q_out: Dict[str, Any] = {
+                            "source": self.id,
+                            "target_entity": entity_name,
+                        }
+                        out_count = await db.count("edge", q_out)
+                    else:
+                        out_count = 0
+                    if direction in ("in", "both"):
+                        q_in: Dict[str, Any] = {
+                            "target": self.id,
+                            "source_entity": entity_name,
+                        }
+                        in_count = await db.count("edge", q_in)
+                    else:
+                        in_count = 0
+                    return out_count + in_count
+                except Exception:
+                    pass  # Fall through to full hydration on any error.
+
         return len(
             await self.nodes(
                 direction=direction,
@@ -512,7 +555,10 @@ class Node(Object):
             if isinstance(edge_filter, type):
                 edge_query["name"] = edge_filter.__name__
 
-            edge_results = await context.database.find("edge", edge_query)
+            # Cap edge fan-out so hub nodes don't accidentally load unbounded sets.
+            edge_results = await context.database.find(
+                "edge", edge_query, limit=limit if limit is not None else 10000
+            )
             for edge_data in edge_results:
                 try:
                     edge_obj: Optional["Edge"] = await context._deserialize_entity(

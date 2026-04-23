@@ -154,6 +154,35 @@ async def test_subgraph_bfs_max_nodes_truncated(graph_ctx: GraphContext):
 
 
 @pytest.mark.asyncio
+async def test_subgraph_bfs_prefers_app_spine_when_edge_list_is_capped(
+    graph_ctx: GraphContext,
+):
+    """Root with 100+ non-spine edges: ``n.App`` must still be within the first cap."""
+    db = graph_ctx.database
+    edges_from_root = [f"e.{i:03d}" for i in range(100)] + ["e.to.app"]
+    await db.save("node", _node("n.Root.root", edges_from_root))
+    await db.save("node", _node("n.App.main", ["e.app.agents"]))
+    await db.save("node", _node("n.Agents.coll", []))
+    for i in range(100):
+        await db.save("node", _node(f"n.Filler.f{i}", []))
+        await db.save("edge", _edge(f"e.{i:03d}", "n.Root.root", f"n.Filler.f{i}"))
+    await db.save("edge", _edge("e.to.app", "n.Root.root", "n.App.main"))
+    await db.save("edge", _edge("e.app.agents", "n.App.main", "n.Agents.coll"))
+
+    sub = await subgraph_bfs(
+        graph_ctx,
+        "n.Root.root",
+        max_depth=3,
+        max_nodes=200,
+        max_edges_per_node=100,
+    )
+    ids = {n["id"] for n in sub["nodes"]}
+    assert "n.App.main" in ids, "n.App should rank before 100 generic edges from Root"
+    assert "n.Agents.coll" in ids
+    assert "n.Root.root" in ids
+
+
+@pytest.mark.asyncio
 async def test_node_label_is_entity_class_name(graph_ctx: GraphContext):
     db = graph_ctx.database
     await db.save(
