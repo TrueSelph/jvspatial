@@ -82,6 +82,8 @@ class FileValidator:
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         # Text
         "text/plain",
+        "text/markdown",
+        "text/x-markdown",
         "text/csv",
         "text/html",
         "text/css",
