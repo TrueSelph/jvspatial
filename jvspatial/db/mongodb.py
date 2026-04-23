@@ -12,9 +12,8 @@ Index creation
     in code can migrate existing databases without manual ``dropIndex`` steps.
 
     ``drop_deprecated_indexes(deprecated)`` removes named indexes listed by collection
-    (e.g. orphan names from earlier releases). It is invoked from jvagent startup via
-    ``jvagent.core.index_bootstrap.run_index_migration`` together with eager
-    ``ensure_indexes`` for entity classes.
+    (e.g. orphan names from earlier releases). Host applications may call it during
+    startup along with ``GraphContext.ensure_indexes`` for their entity types.
 """
 
 import contextlib

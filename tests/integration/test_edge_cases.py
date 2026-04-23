@@ -40,7 +40,7 @@ from jvspatial.core.entities import (
 # TraversalPaused and TraversalSkipped are not available in protection module
 # These may be defined elsewhere or need to be imported differently
 from jvspatial.core.pager import ObjectPager
-from jvspatial.db.database import Database, VersionConflictError
+from jvspatial.db.database import Database, VersionConflictError, finalize_find_results
 
 
 class EdgeCaseTestNode(Node):
@@ -362,45 +362,46 @@ class TestBoundaryConditions:
 
     @pytest.mark.asyncio
     async def test_pagination_boundary_cases(self, mock_context):
-        """Test pagination at boundaries."""
+        """Test pagination at boundaries (single full page, out-of-range page number)."""
         # Create exactly one page worth of data
         nodes = [EdgeCaseTestNode(name=f"node_{i}") for i in range(20)]
 
         for node in nodes:
             await mock_context.save(node)
 
-        # Mock database responses
-        mock_context.database.count.return_value = 20
-        # Note: export() is async, but for mock data we can use sync export for test data
-        # In real usage, this would be: [await node.export() for node in nodes]
-        mock_context.database.find.return_value = []
-        # We'll handle the async export in the mock_find function below
-
+        exported = await asyncio.gather(*[node.export() for node in nodes])
         pager = ObjectPager(EdgeCaseTestNode, page_size=20)
 
         with patch(
             "jvspatial.core.context.get_default_context", return_value=mock_context
         ):
-            # Mock database count to return exactly 20 for this test
             mock_context.database.count.return_value = 20
 
-            # Mock find to return different results for different page requests
-            async def mock_find(collection, query):
-                # Simulate pagination behavior - only return results for first page
-                if query.get("_limit") == 20 and query.get("_skip", 0) == 0:
-                    return await asyncio.gather(*[node.export() for node in nodes])
-                else:
-                    return []  # Second page and beyond are empty
+            async def mock_find(
+                collection: str,
+                query: Dict[str, Any],
+                *,
+                limit: Optional[int] = None,
+                sort: Optional[List[Any]] = None,
+            ) -> List[Dict[str, Any]]:
+                records = [dict(r) for r in exported]
+                if isinstance(query, dict) and "id" in query:
+                    id_q = query["id"]
+                    if isinstance(id_q, dict) and "$gt" in id_q:
+                        g = str(id_q["$gt"])
+                        records = [r for r in records if str(r.get("id", "")) > g]
+                return finalize_find_results(records, sort=sort, limit=limit)
 
             mock_context.database.find.side_effect = mock_find
 
-            # First page should contain all items
             page1 = await pager.get_page(1)
-            assert len(page1) <= 20
+            assert len(page1) == 20
+            assert pager.current_page == 1
 
-            # Second page should be empty
+            # No second page: requesting page 2 is clamped to the last (only) page
             page2 = await pager.get_page(2)
-            assert len(page2) == 0
+            assert pager.current_page == 1
+            assert len(page2) == 20
 
 
 class TestMemoryManagement:

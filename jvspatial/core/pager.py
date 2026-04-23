@@ -194,7 +194,7 @@ class ObjectPager:
             all_items_raw = await db.find(
                 collection, db_filter, limit=offset + self.page_size, sort=page_sort
             )
-            page_items_raw = all_items_raw[offset:]
+            page_items_raw = all_items_raw[offset : offset + self.page_size]
 
         # Apply in-Python ordering when a non-id order_by is set.
         if self.order_by and page_sort != [("id", 1)]:

@@ -44,21 +44,13 @@ class TestEndpointDiscoveryService:
         assert count == 0
 
     def test_discover_modules(self):
-        """Test module discovery."""
-        # Test discover_in_module for a specific module
-        # Use importlib to handle potential import issues
+        """Test module discovery on a real package (``tests`` is not always importable as a top-level)."""
         import importlib
-        import sys
 
-        try:
-            # Try to import the module
-            module = importlib.import_module("tests.api.test_components")
-            count = self.service.discover_in_module(module)
-            assert isinstance(count, int)
-            assert count >= 0
-        except ImportError:
-            # If module can't be imported, skip the test
-            pytest.skip("Module tests.api.test_components not available")
+        module = importlib.import_module("jvspatial.api.components")
+        count = self.service.discover_in_module(module)
+        assert isinstance(count, int)
+        assert count >= 0
 
     def test_enable_with_patterns(self):
         """Test enabling discovery with patterns."""

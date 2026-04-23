@@ -155,10 +155,9 @@ class Database(ABC):
     ) -> None:
         """Drop indexes that were removed or renamed in application code.
 
-        The base class default is a no-op. jvagent calls this at startup with a
-        map of collection name → former index names (MongoDB-oriented). Override
-        if your backend supports named indexes and you want migration cleanup;
-        otherwise leave the default.
+        The base class default is a no-op. The host application may call this
+        at startup with a map of collection name → former index names. Override
+        if your backend supports named indexes and you want migration cleanup.
         """
         pass
 ```
@@ -674,7 +673,7 @@ class MyDatabase(Database):
         # logger.debug(f"Index creation requested for {collection} (not supported)")
 ```
 
-If your backend supports **named** indexes and you deploy jvagent, also override `drop_deprecated_indexes(self, deprecated)` to remove old index names listed in `jvagent.core.index_bootstrap.DEPRECATED_INDEXES` (or ignore the call if not applicable). The MongoDB adapter implements both methods; the base `Database` class provides no-op defaults.
+If your backend supports **named** indexes, also override `drop_deprecated_indexes(self, deprecated)` to remove obsolete index names your application still passes in at startup (or ignore the call if not applicable). The MongoDB adapter implements both methods; the base `Database` class provides no-op defaults.
 
 **Index Creation Examples:**
 

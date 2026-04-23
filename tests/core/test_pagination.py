@@ -10,13 +10,15 @@ This module implements comprehensive tests for the pagination system including:
 - Edge cases and error handling
 """
 
-from typing import Any, Dict, List
+from functools import partial
+from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from jvspatial.core.entities import Node, Object
 from jvspatial.core.pager import ObjectPager, paginate_by_field, paginate_objects
+from jvspatial.db.database import finalize_find_results
 
 
 class PaginationTestObject(Object):
@@ -44,6 +46,27 @@ def mock_context():
     context._get_collection_name = MagicMock(return_value="test_collection")
     context._deserialize_entity = AsyncMock()
     return context
+
+
+async def mock_find_respecting_limit(
+    base_records: List[Dict[str, Any]],
+    collection: str,
+    query: Dict[str, Any],
+    *,
+    limit: Optional[int] = None,
+    sort: Any = None,
+) -> List[Dict[str, Any]]:
+    """Mimic database ``find`` for unit tests: apply ``id: {$gt: ...}`` if present, then sort and limit.
+
+    The pager relies on a bounded result set; ignoring ``limit`` in mocks breaks pagination.
+    """
+    records = [dict(r) for r in base_records]
+    if isinstance(query, dict) and "id" in query:
+        id_q = query["id"]
+        if isinstance(id_q, dict) and "$gt" in id_q:
+            g = str(id_q["$gt"])
+            records = [r for r in records if str(r.get("id", "")) > g]
+    return finalize_find_results(records, sort=sort, limit=limit)
 
 
 @pytest.fixture
@@ -241,12 +264,9 @@ class TestObjectPagerNavigation:
         ):
             mock_context.database.count.return_value = len(sample_data)
 
-            # Return different data based on which page is being requested
-            def mock_find(*args, **kwargs):
-                # For this test, we'll just return all data and let the pager handle slicing
-                return sample_data
-
-            mock_context.database.find.side_effect = mock_find
+            mock_context.database.find.side_effect = partial(
+                mock_find_respecting_limit, sample_data
+            )
 
             async def mock_deserialize(cls, data):
                 return PaginationTestObject(id=data["id"], **data["context"])
