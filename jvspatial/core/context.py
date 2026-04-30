@@ -842,19 +842,17 @@ class GraphContext:
         # from within Node.delete() (which has already cleaned up edges), we should
         # do simple deletion to avoid infinite recursion.
         from .entities.node import Node
-
         if isinstance(entity, Node):
             # Check if this is a recursive call from Node.delete() by checking
             # if cascade=False and the node has no edges (cleaned up by Node.delete())
             if not cascade and len(entity.edge_ids) == 0:
                 # Node.delete() has cleaned up edges, just delete the entity
-                collection = self._get_collection_name(entity.type_code)
-                db = self.database
-                await db.delete(collection, entity.id)
-                await self._cache.delete(entity.id)
-            else:
-                # Delegate to Node.delete() for proper edge cleanup and cascading
-                await entity.delete(cascade=cascade)
+                collection = self._get_collection_name("n")
+                await self.database.delete(collection, entity.id)
+                await self._remove_from_cache(entity.id)
+                return
+
+            await entity.delete(cascade=cascade)
             return
 
         # For Edge entities, clean up edge_ids on source/target nodes before deletion
@@ -880,6 +878,50 @@ class GraphContext:
         db = self.database
         await db.delete(collection, entity.id)
         await self._cache.delete(entity.id)
+
+    async def find(
+        self, entity_class, query: Dict[str, Any], limit: Optional[int] = None
+    ) -> List:
+        """Find entities in the current context.
+
+        Args:
+            entity_class: Class of entities to find
+            query: Database query parameters
+            limit: Maximum number of results
+
+        Returns:
+            List of matching entity instances
+        """
+        entity_type_code = self._get_entity_type_code(entity_class)
+        if entity_type_code == "n":
+            return await self.find_nodes(entity_class, query, limit=limit)
+
+        collection = self._get_collection_name(entity_type_code)
+        db_query = {"entity": entity_class.__name__, **query}
+        results = await self.database.find(collection, db_query, limit=limit)
+
+        entities = []
+        for data in results:
+            try:
+                entity = await self._deserialize_entity(entity_class, data)
+                if entity:
+                    entities.append(entity)
+            except Exception:
+                continue
+        return entities
+
+    async def create(self, entity_class, **kwargs):
+        """Create and save a new entity instance in this context.
+
+        Args:
+            entity_class: Class to instantiate
+            **kwargs: Arguments for the entity constructor
+
+        Returns:
+            The created and saved entity instance
+        """
+        instance = entity_class(**kwargs)
+        return await self.save(instance)
 
     async def export_graph(
         self,
