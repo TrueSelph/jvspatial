@@ -2,6 +2,7 @@
 
 import inspect
 import logging
+import re
 import weakref
 from typing import (
     TYPE_CHECKING,
@@ -403,9 +404,10 @@ class Node(Object):
         Node subclasses (e.g. ``User.count(query)`` remains the DB count API).
 
         Fast path: when ``node`` is a single entity name/class and no ``edge``
-        filter or extra ``kwargs`` are provided, this issues a single
-        ``count("edge", {direction: self.id, "target_entity": entity_name})``
-        query instead of hydrating all neighbor objects.
+        filter or extra ``kwargs`` are provided, this issues ``count`` queries on
+        the ``edge`` collection using ``source`` / ``target`` plus a regex on the
+        peer node id (pattern ``^n.<ClassName>.``). Persisted edges do not store
+        separate ``target_entity`` / ``source_entity`` fields.
 
         Returns:
             Number of matching connected nodes.
@@ -428,10 +430,13 @@ class Node(Object):
 
                     ctx = get_default_context()
                     db = ctx.database
+                    node_type_re = {
+                        "$regex": {"pattern": rf"^n\.{re.escape(entity_name)}\."}
+                    }
                     if direction in ("out", "both"):
                         q_out: Dict[str, Any] = {
                             "source": self.id,
-                            "target_entity": entity_name,
+                            "target": node_type_re,
                         }
                         out_count = await db.count("edge", q_out)
                     else:
@@ -439,7 +444,7 @@ class Node(Object):
                     if direction in ("in", "both"):
                         q_in: Dict[str, Any] = {
                             "target": self.id,
-                            "source_entity": entity_name,
+                            "source": node_type_re,
                         }
                         in_count = await db.count("edge", q_in)
                     else:

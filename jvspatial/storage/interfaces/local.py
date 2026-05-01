@@ -19,9 +19,11 @@ from jvspatial.runtime.serverless import is_serverless_mode
 from ..exceptions import (
     AccessDeniedError,
     FileNotFoundError,
+    FileSizeLimitError,
     PathTraversalError,
     StorageProviderError,
 )
+from ..internal_markers import should_skip_mime_allowlist, trivial_marker_validation
 from ..security.path_sanitizer import PathSanitizer
 from ..security.validator import FileValidator
 from .base import FileStorageInterface
@@ -372,12 +374,27 @@ class LocalFileInterface(FileStorageInterface):
         logger.info(f"Saving file: {file_path} ({len(content)} bytes)")
 
         try:
-            # Validate file content
+            # Validate file content (internal markers use empty bodies → octet-stream)
             filename = Path(file_path).name
-            validation = self.validator.validate_file(
-                content=content, filename=filename
-            )
-            logger.debug(f"File validation passed: {validation}")
+            if should_skip_mime_allowlist(file_path, metadata):
+                file_size = len(content)
+                if file_size > self.validator.max_size_bytes:
+                    max_mb = self.validator.max_size_bytes / (1024 * 1024)
+                    actual_mb = file_size / (1024 * 1024)
+                    raise FileSizeLimitError(
+                        f"File size ({actual_mb:.2f}MB) exceeds limit ({max_mb:.2f}MB)",
+                        file_size=file_size,
+                        max_size=self.validator.max_size_bytes,
+                    )
+                validation = trivial_marker_validation(file_path, content)
+                logger.debug(
+                    "Skipping MIME allowlist for internal marker: %s", file_path
+                )
+            else:
+                validation = self.validator.validate_file(
+                    content=content, filename=filename
+                )
+                logger.debug(f"File validation passed: {validation}")
 
             # Get validated full path
             full_path = self._get_full_path(file_path)

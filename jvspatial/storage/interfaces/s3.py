@@ -15,6 +15,7 @@ from jvspatial.env import env
 from ..exceptions import (
     AccessDeniedError,
     FileNotFoundError,
+    FileSizeLimitError,
     PathTraversalError,
     StorageProviderError,
 )
@@ -244,14 +245,33 @@ class S3FileInterface(FileStorageInterface):
         logger.info(f"Uploading to S3: {file_path} ({len(content)} bytes)")
 
         try:
-            # Validate file content
             from pathlib import Path
 
-            filename = Path(file_path).name
-            validation = self.validator.validate_file(
-                content=content, filename=filename
+            from ..internal_markers import (
+                should_skip_mime_allowlist,
+                trivial_marker_validation,
             )
-            logger.debug(f"File validation passed: {validation}")
+
+            filename = Path(file_path).name
+            if should_skip_mime_allowlist(file_path, metadata):
+                file_size = len(content)
+                if file_size > self.validator.max_size_bytes:
+                    max_mb = self.validator.max_size_bytes / (1024 * 1024)
+                    actual_mb = file_size / (1024 * 1024)
+                    raise FileSizeLimitError(
+                        f"File size ({actual_mb:.2f}MB) exceeds limit ({max_mb:.2f}MB)",
+                        file_size=file_size,
+                        max_size=self.validator.max_size_bytes,
+                    )
+                validation = trivial_marker_validation(file_path, content)
+                logger.debug(
+                    "Skipping MIME allowlist for internal marker: %s", file_path
+                )
+            else:
+                validation = self.validator.validate_file(
+                    content=content, filename=filename
+                )
+                logger.debug(f"File validation passed: {validation}")
 
             # Sanitize S3 key
             s3_key = self._sanitize_key(file_path)

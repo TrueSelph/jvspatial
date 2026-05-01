@@ -842,6 +842,7 @@ class GraphContext:
         # from within Node.delete() (which has already cleaned up edges), we should
         # do simple deletion to avoid infinite recursion.
         from .entities.node import Node
+
         if isinstance(entity, Node):
             # Check if this is a recursive call from Node.delete() by checking
             # if cascade=False and the node has no edges (cleaned up by Node.delete())
@@ -909,19 +910,6 @@ class GraphContext:
             except Exception:
                 continue
         return entities
-
-    async def create(self, entity_class, **kwargs):
-        """Create and save a new entity instance in this context.
-
-        Args:
-            entity_class: Class to instantiate
-            **kwargs: Arguments for the entity constructor
-
-        Returns:
-            The created and saved entity instance
-        """
-        instance = entity_class(**kwargs)
-        return await self.save(instance)
 
     async def export_graph(
         self,
@@ -1450,9 +1438,23 @@ class GraphContext:
 
             # Use entity field for class identification
             stored_entity = data.get("entity", entity_class.__name__)
-            target_class = (
-                find_subclass_by_name(entity_class, stored_entity) or entity_class
-            )
+            entity_type_code = self._get_entity_type_code(entity_class)
+
+            # Prefer requested class subtree, then (for Nodes) scan the entire Node hierarchy.
+            #
+            # If entity_class is Action (or another abstract intermediate) but the concrete
+            # class is only linked under Action deeper in the tree, find_subclass_by_name
+            # usually still finds it. When the subclass module has not linked into
+            # entity_class.__subclasses__ yet, the lookup returns None and we would fall
+            # back to the base — model_dump/save then drops fields declared only on the
+            # concrete subclass. Falling back to Node covers all persisted node subclasses.
+            target_class = find_subclass_by_name(entity_class, stored_entity)
+            if target_class is None and entity_type_code == "n":
+                from .entities.node import Node
+
+                target_class = find_subclass_by_name(Node, stored_entity)
+            if target_class is None:
+                target_class = entity_class
 
             # Create object with proper subclass
             # All entities use nested format with context field
@@ -1462,7 +1464,7 @@ class GraphContext:
                 )
             context_data = data["context"].copy()
 
-            entity_type_code = self._get_entity_type_code(entity_class)
+            # entity_type_code already computed above
 
             if entity_type_code == "n":
                 # Handle Node-specific logic
