@@ -132,6 +132,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         """
         import re
 
+        # ReDoS guard: reject paths longer than 1024 characters
+        if len(path) > 1024:
+            return False
+
         # Convert pattern to regex by replacing {param} with [^/]+
         escaped_pattern = re.escape(pattern)
         # Replace escaped {param} patterns with regex

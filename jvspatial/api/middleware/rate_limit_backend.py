@@ -53,8 +53,14 @@ class RateLimitBackend(Protocol):
 class MemoryRateLimitBackend:
     """In-memory rate limiting backend (for testing/single-instance deployments).
 
-    This backend stores counters in memory with automatic cleanup of expired entries.
-    Not suitable for multi-worker deployments as counters are not shared.
+    This backend stores counters in process-local memory with automatic cleanup
+    of expired entries.
+
+    **Multi-process limitation:** In multi-worker deployments (gunicorn with
+    multiple workers, concurrent Lambda invocations), each worker maintains an
+    independent counter. An attacker can send ``N * workers`` requests before
+    hitting limits. For multi-process deployments, use a shared backend such as
+    Redis (see jvspatial.cache for the built-in Redis integration).
 
     Attributes:
         _counters: Dictionary mapping keys to lists of timestamps

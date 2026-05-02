@@ -9,7 +9,12 @@ from jvspatial.core.entities.object import Object
 
 
 class UserCreate(BaseModel):
-    """Model for creating a new user (public registration)."""
+    """Model for creating a new user (public registration).
+
+    Password complexity enforcement (uppercase, lowercase, digits, special
+    characters, common-password denylist) is left to the application layer.
+    Only minimum length (6) is enforced at the framework level.
+    """
 
     email: EmailStr = Field(..., description="User email address")
     password: str = Field(
@@ -301,6 +306,10 @@ class RefreshToken(Object):
     """
 
     token_hash: str = Field(..., description="Hashed refresh token (never plaintext)")
+    token_lookup: str = Field(
+        default="",
+        description="SHA-256 hash for O(1) database lookup before bcrypt verification",
+    )
     user_id: str = Field(..., description="Owner user ID")
     access_token_jti: str = Field(
         ..., description="JTI of associated access token for tracking"
@@ -320,6 +329,10 @@ class PasswordResetToken(Object):
     """Single-use token for password reset. Stored hashed, short expiry."""
 
     token_hash: str = Field(..., description="Hashed reset token (never plaintext)")
+    token_lookup: str = Field(
+        default="",
+        description="SHA-256 hash for O(1) database lookup before bcrypt verification",
+    )
     user_id: str = Field(..., description="Owner user ID")
     email: str = Field(..., description="User email address")
     expires_at: datetime = Field(..., description="Token expiration timestamp")

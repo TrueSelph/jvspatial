@@ -105,10 +105,20 @@ async def authenticate_webhook_api_key(
         if api_key:
             source = "query_param"
             if require_https:
-                is_https = (
-                    request.url.scheme == "https"
-                    or request.headers.get("x-forwarded-proto") == "https"
-                    or request.headers.get("x-forwarded-ssl") == "on"
+                # Only trust forwarded headers when explicitly configured (behind a trusted
+                # reverse proxy that strips/overwrites these headers). Otherwise, a direct
+                # client can spoof them.
+                trust_forwarded = (
+                    webhook_config.get("trust_x_forwarded_proto", False)
+                    if webhook_config
+                    else False
+                )
+                is_https = request.url.scheme == "https" or (
+                    trust_forwarded
+                    and (
+                        request.headers.get("x-forwarded-proto") == "https"
+                        or request.headers.get("x-forwarded-ssl") == "on"
+                    )
                 )
                 if not is_https:
                     logger.warning(

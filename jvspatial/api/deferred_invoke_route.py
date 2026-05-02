@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 from typing import Any, Dict
 
@@ -33,7 +34,7 @@ def _deferred_invoke_secret_ok(request: Request) -> bool:
     bearer = ""
     if auth.lower().startswith("bearer "):
         bearer = auth[7:].strip()
-    return hdr == secret or bearer == secret
+    return hmac.compare_digest(hdr, secret) or hmac.compare_digest(bearer, secret)
 
 
 def register_deferred_invoke_route(app: FastAPI) -> None:

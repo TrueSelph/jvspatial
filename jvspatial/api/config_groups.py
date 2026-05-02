@@ -51,7 +51,11 @@ class SecurityConfig(BaseModel):
 
     security_headers_enabled: bool = Field(
         default=True,
-        description="Add security headers (X-Content-Type-Options, X-Frame-Options, etc.) to responses",
+        description="Add security headers (X-Content-Type-Options, X-Frame-Options, CSP, etc.) to responses",
+    )
+    hsts_enabled: bool = Field(
+        default=False,
+        description="Add Strict-Transport-Security header (enable in production behind TLS)",
     )
 
 
@@ -69,8 +73,12 @@ class CORSConfig(BaseModel):
             "http://127.0.0.1:8000",
         ]
     )
-    cors_methods: List[str] = Field(default_factory=lambda: ["*"])
-    cors_headers: List[str] = Field(default_factory=lambda: ["*"])
+    cors_methods: List[str] = Field(
+        default_factory=lambda: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    )
+    cors_headers: List[str] = Field(
+        default_factory=lambda: ["Content-Type", "Authorization", "X-API-Key"]
+    )
 
 
 class AuthConfig(BaseModel):

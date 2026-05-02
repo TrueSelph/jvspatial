@@ -194,7 +194,20 @@ class EndpointAuthResolver:
                     if route.dependencies:
                         for dep in route.dependencies:
                             s = str(dep).lower()
-                            if "security" in s or "bearer" in s or "auth" in s:
+                            # Heuristic: detect FastAPI security dependencies by known
+                            # class/function names. More robust than substring "auth".
+                            if any(
+                                kw in s
+                                for kw in (
+                                    "httpbearer",
+                                    "httpbasic",
+                                    "httpdigest",
+                                    "oauth2passwordbearer",
+                                    "apikey",
+                                    "security",
+                                    "bearer",
+                                )
+                            ):
                                 return True
                     if "/auth/" in request_path and not self._path_matcher.is_exempt(
                         request_path

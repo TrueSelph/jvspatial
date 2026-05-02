@@ -826,7 +826,7 @@ class Node(Object):
                 List[Union[str, Type["Edge"], Dict[str, Dict[str, Any]]]],
             ]
         ] = None,
-        limit: Optional[int] = None,
+        limit: Optional[int] = 1000,
         **kwargs: Any,
     ) -> List["Node"]:
         """Get all neighboring nodes (convenient alias for nodes()).
@@ -834,12 +834,19 @@ class Node(Object):
         Args:
             node: Node filtering (supports semantic filtering)
             edge: Edge filtering (supports semantic filtering)
-            limit: Maximum number of neighbors to return
+            limit: Maximum number of neighbors to return (default 1000).
+                   Pass None to disable the limit (logged at WARNING).
             **kwargs: Simple property filters for connected nodes
 
         Returns:
             List of neighboring nodes in connection order
         """
+        if limit is None:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "neighbors() called with limit=None — unbounded query on %s", self.id
+            )
         return await self.nodes(
             direction="both", node=node, edge=edge, limit=limit, **kwargs
         )

@@ -23,11 +23,9 @@ class TokenCleanupService:
             context: GraphContext instance for database operations.
                     If None, creates a context using the prime database.
         """
-        if context is None:
-            prime_db = get_prime_database()
-            self.context = GraphContext(database=prime_db)
+        if context is not None:
+            self.context = context
         else:
-            # Ensure context uses prime database for auth operations
             prime_db = get_prime_database()
             self.context = GraphContext(database=prime_db)
         self._logger = logging.getLogger(__name__)
