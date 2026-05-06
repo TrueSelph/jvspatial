@@ -8,8 +8,12 @@ is handled internally to maintain semantic simplicity.
 from .context import (
     GraphContext,
     async_graph_context,
+    clear_default_context,
     get_default_context,
     graph_context,
+    reset_default_context,
+    scoped_default_context,
+    scoped_default_context_async,
     set_default_context,
 )
 from .decorators import on_exit, on_visit
@@ -72,6 +76,10 @@ __all__ = [
     "GraphContext",
     "get_default_context",
     "set_default_context",
+    "reset_default_context",
+    "clear_default_context",
+    "scoped_default_context",
+    "scoped_default_context_async",
     "graph_context",
     "async_graph_context",
 ]

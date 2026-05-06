@@ -1,6 +1,7 @@
 """GraphContext for managing database dependencies."""
 
 import asyncio
+import contextvars
 import inspect
 import logging
 import time
@@ -1754,37 +1755,121 @@ class GraphContext:
                     yield entity
 
 
-# Global context instance
-_default_context: Optional[GraphContext] = None
+# Per-asyncio-task default context.
+#
+# Backed by a ``ContextVar`` so each task sees an independent value
+# (inherited from its parent task at creation time). This eliminates the
+# global-mutation race that the previous module-global allowed: Task A
+# capturing B's mid-flight context as its "previous" value and restoring
+# the wrong context on exit, plus B's swap leaking into every other
+# coroutine the worker handles.
+#
+# Callers that need a short-lived override should prefer
+# ``scoped_default_context`` / ``scoped_default_context_async`` (Token-
+# based, exception-safe). Direct ``set_default_context`` is fine for
+# bootstrap fixtures that set once at startup, but be aware its effect
+# is scoped to the current task — child tasks inherit it at creation,
+# but tasks spawned in unrelated event loops do not.
+_default_context_var: contextvars.ContextVar[Optional["GraphContext"]] = (
+    contextvars.ContextVar("jvspatial_default_context", default=None)
+)
 
 
 def get_default_context() -> GraphContext:
-    """Get the default global context."""
-    global _default_context
-    if _default_context is None:
-        # Check if DatabaseManager was auto-created (not initialized by Server)
-        # If so, don't create a default GraphContext yet - wait for Server to initialize
-        from jvspatial.db.manager import DatabaseManager
+    """Get the default GraphContext for the current async task.
 
-        if (
-            DatabaseManager._instance is not None
-            and DatabaseManager._instance._auto_created
-        ):
-            # DatabaseManager was auto-created with default 'jvdb' path
-            # Don't create default context - Server should initialize it
-            raise RuntimeError(
-                "Default GraphContext not initialized. Server must initialize the database "
-                "before accessing the default context. Ensure Server is initialized before "
-                "calling Root.get() or other operations that require a database."
-            )
-        _default_context = GraphContext()
-    return _default_context
+    Lookup order:
+        1. ContextVar value set in the current task (or inherited from an
+           ancestor task at task-creation time).
+        2. Lazy-init a fresh ``GraphContext`` and bind it to the current
+           task's slot.
+
+    Raises ``RuntimeError`` when the DatabaseManager was auto-created
+    rather than initialized by the Server, so callers know to bring up the
+    Server before persisting graph state.
+    """
+    ctx = _default_context_var.get()
+    if ctx is not None:
+        return ctx
+
+    # Defer the import to avoid a circular dependency on the manager module.
+    from jvspatial.db.manager import DatabaseManager
+
+    if (
+        DatabaseManager._instance is not None
+        and DatabaseManager._instance._auto_created
+    ):
+        raise RuntimeError(
+            "Default GraphContext not initialized. Server must initialize the database "
+            "before accessing the default context. Ensure Server is initialized before "
+            "calling Root.get() or other operations that require a database."
+        )
+    ctx = GraphContext()
+    _default_context_var.set(ctx)
+    return ctx
 
 
-def set_default_context(context: GraphContext) -> None:
-    """Set the default global context."""
-    global _default_context
-    _default_context = context
+def set_default_context(context: Optional[GraphContext]) -> contextvars.Token:
+    """Set the default GraphContext for the current async task.
+
+    Returns a ``contextvars.Token`` that callers may pass to
+    ``reset_default_context`` to restore the previous per-task value
+    precisely. New code should prefer ``scoped_default_context`` for
+    exception-safe scoping.
+
+    Accepting ``None`` is permitted so the per-task slot can be cleared
+    explicitly via ``set_default_context(None)`` (equivalent to
+    ``clear_default_context``).
+    """
+    return _default_context_var.set(context)
+
+
+def reset_default_context(token: contextvars.Token) -> None:
+    """Restore the per-task default context using a previously captured Token.
+
+    Pair with the Token returned from ``set_default_context`` to restore
+    the slot to its prior value precisely, even across nested overrides.
+    """
+    _default_context_var.reset(token)
+
+
+def clear_default_context() -> None:
+    """Clear the current task's default GraphContext (set the slot to None).
+
+    Useful in test teardown or when a previously set context should be
+    removed without restoring a specific prior value (i.e. when no Token
+    is available). Other tasks are unaffected because the slot is per-task.
+    """
+    _default_context_var.set(None)
+
+
+@contextmanager
+def scoped_default_context(context: GraphContext):
+    """Sync context manager: bind ``context`` as the default for the current task.
+
+    The previous value is restored automatically on exit, including when
+    the body raises. Prefer this over manual ``set_default_context`` /
+    ``reset_default_context`` pairs.
+    """
+    token = _default_context_var.set(context)
+    try:
+        yield context
+    finally:
+        _default_context_var.reset(token)
+
+
+@asynccontextmanager
+async def scoped_default_context_async(context: GraphContext):
+    """Async variant of ``scoped_default_context``.
+
+    Equivalent semantics; provided so callers in ``async with`` flows do
+    not have to mix sync and async context managers.
+    """
+    token = _default_context_var.set(context)
+    try:
+        yield context
+    finally:
+        _default_context_var.reset(token)
 
 
 @contextmanager
