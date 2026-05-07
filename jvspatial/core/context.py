@@ -1774,6 +1774,29 @@ _default_context_var: contextvars.ContextVar[Optional["GraphContext"]] = (
     contextvars.ContextVar("jvspatial_default_context", default=None)
 )
 
+# Process-wide fallback for the most recently configured GraphContext.
+#
+# ``_default_context_var`` is a ``ContextVar`` and only propagates to tasks
+# that were created from a Context which already had the value set. In
+# real deployments the ``ContextVar`` is set during ``Server.__init__``
+# (synchronously, before the asyncio loop exists) and most launchers carry
+# that value through to request handlers. But several legitimate
+# launchers do not — e.g. when ``Server`` is constructed inside an
+# ``asyncio.run`` block, in a different thread from the one that
+# eventually serves requests, or under custom ASGI adapters that spawn a
+# fresh event loop per invocation. In those cases the per-task lookup
+# misses and the lazy-init branch raises, even though the database is
+# fully configured.
+#
+# The module-level fallback removes that brittleness: ``set_default_context``
+# also records the value here, and ``get_default_context`` falls back to
+# it (binding it into the current task's slot for cheap subsequent reads)
+# when the per-task ContextVar is empty. Tests and multi-server setups
+# that need strict isolation should keep using ``scoped_default_context``
+# / ``ServerContext``, which set the ContextVar — the per-task value
+# always takes precedence over the fallback.
+_module_default_context: Optional["GraphContext"] = None
+
 
 def get_default_context() -> GraphContext:
     """Get the default GraphContext for the current async task.
@@ -1781,16 +1804,27 @@ def get_default_context() -> GraphContext:
     Lookup order:
         1. ContextVar value set in the current task (or inherited from an
            ancestor task at task-creation time).
-        2. Lazy-init a fresh ``GraphContext`` and bind it to the current
+        2. Process-wide fallback recorded by the most recent
+           ``set_default_context`` call (covers task trees that did not
+           inherit the ContextVar).
+        3. Lazy-init a fresh ``GraphContext`` and bind it to the current
            task's slot.
 
-    Raises ``RuntimeError`` when the DatabaseManager was auto-created
-    rather than initialized by the Server, so callers know to bring up the
-    Server before persisting graph state.
+    Raises ``RuntimeError`` only when no context has ever been configured
+    AND the DatabaseManager was auto-created rather than initialized by
+    the Server, so callers know to bring up the Server before persisting
+    graph state.
     """
     ctx = _default_context_var.get()
     if ctx is not None:
         return ctx
+
+    fallback = _module_default_context
+    if fallback is not None:
+        # Bind into the current task's slot so subsequent lookups skip
+        # the fallback path entirely.
+        _default_context_var.set(fallback)
+        return fallback
 
     # Defer the import to avoid a circular dependency on the manager module.
     from jvspatial.db.manager import DatabaseManager
@@ -1820,7 +1854,16 @@ def set_default_context(context: Optional[GraphContext]) -> contextvars.Token:
     Accepting ``None`` is permitted so the per-task slot can be cleared
     explicitly via ``set_default_context(None)`` (equivalent to
     ``clear_default_context``).
+
+    The non-``None`` value is also recorded as the process-wide fallback
+    so request tasks that do not inherit this ContextVar can still
+    resolve the configured context via ``get_default_context``. Passing
+    ``None`` only clears the per-task slot; use
+    ``clear_default_context_global`` to clear the process-wide fallback.
     """
+    global _module_default_context
+    if context is not None:
+        _module_default_context = context
     return _default_context_var.set(context)
 
 
@@ -1839,7 +1882,25 @@ def clear_default_context() -> None:
     Useful in test teardown or when a previously set context should be
     removed without restoring a specific prior value (i.e. when no Token
     is available). Other tasks are unaffected because the slot is per-task.
+
+    Note: this does not clear the process-wide fallback recorded by
+    ``set_default_context``. Subsequent ``get_default_context`` calls in
+    this task will fall back to that value. Use
+    ``clear_default_context_global`` to also drop the fallback.
     """
+    _default_context_var.set(None)
+
+
+def clear_default_context_global() -> None:
+    """Clear per-task slot and process-wide fallback simultaneously.
+
+    Resets both the current task's default GraphContext slot and the
+    process-wide fallback recorded by ``set_default_context``. Intended
+    for test teardown that needs the next ``get_default_context`` call
+    to behave as if no context had ever been configured.
+    """
+    global _module_default_context
+    _module_default_context = None
     _default_context_var.set(None)
 
 
