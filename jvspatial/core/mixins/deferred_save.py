@@ -141,12 +141,22 @@ class DeferredSaveMixin:
         with deferred batching enabled if :func:`deferred_saves_globally_allowed`
         is true. Set to False on a subclass to keep deferred mode off until
         :meth:`enable_deferred_saves` is called.
+
+        max_pending_saves: Safety net against callers who forget to call
+        :meth:`flush`. When the count of deferred ``save()`` calls since
+        the last flush reaches this number, the next ``save()`` triggers
+        an automatic flush and emits a WARNING-level log. ``None``
+        (the default) disables the safety net entirely. Set to a small
+        integer (e.g. 1000) on subclasses where deferred state is
+        long-lived and a missed flush would matter operationally.
     """
 
     deferred_saves_auto_on_init: ClassVar[bool] = True
+    max_pending_saves: ClassVar[Optional[int]] = None
 
     _deferred_save_mode: bool
     _dirty: bool
+    _pending_save_count: int
 
     async def _super_save(self, *args: Any, **kwargs: Any) -> Any:
         """Call the parent class save method.
@@ -167,6 +177,7 @@ class DeferredSaveMixin:
         """
         super().__init__(*args, **kwargs)
         self._dirty = False
+        self._pending_save_count = 0
         if self.deferred_saves_auto_on_init and deferred_saves_globally_allowed():
             self._deferred_save_mode = True
         else:
@@ -226,6 +237,12 @@ class DeferredSaveMixin:
         Otherwise, it performs the save immediately by calling the
         parent class's save() method.
 
+        When :attr:`max_pending_saves` is set on the class and the number
+        of deferred ``save()`` calls since the last flush reaches it, the
+        save triggers an automatic flush and emits a WARNING. This is a
+        safety net for callers who forget to flush -- it does not
+        replace explicit ``flush()`` discipline.
+
         Args:
             *args: Positional arguments passed to parent save().
             **kwargs: Keyword arguments passed to parent save().
@@ -235,6 +252,19 @@ class DeferredSaveMixin:
         """
         if deferred_saves_globally_allowed() and self._deferred_save_mode:
             self._dirty = True
+            self._pending_save_count += 1
+            cap = self.max_pending_saves
+            if cap is not None and cap > 0 and self._pending_save_count >= cap:
+                logger.warning(
+                    "%s id=%s reached max_pending_saves=%d without an explicit "
+                    "flush(); auto-flushing. Add a flush() call to your code "
+                    "path to silence this warning.",
+                    self.__class__.__name__,
+                    getattr(self, "id", "unknown"),
+                    cap,
+                )
+                # ``flush()`` clears _pending_save_count via reset below.
+                await self.flush()
             return None
         return await self._super_save(*args, **kwargs)
 
@@ -258,12 +288,14 @@ class DeferredSaveMixin:
         """
         if not self._dirty:
             self._deferred_save_mode = False
+            self._pending_save_count = 0
             return
 
         self._deferred_save_mode = False
         try:
             await self._super_save()
             self._dirty = False
+            self._pending_save_count = 0
         except Exception as e:
             self._deferred_save_mode = True
             logger.error(

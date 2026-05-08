@@ -1,0 +1,55 @@
+name: Security audit
+
+# Runs pip-audit weekly and on any change to dependency declarations.
+# Currently non-blocking (continue-on-error: true) so an upstream CVE
+# disclosure doesn't block unrelated PRs while a maintainer triages.
+# Flip to ``false`` once the dependency hygiene baseline is clean.
+
+on:
+  pull_request:
+    paths:
+      - 'pyproject.toml'
+      - 'requirements*.txt'
+      - '.github/workflows/security.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'pyproject.toml'
+      - 'requirements*.txt'
+  schedule:
+    # Mondays at 06:00 UTC. Catches CVEs disclosed over the weekend
+    # before adopters hit them.
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install project + audit tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+          # Resolve the project's own dependency set so pip-audit sees
+          # the same packages adopters would install. We do NOT install
+          # the project itself in editable mode -- pip-audit walks the
+          # currently-installed environment.
+          pip install '.[dev,test,otel]'
+
+      - name: Run pip-audit
+        run: |
+          # --strict makes pip-audit fail on any vuln (we wrap the
+          # whole job in continue-on-error today).
+          pip-audit --strict --progress-spinner off

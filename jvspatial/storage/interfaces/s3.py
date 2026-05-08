@@ -8,9 +8,10 @@ import asyncio
 import hashlib
 import logging
 from asyncio import to_thread
-from typing import Any, AsyncIterator, Dict, List, Optional, cast
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, cast
 
 from jvspatial.env import env
+from jvspatial.utils.retry import retry_async
 
 from ..exceptions import (
     AccessDeniedError,
@@ -44,6 +45,37 @@ except ImportError:
 
 
 logger = logging.getLogger(__name__)
+
+
+# S3 error codes worth retrying with backoff. The application would
+# otherwise see a single SlowDown / 503 / brief outage as a hard
+# failure even though boto3's transfer manager is already resilient
+# for chunked uploads. These wrap the *control* plane (head/get/delete/
+# put_object) where transient errors aren't auto-retried.
+_S3_THROTTLE_CODES = frozenset(
+    {
+        "SlowDown",
+        "RequestTimeout",
+        "ServiceUnavailable",
+        "InternalError",
+        "503",
+        "500",
+    }
+)
+
+
+def _is_s3_throttle_error(exc: BaseException) -> bool:
+    """Predicate for the shared retry helper on S3 ops."""
+    if ClientError is None or not isinstance(exc, ClientError):
+        return False
+    err = getattr(exc, "response", {}).get("Error", {}) or {}
+    code = err.get("Code")
+    if code in _S3_THROTTLE_CODES:
+        return True
+    # boto3 sometimes surfaces transient errors via HTTP status only.
+    meta = getattr(exc, "response", {}).get("ResponseMetadata", {}) or {}
+    status = meta.get("HTTPStatusCode")
+    return status in (500, 502, 503, 504)
 
 
 # Direct serve extensions (small text files that can be sent directly)
@@ -101,6 +133,12 @@ class S3FileInterface(FileStorageInterface):
         >>> await storage.save_file("uploads/doc.pdf", file_bytes)
     """
 
+    # 8 MiB default multipart threshold. Anything bigger goes through
+    # boto3's TransferManager which splits, parallelizes, and resumes
+    # automatically. Override with ``multipart_threshold`` in the
+    # constructor or the ``JVSPATIAL_S3_MULTIPART_THRESHOLD`` env var.
+    DEFAULT_MULTIPART_THRESHOLD = 8 * 1024 * 1024
+
     def __init__(
         self,
         bucket_name: Optional[str] = None,
@@ -110,6 +148,7 @@ class S3FileInterface(FileStorageInterface):
         endpoint_url: Optional[str] = None,
         validator: Optional[FileValidator] = None,
         url_expiration: int = 3600,
+        multipart_threshold: Optional[int] = None,
     ):
         """Initialize S3 storage.
 
@@ -121,6 +160,10 @@ class S3FileInterface(FileStorageInterface):
             endpoint_url: Custom endpoint URL
             validator: Optional FileValidator instance
             url_expiration: Default URL expiration in seconds
+            multipart_threshold: Files at or above this size (in bytes)
+                are uploaded via boto3's automatic multipart transfer
+                manager. Default 8 MiB. Also configurable via the
+                ``JVSPATIAL_S3_MULTIPART_THRESHOLD`` env var.
         """
         # Check if boto3 is available
         if not HAS_BOTO3:
@@ -150,6 +193,17 @@ class S3FileInterface(FileStorageInterface):
         self.validator = validator or FileValidator()
         self.url_expiration = url_expiration
 
+        # Resolve multipart threshold: explicit arg -> env -> class default.
+        if multipart_threshold is not None:
+            self.multipart_threshold = int(multipart_threshold)
+        else:
+            env_threshold = env("JVSPATIAL_S3_MULTIPART_THRESHOLD", parse=int)
+            self.multipart_threshold = (
+                int(env_threshold)
+                if env_threshold
+                else self.DEFAULT_MULTIPART_THRESHOLD
+            )
+
         # Initialize S3 client
         self._init_client()
 
@@ -173,6 +227,25 @@ class S3FileInterface(FileStorageInterface):
 
         self.s3_client = self._boto3.client(**client_kwargs)
         logger.debug("S3 client initialized")
+
+    async def _run_with_throttle_retry(
+        self, op_name: str, coro_factory: Callable[[], Awaitable[Any]]
+    ) -> Any:
+        """Wrap an S3 op with throttle-error retry.
+
+        SlowDown / 5xx / RequestTimeout get exponential backoff with
+        full jitter; non-throttle ``ClientError``s propagate
+        immediately and are handled by the caller's normal error
+        mapping.
+        """
+        return await retry_async(
+            coro_factory,
+            retry_on=_is_s3_throttle_error,
+            max_attempts=4,
+            base_delay=0.2,
+            max_delay=4.0,
+            jitter=True,
+        )
 
     def _sanitize_key(self, file_path: str) -> str:
         """Sanitize S3 object key.
@@ -279,23 +352,69 @@ class S3FileInterface(FileStorageInterface):
             # Detect content type
             content_type = validation.get("mime_type", "application/octet-stream")
 
-            # Prepare upload parameters
-            put_kwargs: Dict[str, Any] = {
-                "Bucket": self.bucket_name,
-                "Key": s3_key,
-                "Body": content,
-                "ContentType": content_type,
-            }
-
-            # Add metadata if provided
+            # Build the metadata header dict once -- both code paths use it.
+            extra_metadata: Optional[Dict[str, str]] = None
             if metadata:
-                # S3 metadata keys must be lowercase and alphanumeric
-                put_kwargs["Metadata"] = {
+                extra_metadata = {
                     k.lower().replace("-", "_"): str(v) for k, v in metadata.items()
                 }
 
-            # Upload to S3
-            await asyncio.to_thread(self.s3_client.put_object, **put_kwargs)
+            content_size = len(content)
+            if content_size >= self.multipart_threshold:
+                # Multipart path: boto3's TransferManager handles
+                # splitting, parallel part upload, and resumption. We
+                # feed it a BytesIO wrapper around the in-memory bytes.
+                import io
+
+                from boto3.s3.transfer import TransferConfig
+
+                transfer_config = TransferConfig(
+                    multipart_threshold=self.multipart_threshold,
+                    multipart_chunksize=max(
+                        self.multipart_threshold // 2,
+                        5 * 1024 * 1024,  # S3 minimum part size
+                    ),
+                    use_threads=True,
+                )
+                extra_args: Dict[str, Any] = {"ContentType": content_type}
+                if extra_metadata:
+                    extra_args["Metadata"] = extra_metadata
+
+                logger.info(
+                    "S3 upload via multipart: %s (%d bytes, threshold=%d)",
+                    s3_key,
+                    content_size,
+                    self.multipart_threshold,
+                )
+
+                async def _multipart_upload() -> None:
+                    await asyncio.to_thread(
+                        self.s3_client.upload_fileobj,
+                        io.BytesIO(content),
+                        self.bucket_name,
+                        s3_key,
+                        ExtraArgs=extra_args,
+                        Config=transfer_config,
+                    )
+
+                await self._run_with_throttle_retry(
+                    "save_file (multipart)", _multipart_upload
+                )
+            else:
+                # Small-object path: single put_object call.
+                put_kwargs: Dict[str, Any] = {
+                    "Bucket": self.bucket_name,
+                    "Key": s3_key,
+                    "Body": content,
+                    "ContentType": content_type,
+                }
+                if extra_metadata:
+                    put_kwargs["Metadata"] = extra_metadata
+
+                async def _put_object() -> None:
+                    await asyncio.to_thread(self.s3_client.put_object, **put_kwargs)
+
+                await self._run_with_throttle_retry("save_file", _put_object)
 
             logger.info(f"File uploaded to S3: {s3_key}")
 
@@ -337,10 +456,15 @@ class S3FileInterface(FileStorageInterface):
         try:
             s3_key = self._sanitize_key(file_path)
 
-            # Download from S3
-            response = await to_thread(
-                self.s3_client.get_object, Bucket=self.bucket_name, Key=s3_key
-            )
+            async def _get_object_op() -> Any:
+                return await to_thread(
+                    self.s3_client.get_object,
+                    Bucket=self.bucket_name,
+                    Key=s3_key,
+                )
+
+            # Download from S3 with throttle retry.
+            response = await self._run_with_throttle_retry("get_file", _get_object_op)
 
             # Read content
             content = cast(bytes, await to_thread(response["Body"].read))
@@ -444,10 +568,15 @@ class S3FileInterface(FileStorageInterface):
                     return False
                 raise
 
-            # Delete object
-            await asyncio.to_thread(
-                self.s3_client.delete_object, Bucket=self.bucket_name, Key=s3_key
-            )
+            # Delete object with throttle retry.
+            async def _delete_op() -> None:
+                await asyncio.to_thread(
+                    self.s3_client.delete_object,
+                    Bucket=self.bucket_name,
+                    Key=s3_key,
+                )
+
+            await self._run_with_throttle_retry("delete_file", _delete_op)
 
             logger.info(f"File deleted from S3: {s3_key}")
             return True

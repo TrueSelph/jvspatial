@@ -1,0 +1,50 @@
+# Dependabot configuration.
+#
+# Two ecosystems are watched:
+# * pip -- the project's runtime + dev dependencies as declared in
+#   pyproject.toml. Weekly cadence keeps the noise low while still
+#   catching CVEs on a reasonable schedule.
+# * github-actions -- the CI workflow actions (actions/checkout,
+#   actions/setup-python, etc.). These have a long history of
+#   breaking changes and tag drift; weekly is enough.
+#
+# We mark security-impacting bumps separately so a maintainer can
+# fast-track them without wading through routine version bumps.
+
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "pip"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    # Group routine version bumps so we don't drown in tiny PRs.
+    groups:
+      pip-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "ci"
+      include: "scope"

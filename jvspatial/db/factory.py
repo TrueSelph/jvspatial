@@ -8,6 +8,8 @@ Supports custom database registration for seamless extension.
 
 from typing import Any, Callable, Dict, Optional
 
+from ._cache import CachingDatabase
+from ._observable import DEFAULT_SLOW_QUERY_MS, ObservableDatabase
 from .database import Database
 from .jsondb import JsonDB
 from .manager import get_database_manager
@@ -202,6 +204,11 @@ def create_database(
     db_type: str = "json",
     register: bool = False,
     name: Optional[str] = None,
+    cache_get_size: int = 0,
+    cache_get_ttl: float = 60.0,
+    observe: bool = False,
+    slow_query_ms: float = DEFAULT_SLOW_QUERY_MS,
+    metrics: Optional[Any] = None,
     **kwargs: Any,
 ) -> Database:
     """Create a database instance with direct instantiation.
@@ -213,6 +220,29 @@ def create_database(
         db_type: Database type ('json', 'mongodb', 'sqlite', 'dynamodb', or a registered custom type)
         register: If True, register the database with DatabaseManager
         name: Database name for registration (required if register=True)
+        cache_get_size: Optional opt-in read-through cache for ``get()``
+            calls. Pass ``> 0`` to wrap the backend in a
+            :class:`~jvspatial.db._cache.CachingDatabase` with that LRU cap.
+            Default ``0`` disables caching (current behavior). Skipped at
+            runtime under serverless mode -- per-process caches are not
+            useful across cold starts.
+        cache_get_ttl: TTL in seconds for cached ``get()`` results when
+            ``cache_get_size > 0``. Default ``60``. Set to ``0`` for no
+            TTL (LRU eviction only).
+        observe: When ``True``, wrap the database in an
+            :class:`~jvspatial.db._observable.ObservableDatabase` that
+            emits a structured log line and one metric per operation.
+            Defaults to ``False`` (no behavior change for existing
+            callers).
+        slow_query_ms: Threshold above which the per-op log line is
+            elevated to WARNING. Only meaningful when
+            ``observe=True``. Defaults to 100ms.
+        metrics: Optional :class:`~jvspatial.observability.metrics.MetricsRecorder`
+            implementation. Defaults to
+            :class:`~jvspatial.observability.metrics.NullMetricsRecorder`
+            (zero overhead). For OpenTelemetry, install
+            ``pip install jvspatial[otel]`` and pass an
+            :class:`~jvspatial.observability.otel.OpenTelemetryMetricsRecorder`.
         **kwargs: Database-specific configuration passed to the database constructor
 
     Returns:
@@ -231,6 +261,12 @@ def create_database(
 
         # DynamoDB database
         db = create_database("dynamodb", table_name="myapp", region_name="us-east-1")
+
+        # JSON database with read-through cache (opt-in)
+        db = create_database(
+            "json", base_path="./data",
+            cache_get_size=2048, cache_get_ttl=30.0,
+        )
 
         # Custom database (after registration)
         db = create_database("my_custom", connection_string="custom://",
@@ -256,6 +292,17 @@ def create_database(
         raise ValueError(
             f"Unsupported database type: '{db_type}'. " f"Available types: {available}"
         )
+
+    # Optional read-through cache (off by default).
+    if cache_get_size and cache_get_size > 0:
+        db = CachingDatabase(db, max_entries=cache_get_size, ttl_seconds=cache_get_ttl)
+
+    # Optional observability layer (off by default). Applied AFTER the
+    # cache so the structured log line measures user-visible latency
+    # including cache hits/misses -- which is what SLO calculations
+    # need.
+    if observe:
+        db = ObservableDatabase(db, metrics=metrics, slow_query_ms=slow_query_ms)
 
     # Register with manager if requested
     if register:

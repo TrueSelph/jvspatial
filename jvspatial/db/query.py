@@ -7,7 +7,15 @@ Includes built-in query optimization for improved performance.
 
 import re
 import time
+from collections import OrderedDict
 from typing import Any, Callable, Dict, List, Optional, Union
+
+# Default upper bound for the per-instance ``optimize_query`` cache. The
+# previous implementation grew unboundedly which is fine for short-lived
+# processes but a slow leak in long-lived servers. 1024 entries holds
+# the working set of any realistic workload while bounding memory.
+DEFAULT_QUERY_CACHE_SIZE = 1024
+
 
 # Unified evaluation and builder in a single module
 
@@ -15,18 +23,29 @@ from typing import Any, Callable, Dict, List, Optional, Union
 class QueryEngine:
     """Unified MongoDB-style query engine with built-in optimization for all backends."""
 
-    def __init__(self, enable_optimization: bool = True):
+    def __init__(
+        self,
+        enable_optimization: bool = True,
+        cache_size: int = DEFAULT_QUERY_CACHE_SIZE,
+    ):
         """Initialize the query engine.
 
         Args:
             enable_optimization: Whether to enable built-in query optimization
+            cache_size: Maximum number of cached optimized queries (LRU
+                eviction). Set to 0 to disable caching entirely.
         """
+        if cache_size < 0:
+            raise ValueError("cache_size must be >= 0")
         self.enable_optimization = enable_optimization
-        self._query_cache: Dict[str, Any] = {}
+        self._cache_size = cache_size
+        # OrderedDict gives O(1) move-to-end for LRU promotion on hit.
+        self._query_cache: "OrderedDict[str, Any]" = OrderedDict()
         self._optimization_stats = {
             "optimized_queries": 0,
             "cache_hits": 0,
             "optimization_time": 0.0,
+            "cache_evictions": 0,
         }
 
     def optimize_query(self, query: Dict[str, Any]) -> Dict[str, Any]:
@@ -44,9 +63,11 @@ class QueryEngine:
         start_time = time.time()
 
         try:
-            # Check query cache first
-            query_key = str(sorted(query.items()))
-            if query_key in self._query_cache:
+            # Check query cache first (skip entirely when disabled)
+            query_key = str(sorted(query.items())) if self._cache_size else None
+            if query_key is not None and query_key in self._query_cache:
+                # LRU promotion: move-to-end so this entry stays warm.
+                self._query_cache.move_to_end(query_key)
                 self._optimization_stats["cache_hits"] += 1
                 return self._query_cache[query_key]
 
@@ -68,8 +89,14 @@ class QueryEngine:
             # Add indexing hints
             optimized_query = self._add_indexing_hints(optimized_query)
 
-            # Cache the optimized query
-            self._query_cache[query_key] = optimized_query
+            # Cache the optimized query under LRU bound.
+            if query_key is not None:
+                self._query_cache[query_key] = optimized_query
+                # Evict oldest while over capacity. Loop because cache_size
+                # may have been lowered after population.
+                while len(self._query_cache) > self._cache_size:
+                    self._query_cache.popitem(last=False)
+                    self._optimization_stats["cache_evictions"] += 1
 
             # Update stats
             self._optimization_stats["optimized_queries"] += 1

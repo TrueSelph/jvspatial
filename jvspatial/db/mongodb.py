@@ -18,7 +18,7 @@ Index creation
 
 import contextlib
 import logging
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import (
@@ -30,6 +30,7 @@ from pymongo.errors import (
 
 from jvspatial.db.database import Database
 from jvspatial.exceptions import DatabaseError
+from jvspatial.utils.retry import retry_async
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +43,28 @@ def _is_connection_error(exc: BaseException) -> bool:
     return "connection closed" in msg or "connection refused" in msg
 
 
+def _is_retryable_mongo_error(exc: BaseException) -> bool:
+    """Predicate used by the shared retry helper for Mongo ops.
+
+    Captures both the existing ``PyMongoError`` connection-error
+    detection and the "Event loop is closed" ``RuntimeError`` we see
+    when Motor reuses a stale loop reference across requests.
+    """
+    if isinstance(exc, RuntimeError):
+        msg = str(exc).lower()
+        return "event loop is closed" in msg or "closed" in msg
+    if isinstance(exc, PyMongoError):
+        return _is_connection_error(exc)
+    return False
+
+
 class MongoDB(Database):
     """Simplified MongoDB-based database implementation."""
+
+    # Advertised capability. The adapter implements the transactional API;
+    # the deployment must be a replica set (even single-node) for the
+    # actual ``begin_transaction()`` call to succeed at runtime.
+    supports_transactions: bool = True
 
     def __init__(
         self,
@@ -171,20 +192,56 @@ class MongoDB(Database):
         if self._client is not None and self._db is None:
             self._db = self._client[self.db_name]
 
+    def _drop_connection_on_retry(
+        self, exc: BaseException, attempt: int, sleep_for: float
+    ) -> None:
+        """``on_retry`` hook that resets the cached client/db.
+
+        Called by :func:`retry_async` between failed attempts. The
+        next call to :meth:`_ensure_connected` (which the operation
+        re-runs at the top) will re-establish the connection.
+        """
+        logger.debug(
+            "MongoDB op retry %d after %s; resetting client (sleep=%.3fs)",
+            attempt,
+            type(exc).__name__,
+            sleep_for,
+        )
+        self._client = None
+        self._db = None
+
+    async def _run_with_reconnect(
+        self, op_name: str, coro_factory: Callable[[], Awaitable[Any]]
+    ) -> Any:
+        """Execute ``coro_factory()`` with one reconnect-on-fail retry.
+
+        Any non-retryable exception is wrapped in
+        :class:`DatabaseError`. Retry semantics match the previous
+        per-method implementations: 2 attempts total (one original +
+        one retry), connection state reset between them.
+        """
+        try:
+            return await retry_async(
+                coro_factory,
+                retry_on=_is_retryable_mongo_error,
+                max_attempts=2,
+                base_delay=0.0,
+                max_delay=0.0,
+                jitter=False,
+                on_retry=self._drop_connection_on_retry,
+            )
+        except (RuntimeError, PyMongoError) as e:
+            raise DatabaseError(f"MongoDB {op_name} error: {e}") from e
+
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Save a record to the database."""
-        await self._ensure_connected()
-
-        if self._db is None:
-            raise DatabaseError("MongoDB database connection not established")
-
-        # Ensure record has an ID
+        # Ensure record has an ID before we hand the closure to the
+        # retry helper so the second attempt sees the same payload.
         if "_id" not in data and "id" not in data:
             import uuid
 
             uuid_obj = uuid.uuid4()
             # Handle both real UUID objects and mocks (for testing)
-            # Real UUID objects have a 'hex' property, mocks may have it as an attribute
             if hasattr(uuid_obj, "hex"):
                 hex_value = getattr(uuid_obj, "hex", None)
                 if hex_value and isinstance(hex_value, str):
@@ -196,141 +253,39 @@ class MongoDB(Database):
         elif "id" in data and "_id" not in data:
             data["_id"] = data["id"]
 
-        try:
+        async def _save_op() -> Dict[str, Any]:
+            await self._ensure_connected()
+            if self._db is None:
+                raise DatabaseError("MongoDB database connection not established")
             collection_obj = self._db[collection]
             await collection_obj.replace_one({"_id": data["_id"]}, data, upsert=True)
             return data
-        except RuntimeError as e:
-            # Handle "Event loop is closed" error by recreating connection
-            if "Event loop is closed" in str(e) or "closed" in str(e).lower():
-                logger.debug(
-                    "Event loop closed during operation, recreating MongoDB connection"
-                )
-                self._client = None
-                self._db = None
-                await self._ensure_connected()
-                # Retry the operation
-                if self._db is None:
-                    raise DatabaseError(
-                        "Failed to establish MongoDB connection after retry"
-                    )
-                collection_obj = self._db[collection]
-                await collection_obj.replace_one(
-                    {"_id": data["_id"]}, data, upsert=True
-                )
-                return data
-            raise DatabaseError(f"MongoDB save error: {e}") from e
-        except PyMongoError as e:
-            if _is_connection_error(e):
-                logger.debug(
-                    "MongoDB connection error during save, recreating and retrying: %s",
-                    e,
-                )
-                self._client = None
-                self._db = None
-                await self._ensure_connected()
-                if self._db is None:
-                    raise DatabaseError(
-                        "Failed to establish MongoDB connection after retry"
-                    )
-                collection_obj = self._db[collection]
-                await collection_obj.replace_one(
-                    {"_id": data["_id"]}, data, upsert=True
-                )
-                return data
-            raise DatabaseError(f"MongoDB save error: {e}") from e
+
+        return await self._run_with_reconnect("save", _save_op)
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a record by ID."""
-        await self._ensure_connected()
 
-        if self._db is None:
-            raise DatabaseError("MongoDB database connection not established")
-
-        try:
+        async def _get_op() -> Optional[Dict[str, Any]]:
+            await self._ensure_connected()
+            if self._db is None:
+                raise DatabaseError("MongoDB database connection not established")
             collection_obj = self._db[collection]
-            result = await collection_obj.find_one({"_id": id})
-            return result
-        except RuntimeError as e:
-            # Handle "Event loop is closed" error by recreating connection
-            if "Event loop is closed" in str(e) or "closed" in str(e).lower():
-                logger.debug(
-                    "Event loop closed during operation, recreating MongoDB connection"
-                )
-                self._client = None
-                self._db = None
-                await self._ensure_connected()
-                # Retry the operation
-                if self._db is None:
-                    raise DatabaseError(
-                        "Failed to establish MongoDB connection after retry"
-                    )
-                collection_obj = self._db[collection]
-                result = await collection_obj.find_one({"_id": id})
-                return result
-            raise DatabaseError(f"MongoDB get error: {e}") from e
-        except PyMongoError as e:
-            if _is_connection_error(e):
-                logger.debug(
-                    "MongoDB connection error during get, recreating and retrying: %s",
-                    e,
-                )
-                self._client = None
-                self._db = None
-                await self._ensure_connected()
-                if self._db is None:
-                    raise DatabaseError(
-                        "Failed to establish MongoDB connection after retry"
-                    )
-                collection_obj = self._db[collection]
-                return await collection_obj.find_one({"_id": id})
-            raise DatabaseError(f"MongoDB get error: {e}") from e
+            return await collection_obj.find_one({"_id": id})
+
+        return await self._run_with_reconnect("get", _get_op)
 
     async def delete(self, collection: str, id: str) -> None:
         """Delete a record by ID."""
-        await self._ensure_connected()
 
-        if self._db is None:
-            raise DatabaseError("MongoDB database connection not established")
-
-        try:
+        async def _delete_op() -> None:
+            await self._ensure_connected()
+            if self._db is None:
+                raise DatabaseError("MongoDB database connection not established")
             collection_obj = self._db[collection]
             await collection_obj.delete_one({"_id": id})
-        except RuntimeError as e:
-            # Handle "Event loop is closed" error by recreating connection
-            if "Event loop is closed" in str(e) or "closed" in str(e).lower():
-                logger.debug(
-                    "Event loop closed during operation, recreating MongoDB connection"
-                )
-                self._client = None
-                self._db = None
-                await self._ensure_connected()
-                # Retry the operation
-                if self._db is None:
-                    raise DatabaseError(
-                        "Failed to establish MongoDB connection after retry"
-                    )
-                collection_obj = self._db[collection]
-                await collection_obj.delete_one({"_id": id})
-                return
-            raise DatabaseError(f"MongoDB delete error: {e}") from e
-        except PyMongoError as e:
-            if _is_connection_error(e):
-                logger.debug(
-                    "MongoDB connection error during delete, recreating and retrying: %s",
-                    e,
-                )
-                self._client = None
-                self._db = None
-                await self._ensure_connected()
-                if self._db is None:
-                    raise DatabaseError(
-                        "Failed to establish MongoDB connection after retry"
-                    )
-                collection_obj = self._db[collection]
-                await collection_obj.delete_one({"_id": id})
-                return
-            raise DatabaseError(f"MongoDB delete error: {e}") from e
+
+        await self._run_with_reconnect("delete", _delete_op)
 
     async def find(
         self,
@@ -341,49 +296,92 @@ class MongoDB(Database):
         sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find records matching a query."""
-        await self._ensure_connected()
 
-        if self._db is None:
-            raise DatabaseError("MongoDB database connection not established")
-
-        try:
+        async def _find_op() -> List[Dict[str, Any]]:
+            await self._ensure_connected()
+            if self._db is None:
+                raise DatabaseError("MongoDB database connection not established")
             collection_obj = self._db[collection]
             cursor = collection_obj.find(query)
             if sort:
                 cursor = cursor.sort(sort)
             if limit is not None:
                 cursor = cursor.limit(limit)
-            results = await cursor.to_list(length=None)
-            return results
-        except RuntimeError as e:
-            # Handle "Event loop is closed" error by recreating connection
-            if "Event loop is closed" in str(e) or "closed" in str(e).lower():
-                logger.debug(
-                    "Event loop closed during operation, recreating MongoDB connection"
+            return await cursor.to_list(length=None)
+
+        return await self._run_with_reconnect("find", _find_op)
+
+    async def find_many(
+        self, collection: str, ids: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Bulk fetch via a single ``find({"_id": {"$in": ids}})``.
+
+        Returns ``{id: record}`` for ids that exist; missing ids are
+        absent from the result. De-duplicates the input id list.
+        """
+        if not ids:
+            return {}
+        await self._ensure_connected()
+        if self._db is None:
+            raise DatabaseError("MongoDB database connection not established")
+        unique_ids = list(dict.fromkeys(ids))
+        try:
+            collection_obj = self._db[collection]
+            cursor = collection_obj.find({"_id": {"$in": unique_ids}})
+            docs = await cursor.to_list(length=None)
+        except (RuntimeError, PyMongoError) as e:
+            # Reuse the existing reconnect-on-stale pattern by deferring
+            # to the base class default if the wire fails. The base
+            # falls back to N serial get() calls which themselves
+            # already handle reconnect.
+            if isinstance(e, RuntimeError) and "closed" not in str(e).lower():
+                raise DatabaseError(f"MongoDB find_many error: {e}") from e
+            if isinstance(e, PyMongoError) and not _is_connection_error(e):
+                raise DatabaseError(f"MongoDB find_many error: {e}") from e
+            self._client = None
+            self._db = None
+            await self._ensure_connected()
+            if self._db is None:
+                raise DatabaseError(
+                    "Failed to establish MongoDB connection after retry"
                 )
-                self._client = None
-                self._db = None
-                await self._ensure_connected()
-                # Retry the operation
-                if self._db is None:
-                    raise DatabaseError(
-                        "Failed to establish MongoDB connection after retry"
-                    )
-                collection_obj = self._db[collection]
-                cursor = collection_obj.find(query)
-                if sort:
-                    cursor = cursor.sort(sort)
-                if limit is not None:
-                    cursor = cursor.limit(limit)
-                results = await cursor.to_list(length=None)
-                return results
-            raise DatabaseError(f"MongoDB find error: {e}") from e
+            collection_obj = self._db[collection]
+            cursor = collection_obj.find({"_id": {"$in": unique_ids}})
+            docs = await cursor.to_list(length=None)
+        return {str(doc["_id"]): doc for doc in docs}
+
+    async def bulk_save(self, collection: str, records: List[Dict[str, Any]]) -> int:
+        """Bulk write via ``bulk_write`` with ``ordered=False``.
+
+        Partial successes are reported -- a single record's failure
+        does not block the rest of the batch. Returns the number of
+        records the server reported as either upserted or modified.
+        """
+        if not records:
+            return 0
+        for r in records:
+            if "id" not in r:
+                raise ValueError(
+                    "bulk_save requires every record to have an 'id' field"
+                )
+        await self._ensure_connected()
+        if self._db is None:
+            raise DatabaseError("MongoDB database connection not established")
+
+        from pymongo import ReplaceOne
+
+        ops = []
+        for r in records:
+            doc = dict(r)
+            if "_id" not in doc:
+                doc["_id"] = doc["id"]
+            ops.append(ReplaceOne({"_id": doc["_id"]}, doc, upsert=True))
+
+        try:
+            collection_obj = self._db[collection]
+            result = await collection_obj.bulk_write(ops, ordered=False)
         except PyMongoError as e:
             if _is_connection_error(e):
-                logger.debug(
-                    "MongoDB connection error during find, recreating and retrying: %s",
-                    e,
-                )
                 self._client = None
                 self._db = None
                 await self._ensure_connected()
@@ -392,13 +390,15 @@ class MongoDB(Database):
                         "Failed to establish MongoDB connection after retry"
                     )
                 collection_obj = self._db[collection]
-                cursor = collection_obj.find(query)
-                if sort:
-                    cursor = cursor.sort(sort)
-                if limit is not None:
-                    cursor = cursor.limit(limit)
-                return await cursor.to_list(length=None)
-            raise DatabaseError(f"MongoDB find error: {e}") from e
+                result = await collection_obj.bulk_write(ops, ordered=False)
+            else:
+                raise DatabaseError(f"MongoDB bulk_save error: {e}") from e
+        # ``upserted_count`` covers brand-new docs, ``matched_count``
+        # covers existing docs we replaced (whether the bytes changed
+        # or not). Sum is the total "successfully persisted" count.
+        upserted = int(getattr(result, "upserted_count", 0) or 0)
+        matched = int(getattr(result, "matched_count", 0) or 0)
+        return upserted + matched
 
     async def find_one_and_delete(
         self, collection: str, query: Dict[str, Any]

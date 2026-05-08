@@ -1,0 +1,181 @@
+name: Benchmarks
+
+# Runs the pytest-benchmark suite on every pull request and compares
+# against a baseline captured from main. A regression > REGRESSION_PCT
+# is reported as a comment on the PR but does NOT (yet) fail the build
+# -- shared GitHub-runner CI has too much variance to make hard gating
+# trustworthy. Treat the comment as a signal to investigate.
+#
+# To capture a new baseline (e.g. after intentional perf work):
+# - merge the PR to main
+# - the workflow's `update-baseline` job below runs on push to main
+#   and uploads the fresh result as the `bench-baseline` artifact
+
+on:
+  pull_request:
+    paths:
+      - 'jvspatial/**'
+      - 'tests/benchmarks/**'
+      - 'pyproject.toml'
+      - '.github/workflows/benchmarks.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'jvspatial/**'
+      - 'tests/benchmarks/**'
+      - 'pyproject.toml'
+      - '.github/workflows/benchmarks.yml'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  # When a PR is more than this percent slower than the baseline on
+  # any single benchmark, post a regression comment. Threshold is
+  # deliberately loose to absorb runner variance; tighten as the
+  # benchmark suite stabilizes.
+  REGRESSION_PCT: '25'
+
+jobs:
+  run-benchmarks:
+    name: Run benchmark suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,test]'
+
+      - name: Run benchmarks (PR or main push)
+        run: |
+          mkdir -p .benchmarks/current
+          pytest tests/benchmarks \
+            --benchmark-only \
+            --benchmark-json=.benchmarks/current/result.json \
+            --benchmark-min-rounds=5 \
+            --benchmark-warmup=on
+
+      - name: Upload current results
+        uses: actions/upload-artifact@v6
+        with:
+          name: bench-current
+          path: .benchmarks/current/result.json
+          retention-days: 30
+
+      # On a push to main, this run becomes the new baseline.
+      - name: Publish as baseline (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v6
+        with:
+          name: bench-baseline
+          path: .benchmarks/current/result.json
+          retention-days: 90
+
+  compare-to-baseline:
+    name: Compare against baseline
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    needs: run-benchmarks
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download current results
+        uses: actions/download-artifact@v5
+        with:
+          name: bench-current
+          path: .benchmarks/current
+
+      - name: Download baseline (best-effort)
+        id: baseline
+        continue-on-error: true
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: benchmarks.yml
+          branch: main
+          name: bench-baseline
+          path: .benchmarks/baseline
+          if_no_artifact_found: warn
+
+      - name: Compare
+        if: steps.baseline.outcome == 'success'
+        id: compare
+        run: |
+          python <<'PY'
+          import json, os, sys
+          from pathlib import Path
+
+          cur = json.loads(Path('.benchmarks/current/result.json').read_text())
+          base = json.loads(Path('.benchmarks/baseline/result.json').read_text())
+
+          threshold = float(os.environ.get('REGRESSION_PCT', '25'))
+
+          # Build {name: mean_seconds}
+          def index(report):
+              out = {}
+              for b in report.get('benchmarks', []):
+                  out[b['fullname']] = b['stats']['mean']
+              return out
+
+          cur_idx = index(cur)
+          base_idx = index(base)
+
+          rows = []
+          regressions = []
+          for name, cur_mean in sorted(cur_idx.items()):
+              base_mean = base_idx.get(name)
+              if base_mean is None:
+                  rows.append((name, None, cur_mean, None, 'NEW'))
+                  continue
+              pct = (cur_mean - base_mean) / base_mean * 100.0
+              status = 'OK'
+              if pct > threshold:
+                  status = f'REGRESSION (+{pct:.1f}%)'
+                  regressions.append((name, base_mean, cur_mean, pct))
+              elif pct < -threshold:
+                  status = f'IMPROVED ({pct:.1f}%)'
+              rows.append((name, base_mean, cur_mean, pct, status))
+
+          # Render markdown summary
+          md = ['## Benchmark comparison\n']
+          md.append(f'Threshold: ±{threshold:.0f}% (informational, does not block merge)\n')
+          md.append('| benchmark | baseline (s) | current (s) | delta | status |')
+          md.append('|---|---:|---:|---:|---|')
+          for row in rows:
+              if row[1] is None:
+                  md.append(f'| `{row[0]}` | — | {row[2]:.6f} | — | {row[4]} |')
+              else:
+                  delta = f'{row[3]:+.1f}%'
+                  md.append(f'| `{row[0]}` | {row[1]:.6f} | {row[2]:.6f} | {delta} | {row[4]} |')
+
+          summary = '\n'.join(md) + '\n'
+          Path('comment.md').write_text(summary)
+          print(summary)
+
+          if regressions:
+              print(f'::warning::Detected {len(regressions)} benchmark(s) regressing > {threshold}%')
+          PY
+
+      - name: Comment on PR
+        if: steps.baseline.outcome == 'success'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: comment.md
+          edit-mode: replace
+
+      - name: No baseline yet
+        if: steps.baseline.outcome != 'success'
+        run: |
+          echo "::notice::No baseline artifact yet — benchmark comparison skipped."
+          echo "After this PR merges and the workflow runs on main, the"
+          echo "produced 'bench-baseline' artifact will be used for"
+          echo "future PR comparisons."

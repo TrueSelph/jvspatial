@@ -34,7 +34,11 @@ jobs:
     # coverage threshold once on 3.12.
     - name: Run tests (with coverage)
       if: matrix.python-version == '3.12'
-      run: pytest tests/ -v --tb=short --cov=jvspatial --cov-report=xml --cov-report=term-missing --cov-fail-under=55
+      # Coverage floor bumped to 60% after Phase A1-A5/B1-B3/C1-C2 added
+      # ~80 new tests covering durability, transactions, push-down,
+      # caching, observability, retry, bulk APIs, multipart S3.
+      # Tighten further once flake risk is understood under the new suite.
+      run: pytest tests/ -v --tb=short --cov=jvspatial --cov-report=xml --cov-report=term-missing --cov-fail-under=60
 
     - name: Run tests (no coverage)
       if: matrix.python-version != '3.12'
