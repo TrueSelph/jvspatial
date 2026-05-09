@@ -43,13 +43,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install pip-audit
           # Resolve the project's own dependency set so pip-audit sees
-          # the same packages adopters would install. We do NOT install
-          # the project itself in editable mode -- pip-audit walks the
-          # currently-installed environment.
+          # the same packages adopters would install.
           pip install '.[dev,test,otel]'
 
       - name: Run pip-audit
         run: |
-          # --strict makes pip-audit fail on any vuln (we wrap the
-          # whole job in continue-on-error today).
-          pip-audit --strict --progress-spinner off
+          # --skip-editable: jvspatial itself is installed editable and
+          #   its in-development version isn't on PyPI yet; auditing it
+          #   would always fail with "Dependency not found on PyPI".
+          # --strict: fail on any vulnerability in the resolved deps.
+          # The whole job is wrapped in continue-on-error today so a
+          # CVE in a transitive dep doesn't block unrelated PRs while
+          # a maintainer triages.
+          pip-audit --strict --skip-editable --progress-spinner off

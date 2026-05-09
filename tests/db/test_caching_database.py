@@ -86,7 +86,9 @@ class TestInvalidation:
 
     async def test_find_one_and_delete_invalidates(self, jsondb):
         cached = CachingDatabase(jsondb, max_entries=8)
-        await jsondb.save("node", {"id": "x", "v": 1})
+        # Save with both id + _id so the {"_id": "x"} query matches under
+        # JsonDB (which doesn't auto-mirror id<->_id at find time).
+        await jsondb.save("node", {"id": "x", "_id": "x", "v": 1})
         await cached.get("node", "x")  # populate
         deleted = await cached.find_one_and_delete("node", {"_id": "x"})
         assert deleted is not None

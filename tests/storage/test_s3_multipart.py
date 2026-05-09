@@ -17,16 +17,23 @@ from jvspatial.storage.interfaces.s3 import S3FileInterface  # noqa: E402
 
 @pytest.fixture
 def mock_client():
-    """Patch S3FileInterface._init_client to install a mock client."""
+    """Patch S3FileInterface._init_client so __init__ doesn't touch boto3.
+
+    Note:
+        ``patch.object(cls, name)`` replaces the attribute with a MagicMock,
+        which is *not* a descriptor and therefore does not auto-bind
+        ``self`` when accessed via an instance. Assigning a real
+        ``side_effect`` callable that expects ``self`` would fail because
+        the mock invokes the side effect with the call's args (none, since
+        ``self._init_client()`` passes nothing). We replace with a plain
+        ``lambda`` -- which IS a descriptor -- so ``self`` binds normally,
+        then assign ``s3_client`` on the resulting instance from the test
+        fixture.
+    """
     client = MagicMock()
     client.put_object.return_value = {}
     client.upload_fileobj.return_value = None
-    with patch.object(S3FileInterface, "_init_client") as init:
-
-        def _set(self):
-            self.s3_client = client
-
-        init.side_effect = _set
+    with patch.object(S3FileInterface, "_init_client", lambda self: None):
         yield client
 
 
@@ -37,6 +44,7 @@ def s3(mock_client, monkeypatch):
         bucket_name="test-bucket",
         multipart_threshold=1024,  # 1 KiB threshold for fast tests
     )
+    storage.s3_client = mock_client
     return storage
 
 

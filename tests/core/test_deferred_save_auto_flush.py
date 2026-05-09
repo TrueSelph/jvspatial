@@ -4,6 +4,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
+from typing import ClassVar, Optional
 from unittest.mock import patch
 
 import pytest
@@ -20,7 +21,10 @@ class _AutoFlushNode(DeferredSaveMixin, Node):
 
     name: str = ""
     counter: int = 0
-    max_pending_saves = 5  # auto-flush after 5 deferred save() calls
+    # Pydantic v2 requires a ClassVar annotation on any non-field
+    # attribute defined on a BaseModel subclass; without it the model
+    # construction step rejects the class.
+    max_pending_saves: ClassVar[Optional[int]] = 5
 
 
 @pytest.fixture
@@ -61,12 +65,19 @@ def _enable_deferred_env():
 class TestAutoFlushBound:
     async def test_auto_flush_triggers_at_threshold(self, sqlite_context, caplog):
         node = await _AutoFlushNode.create(name="x", counter=0)
-        # First save (call 1 of 5). _pending_save_count is incremented
-        # in __init__-from-create flow.
-        # Issue another four; the 5th should trigger auto-flush.
+        # ``create()`` calls save() then flush(); flush() turns off
+        # deferred mode and clears _pending_save_count. Re-enable to
+        # start a fresh batching session for the test.
+        node.enable_deferred_saves()
+        # Issue 4 deferred saves; the 5th should trigger auto-flush.
         for i in range(1, 5):
             node.counter = i
             await node.save()
+
+        # Just before the 5th save, we have 4 pending saves and the
+        # node is dirty.
+        assert node._pending_save_count == 4
+        assert node.is_dirty
 
         with caplog.at_level(logging.WARNING):
             node.counter = 5
@@ -89,6 +100,8 @@ class TestAutoFlushBound:
 
     async def test_under_threshold_no_auto_flush(self, sqlite_context, caplog):
         node = await _AutoFlushNode.create(name="x", counter=0)
+        # ``create()`` flushed and disabled deferred mode -- re-enable.
+        node.enable_deferred_saves()
         # 3 deferred saves -> no flush (under cap of 5)
         for i in range(1, 4):
             node.counter = i
@@ -106,6 +119,8 @@ class TestAutoFlushBound:
             # max_pending_saves intentionally unset -- inherits None.
 
         node = await _UnboundedNode.create(counter=0)
+        # ``create()`` flushed and disabled deferred mode -- re-enable.
+        node.enable_deferred_saves()
         for i in range(1, 50):
             node.counter = i
             await node.save()
@@ -115,6 +130,8 @@ class TestAutoFlushBound:
 
     async def test_explicit_flush_resets_counter(self, sqlite_context, caplog):
         node = await _AutoFlushNode.create(name="x", counter=0)
+        # ``create()`` flushed and disabled deferred mode -- re-enable.
+        node.enable_deferred_saves()
         for i in range(1, 4):
             node.counter = i
             await node.save()

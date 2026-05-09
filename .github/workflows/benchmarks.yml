@@ -105,8 +105,21 @@ jobs:
           path: .benchmarks/baseline
           if_no_artifact_found: warn
 
+      - name: Check baseline presence
+        # The download action returns outcome=success even when no
+        # artifact was found (because if_no_artifact_found=warn). The
+        # only reliable check is whether the file actually landed.
+        id: have_baseline
+        run: |
+          if [ -f .benchmarks/baseline/result.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No baseline artifact yet -- benchmark comparison skipped. After this PR merges and the benchmarks workflow runs on main, the produced 'bench-baseline' artifact will be used for future PR comparisons."
+          fi
+
       - name: Compare
-        if: steps.baseline.outcome == 'success'
+        if: steps.have_baseline.outputs.present == 'true'
         id: compare
         run: |
           python <<'PY'
@@ -165,17 +178,9 @@ jobs:
           PY
 
       - name: Comment on PR
-        if: steps.baseline.outcome == 'success'
+        if: steps.have_baseline.outputs.present == 'true'
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
           body-path: comment.md
           edit-mode: replace
-
-      - name: No baseline yet
-        if: steps.baseline.outcome != 'success'
-        run: |
-          echo "::notice::No baseline artifact yet — benchmark comparison skipped."
-          echo "After this PR merges and the workflow runs on main, the"
-          echo "produced 'bench-baseline' artifact will be used for"
-          echo "future PR comparisons."
