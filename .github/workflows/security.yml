@@ -1,0 +1,71 @@
+name: Security audit
+
+# Runs pip-audit weekly and on any change to dependency declarations.
+# Currently non-blocking (continue-on-error: true) so an upstream CVE
+# disclosure doesn't block unrelated PRs while a maintainer triages.
+# Flip to ``false`` once the dependency hygiene baseline is clean.
+
+on:
+  pull_request:
+    paths:
+      - 'pyproject.toml'
+      - 'requirements*.txt'
+      - '.github/workflows/security.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'pyproject.toml'
+      - 'requirements*.txt'
+  schedule:
+    # Mondays at 06:00 UTC. Catches CVEs disclosed over the weekend
+    # before adopters hit them.
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install project + audit tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+          # Resolve the project's full dependency set so the audit
+          # sees the same packages adopters would install.
+          pip install '.[dev,test,otel]'
+
+      - name: Run pip-audit
+        run: |
+          # We audit an explicit requirements list rather than the
+          # environment because jvspatial itself (0.0.x) isn't on PyPI
+          # yet -- env-mode pip-audit fails on it both as a regular
+          # install ("Dependency not found on PyPI") and as an editable
+          # install ("distribution marked as editable"; --skip-editable
+          # is unreliable across pip-audit versions). Generating a
+          # filtered freeze-list and feeding it via -r side-steps the
+          # whole detection path.
+          #
+          # --strict: fail on any vulnerability in the resolved deps.
+          # The whole job is wrapped in continue-on-error today so a
+          # CVE in a transitive dep doesn't block unrelated PRs while
+          # a maintainer triages.
+          pip list --format=freeze \
+            | grep -iv '^jvspatial' \
+            | grep -iv '^-e' \
+            > /tmp/audit-reqs.txt
+          echo "::group::Auditing the following requirements"
+          cat /tmp/audit-reqs.txt
+          echo "::endgroup::"
+          pip-audit --strict -r /tmp/audit-reqs.txt --progress-spinner off

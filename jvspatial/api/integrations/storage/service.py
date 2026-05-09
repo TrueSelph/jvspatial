@@ -4,6 +4,7 @@ This module provides a dedicated service class for handling file storage
 operations, separating concerns from the main Server class.
 """
 
+import mimetypes
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException, UploadFile
@@ -18,6 +19,12 @@ from jvspatial.env import env, parse_bool_basic
 from jvspatial.storage.exceptions import StorageError
 
 _FILES_OPENAPI_TAGS = ["Files"]
+
+
+def _media_type_for_path(file_path: str) -> str:
+    """MIME type from path extension; downstream fetches rely on correct Content-Type."""
+    guessed, _enc = mimetypes.guess_type(file_path)
+    return guessed or "application/octet-stream"
 
 
 def _mark_storage_endpoint(
@@ -129,7 +136,8 @@ class FileStorageService:
         """
         try:
             stream = self.file_interface.serve_file(file_path)
-            return StreamingResponse(stream, media_type="application/octet-stream")
+            media_type = _media_type_for_path(file_path)
+            return StreamingResponse(stream, media_type=media_type)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail=ErrorMessages.FILE_NOT_FOUND)
         except StorageError as e:
@@ -223,7 +231,8 @@ class FileStorageService:
             file_path, _metadata = self.proxy_manager.resolve_proxy(code)
 
             stream = self.file_interface.serve_file(file_path)
-            return StreamingResponse(stream, media_type="application/octet-stream")
+            media_type = _media_type_for_path(file_path)
+            return StreamingResponse(stream, media_type=media_type)
 
         except FileNotFoundError:
             raise HTTPException(404, "Proxy not found or expired")

@@ -64,6 +64,8 @@ def find_subclass_by_name(base_class: Type, name: str) -> Optional[Type]:
         return None
 
     result = find_subclass(base_class)
-    # Cache the result
-    _subclass_cache[cache_key] = result
+    # Only cache positive hits. Caching None permanently breaks lookups after the class
+    # is imported later (subclass cache poisoning during bootstrap).
+    if result is not None:
+        _subclass_cache[cache_key] = result
     return result

@@ -16,7 +16,7 @@ Summary:
 import asyncio
 import json
 import logging
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple, Union
 
 try:
     import aioboto3
@@ -35,11 +35,38 @@ except ImportError:
     ClientError = Exception  # type: ignore[assignment, misc]
     Config = None  # type: ignore[assignment, misc]
 
-from jvspatial.db.database import Database
+from jvspatial.db.database import Database, finalize_find_results
 from jvspatial.db.query import QueryEngine
 from jvspatial.exceptions import DatabaseError
+from jvspatial.utils.retry import retry_async
 
 logger = logging.getLogger(__name__)
+
+
+# Error codes DynamoDB returns for transient throttling / capacity
+# pressure. Worth retrying with backoff; non-throttle ``ClientError``s
+# propagate immediately.
+_DDB_THROTTLE_CODES = frozenset(
+    {
+        "ProvisionedThroughputExceededException",
+        "ThrottlingException",
+        "RequestLimitExceeded",
+        "TooManyRequestsException",
+        "TransactionConflictException",
+    }
+)
+
+
+def _is_dynamodb_throttle_error(exc: BaseException) -> bool:
+    """Predicate for the shared retry helper on DynamoDB ops."""
+    if not isinstance(exc, ClientError):
+        return False
+    code = (
+        exc.response.get("Error", {}).get("Code")  # type: ignore[union-attr]
+        if hasattr(exc, "response")
+        else None
+    )
+    return code in _DDB_THROTTLE_CODES
 
 
 class DynamoDB(Database):
@@ -458,6 +485,27 @@ class DynamoDB(Database):
 
         return full_table_name
 
+    async def _run_with_throttle_retry(
+        self, op_name: str, coro_factory: "Callable[[], Awaitable[Any]]"
+    ) -> Any:
+        """Wrap a DynamoDB op with throttle-error retry.
+
+        Uses the shared :func:`retry_async` helper. Throttle errors get
+        exponential backoff with full jitter; non-throttle ``ClientError``s
+        propagate immediately and are wrapped as ``DatabaseError``.
+        """
+        try:
+            return await retry_async(
+                coro_factory,
+                retry_on=_is_dynamodb_throttle_error,
+                max_attempts=4,
+                base_delay=0.1,
+                max_delay=2.0,
+                jitter=True,
+            )
+        except ClientError as e:
+            raise DatabaseError(f"DynamoDB {op_name} error: {e}") from e
+
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Save a record to the database.
 
@@ -489,21 +537,20 @@ class DynamoDB(Database):
         indexed_attrs = self._extract_indexed_fields(data, collection)
         item.update(indexed_attrs)
 
-        try:
+        async def _put_op() -> None:
             client = await self._get_client()
-            # Add timeout to prevent hanging
             try:
                 await asyncio.wait_for(
                     client.put_item(TableName=table_name, Item=item),
-                    timeout=30.0,  # 30 second timeout
+                    timeout=30.0,
                 )
             except asyncio.TimeoutError:
                 raise DatabaseError(
                     f"DynamoDB save operation timed out for table: {table_name}"
                 )
-            return data
-        except ClientError as e:
-            raise DatabaseError(f"DynamoDB save error: {e}") from e
+
+        await self._run_with_throttle_retry("save", _put_op)
+        return data
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a record by ID.
@@ -517,7 +564,7 @@ class DynamoDB(Database):
         """
         table_name = await self._ensure_table_exists(collection)
 
-        try:
+        async def _get_op() -> Optional[Dict[str, Any]]:
             client = await self._get_client()
             response = await client.get_item(
                 TableName=table_name,
@@ -525,13 +572,10 @@ class DynamoDB(Database):
             )
             if "Item" not in response:
                 return None
-
-            # Deserialize data from JSON string
             item = response["Item"]
-            data = json.loads(item["data"]["S"])
-            return data
-        except ClientError as e:
-            raise DatabaseError(f"DynamoDB get error: {e}") from e
+            return json.loads(item["data"]["S"])
+
+        return await self._run_with_throttle_retry("get", _get_op)
 
     async def delete(self, collection: str, id: str) -> None:
         """Delete a record by ID.
@@ -542,14 +586,14 @@ class DynamoDB(Database):
         """
         table_name = await self._ensure_table_exists(collection)
 
-        try:
+        async def _delete_op() -> None:
             client = await self._get_client()
             await client.delete_item(
                 TableName=table_name,
                 Key={"collection": {"S": collection}, "id": {"S": id}},
             )
-        except ClientError as e:
-            raise DatabaseError(f"DynamoDB delete error: {e}") from e
+
+        await self._run_with_throttle_retry("delete", _delete_op)
 
     async def batch_get(self, collection: str, ids: List[str]) -> List[Dict[str, Any]]:
         """Retrieve multiple records by IDs using batch_get_item.
@@ -733,6 +777,44 @@ class DynamoDB(Database):
             # Single batch, no need for parallelization
             await process_batch(batches[0] if batches else [])
 
+    async def find_many(
+        self, collection: str, ids: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Bulk fetch via :meth:`batch_get`.
+
+        Wraps the existing batch_get_item path in the
+        ``{id: record}`` shape required by the
+        :class:`Database.find_many` protocol.
+        """
+        if not ids:
+            return {}
+        unique_ids = list(dict.fromkeys(ids))
+        records = await self.batch_get(collection, unique_ids)
+        out: Dict[str, Dict[str, Any]] = {}
+        for rec in records:
+            rid = rec.get("id", rec.get("_id"))
+            if rid is not None:
+                out[str(rid)] = rec
+        return out
+
+    async def bulk_save(self, collection: str, records: List[Dict[str, Any]]) -> int:
+        """Bulk write via :meth:`batch_write`.
+
+        DynamoDB's batch_write_item handles partial failures with
+        unprocessed-item retry. The count returned reflects the
+        records we *attempted* to write -- the underlying batch_write
+        logs a warning on items still unprocessed after retries.
+        """
+        if not records:
+            return 0
+        for r in records:
+            if "id" not in r:
+                raise ValueError(
+                    "bulk_save requires every record to have an 'id' field"
+                )
+        await self.batch_write(collection, [dict(r) for r in records])
+        return len(records)
+
     def _find_matching_gsi(
         self, collection: str, query: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
@@ -837,8 +919,157 @@ class DynamoDB(Database):
         filter_expression = " AND ".join(filter_parts)
         return filter_expression, attr_names, attr_values
 
+    async def count(
+        self,
+        collection: str,
+        query: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Count records matching ``query`` using server-side ``Select=COUNT``.
+
+        Push-down strategy:
+
+        * Empty query -> Scan with ``Select="COUNT"``; only ``ScannedCount`` /
+          ``Count`` come back across the wire, item bodies do not.
+        * Equality on an indexed field that maps to a GSI -> Query with
+          ``Select="COUNT"`` against that GSI; this is the fast path.
+        * Equality filters that ``_build_filter_expression`` can express ->
+          Scan with FilterExpression + ``Select="COUNT"``.
+        * Anything else (complex operators we don't translate) -> fall back
+          to ``find + len`` and log a warning, because DynamoDB scans
+          *with* client-side filtering are the worst case and callers
+          should know.
+
+        DynamoDB returns ``Count`` per page; we sum them across
+        ``LastEvaluatedKey`` pagination.
+        """
+        q = query or {}
+        table_name = await self._ensure_table_exists(collection)
+        client = await self._get_client()
+
+        try:
+            # GSI fast path
+            if q:
+                gsi_match = self._find_matching_gsi(collection, q)
+                if gsi_match and not q.get("$or") and not q.get("$and"):
+                    attr_name = gsi_match["attr_name"]
+                    value = gsi_match["value"]
+                    if isinstance(value, str):
+                        value_attr: Dict[str, Any] = {"S": value}
+                    elif isinstance(value, bool):
+                        value_attr = {"BOOL": value}  # type: ignore[dict-item]
+                    elif isinstance(value, (int, float)):
+                        value_attr = {"N": str(value)}
+                    else:
+                        value_attr = {"S": str(value)}
+
+                    # Anything in the query other than the indexed field
+                    # would need post-filtering, which Select=COUNT cannot
+                    # do precisely if some of those filters require
+                    # client-side matching. If the remainder is fully
+                    # FilterExpression-able, we keep the COUNT path; else
+                    # we fall through to the find+len fallback below.
+                    remaining = {
+                        k: v for k, v in q.items() if k != gsi_match["field_path"]
+                    }
+                    filter_expr, filter_attr_names, filter_attr_values = (
+                        self._build_filter_expression(remaining, collection)
+                    )
+                    if not remaining or filter_expr is not None:
+                        expr_attr_names = {"#key": attr_name}
+                        expr_attr_values = {":val": value_attr}
+                        if filter_expr:
+                            expr_attr_names.update(filter_attr_names)
+                            expr_attr_values.update(filter_attr_values)
+                        params: Dict[str, Any] = {
+                            "TableName": table_name,
+                            "IndexName": gsi_match["gsi_name"],
+                            "KeyConditionExpression": "#key = :val",
+                            "ExpressionAttributeNames": expr_attr_names,
+                            "ExpressionAttributeValues": expr_attr_values,
+                            "Select": "COUNT",
+                        }
+                        if filter_expr:
+                            params["FilterExpression"] = filter_expr
+
+                        total = 0
+                        while True:
+                            resp = await client.query(**params)
+                            total += int(resp.get("Count", 0))
+                            if "LastEvaluatedKey" not in resp:
+                                break
+                            params["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+                        return total
+
+            # Scan fast path: empty query OR query that's fully expressible
+            # as FilterExpression.
+            filter_expr, filter_attr_names, filter_attr_values = (
+                self._build_filter_expression(q, collection)
+            )
+            scan_attr_names = {"#coll": "collection"}
+            scan_attr_values = {":collection_val": {"S": collection}}
+            # Decide whether the query is fully push-downable. It is iff
+            # every value is either scalar (handled by _build_filter_expression
+            # for indexed fields) and there's no extra Python work needed.
+            non_pushdown_keys = []
+            for k, v in q.items():
+                if k.startswith("$"):
+                    non_pushdown_keys.append(k)
+                    continue
+                if isinstance(v, dict):
+                    # Operator dicts are not handled by _build_filter_expression.
+                    non_pushdown_keys.append(k)
+                    continue
+                if (
+                    collection in self._indexed_fields
+                    and k in self._indexed_fields[collection]
+                ):
+                    continue
+                non_pushdown_keys.append(k)
+
+            if not q or (filter_expr is not None and not non_pushdown_keys):
+                if filter_expr:
+                    scan_attr_names.update(filter_attr_names)
+                    scan_attr_values.update(filter_attr_values)
+                    combined = f"#coll = :collection_val AND {filter_expr}"
+                else:
+                    combined = "#coll = :collection_val"
+                scan_params: Dict[str, Any] = {
+                    "TableName": table_name,
+                    "FilterExpression": combined,
+                    "ExpressionAttributeNames": scan_attr_names,
+                    "ExpressionAttributeValues": scan_attr_values,
+                    "Select": "COUNT",
+                }
+                total = 0
+                while True:
+                    resp = await client.scan(**scan_params)
+                    total += int(resp.get("Count", 0))
+                    if "LastEvaluatedKey" not in resp:
+                        break
+                    scan_params["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+                return total
+
+        except ClientError as e:
+            raise DatabaseError(f"DynamoDB count error: {e}") from e
+
+        # Fallback: full materialization for queries we can't push down.
+        logger.warning(
+            "DynamoDB count() falling back to find+len for unindexed/"
+            "complex query on collection '%s' (%d filter keys). "
+            "Consider adding a GSI on the filter field.",
+            collection,
+            len([k for k in q if not k.startswith("$")]),
+        )
+        rows = await self.find(collection, q)
+        return len(rows)
+
     async def find(
-        self, collection: str, query: Dict[str, Any], limit: Optional[int] = None
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find records matching a query.
 
@@ -850,6 +1081,8 @@ class DynamoDB(Database):
             collection: Collection name
             query: Query parameters (empty dict for all records)
             limit: Optional maximum number of results to return
+            sort: Optional sort spec; when set, matching rows are collected without
+                an early DynamoDB ``Limit`` (then sorted and truncated in memory).
 
         Returns:
             List of matching records
@@ -863,6 +1096,7 @@ class DynamoDB(Database):
         table_name = await self._ensure_table_exists(collection)
 
         try:
+            fetch_limit = None if sort else limit
             client = await self._get_client()
             # Try to use GSI if query matches an indexed field
             gsi_match = self._find_matching_gsi(collection, query)
@@ -907,8 +1141,8 @@ class DynamoDB(Database):
                         "ExpressionAttributeNames": expr_attr_names,
                         "ExpressionAttributeValues": expr_attr_values,
                     }
-                    if limit:
-                        query_params["Limit"] = limit
+                    if fetch_limit:
+                        query_params["Limit"] = fetch_limit
                     if filter_expr:
                         query_params["FilterExpression"] = filter_expr
 
@@ -926,16 +1160,16 @@ class DynamoDB(Database):
                         ):
                             continue
                         results.append(data)
-                        if limit and len(results) >= limit:
+                        if fetch_limit and len(results) >= fetch_limit:
                             break
 
                     # Handle pagination (only if limit not reached)
                     while "LastEvaluatedKey" in response and (
-                        not limit or len(results) < limit
+                        not fetch_limit or len(results) < fetch_limit
                     ):
                         query_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
-                        if limit:
-                            query_params["Limit"] = limit - len(results)
+                        if fetch_limit:
+                            query_params["Limit"] = fetch_limit - len(results)
                         response = await client.query(**query_params)
 
                         for item in response.get("Items", []):
@@ -947,15 +1181,15 @@ class DynamoDB(Database):
                             ):
                                 continue
                             results.append(data)
-                            if limit and len(results) >= limit:
+                            if fetch_limit and len(results) >= fetch_limit:
                                 break
-                        if limit and len(results) >= limit:
+                        if fetch_limit and len(results) >= fetch_limit:
                             break
 
                     logger.debug(
                         f"Used GSI '{gsi_match['gsi_name']}' for query on '{gsi_match['field_path']}'"
                     )
-                    return results[:limit] if limit else results
+                    return finalize_find_results(results, sort=sort, limit=limit)
 
                 except ClientError as e:
                     # If GSI query fails, fall back to scan
@@ -989,8 +1223,8 @@ class DynamoDB(Database):
                 "ExpressionAttributeNames": scan_attr_names,
                 "ExpressionAttributeValues": scan_attr_values,
             }
-            if limit:
-                scan_params["Limit"] = limit
+            if fetch_limit:
+                scan_params["Limit"] = fetch_limit
 
             response = await client.scan(**scan_params)
 
@@ -1003,16 +1237,16 @@ class DynamoDB(Database):
                 if not filter_expr and query and not QueryEngine.match(data, query):
                     continue
                 results.append(data)
-                if limit and len(results) >= limit:
+                if fetch_limit and len(results) >= fetch_limit:
                     break
 
             # Handle pagination (only if limit not reached)
             while "LastEvaluatedKey" in response and (
-                not limit or len(results) < limit
+                not fetch_limit or len(results) < fetch_limit
             ):
                 scan_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
-                if limit:
-                    scan_params["Limit"] = limit - len(results)
+                if fetch_limit:
+                    scan_params["Limit"] = fetch_limit - len(results)
                 response = await client.scan(**scan_params)
 
                 for item in response.get("Items", []):
@@ -1020,12 +1254,12 @@ class DynamoDB(Database):
                     if not filter_expr and query and not QueryEngine.match(data, query):
                         continue
                     results.append(data)
-                    if limit and len(results) >= limit:
+                    if fetch_limit and len(results) >= fetch_limit:
                         break
-                if limit and len(results) >= limit:
+                if fetch_limit and len(results) >= fetch_limit:
                     break
 
-            return results[:limit] if limit else results
+            return finalize_find_results(results, sort=sort, limit=limit)
         except ClientError as e:
             raise DatabaseError(f"DynamoDB find error: {e}") from e
 

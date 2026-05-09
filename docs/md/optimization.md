@@ -334,13 +334,15 @@ class User(Object):
 
 #### How It Works
 
-1. **Automatic Creation**: Indexes are created automatically when entities are first saved
-2. **Database-Specific**: Each database backend implements indexing optimally:
-   - **MongoDB**: Uses native `create_index()` with proper options
+1. **When indexes are created (jvspatial)**: `GraphContext.ensure_indexes()` is invoked when a class is first used for `save` / `find` (unless `JVSPATIAL_AUTO_CREATE_INDEXES` is false, or in serverless mode where the default is off to reduce cold start). A host application can also call `ensure_indexes` for specific entity classes during its own startup if it needs indexes before the first ORM use.
+2. **Database-Specific**: Each database backend implements indexing via the optional `Database.create_index()` API (and optional `Database.drop_deprecated_indexes()` for named-index cleanup). Defaults no-op with a log line when not implemented.
+   - **MongoDB** (`jvspatial.db.mongodb.MongoDB`): Native `create_index()`. If an index with the same name has different options (Mongo error 85) or a different name shares the same key pattern (error 86), the adapter drops the conflicting index and recreates. Passes `partialFilterExpression` and `sparse` from entity metadata.
    - **SQLite**: Creates JSON path indexes using `json_extract()`
    - **DynamoDB**: Creates Global Secondary Indexes (GSI) transparently
    - **JSON**: No-op (indexing not applicable for file-based storage)
-3. **Query Optimization**: Queries on indexed fields automatically use indexes for better performance
+3. **Query Optimization**: Queries on indexed fields use indexes for better performance when the backend supports it.
+4. **Custom adapters**: Implement `create_index` for performance; implement `drop_deprecated_indexes` if your backend has named indexes and you want to honor a map of collection → former index names passed in at application startup. See the [Custom Database guide](custom-database-guide.md#database-interface).
+5. **Partial and compound indexes**: Use `index_partial_filter_expression` on `attribute()` and `partial_filter_expression` (and optional `sparse`) on `@compound_index` for MongoDB. Field names in `@compound_index` are model field names, not `context.*` (the framework maps them to `context.<field>` in storage).
 
 #### Index Usage Examples
 

@@ -66,6 +66,9 @@ class PathSanitizer:
     # Maximum total path length
     MAX_PATH_LENGTH = 4096
 
+    # Known internal storage markers (directory placeholders, sandbox roots)
+    _ALLOWED_HIDDEN_SEGMENTS = frozenset({".jvdirectory", ".jvagent_sandbox"})
+
     @classmethod
     def sanitize_path(
         cls, file_path: str, base_dir: Optional[str] = None, allow_hidden: bool = False
@@ -149,8 +152,13 @@ class PathSanitizer:
 
         # Validate each path component
         for part in parts:
-            # Check for hidden files
-            if not allow_hidden and part.startswith(".") and part != ".":
+            # Check for hidden files (allow known internal marker filenames)
+            if (
+                not allow_hidden
+                and part.startswith(".")
+                and part not in cls._ALLOWED_HIDDEN_SEGMENTS
+                and part != "."
+            ):
                 raise InvalidPathError(
                     f"Hidden files not allowed: {part}", path=file_path
                 )

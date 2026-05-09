@@ -2,6 +2,7 @@
 
 import inspect
 import logging
+import re
 import weakref
 from typing import (
     TYPE_CHECKING,
@@ -402,9 +403,56 @@ class Node(Object):
         Named ``count_neighbors`` so this does not shadow :meth:`Object.count` on
         Node subclasses (e.g. ``User.count(query)`` remains the DB count API).
 
+        Fast path: when ``node`` is a single entity name/class and no ``edge``
+        filter or extra ``kwargs`` are provided, this issues ``count`` queries on
+        the ``edge`` collection using ``source`` / ``target`` plus a regex on the
+        peer node id (pattern ``^n.<ClassName>.``). Persisted edges do not store
+        separate ``target_entity`` / ``source_entity`` fields.
+
         Returns:
             Number of matching connected nodes.
         """
+        # Fast-path: single entity type filter, no edge filter or property kwargs.
+        if (
+            not kwargs
+            and edge is None
+            and node is not None
+            and not isinstance(node, list)
+        ):
+            entity_name: Optional[str] = None
+            if isinstance(node, str):
+                entity_name = node
+            elif isinstance(node, type):
+                entity_name = node.__name__
+            if entity_name is not None:
+                try:
+                    from ..context import get_default_context
+
+                    ctx = get_default_context()
+                    db = ctx.database
+                    node_type_re = {
+                        "$regex": {"pattern": rf"^n\.{re.escape(entity_name)}\."}
+                    }
+                    if direction in ("out", "both"):
+                        q_out: Dict[str, Any] = {
+                            "source": self.id,
+                            "target": node_type_re,
+                        }
+                        out_count = await db.count("edge", q_out)
+                    else:
+                        out_count = 0
+                    if direction in ("in", "both"):
+                        q_in: Dict[str, Any] = {
+                            "target": self.id,
+                            "source": node_type_re,
+                        }
+                        in_count = await db.count("edge", q_in)
+                    else:
+                        in_count = 0
+                    return out_count + in_count
+                except Exception:
+                    pass  # Fall through to full hydration on any error.
+
         return len(
             await self.nodes(
                 direction=direction,
@@ -512,7 +560,10 @@ class Node(Object):
             if isinstance(edge_filter, type):
                 edge_query["name"] = edge_filter.__name__
 
-            edge_results = await context.database.find("edge", edge_query)
+            # Cap edge fan-out so hub nodes don't accidentally load unbounded sets.
+            edge_results = await context.database.find(
+                "edge", edge_query, limit=limit if limit is not None else 10000
+            )
             for edge_data in edge_results:
                 try:
                     edge_obj: Optional["Edge"] = await context._deserialize_entity(
@@ -775,7 +826,7 @@ class Node(Object):
                 List[Union[str, Type["Edge"], Dict[str, Dict[str, Any]]]],
             ]
         ] = None,
-        limit: Optional[int] = None,
+        limit: Optional[int] = 1000,
         **kwargs: Any,
     ) -> List["Node"]:
         """Get all neighboring nodes (convenient alias for nodes()).
@@ -783,12 +834,19 @@ class Node(Object):
         Args:
             node: Node filtering (supports semantic filtering)
             edge: Edge filtering (supports semantic filtering)
-            limit: Maximum number of neighbors to return
+            limit: Maximum number of neighbors to return (default 1000).
+                   Pass None to disable the limit (logged at WARNING).
             **kwargs: Simple property filters for connected nodes
 
         Returns:
             List of neighboring nodes in connection order
         """
+        if limit is None:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "neighbors() called with limit=None — unbounded query on %s", self.id
+            )
         return await self.nodes(
             direction="both", node=node, edge=edge, limit=limit, **kwargs
         )

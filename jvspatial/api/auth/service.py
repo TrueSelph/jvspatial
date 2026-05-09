@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import hmac
 import logging
 import secrets
 import time
@@ -97,6 +98,7 @@ class AuthenticationService:
         refresh_expire_days: Optional[int] = None,
         refresh_token_rotation: Optional[bool] = None,
         blacklist_cache_ttl_seconds: Optional[int] = None,
+        blacklist_fail_closed: Optional[bool] = None,
         password_reset_token_expiry_minutes: Optional[int] = None,
         role_permission_mapping: Optional[Dict[str, List[str]]] = None,
         admin_role: str = "admin",
@@ -138,6 +140,13 @@ class AuthenticationService:
         self.refresh_expire_days = refresh_expire_days or 7
         self.refresh_token_rotation = refresh_token_rotation or False
         self.blacklist_cache_ttl_seconds = blacklist_cache_ttl_seconds or 3600
+        self.blacklist_fail_closed = (
+            blacklist_fail_closed
+            if blacklist_fail_closed is not None
+            else env(
+                "JVSPATIAL_AUTH_BLACKLIST_FAIL_CLOSED", default=False, parse=parse_bool
+            )
+        )
         self.password_reset_token_expiry_minutes = (
             password_reset_token_expiry_minutes or 60
         )
@@ -221,7 +230,7 @@ class AuthenticationService:
         if _HASHING_AVAILABLE and _HASHING_LIB == "passlib":
             return _passlib_context.hash(password)
         # Fallback when no secure library available
-        if env("JVSPATIAL_AUTH_STRICT_HASHING", default=False, parse=parse_bool):
+        if env("JVSPATIAL_AUTH_STRICT_HASHING", default=True, parse=parse_bool):
             raise RuntimeError(
                 "Secure hashing library required but unavailable. "
                 "Install bcrypt/argon2/passlib or disable JVSPATIAL_AUTH_STRICT_HASHING."
@@ -271,7 +280,7 @@ class AuthenticationService:
             # Legacy SHA-256 format: salt:hash
             salt, stored_hash = password_hash.split(":", 1)
             password_hash_check = hashlib.sha256((password + salt).encode()).hexdigest()
-            return password_hash_check == stored_hash
+            return hmac.compare_digest(password_hash_check, stored_hash)
         except Exception:
             return False
 
@@ -443,7 +452,13 @@ class AuthenticationService:
 
             return await self._is_token_blacklisted_by_jti(token_id)
         except Exception as e:
-            # Fail-open for availability; operators must see failures in logs.
+            if self.blacklist_fail_closed:
+                self._logger.error(
+                    "JWT blacklist check failed (fail-closed; treating token as blacklisted): %s",
+                    e,
+                    exc_info=True,
+                )
+                return True
             self._logger.error(
                 "JWT blacklist check failed (fail-open; token not treated as blacklisted): %s",
                 e,
@@ -499,7 +514,14 @@ class AuthenticationService:
             )
             return is_blacklisted
         except Exception as e:
-            # Fail-open for availability
+            if self.blacklist_fail_closed:
+                self._logger.error(
+                    "Error checking blacklist for token %s (fail-closed): %s",
+                    token_id,
+                    e,
+                    exc_info=True,
+                )
+                return True
             self._logger.error(
                 "Error checking blacklist for token %s (fail-open): %s",
                 token_id,
@@ -583,8 +605,11 @@ class AuthenticationService:
         # Generate plaintext token
         plaintext_token = self._generate_refresh_token_string()
 
-        # Hash the token
+        # Hash the token (bcrypt for verification)
         token_hash = self._hash_refresh_token(plaintext_token)
+
+        # Deterministic SHA-256 lookup key for O(1) database queries
+        token_lookup = hashlib.sha256(plaintext_token.encode()).hexdigest()
 
         # Calculate expiration
         expires_at = datetime.now(timezone.utc) + timedelta(
@@ -601,6 +626,7 @@ class AuthenticationService:
         refresh_token = RefreshToken(
             id=refresh_token_id,
             token_hash=token_hash,
+            token_lookup=token_lookup,
             user_id=user_id,
             access_token_jti=access_token_jti,
             expires_at=expires_at,
@@ -628,11 +654,13 @@ class AuthenticationService:
         if not token or len(token) < 10:
             return None
 
-        # Get all active refresh tokens for validation
-        # We need to check all tokens because we can't reverse the hash
+        # O(1) lookup: compute deterministic SHA-256 hash and query directly
+        token_lookup = hashlib.sha256(token.encode()).hexdigest()
         await self.context.ensure_indexes(RefreshToken)
         collection, final_query = await RefreshToken._build_database_query(
-            self.context, {"context.is_active": True}, {}
+            self.context,
+            {"context.token_lookup": token_lookup, "context.is_active": True},
+            {},
         )
         results = await self.context.database.find(collection, final_query)
 
@@ -650,7 +678,7 @@ class AuthenticationService:
                 if refresh_token_entity.expires_at < datetime.now(timezone.utc):
                     continue
 
-                # Verify the token against the stored hash
+                # Verify the token against the stored bcrypt hash
                 if self._verify_refresh_token(token, refresh_token_entity.token_hash):
                     # Update last_used_at
                     refresh_token_entity.last_used_at = datetime.now(timezone.utc)
@@ -975,7 +1003,12 @@ class AuthenticationService:
         try:
             user = await self._get_user_by_id(user_id)
         except Exception as e:
-            got_db_error = True
+            from jvspatial.exceptions import DatabaseError
+
+            # Only enter JWT-payload fallback for unambiguous DB errors
+            # (connection failures, path mismatches), not for generic exceptions.
+            if isinstance(e, DatabaseError):
+                got_db_error = True
             self._logger.warning("[validate_token] _get_user_by_id error: %s", e)
 
         # Fallback: lookup by email when get-by-id fails (e.g. context/db path mismatch).
@@ -1331,6 +1364,7 @@ class AuthenticationService:
 
         token = secrets.token_urlsafe(32)
         token_hash = self._hash_refresh_token(token)
+        token_lookup = hashlib.sha256(token.encode()).hexdigest()
         expires_at = datetime.now(timezone.utc) + timedelta(
             minutes=self.password_reset_token_expiry_minutes
         )
@@ -1342,6 +1376,7 @@ class AuthenticationService:
         reset_token = PasswordResetToken(
             id=reset_token_id,
             token_hash=token_hash,
+            token_lookup=token_lookup,
             user_id=user.id,
             email=user.email,
             expires_at=expires_at,
@@ -1382,10 +1417,11 @@ class AuthenticationService:
             ValueError: If token is invalid, expired, or already used
         """
         now = datetime.now(timezone.utc)
+        token_lookup = hashlib.sha256(token.encode()).hexdigest()
         await self.context.ensure_indexes(PasswordResetToken)
         collection, final_query = await PasswordResetToken._build_database_query(
             self.context,
-            {"context.used_at": None},
+            {"context.token_lookup": token_lookup, "context.used_at": None},
             {},
         )
         results = await self.context.database.find(collection, final_query)

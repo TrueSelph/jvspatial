@@ -9,13 +9,14 @@ across different database backends (JSON, MongoDB, custom databases).
 import asyncio
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 # Add the current project to the Python path for development
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from jvspatial.core import GraphContext, Node
 from jvspatial.db import Database, create_database
+from jvspatial.db.database import finalize_find_results
 from jvspatial.db.query import QueryBuilder, QueryEngine, query
 
 
@@ -42,7 +43,14 @@ class InMemoryDatabase(Database):
         key = f"{collection}:{id}"
         self._data.pop(key, None)
 
-    async def find(self, collection: str, query: Dict[str, Any]):
+    async def find(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+    ):
         """Use the standardized query matcher for custom databases."""
         results = []
         prefix = f"{collection}:"
@@ -53,7 +61,7 @@ class InMemoryDatabase(Database):
                 if QueryEngine.match(doc, query):
                     results.append(doc)
 
-        return results
+        return finalize_find_results(results, sort=sort, limit=limit)
 
 
 def memory_configurator(kwargs):

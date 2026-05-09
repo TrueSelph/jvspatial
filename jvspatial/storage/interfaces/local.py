@@ -14,14 +14,17 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, cast
 
 from jvspatial.api.constants import APIRoutes
+from jvspatial.db._atomic import atomic_write_bytes, atomic_write_text
 from jvspatial.runtime.serverless import is_serverless_mode
 
 from ..exceptions import (
     AccessDeniedError,
     FileNotFoundError,
+    FileSizeLimitError,
     PathTraversalError,
     StorageProviderError,
 )
+from ..internal_markers import should_skip_mime_allowlist, trivial_marker_validation
 from ..security.path_sanitizer import PathSanitizer
 from ..security.validator import FileValidator
 from .base import FileStorageInterface
@@ -177,7 +180,23 @@ class LocalFileInterface(FileStorageInterface):
 
         Returns:
             Version identifier
+
+        Durability
+        ----------
+        Each of the three on-disk writes (binary blob, metadata sidecar,
+        ``.latest`` pointer) goes through :func:`atomic_write_bytes` so a
+        crash mid-write never leaves a half-written file. The ordering --
+        content, then metadata, then latest pointer -- means the failure
+        modes are recoverable:
+
+        * crash after content, before metadata: orphan ``.bin`` exists but
+          ``list_versions`` ignores it (it filters by ``.meta.json``);
+        * crash after metadata, before latest pointer: the version is
+          fully formed and reachable by version_id; ``get_latest_version``
+          still returns the previous latest;
+        * crash after latest pointer: success.
         """
+        import json
         import uuid
 
         # Generate version if not provided
@@ -188,11 +207,6 @@ class LocalFileInterface(FileStorageInterface):
         version_dir = self.root_dir / f"{file_path}.versions"
         await to_thread(version_dir.mkdir, parents=True, exist_ok=True)
 
-        # Save version file
-        version_file = version_dir / f"{version}.bin"
-        await to_thread(version_file.write_bytes, content)
-
-        # Save version metadata
         version_metadata = {
             "version": version,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -201,16 +215,21 @@ class LocalFileInterface(FileStorageInterface):
             "metadata": metadata or {},
         }
 
+        version_file = version_dir / f"{version}.bin"
         metadata_file = version_dir / f"{version}.meta.json"
-        import json
+        latest_file = self.root_dir / f"{file_path}.latest"
 
+        # 1) Write content atomically (fully durable).
+        await to_thread(atomic_write_bytes, version_file, content)
+
+        # 2) Write metadata atomically. Until this lands, list_versions()
+        #    will not surface this version.
         await to_thread(
-            metadata_file.write_text, json.dumps(version_metadata, indent=2)
+            atomic_write_text, metadata_file, json.dumps(version_metadata, indent=2)
         )
 
-        # Update latest version pointer
-        latest_file = self.root_dir / f"{file_path}.latest"
-        await to_thread(latest_file.write_text, version)
+        # 3) Publish as the latest version.
+        await to_thread(atomic_write_text, latest_file, version)
 
         logger.info(f"Created version {version} for file {file_path}")
         return {
@@ -372,36 +391,37 @@ class LocalFileInterface(FileStorageInterface):
         logger.info(f"Saving file: {file_path} ({len(content)} bytes)")
 
         try:
-            # Validate file content
+            # Validate file content (internal markers use empty bodies → octet-stream)
             filename = Path(file_path).name
-            validation = self.validator.validate_file(
-                content=content, filename=filename
-            )
-            logger.debug(f"File validation passed: {validation}")
+            if should_skip_mime_allowlist(file_path, metadata):
+                file_size = len(content)
+                if file_size > self.validator.max_size_bytes:
+                    max_mb = self.validator.max_size_bytes / (1024 * 1024)
+                    actual_mb = file_size / (1024 * 1024)
+                    raise FileSizeLimitError(
+                        f"File size ({actual_mb:.2f}MB) exceeds limit ({max_mb:.2f}MB)",
+                        file_size=file_size,
+                        max_size=self.validator.max_size_bytes,
+                    )
+                validation = trivial_marker_validation(file_path, content)
+                logger.debug(
+                    "Skipping MIME allowlist for internal marker: %s", file_path
+                )
+            else:
+                validation = self.validator.validate_file(
+                    content=content, filename=filename
+                )
+                logger.debug(f"File validation passed: {validation}")
 
             # Get validated full path
             full_path = self._get_full_path(file_path)
 
-            # Create parent directories
-            await asyncio.to_thread(full_path.parent.mkdir, parents=True, exist_ok=True)
+            # Crash-safe write: temp + fsync + atomic rename + fsync(dir).
+            # ``atomic_write_bytes`` handles parent-directory creation and
+            # cleans up its own temp file on failure.
+            await asyncio.to_thread(atomic_write_bytes, full_path, content)
 
-            # Write file atomically (write to temp, then rename)
-            temp_path = full_path.with_suffix(full_path.suffix + ".tmp")
-
-            try:
-                # Write to temporary file
-                await asyncio.to_thread(temp_path.write_bytes, content)
-
-                # Atomic rename
-                await asyncio.to_thread(temp_path.replace, full_path)
-
-                logger.info(f"File saved successfully: {file_path}")
-
-            except Exception:
-                # Clean up temp file on error
-                if temp_path.exists():
-                    await to_thread(temp_path.unlink)
-                raise
+            logger.info(f"File saved successfully: {file_path}")
 
             # Calculate checksum
             checksum = hashlib.md5(content).hexdigest()

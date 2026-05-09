@@ -223,6 +223,13 @@ class SessionManager:
 
     Provides secure session management with configurable timeouts,
     session invalidation, and security features.
+
+    **CSRF note:** Sessions managed here are server-side only (session IDs are
+    generated but not automatically attached as cookies). If cookie-based session
+    delivery is added in the future, CSRF protection (double-submit cookie or
+    Synchronizer Token Pattern) MUST be implemented to prevent cross-site request
+    forgery. JWT in the Authorization header is naturally CSRF-resistant because
+    browsers do not auto-attach it.
     """
 
     def __init__(self, session_timeout: int = 3600, max_sessions_per_user: int = 5):

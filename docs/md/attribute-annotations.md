@@ -327,8 +327,11 @@ Convenience for protected + transient fields.
 
 #### `@compound_index(fields: List[Tuple[str, int]])`
 Class decorator for creating compound indexes on multiple fields:
-- `fields`: List of `(field_name, direction)` tuples
+- `fields`: List of `(field_name, direction)` tuples (use **model field names**, not `context.` prefixes; the ORM maps them to `context.<field>` in MongoDB)
 - `direction`: `1` for ascending, `-1` for descending
+- Optional: `unique`, `sparse`, `name`, and `partial_filter_expression` (MongoDB `partialFilterExpression`) for shared collections where uniqueness should apply only to a subset of documents
+
+Single-field indexes may use `index_partial_filter_expression` on `attribute()` for the same effect. See [Declarative Database Indexing](optimization.md#declarative-database-indexing) for when `ensure_indexes` runs and how indexes are created.
 
 Example:
 ```python

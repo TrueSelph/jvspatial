@@ -1,6 +1,7 @@
 """GraphContext for managing database dependencies."""
 
 import asyncio
+import contextvars
 import inspect
 import logging
 import time
@@ -848,13 +849,12 @@ class GraphContext:
             # if cascade=False and the node has no edges (cleaned up by Node.delete())
             if not cascade and len(entity.edge_ids) == 0:
                 # Node.delete() has cleaned up edges, just delete the entity
-                collection = self._get_collection_name(entity.type_code)
-                db = self.database
-                await db.delete(collection, entity.id)
-                await self._cache.delete(entity.id)
-            else:
-                # Delegate to Node.delete() for proper edge cleanup and cascading
-                await entity.delete(cascade=cascade)
+                collection = self._get_collection_name("n")
+                await self.database.delete(collection, entity.id)
+                await self._remove_from_cache(entity.id)
+                return
+
+            await entity.delete(cascade=cascade)
             return
 
         # For Edge entities, clean up edge_ids on source/target nodes before deletion
@@ -880,6 +880,37 @@ class GraphContext:
         db = self.database
         await db.delete(collection, entity.id)
         await self._cache.delete(entity.id)
+
+    async def find(
+        self, entity_class, query: Dict[str, Any], limit: Optional[int] = None
+    ) -> List:
+        """Find entities in the current context.
+
+        Args:
+            entity_class: Class of entities to find
+            query: Database query parameters
+            limit: Maximum number of results
+
+        Returns:
+            List of matching entity instances
+        """
+        entity_type_code = self._get_entity_type_code(entity_class)
+        if entity_type_code == "n":
+            return await self.find_nodes(entity_class, query, limit=limit)
+
+        collection = self._get_collection_name(entity_type_code)
+        db_query = {"entity": entity_class.__name__, **query}
+        results = await self.database.find(collection, db_query, limit=limit)
+
+        entities = []
+        for data in results:
+            try:
+                entity = await self._deserialize_entity(entity_class, data)
+                if entity:
+                    entities.append(entity)
+            except Exception:
+                continue
+        return entities
 
     async def export_graph(
         self,
@@ -1264,12 +1295,18 @@ class GraphContext:
         Args:
             entity_class: Entity class to ensure indexes for
         """
-        # Check if automatic index creation is enabled
-        # Default is False - indexes must be created explicitly
+        # Check if automatic index creation is enabled.
+        # Default is True in non-serverless environments so deployments get the
+        # indexes they need without manual configuration.  Serverless runtimes
+        # (Lambda, Cloud Functions) default to False to avoid cold-start penalty.
         from jvspatial.env import env, parse_bool_basic
+        from jvspatial.runtime.serverless import is_serverless_mode
 
+        serverless = is_serverless_mode()
         auto_create = env(
-            "JVSPATIAL_AUTO_CREATE_INDEXES", default=False, parse=parse_bool_basic
+            "JVSPATIAL_AUTO_CREATE_INDEXES",
+            default=not serverless,
+            parse=parse_bool_basic,
         )
         if not auto_create:
             return  # Automatic index creation is disabled
@@ -1301,18 +1338,30 @@ class GraphContext:
         for index_def in indexes:
             try:
                 if "field" in index_def:
-                    # Single-field index
+                    # Single-field index; pass through name and extra kwargs
+                    extra = {
+                        k: v
+                        for k, v in index_def.items()
+                        if k not in ("field", "unique", "direction")
+                    }
                     await self.database.create_index(
                         collection,
                         index_def["field"],
                         unique=index_def.get("unique", False),
+                        **extra,
                     )
                 elif "fields" in index_def:
-                    # Compound index
+                    # Compound index; pass through name and other create_index kwargs
+                    extra = {
+                        k: v
+                        for k, v in index_def.items()
+                        if k not in ("fields", "unique")
+                    }
                     await self.database.create_index(
                         collection,
                         index_def["fields"],
                         unique=index_def.get("unique", False),
+                        **extra,
                     )
             except Exception as e:
                 # Log error but continue with other indexes
@@ -1390,9 +1439,23 @@ class GraphContext:
 
             # Use entity field for class identification
             stored_entity = data.get("entity", entity_class.__name__)
-            target_class = (
-                find_subclass_by_name(entity_class, stored_entity) or entity_class
-            )
+            entity_type_code = self._get_entity_type_code(entity_class)
+
+            # Prefer requested class subtree, then (for Nodes) scan the entire Node hierarchy.
+            #
+            # If entity_class is Action (or another abstract intermediate) but the concrete
+            # class is only linked under Action deeper in the tree, find_subclass_by_name
+            # usually still finds it. When the subclass module has not linked into
+            # entity_class.__subclasses__ yet, the lookup returns None and we would fall
+            # back to the base — model_dump/save then drops fields declared only on the
+            # concrete subclass. Falling back to Node covers all persisted node subclasses.
+            target_class = find_subclass_by_name(entity_class, stored_entity)
+            if target_class is None and entity_type_code == "n":
+                from .entities.node import Node
+
+                target_class = find_subclass_by_name(Node, stored_entity)
+            if target_class is None:
+                target_class = entity_class
 
             # Create object with proper subclass
             # All entities use nested format with context field
@@ -1402,7 +1465,7 @@ class GraphContext:
                 )
             context_data = data["context"].copy()
 
-            entity_type_code = self._get_entity_type_code(entity_class)
+            # entity_type_code already computed above
 
             if entity_type_code == "n":
                 # Handle Node-specific logic
@@ -1692,37 +1755,182 @@ class GraphContext:
                     yield entity
 
 
-# Global context instance
-_default_context: Optional[GraphContext] = None
+# Per-asyncio-task default context.
+#
+# Backed by a ``ContextVar`` so each task sees an independent value
+# (inherited from its parent task at creation time). This eliminates the
+# global-mutation race that the previous module-global allowed: Task A
+# capturing B's mid-flight context as its "previous" value and restoring
+# the wrong context on exit, plus B's swap leaking into every other
+# coroutine the worker handles.
+#
+# Callers that need a short-lived override should prefer
+# ``scoped_default_context`` / ``scoped_default_context_async`` (Token-
+# based, exception-safe). Direct ``set_default_context`` is fine for
+# bootstrap fixtures that set once at startup, but be aware its effect
+# is scoped to the current task — child tasks inherit it at creation,
+# but tasks spawned in unrelated event loops do not.
+_default_context_var: contextvars.ContextVar[Optional["GraphContext"]] = (
+    contextvars.ContextVar("jvspatial_default_context", default=None)
+)
+
+# Process-wide fallback for the most recently configured GraphContext.
+#
+# ``_default_context_var`` is a ``ContextVar`` and only propagates to tasks
+# that were created from a Context which already had the value set. In
+# real deployments the ``ContextVar`` is set during ``Server.__init__``
+# (synchronously, before the asyncio loop exists) and most launchers carry
+# that value through to request handlers. But several legitimate
+# launchers do not — e.g. when ``Server`` is constructed inside an
+# ``asyncio.run`` block, in a different thread from the one that
+# eventually serves requests, or under custom ASGI adapters that spawn a
+# fresh event loop per invocation. In those cases the per-task lookup
+# misses and the lazy-init branch raises, even though the database is
+# fully configured.
+#
+# The module-level fallback removes that brittleness: ``set_default_context``
+# also records the value here, and ``get_default_context`` falls back to
+# it (binding it into the current task's slot for cheap subsequent reads)
+# when the per-task ContextVar is empty. Tests and multi-server setups
+# that need strict isolation should keep using ``scoped_default_context``
+# / ``ServerContext``, which set the ContextVar — the per-task value
+# always takes precedence over the fallback.
+_module_default_context: Optional["GraphContext"] = None
 
 
 def get_default_context() -> GraphContext:
-    """Get the default global context."""
-    global _default_context
-    if _default_context is None:
-        # Check if DatabaseManager was auto-created (not initialized by Server)
-        # If so, don't create a default GraphContext yet - wait for Server to initialize
-        from jvspatial.db.manager import DatabaseManager
+    """Get the default GraphContext for the current async task.
 
-        if (
-            DatabaseManager._instance is not None
-            and DatabaseManager._instance._auto_created
-        ):
-            # DatabaseManager was auto-created with default 'jvdb' path
-            # Don't create default context - Server should initialize it
-            raise RuntimeError(
-                "Default GraphContext not initialized. Server must initialize the database "
-                "before accessing the default context. Ensure Server is initialized before "
-                "calling Root.get() or other operations that require a database."
-            )
-        _default_context = GraphContext()
-    return _default_context
+    Lookup order:
+        1. ContextVar value set in the current task (or inherited from an
+           ancestor task at task-creation time).
+        2. Process-wide fallback recorded by the most recent
+           ``set_default_context`` call (covers task trees that did not
+           inherit the ContextVar).
+        3. Lazy-init a fresh ``GraphContext`` and bind it to the current
+           task's slot.
+
+    Raises ``RuntimeError`` only when no context has ever been configured
+    AND the DatabaseManager was auto-created rather than initialized by
+    the Server, so callers know to bring up the Server before persisting
+    graph state.
+    """
+    ctx = _default_context_var.get()
+    if ctx is not None:
+        return ctx
+
+    fallback = _module_default_context
+    if fallback is not None:
+        # Bind into the current task's slot so subsequent lookups skip
+        # the fallback path entirely.
+        _default_context_var.set(fallback)
+        return fallback
+
+    # Defer the import to avoid a circular dependency on the manager module.
+    from jvspatial.db.manager import DatabaseManager
+
+    if (
+        DatabaseManager._instance is not None
+        and DatabaseManager._instance._auto_created
+    ):
+        raise RuntimeError(
+            "Default GraphContext not initialized. Server must initialize the database "
+            "before accessing the default context. Ensure Server is initialized before "
+            "calling Root.get() or other operations that require a database."
+        )
+    ctx = GraphContext()
+    _default_context_var.set(ctx)
+    return ctx
 
 
-def set_default_context(context: GraphContext) -> None:
-    """Set the default global context."""
-    global _default_context
-    _default_context = context
+def set_default_context(context: Optional[GraphContext]) -> contextvars.Token:
+    """Set the default GraphContext for the current async task.
+
+    Returns a ``contextvars.Token`` that callers may pass to
+    ``reset_default_context`` to restore the previous per-task value
+    precisely. New code should prefer ``scoped_default_context`` for
+    exception-safe scoping.
+
+    Accepting ``None`` is permitted so the per-task slot can be cleared
+    explicitly via ``set_default_context(None)`` (equivalent to
+    ``clear_default_context``).
+
+    The non-``None`` value is also recorded as the process-wide fallback
+    so request tasks that do not inherit this ContextVar can still
+    resolve the configured context via ``get_default_context``. Passing
+    ``None`` only clears the per-task slot; use
+    ``clear_default_context_global`` to clear the process-wide fallback.
+    """
+    global _module_default_context
+    if context is not None:
+        _module_default_context = context
+    return _default_context_var.set(context)
+
+
+def reset_default_context(token: contextvars.Token) -> None:
+    """Restore the per-task default context using a previously captured Token.
+
+    Pair with the Token returned from ``set_default_context`` to restore
+    the slot to its prior value precisely, even across nested overrides.
+    """
+    _default_context_var.reset(token)
+
+
+def clear_default_context() -> None:
+    """Clear the current task's default GraphContext (set the slot to None).
+
+    Useful in test teardown or when a previously set context should be
+    removed without restoring a specific prior value (i.e. when no Token
+    is available). Other tasks are unaffected because the slot is per-task.
+
+    Note: this does not clear the process-wide fallback recorded by
+    ``set_default_context``. Subsequent ``get_default_context`` calls in
+    this task will fall back to that value. Use
+    ``clear_default_context_global`` to also drop the fallback.
+    """
+    _default_context_var.set(None)
+
+
+def clear_default_context_global() -> None:
+    """Clear per-task slot and process-wide fallback simultaneously.
+
+    Resets both the current task's default GraphContext slot and the
+    process-wide fallback recorded by ``set_default_context``. Intended
+    for test teardown that needs the next ``get_default_context`` call
+    to behave as if no context had ever been configured.
+    """
+    global _module_default_context
+    _module_default_context = None
+    _default_context_var.set(None)
+
+
+@contextmanager
+def scoped_default_context(context: GraphContext):
+    """Sync context manager: bind ``context`` as the default for the current task.
+
+    The previous value is restored automatically on exit, including when
+    the body raises. Prefer this over manual ``set_default_context`` /
+    ``reset_default_context`` pairs.
+    """
+    token = _default_context_var.set(context)
+    try:
+        yield context
+    finally:
+        _default_context_var.reset(token)
+
+
+@asynccontextmanager
+async def scoped_default_context_async(context: GraphContext):
+    """Async variant of ``scoped_default_context``.
+
+    Equivalent semantics; provided so callers in ``async with`` flows do
+    not have to mix sync and async context managers.
+    """
+    token = _default_context_var.set(context)
+    try:
+        yield context
+    finally:
+        _default_context_var.reset(token)
 
 
 @contextmanager
@@ -1753,22 +1961,35 @@ async def async_graph_context(database: Optional[Database] = None):
 async def async_transaction_context(database: Optional[Database] = None):
     """Async context manager for database transactions.
 
+    Captures the transaction object returned by ``begin_transaction()`` and
+    passes it to ``commit_transaction``/``rollback_transaction`` so that the
+    MongoDB session handle is not lost between calls.
+
     Usage:
         async with async_transaction_context(my_db) as ctx:
             node = await ctx.create_node(name="Test")
             # All operations are automatically committed
     """
     ctx = GraphContext(database)
+    txn = None
     try:
-        # Start transaction if database supports it
         if hasattr(ctx.database, "begin_transaction"):
-            await ctx.database.begin_transaction()
+            txn = await ctx.database.begin_transaction()
         yield ctx
-        # Commit transaction
-        if hasattr(ctx.database, "commit_transaction"):
-            await ctx.database.commit_transaction()
+        if txn is not None and hasattr(ctx.database, "commit_transaction"):
+            await ctx.database.commit_transaction(txn)
+        elif txn is None and hasattr(ctx.database, "commit_transaction"):
+            # Backend's commit_transaction accepts no txn argument (non-Mongo)
+            try:
+                await ctx.database.commit_transaction()
+            except TypeError:
+                await ctx.database.commit_transaction(None)
     except Exception:
-        # Rollback transaction on error
-        if hasattr(ctx.database, "rollback_transaction"):
-            await ctx.database.rollback_transaction()
+        if txn is not None and hasattr(ctx.database, "rollback_transaction"):
+            await ctx.database.rollback_transaction(txn)
+        elif txn is None and hasattr(ctx.database, "rollback_transaction"):
+            try:
+                await ctx.database.rollback_transaction()
+            except TypeError:
+                await ctx.database.rollback_transaction(None)
         raise

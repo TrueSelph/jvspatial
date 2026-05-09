@@ -21,14 +21,34 @@ if TYPE_CHECKING:
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Middleware that adds security headers to all responses."""
+    """Middleware that adds security headers to all responses.
+
+    Headers applied:
+    - X-Content-Type-Options: nosniff (MIME sniffing prevention)
+    - X-Frame-Options: DENY (clickjacking prevention)
+    - Content-Security-Policy: default-src 'self'; frame-ancestors 'none'
+    - Strict-Transport-Security: max-age=31536000; includeSubDomains (if enabled)
+
+    HSTS is only applied when the server configures hsts_enabled=True
+    (off by default in development, on in production).
+    """
+
+    def __init__(self, app, hsts_enabled: bool = False):
+        super().__init__(app)
+        self._hsts_enabled = hsts_enabled
 
     async def dispatch(self, request, call_next):
         """Process request and add security headers to response."""
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; frame-ancestors 'none'"
+        )
+        if self._hsts_enabled:
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains"
+            )
         return response
 
 
@@ -97,8 +117,8 @@ class MiddlewareManager:
     def _configure_security_headers(self, app: FastAPI) -> None:
         """Add security headers middleware if enabled.
 
-        Sets X-Content-Type-Options, X-Frame-Options, and X-XSS-Protection
-        to mitigate common web vulnerabilities.
+        Sets X-Content-Type-Options, X-Frame-Options, Content-Security-Policy,
+        and optionally Strict-Transport-Security headers.
 
         Args:
             app: FastAPI application instance
@@ -106,7 +126,8 @@ class MiddlewareManager:
         if not self.server.config.security.security_headers_enabled:
             return
 
-        app.add_middleware(SecurityHeadersMiddleware)
+        hsts_enabled = getattr(self.server.config.security, "hsts_enabled", False)
+        app.add_middleware(SecurityHeadersMiddleware, hsts_enabled=hsts_enabled)
         self._logger.debug(f"{LogIcons.SUCCESS} Security headers middleware configured")
 
     def _configure_cors(self, app: FastAPI) -> None:

@@ -76,6 +76,9 @@ from .core.mixins import (
 # Simplified database and cache
 from .db import Database, create_database
 from .db.work_claim import claim_record, delete_claimed_record, release_claim
+
+# Observability primitives
+from .observability import MetricsRecorder, NullMetricsRecorder
 from .runtime.serverless import detect_serverless_provider, is_serverless_mode
 from .serverless.deferred_invoke import (
     MalformedDeferredInvokeError,
@@ -139,6 +142,9 @@ __all__ = [
     "Database",
     "create_database",
     "create_cache",
+    # Observability
+    "MetricsRecorder",
+    "NullMetricsRecorder",
     # Utilities
     "serialize_datetime",
     "deserialize_datetime",

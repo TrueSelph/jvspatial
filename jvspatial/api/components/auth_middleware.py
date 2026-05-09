@@ -95,11 +95,17 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Request State Contract: when request.state.user is set (e.g. by test fixtures),
-        # use it for in-process ASGI testing. Set auth test_mode=True to enable explicitly.
+        # use it for in-process ASGI testing. Only honoured when auth test_mode=True.
         # See docs/md/authentication.md "Request State Contract".
         user = getattr(request.state, "user", None)
-        if user is not None and hasattr(user, "id"):
+        if user is not None and hasattr(user, "id") and self.auth_config.test_mode:
             pass  # Use pre-set user, skip _authenticate_request
+        elif user is not None and hasattr(user, "id"):
+            self._logger.warning(
+                "request.state.user preset without test_mode on %s; forcing re-auth",
+                request.url.path,
+            )
+            user = await self._authenticate_request(request)
         else:
             user = await self._authenticate_request(request)
         if not user:

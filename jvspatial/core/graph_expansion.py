@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 from jvspatial.core.graph_payload import (
     DetailLevel,
@@ -54,6 +54,26 @@ def _other_endpoint(edge_doc: Dict[str, Any], node_id: str) -> Optional[str]:
     if tgt == node_id:
         return str(src) if src else None
     return None
+
+
+def _bfs_spine_edge_sort_key(
+    eid: str, edge_doc: Optional[Dict[str, Any]], current_id: str
+) -> tuple:
+    """So Root→App→Agents stays in the BFS when ``max_edges_per_node`` caps lists.
+
+    Edge lists are often sorted by id; without this, a hub can exhaust the cap
+    before the canonical ``n.App`` / ``n.Agents`` link is seen.
+    """
+    other = _other_endpoint(edge_doc, current_id) if edge_doc else None
+    if not other:
+        return (9, eid)
+    if other.startswith("n.App."):
+        return (0, eid)
+    if other.startswith("n.Agents."):
+        return (1, eid)
+    if other == "n.Root.root" or other.startswith("n.Root."):
+        return (2, eid)
+    return (3, eid)
 
 
 async def expand_node(
@@ -234,12 +254,15 @@ async def subgraph_bfs(
             continue
 
         all_eids = _coerce_edge_id_list((raw or {}).get("edges"))
-        eids = sorted(all_eids)[:max_edges_per_node]
-        if len(all_eids) > len(eids):
+        eid_docs: List[Tuple[str, Optional[Dict[str, Any]]]] = [
+            (eid, await db.get("edge", eid)) for eid in all_eids
+        ]
+        eid_docs.sort(key=lambda t: _bfs_spine_edge_sort_key(t[0], t[1], vid))
+        selected = eid_docs[:max_edges_per_node]
+        if len(eid_docs) > len(selected):
             truncated = True
 
-        for eid in eids:
-            edoc = await db.get("edge", eid)
+        for eid, edoc in selected:
             if not edoc:
                 continue
             edges_by_id[eid] = edoc

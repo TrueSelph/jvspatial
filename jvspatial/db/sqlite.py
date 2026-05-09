@@ -9,13 +9,15 @@ the JSON database structure and query behaviour.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
 
-from .database import Database
+from ._sqlite_translate import translate_query, translate_sort
+from .database import Database, finalize_find_results
 from .query import QueryEngine
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,25 @@ class SQLiteDB(Database):
         For typical use cases with small to medium datasets, index creation is very fast
         (milliseconds to seconds). For very large databases, index creation may take longer
         but is generally much faster than DynamoDB GSI creation.
+
+    Connection model:
+        One persistent ``aiosqlite`` connection per :class:`SQLiteDB`
+        instance, created lazily on first use and held until :meth:`close`.
+        We do not pool connections: SQLite is in-process and the cost of
+        opening a new connection is negligible, while WAL mode already
+        gives us reader/writer parallelism (concurrent readers, one
+        writer) on the single connection.
+
+        Writes are serialized through ``self._lock`` (an
+        :class:`asyncio.Lock`). Reads run unlocked to take advantage of
+        WAL.
+
+        The single-connection model assumes a single event loop per
+        :class:`SQLiteDB` instance. Sharing a single instance across
+        loops is not supported -- if you need that, instantiate one
+        :class:`SQLiteDB` per loop. (Mongo and DynamoDB adapters have
+        explicit cross-loop handling because they speak to a network
+        service; SQLite does not.)
     """
 
     def __init__(
@@ -303,8 +324,76 @@ class SQLiteDB(Database):
             )
             await connection.commit()
 
+    async def find_many(
+        self, collection: str, ids: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Bulk fetch via a single ``WHERE collection=? AND id IN (...)``.
+
+        Chunks ids into groups of 500 to stay safely within SQLite's
+        default ``SQLITE_MAX_VARIABLE_NUMBER`` (typically 999 or 32766
+        depending on the build, but 500 is conservative for both).
+        """
+        if not ids:
+            return {}
+        unique_ids = list(dict.fromkeys(ids))
+        connection = await self._get_connection()
+        out: Dict[str, Dict[str, Any]] = {}
+        chunk_size = 500
+        for i in range(0, len(unique_ids), chunk_size):
+            chunk = unique_ids[i : i + chunk_size]
+            placeholders = ",".join("?" * len(chunk))
+            sql = (
+                f"SELECT id, data FROM records "
+                f"WHERE collection = ? AND id IN ({placeholders})"
+            )
+            cursor = await connection.execute(sql, (collection, *chunk))
+            rows = await cursor.fetchall()
+            await cursor.close()
+            for row in rows:
+                out[row["id"]] = json.loads(row["data"])
+        return out
+
+    async def bulk_save(self, collection: str, records: List[Dict[str, Any]]) -> int:
+        """Atomic batch write under a single transaction.
+
+        Either every record in ``records`` is persisted or none are.
+        A constraint violation rolls back the whole batch and re-raises
+        the underlying ``sqlite3`` error.
+        """
+        if not records:
+            return 0
+        for r in records:
+            if "id" not in r:
+                raise ValueError(
+                    "bulk_save requires every record to have an 'id' field"
+                )
+        params = [(collection, str(r["id"]), json.dumps(dict(r))) for r in records]
+        async with self._lock:
+            connection = await self._get_connection()
+            try:
+                await connection.execute("BEGIN")
+                await connection.executemany(
+                    "INSERT OR REPLACE INTO records "
+                    "(collection, id, data) VALUES (?, ?, ?)",
+                    params,
+                )
+                await connection.commit()
+            except Exception:
+                # ``aiosqlite`` rollback is best-effort; if the
+                # connection itself is wedged we'd rather surface the
+                # original exception.
+                with contextlib.suppress(Exception):
+                    await connection.rollback()
+                raise
+        return len(records)
+
     async def find(
-        self, collection: str, query: Dict[str, Any]
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find records matching the query.
 
@@ -315,11 +404,63 @@ class SQLiteDB(Database):
         Returns:
             List of matching records
 
+        Pushdown
+        --------
+        For queries built from operators we recognize
+        (see :mod:`jvspatial.db._sqlite_translate`), the WHERE clause and
+        LIMIT/ORDER BY are pushed into SQL via ``json_extract``. This is
+        dramatically cheaper than the previous "load every row, filter in
+        Python" path. Queries we don't translate (``$regex``,
+        ``$elemMatch``, etc.) fall back to the legacy in-Python filter
+        with the same semantics as before.
+
         Note:
-            Read operations don't require the write lock since SQLite WAL mode
-            allows concurrent reads. Only write operations are serialized.
+            Read operations don't require the write lock since SQLite WAL
+            mode allows concurrent reads. Only write operations are
+            serialized.
         """
         connection = await self._get_connection()
+        translated = translate_query(query) if query else ("", [])
+
+        if translated is not None:
+            where_extra, params = translated
+            sql = "SELECT data FROM records WHERE collection = ?"
+            sql_params: List[Any] = [collection]
+            if where_extra:
+                sql += f" AND ({where_extra})"
+                sql_params.extend(params)
+
+            order_by = translate_sort(sort)
+            if order_by is not None:
+                sql += f" ORDER BY {order_by}"
+                # Pushed-down sort means LIMIT can also be pushed.
+                if limit is not None:
+                    sql += " LIMIT ?"
+                    sql_params.append(int(limit))
+                cursor = await connection.execute(sql, tuple(sql_params))
+                rows = await cursor.fetchall()
+                await cursor.close()
+                return [json.loads(row["data"]) for row in rows]
+
+            # No sort, or sort not translatable.
+            if sort is None and limit is not None:
+                sql += " LIMIT ?"
+                sql_params.append(int(limit))
+                cursor = await connection.execute(sql, tuple(sql_params))
+                rows = await cursor.fetchall()
+                await cursor.close()
+                return [json.loads(row["data"]) for row in rows]
+
+            # Sort spec we can't translate: pull all matching rows, sort
+            # in memory via finalize_find_results.
+            cursor = await connection.execute(sql, tuple(sql_params))
+            rows = await cursor.fetchall()
+            await cursor.close()
+            return finalize_find_results(
+                [json.loads(row["data"]) for row in rows], sort=sort, limit=limit
+            )
+
+        # Fallback: untranslatable query (e.g. $regex). Original behavior.
         cursor = await connection.execute(
             "SELECT data FROM records WHERE collection = ?", (collection,)
         )
@@ -331,7 +472,47 @@ class SQLiteDB(Database):
             record = json.loads(row["data"])
             if not query or QueryEngine.match(record, query):
                 results.append(record)
-        return results
+        return finalize_find_results(results, sort=sort, limit=limit)
+
+    async def count(
+        self,
+        collection: str,
+        query: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Count records using SQL ``COUNT(*)`` whenever possible.
+
+        * Empty query: ``SELECT COUNT(*) … WHERE collection = ?``.
+        * Translatable filtered query: ``SELECT COUNT(*) … WHERE
+          collection = ? AND <translated WHERE>``.
+        * Untranslatable filtered query (e.g. ``$regex``): falls back to
+          ``find()`` and ``len()``.
+        """
+        q = query or {}
+        connection = await self._get_connection()
+        if not q:
+            cursor = await connection.execute(
+                "SELECT COUNT(*) FROM records WHERE collection = ?", (collection,)
+            )
+            row = await cursor.fetchone()
+            await cursor.close()
+            return row[0] if row else 0
+
+        translated = translate_query(q)
+        if translated is not None:
+            where_extra, params = translated
+            sql = "SELECT COUNT(*) FROM records WHERE collection = ?"
+            sql_params: List[Any] = [collection]
+            if where_extra:
+                sql += f" AND ({where_extra})"
+                sql_params.extend(params)
+            cursor = await connection.execute(sql, tuple(sql_params))
+            row = await cursor.fetchone()
+            await cursor.close()
+            return row[0] if row else 0
+
+        # Untranslatable: legacy fallback.
+        rows = await self.find(collection, q)
+        return len(rows)
 
     # Context manager helpers for convenience
     async def __aenter__(self) -> "SQLiteDB":

@@ -73,97 +73,146 @@ class ObjectPager:
         self._cache: Dict[str, List[T]] = {}
 
     async def get_page(
-        self, page: int = 1, additional_filters: Optional[Dict[str, Any]] = None
+        self,
+        page: int = 1,
+        additional_filters: Optional[Dict[str, Any]] = None,
+        after_id: Optional[str] = None,
     ) -> List[T]:
-        """Retrieve a paginated list of objects using MongoDB-style queries.
+        """Retrieve a paginated list of objects using id-range pagination.
+
+        When ``after_id`` is provided the method uses a keyset/cursor approach:
+        it fetches ``page_size + 1`` documents whose ``id`` is greater than
+        ``after_id``, sorted by id ascending.  This avoids loading the full
+        matching set and sorting in Python.
+
+        For backwards-compatible page-number access (``page`` ≥ 1) the method
+        falls back to the former offset approach, but still avoids the
+        ``find+len`` count call by using ``db.count``.
 
         Args:
-            page: Page number to retrieve (1-based)
-            additional_filters: Additional MongoDB-style filters to apply
+            page: Page number to retrieve (1-based).  Ignored when ``after_id``
+                is provided.
+            additional_filters: Additional MongoDB-style filters to apply.
+            after_id: Exclusive lower bound for keyset pagination.  When set,
+                ``page`` is ignored.
 
         Returns:
-            List of object instances for the current page
+            List of object instances for the current page.
         """
         from .context import get_default_context
 
-        self.current_page = max(1, page)
-
-        # Check cache first (include additional_filters in cache key)
-        cache_key = f"{self.current_page}_{hash(str(additional_filters))}"
-        if cache_key in self._cache:
-            self.is_cached = True
-            return self._cache[cache_key]  # type: ignore[return-value]
-
-        self.is_cached = False
-
-        # Use Object's _build_database_query for class-aware queries
-        # This ensures dynamically loaded subclasses are included
         context = get_default_context()
+        db = context.database
 
         # Merge filters
-        merged_filters = {}
+        merged_filters: Dict[str, Any] = {}
         if self.filters:
             merged_filters.update(self.filters)
         if additional_filters:
             merged_filters.update(additional_filters)
 
-        # Build query using Object's class-aware query builder
-        # Uses _collect_class_names() which finds all imported subclasses via __subclasses__()
         collection, db_filter = await self.object_class._build_database_query(
             context, merged_filters, {}
         )
 
-        # Use enhanced database methods for better performance
-        # Get total count using the new count method
-        from unittest.mock import AsyncMock
+        # --- Keyset (cursor) pagination ---
+        if after_id is not None:
+            keyset_filter = dict(db_filter)
+            keyset_filter["id"] = {"$gt": after_id}
+            sort: Optional[List[Any]] = [("id", 1)]
+            if self.order_by:
+                sort = [
+                    (
+                        f"context.{self.order_by}",
+                        1 if self.order_direction.lower() == "asc" else -1,
+                    )
+                ]
+            raw_items = await db.find(
+                collection, keyset_filter, limit=self.page_size + 1, sort=sort
+            )
+            self.has_next = len(raw_items) > self.page_size
+            if self.has_next:
+                raw_items = raw_items[: self.page_size]
+            objects: List[T] = []
+            for item_data in raw_items:
+                obj = await context._deserialize_entity(self.object_class, item_data)
+                if obj:
+                    objects.append(obj)
+            cache_key = f"keyset_{after_id}_{hash(str(additional_filters))}"
+            self._cache[cache_key] = objects  # type: ignore[assignment]
+            self.is_cached = False
+            return objects
 
-        if isinstance(context.database, AsyncMock):
-            # Handle AsyncMock case (tests)
-            self.total_items = await context.database.count(collection, db_filter)
-        else:
-            # Handle real database case
-            db = context.database
-            self.total_items = await db.count(collection, db_filter)
+        # --- Page-number (offset) pagination ---
+        self.current_page = max(1, page)
+        cache_key = f"{self.current_page}_{hash(str(additional_filters))}"
+        if cache_key in self._cache:
+            self.is_cached = True
+            return self._cache[cache_key]  # type: ignore[return-value]
+        self.is_cached = False
 
-        # Calculate pagination state
+        self.total_items = await db.count(collection, db_filter)
         self.total_pages = max(1, ceil(self.total_items / self.page_size))
         self.current_page = max(1, min(self.current_page, self.total_pages))
         self.has_previous = self.current_page > 1
         self.has_next = self.current_page < self.total_pages
 
-        # For ordering, fetch and sort in Python
-        # Database-level sorting with MongoDB operators can be implemented if needed
-        if isinstance(context.database, AsyncMock):
-            # Handle AsyncMock case (tests)
-            all_items = await context.database.find(collection, db_filter)
-        else:
-            # Handle real database case
-            all_items = await db.find(collection, db_filter)
-
-        # Apply ordering if specified
+        # Fetch only the required slice using DB-level sort + limit.
+        page_sort: Optional[List[Any]] = None
         if self.order_by:
+            page_sort = [
+                (
+                    f"context.{self.order_by}",
+                    1 if self.order_direction.lower() == "asc" else -1,
+                )
+            ]
+        else:
+            page_sort = [("id", 1)]
+
+        offset = (self.current_page - 1) * self.page_size
+
+        # Most backends support limit; we emulate skip via the id-range approach
+        # when offset > 0 to avoid fetching the full collection.
+        if offset > 0 and page_sort == [("id", 1)]:
+            # Get the id at the target offset using a minimal projection.
+            skip_rows = await db.find(
+                collection,
+                db_filter,
+                limit=offset,
+                sort=page_sort,
+            )
+            if skip_rows:
+                pivot_id = skip_rows[-1].get("id", "")
+                slice_filter = dict(db_filter)
+                slice_filter["id"] = {"$gt": pivot_id}
+                page_items_raw = await db.find(
+                    collection, slice_filter, limit=self.page_size, sort=page_sort
+                )
+            else:
+                page_items_raw = []
+        else:
+            all_items_raw = await db.find(
+                collection, db_filter, limit=offset + self.page_size, sort=page_sort
+            )
+            page_items_raw = all_items_raw[offset : offset + self.page_size]
+
+        # Apply in-Python ordering when a non-id order_by is set.
+        if self.order_by and page_sort != [("id", 1)]:
             reverse = self.order_direction.lower() == "desc"
             with contextlib.suppress(KeyError, TypeError):
-                all_items.sort(
+                page_items_raw.sort(
                     key=lambda item: item.get("context", {}).get(self.order_by, 0),
                     reverse=reverse,
                 )
 
-        # Calculate offset for current page
-        offset = (self.current_page - 1) * self.page_size
-        page_items = all_items[offset : offset + self.page_size]
-
-        # Deserialize items to object instances
-        objects = []
-        for item_data in page_items:
+        page_objects: List[T] = []
+        for item_data in page_items_raw:
             obj = await context._deserialize_entity(self.object_class, item_data)
             if obj:
-                objects.append(obj)
+                page_objects.append(obj)
 
-        # Cache the result with the cache key
-        self._cache[cache_key] = objects  # type: ignore[assignment]
-
-        return objects
+        self._cache[cache_key] = page_objects  # type: ignore[assignment]
+        return page_objects
 
     async def next_page(
         self, additional_filters: Optional[Dict[str, Any]] = None

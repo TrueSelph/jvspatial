@@ -31,6 +31,8 @@ classifiers = [
 dependencies = [
     "pydantic>=2.0",
     "fastapi>=0.100.0",
+    # Starlette 1.0 drops Router(on_startup/on_shutdown); older FastAPI APIRouter still passes them.
+    "starlette>=0.40.0,<1.0.0",
     "uvicorn>=0.23.0",
     "python-multipart>=0.0.6",
     "motor>=3.0.0",
@@ -52,6 +54,7 @@ lambda = [
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-benchmark>=4.0.0",
     "httpx>=0.24.0",
     "pre-commit>=3.0.0",
     "python-dotenv>=1.0.0",
@@ -60,11 +63,18 @@ test = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.0.0",
+    "pytest-benchmark>=4.0.0",
     "httpx>=0.24.0",
 ]
 scheduler = [
     "psutil>=5.9.0",
     "python-dotenv>=1.0.0",
+]
+otel = [
+    # OpenTelemetry API only -- the application owns the SDK + exporter.
+    # This dependency stays small so library users who already manage
+    # their own OTel stack don't pay for duplicates.
+    "opentelemetry-api>=1.20.0",
 ]
 all = [
     "pytest>=7.0",
@@ -88,17 +98,23 @@ where = ["."]
 include = ["jvspatial*"]
 
 [tool.setuptools.package-data]
-jvspatial = ["static/**/*"]
+# py.typed: PEP 561 marker so downstream type-checkers (mypy, pyright)
+# treat jvspatial as typed and consult our annotations.
+jvspatial = ["static/**/*", "py.typed"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-addopts = "-ra -q --strict-markers"
+# Skip the benchmarks dir in normal test runs so `pytest` stays fast.
+# Run benchmarks explicitly with `pytest tests/benchmarks --benchmark-only`
+# (see docs/md/benchmarks.md and the benchmarks CI workflow).
+addopts = "-ra -q --strict-markers --ignore=tests/benchmarks"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "module"
 markers = [
     "asyncio: mark test as an asyncio test",
     "s3: mark test as requiring boto3 for S3 storage",
+    "benchmark: performance regression benchmark (run with --benchmark-only)",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning:pydantic.*",

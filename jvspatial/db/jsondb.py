@@ -1,4 +1,27 @@
-"""Simplified JSON-based database implementation."""
+r"""Simplified JSON-based database implementation.
+
+Durability semantics
+--------------------
+``JsonDB`` writes one record per file. Every write goes through
+:func:`jvspatial.db._atomic.atomic_write_bytes` which performs
+``write tmp -> fsync -> rename -> fsync(dir)``. As a result, a process
+crash, kernel panic, or power loss will never leave a partially written
+record on disk -- readers always see either the previous fully-formed
+record or the new fully-formed record.
+
+Concurrency model
+-----------------
+Writes are serialized **per record path** by a
+:class:`~jvspatial.db._path_locks.PathLockManager`. Concurrent writes to
+different files run in parallel; concurrent writes to the *same* file
+serialize. The locks are ``threading.Lock`` instances so that side-thread
+callers (e.g. ``DBLogHandler``'s serverless path that uses
+``asyncio.run`` in a worker thread) work the same as event-loop-thread
+callers.
+
+Reads are unlocked: a reader either observes the completed previous
+write (atomic rename guarantees this) or the completed new write.
+"""
 
 import asyncio
 import json
@@ -7,7 +30,9 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from jvspatial.db.database import Database
+from jvspatial.db._atomic import atomic_write_bytes, cleanup_orphan_tmp_files
+from jvspatial.db._path_locks import PathLockManager
+from jvspatial.db.database import Database, finalize_find_results
 from jvspatial.db.query import QueryEngine
 from jvspatial.runtime.serverless import is_serverless_mode
 
@@ -25,6 +50,10 @@ except ImportError:
 class JsonDB(Database):
     """Simplified JSON file-based database implementation."""
 
+    # Public capability flags -- callers can branch on these without sniffing
+    # for adapter classes.
+    supports_transactions: bool = False
+
     def __init__(self, base_path: str = "jvdb") -> None:
         """Initialize JSON database.
 
@@ -33,9 +62,60 @@ class JsonDB(Database):
         """
         self.base_path = Path(base_path).resolve()
         self._warned_non_tmp_serverless = False
-        # Threading lock: save/delete must work from any OS thread / event loop
-        # (e.g. DBLogHandler serverless path uses asyncio.run in a side thread).
-        self._file_lock = threading.Lock()
+        # Per-path locks: writes to different files run concurrently, writes
+        # to the same file serialize. Locks are threading.Lock so they're
+        # safe across event loops / side-thread callers (DBLogHandler in
+        # serverless mode uses asyncio.run from a worker thread).
+        self._path_locks = PathLockManager()
+        # Initialization gate -- the orphan-tmp sweep must complete
+        # before any write begins. Concurrent writers entering
+        # ``_get_collection_dir`` for the first time race on this lock,
+        # but only the first one does the sweep; the others see
+        # ``_tmp_sweep_done = True`` and proceed immediately.
+        self._init_lock = threading.Lock()
+        self._tmp_sweep_done = False
+
+    def _maybe_sweep_orphan_tmp_files(self) -> None:
+        """Reap leftover ``*.jvtmp`` files from a prior crashed process.
+
+        Idempotent and lazy: runs the first time the base directory is
+        actually used. No-op under serverless mode -- cold starts on
+        managed runtimes don't share filesystem state with prior
+        invocations.
+
+        Concurrency
+        -----------
+        Guarded by ``self._init_lock`` so concurrent writers can't
+        race the sweep against their own in-flight ``.jvtmp`` files.
+        Only the first thread through actually does the sweep; the
+        rest see ``_tmp_sweep_done = True`` after the lock and exit.
+        """
+        # Fast path -- no lock required after first init.
+        if self._tmp_sweep_done:
+            return
+        if is_serverless_mode():
+            self._tmp_sweep_done = True
+            return
+        with self._init_lock:
+            # Re-check under the lock.
+            if self._tmp_sweep_done:
+                return
+            if not self.base_path.exists():
+                self._tmp_sweep_done = True
+                return
+            try:
+                n = cleanup_orphan_tmp_files([self.base_path])
+                if n:
+                    logger.info(
+                        "JsonDB at %s: reaped %d orphan temp file(s) from prior run",
+                        self.base_path,
+                        n,
+                    )
+            except Exception as exc:
+                # Sweep is best-effort -- never fail startup on it.
+                logger.warning("JsonDB tmp sweep failed at %s: %s", self.base_path, exc)
+            finally:
+                self._tmp_sweep_done = True
 
     def _get_collection_dir(self, collection: str) -> Path:
         """Get the directory path for a collection."""
@@ -54,6 +134,8 @@ class JsonDB(Database):
         # This prevents 'jvdb' from being created when DatabaseManager is auto-created
         # before Server initializes with the correct database path
         self.base_path.mkdir(parents=True, exist_ok=True)
+        # First-touch orphan sweep (cheap, idempotent, serverless-skipped).
+        self._maybe_sweep_orphan_tmp_files()
         collection_dir = self.base_path / collection
         collection_dir.mkdir(parents=True, exist_ok=True)
         return collection_dir
@@ -70,18 +152,12 @@ class JsonDB(Database):
     async def _async_write_json(self, path: Path, data: Dict[str, Any]) -> None:
         """Write JSON data to file asynchronously.
 
-        Uses aiofiles if available, otherwise falls back to asyncio.to_thread.
+        Uses :func:`atomic_write_bytes` so writes are crash-safe.
+        Caller is responsible for serializing concurrent writes to the
+        same path (use ``self._path_locks``).
         """
-        json_str = json.dumps(data, indent=2)
-        if HAS_AIOFILES:
-            async with aiofiles.open(path, "w") as f:
-                await f.write(json_str)
-        else:
-            # Fallback to thread pool for async execution
-            def _sync_write(path: Path, content: str) -> None:
-                path.write_text(content)
-
-            await asyncio.to_thread(_sync_write, path, json_str)
+        json_bytes = json.dumps(data, indent=2).encode("utf-8")
+        await asyncio.to_thread(atomic_write_bytes, path, json_bytes)
 
     async def _async_read_json(self, path: Path) -> Optional[Dict[str, Any]]:
         """Read JSON data from file asynchronously.
@@ -121,15 +197,21 @@ class JsonDB(Database):
             return None
 
     def _sync_write_record(self, collection: str, data: Dict[str, Any]) -> None:
-        """Write one record under _file_lock (sync I/O for any thread/loop)."""
-        with self._file_lock:
-            record_path = self._get_record_path(collection, data["id"])
-            record_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        """Write one record atomically with per-path locking.
+
+        Cross-thread safe: callable from any OS thread (including
+        side-thread ``asyncio.run`` callers in the serverless logging
+        path).
+        """
+        record_path = self._get_record_path(collection, data["id"])
+        payload = json.dumps(data, indent=2).encode("utf-8")
+        with self._path_locks.lock(str(record_path)):
+            atomic_write_bytes(record_path, payload)
 
     def _sync_delete_record(self, collection: str, record_id: str) -> None:
-        """Delete one record under _file_lock (sync I/O for any thread/loop)."""
-        with self._file_lock:
-            record_path = self._get_record_path(collection, record_id)
+        """Delete one record under per-path lock (cross-thread safe)."""
+        record_path = self._get_record_path(collection, record_id)
+        with self._path_locks.lock(str(record_path)):
             if record_path.exists():
                 record_path.unlink()
 
@@ -151,8 +233,118 @@ class JsonDB(Database):
         """Delete a record by ID."""
         await asyncio.to_thread(self._sync_delete_record, collection, id)
 
+    async def count(
+        self,
+        collection: str,
+        query: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Count records matching ``query``.
+
+        * Empty query: counts files in the collection directory without
+          opening any of them. ``O(N)`` directory entries, no JSON parse.
+        * Filtered query: streams the records through ``QueryEngine`` and
+          returns the count without materializing a result list.
+        """
+        q = query or {}
+        collection_dir = self._get_collection_dir(collection)
+        if not collection_dir.exists():
+            return 0
+
+        json_files = [
+            p for p in collection_dir.glob("*.json") if not p.name.endswith(".jvtmp")
+        ]
+
+        if not q:
+            return len(json_files)
+
+        # Filtered count: parse + match, but don't accumulate records.
+        tasks = [self._async_load_record(p) for p in json_files]
+        records = await asyncio.gather(*tasks, return_exceptions=True)
+        n = 0
+        for record in records:
+            if isinstance(record, Exception) or record is None:
+                continue
+            if isinstance(record, dict) and QueryEngine.match(record, q):
+                n += 1
+        return n
+
+    async def find_many(
+        self, collection: str, ids: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Bulk-fetch via parallel per-file reads.
+
+        N round trips at the OS level (one open() per id), but they
+        run in parallel via ``asyncio.gather``, so wall-clock time is
+        bounded by ``max(io_latency)`` rather than ``sum(io_latency)``.
+        """
+        if not ids:
+            return {}
+        unique_ids = list(dict.fromkeys(ids))
+        # Build (id, path) pairs first so we can short-circuit when
+        # the collection dir doesn't exist.
+        collection_dir = self._get_collection_dir(collection)
+        if not collection_dir.exists():
+            return {}
+        paths = [
+            (rec_id, self._get_record_path(collection, rec_id)) for rec_id in unique_ids
+        ]
+        records = await asyncio.gather(
+            *[self._async_load_record(p) for _, p in paths],
+            return_exceptions=True,
+        )
+        out: Dict[str, Dict[str, Any]] = {}
+        for (rec_id, _path), record in zip(paths, records):
+            if isinstance(record, Exception) or record is None:
+                continue
+            if isinstance(record, dict):
+                out[rec_id] = record
+        return out
+
+    async def bulk_save(self, collection: str, records: List[Dict[str, Any]]) -> int:
+        """Atomic per-file writes in parallel.
+
+        Each file write is independently atomic (temp + fsync + rename).
+        The set as a whole is **not** atomic -- a process crash mid-bulk
+        can leave a partial set on disk, but each individual record is
+        either fully written or not present at all.
+        """
+        if not records:
+            return 0
+        for r in records:
+            if "id" not in r:
+                raise ValueError(
+                    "bulk_save requires every record to have an 'id' field"
+                )
+        # Run writes via the existing single-record sync helper (which
+        # already takes the per-path lock and uses atomic_write_bytes).
+        # ``asyncio.to_thread`` parallelizes them across the loop's
+        # default executor.
+        results = await asyncio.gather(
+            *[
+                asyncio.to_thread(self._sync_write_record, collection, dict(r))
+                for r in records
+            ],
+            return_exceptions=True,
+        )
+        saved = 0
+        for r, result in zip(records, results):
+            if isinstance(result, Exception):
+                logger.warning(
+                    "JsonDB bulk_save failed for id=%s: %s",
+                    r.get("id"),
+                    result,
+                )
+                continue
+            saved += 1
+        return saved
+
     async def find(
-        self, collection: str, query: Dict[str, Any]
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find records matching a query.
 
@@ -163,8 +355,12 @@ class JsonDB(Database):
         if not collection_dir.exists():
             return []
 
-        # Get all JSON files in the collection directory
-        json_files = list(collection_dir.glob("*.json"))
+        # Get all JSON files in the collection directory.
+        # Skip ``*.jvtmp`` files left behind by an in-flight write -- they
+        # are not yet part of the published dataset.
+        json_files = [
+            p for p in collection_dir.glob("*.json") if not p.name.endswith(".jvtmp")
+        ]
 
         if not json_files:
             return []
@@ -189,7 +385,7 @@ class JsonDB(Database):
             ):
                 results.append(record)
 
-        return results
+        return finalize_find_results(results, sort=sort, limit=limit)
 
     def _get_nested_value(self, data: Dict[str, Any], key: str) -> Any:
         """Get a nested value using dot notation."""

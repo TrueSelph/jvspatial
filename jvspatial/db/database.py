@@ -6,11 +6,43 @@ unnecessary complexity while maintaining core functionality.
 
 import logging
 from abc import ABC, abstractmethod
+from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from jvspatial.db.query import QueryEngine
 
 logger = logging.getLogger(__name__)
+
+
+def _find_sort_key(record: Dict[str, Any], field: str) -> Tuple[bool, Any]:
+    """Sort key: non-``None`` values first, then by value (with ``None`` last)."""
+    value = record.get(field)
+    return (value is None, value)
+
+
+def finalize_find_results(
+    records: List[Dict[str, Any]],
+    *,
+    sort: Optional[List[Tuple[str, int]]] = None,
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Apply optional Mongo-style sort and limit in memory.
+
+    ``sort`` is a list of ``(field, direction)`` with ``direction`` ``1`` for
+    ascending and ``-1`` for descending. Sorting is stable; compound sorts are
+    applied from the last key to the first.
+    """
+    out = records
+    if sort:
+        out = list(records)
+        for field, direction in reversed(sort):
+            out.sort(
+                key=partial(_find_sort_key, field=field),
+                reverse=(direction == -1),
+            )
+    if limit is not None:
+        out = out[:limit]
+    return out
 
 
 class Database(ABC):
@@ -35,7 +67,21 @@ class Database(ABC):
     Query matching for both follows the same rules as :meth:`find_one` / :meth:`find`
     (Mongo-style operators via :class:`~jvspatial.db.query.QueryEngine` where the
     adapter applies it).
+
+    Capability flags
+    ----------------
+    Subclasses set the following class attributes so callers can branch on
+    capabilities without sniffing for adapter classes:
+
+    ``supports_transactions``
+        ``True`` if :meth:`begin_transaction` returns a real transaction
+        with ACID semantics (e.g. MongoDB replica set). ``False`` for
+        adapters where transactions are unavailable or only available in a
+        weak buffered form. Default ``False``.
     """
+
+    # Capability flags. Override in subclasses.
+    supports_transactions: bool = False
 
     @abstractmethod
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -75,13 +121,20 @@ class Database(ABC):
 
     @abstractmethod
     async def find(
-        self, collection: str, query: Dict[str, Any]
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find records matching a query.
 
         Args:
             collection: Collection name
             query: Query parameters (empty dict for all records)
+            limit: Optional maximum number of documents to return after matching
+            sort: Optional list of ``(field, direction)`` tuples (``1`` asc, ``-1`` desc)
 
         Returns:
             List of matching records
@@ -119,6 +172,82 @@ class Database(ABC):
         """
         results = await self.find(collection, query)
         return results[0] if results else None
+
+    async def find_many(
+        self, collection: str, ids: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Bulk-fetch records by id in one round trip per backend.
+
+        Args:
+            collection: Collection name.
+            ids: Record IDs to fetch. Duplicates are de-duplicated.
+
+        Returns:
+            ``{id: record}`` for each id that exists. Missing ids are
+            simply absent from the result (no exception, no ``None``
+            placeholder). Order is **not** preserved across backends --
+            iterate the returned dict by your input ``ids`` list if you
+            need stable ordering.
+
+        Performance:
+            * MongoDB: single ``find({"_id": {"$in": ids}})`` call.
+            * SQLite: single ``WHERE collection=? AND id IN (?,?,...)`` SELECT.
+            * DynamoDB: chunked ``BatchGetItem`` (100 ids/request) with
+              parallel batches.
+            * JsonDB: parallel ``asyncio.gather`` over per-file reads.
+
+            The default implementation in this base class issues N
+            sequential ``get()`` calls -- adapters should override.
+        """
+        if not ids:
+            return {}
+        unique_ids = list(dict.fromkeys(ids))  # de-dup, preserve order
+        out: Dict[str, Dict[str, Any]] = {}
+        for rec_id in unique_ids:
+            doc = await self.get(collection, rec_id)
+            if doc is not None:
+                out[rec_id] = doc
+        return out
+
+    async def bulk_save(self, collection: str, records: List[Dict[str, Any]]) -> int:
+        """Save many records in one round trip per backend.
+
+        Args:
+            collection: Collection name.
+            records: Iterable of record dicts. Each must have an ``id``
+                field. Records without ``id`` raise ``ValueError``.
+
+        Returns:
+            Number of records successfully saved.
+
+        Atomicity (per backend):
+            * MongoDB: ``bulk_write`` with ``ordered=False`` -- partial
+              successes are reported; failures don't block other writes.
+            * SQLite: single transaction with ``executemany``; **all
+              records or none** land. A constraint violation rolls back
+              the whole batch.
+            * DynamoDB: ``BatchWriteItem`` with unprocessed-item retry;
+              partial successes possible.
+            * JsonDB: parallel atomic per-file writes; partial successes
+              possible.
+
+            The default implementation in this base class is a serial
+            loop of ``save()`` calls (partial success on failure), which
+            is correct but slow -- adapters should override.
+        """
+        if not records:
+            return 0
+        for r in records:
+            if "id" not in r:
+                raise ValueError(
+                    "bulk_save requires every record to have an 'id' field"
+                )
+        # Sequential save() calls; on any failure the exception
+        # propagates and the caller sees no return value, so reaching
+        # the ``return`` always means every record persisted.
+        for r in records:
+            await self.save(collection, dict(r))
+        return len(records)
 
     async def find_one_and_delete(
         self, collection: str, query: Dict[str, Any]
@@ -217,6 +346,23 @@ class Database(ABC):
             f"create_index() called on {self.__class__.__name__} but indexing is not implemented. "
             f"Index creation for collection '{collection}' on field(s) '{field_or_fields}' was ignored."
         )
+
+    async def drop_deprecated_indexes(self, deprecated: Dict[str, List[str]]) -> None:
+        """Drop indexes that were removed or renamed in code (orphan cleanup).
+
+        Called once at startup with a map of collection name → list of old index
+        names to remove.  The default implementation is a no-op so that adapters
+        which do not use named indexes (e.g. in-memory) can ignore it.
+
+        Adapters that do support named indexes (MongoDB, PostgreSQL with explicit
+        index names, etc.) should override this to silently skip missing indexes
+        and log a warning for any other errors.
+
+        Args:
+            deprecated: Mapping of collection name to old index names.
+                        Example: ``{"node": ["conv_id_only", "context.session_id_1"]}``
+        """
+        return None
 
 
 class DatabaseError(Exception):

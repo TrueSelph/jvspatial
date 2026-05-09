@@ -57,6 +57,8 @@ class ServerConfig(BaseModel):
     redoc_url: Optional[str] = "/redoc"
     serverless_mode: Optional[bool] = None
     deferred_task_provider: Optional[str] = None
+    scheduler_enabled: bool = False
+    scheduler_interval: int = 1
 
     # Configuration Groups (using composition)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)

@@ -128,6 +128,10 @@ class DatabaseManager:
         """
         self._prime_database = database
         self._databases["prime"] = database
+        # Once an explicit prime database is bound, the manager is no longer
+        # operating on auto-created defaults. Clear the flag so downstream
+        # checks (e.g. ``get_default_context``) treat it as initialized.
+        self._auto_created = False
 
     def get_current_database(self) -> Database:
         """Get the current active database instance.

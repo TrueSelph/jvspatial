@@ -35,8 +35,18 @@ class APIKeyService:
     def _hash_key(self, key: str) -> str:
         """Hash an API key using SHA-256.
 
-        API keys are high-entropy; SHA-256 enables O(1) lookup by hash.
-        Industry standard for API keys (Stripe, GitHub, etc.).
+        SHA-256 is used (not bcrypt/PBKDF2) because:
+        1. API keys have 256 bits of entropy (secrets.token_urlsafe(32)),
+           making offline brute-force infeasible even with fast hashing.
+        2. Deterministic output enables O(1) lookup by hash — critical for
+           API performance on every authenticated request.
+        3. Industry standard: Stripe, GitHub, and other major platforms
+           use SHA-256 for API key hashing.
+        4. Constant-time comparison via hmac.compare_digest prevents
+           timing side-channel attacks during verification.
+
+        If the database is compromised, key rotation (not hash strength)
+        is the correct mitigation.
 
         Args:
             key: Plaintext API key

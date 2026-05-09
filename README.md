@@ -269,6 +269,15 @@ server = Server(
 - [Custom Database Guide](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/custom-database-guide.md) - Implementing custom database backends
 - [Graph Visualization](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/graph-visualization.md) - Export graphs in DOT/Mermaid formats
 - [Pagination](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/pagination.md) - ObjectPager usage
+- [Observability](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/observability.md) - Structured DB logging, slow-query threshold, MetricsRecorder, OpenTelemetry adapter
+- [Performance Benchmarks](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/benchmarks.md) - Regression-detection bench suite (pytest-benchmark + CI workflow)
+- [API Stability](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/stability.md) - Public/internal/experimental tiers and deprecation policy
+
+### For Contributors
+- [Contributing](https://github.com/TrueSelph/jvspatial/blob/main/CONTRIBUTING.md) - Dev loop, conventions, label glossary
+- [Releasing](https://github.com/TrueSelph/jvspatial/blob/main/RELEASING.md) - Maintainer-only release procedure
+- [Security Policy](https://github.com/TrueSelph/jvspatial/blob/main/SECURITY.md) - Vulnerability disclosure
+- [Code of Conduct](https://github.com/TrueSelph/jvspatial/blob/main/CODE_OF_CONDUCT.md) - Contributor Covenant 2.1
 
 ## Contributors
 
