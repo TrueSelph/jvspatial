@@ -6,7 +6,7 @@
 gunicorn[gthread]  # Production ASGI/WSGI server with threading support
 
 # Distributed caching (for multi-instance deployments)
-redis[hiredis]>=5.0.0  # Redis client with C parser for performance
+redis[hiredis]>=7.0.1  # Redis client with C parser for performance
 
 # Environment management
 python-dotenv  # Environment variable loading

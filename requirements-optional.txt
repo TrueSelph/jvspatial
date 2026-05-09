@@ -2,7 +2,7 @@
 # These provide additional functionality but are not required for core operation
 
 # Distributed Caching (for Kubernetes/multi-instance deployments)
-redis[hiredis]>=5.0.0  # Redis client with C parser for performance
+redis[hiredis]>=7.0.1  # Redis client with C parser for performance
 
 # Enhanced JSON support (for better serialization)
 orjson  # Fast JSON library
