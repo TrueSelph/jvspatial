@@ -5,6 +5,7 @@ of FastAPI application instances, following the single responsibility principle.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -45,13 +46,30 @@ class AppBuilder:
 
         Returns:
             Configured FastAPI application instance
+
+        Production unpublish: setting ``JVSPATIAL_DOCS_DISABLED=1`` (or
+        ``true``/``yes``/``on``) forces ``docs_url``, ``redoc_url``,
+        ``openapi_url``, and ``swagger_ui_oauth2_redirect_url`` to
+        ``None``. FastAPI then never registers any of those routes — they
+        return 404 with no body, the OpenAPI schema is not served, and no
+        Swagger UI HTML is emitted. Use this in production when the API
+        surface should not be self-documenting.
         """
-        app_kwargs = {
+        docs_disabled = (
+            os.getenv("JVSPATIAL_DOCS_DISABLED") or ""
+        ).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+        app_kwargs: Dict[str, Any] = {
             "title": self.config.title,
             "description": self.config.description,
             "version": self.config.version,
-            "docs_url": self.config.docs_url,
-            "redoc_url": self.config.redoc_url,
+            "docs_url": None if docs_disabled else self.config.docs_url,
+            "redoc_url": None if docs_disabled else self.config.redoc_url,
             "debug": self.config.debug,
             # Configure OpenAPI tags order - ensure "App" appears after "default"
             # Tags are ordered by their appearance in this list
@@ -60,6 +78,11 @@ class AppBuilder:
                 {"name": "App", "description": "Application-specific endpoints"},
             ],
         }
+        if docs_disabled:
+            # Explicitly nuke the OpenAPI JSON spec and the Swagger OAuth2
+            # redirect endpoint too — FastAPI defaults them on otherwise.
+            app_kwargs["openapi_url"] = None
+            app_kwargs["swagger_ui_oauth2_redirect_url"] = None
 
         # Add lifespan if provided
         if lifespan is not None:

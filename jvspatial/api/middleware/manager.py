@@ -20,13 +20,59 @@ if TYPE_CHECKING:
     from jvspatial.api.server import Server
 
 
+# Strict default — applied to application routes.
+_DEFAULT_CSP = "default-src 'self'; frame-ancestors 'none'"
+
+# Relaxed CSP for FastAPI's bundled Swagger UI / ReDoc pages. Those pages
+# pull swagger-ui-dist + redoc bundles from cdn.jsdelivr.net and a favicon
+# from fastapi.tiangolo.com, plus run a small inline bootstrap script. The
+# strict default blocks all of that and the docs render blank. Scoped to
+# documentation paths only — application routes keep the strict policy.
+#
+# The single production knob is `JVSPATIAL_DOCS_DISABLED=1` (read at app
+# build time in `AppBuilder.create_app`); that flag unpublishes /docs,
+# /redoc, and /openapi.json entirely so this CSP never matters in prod.
+# When docs ARE published (dev / staging) this relaxation makes Swagger
+# UI render — no further env knobs needed.
+_DOCS_CSP = (
+    "default-src 'self' https://cdn.jsdelivr.net; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: blob: https://cdn.jsdelivr.net https://fastapi.tiangolo.com; "
+    "font-src 'self' data: https://cdn.jsdelivr.net; "
+    "connect-src 'self' https://cdn.jsdelivr.net; "
+    "worker-src 'self' blob:; "
+    "object-src 'none'"
+)
+
+# Documentation-page path prefixes. Both `/docs` and `/redoc` may carry
+# trailing path segments (Swagger's oauth2-redirect, ReDoc assets); match
+# exact path or `<prefix>/...`. `/openapi.json` is the JSON spec consumed
+# by both UIs — it's CSP-irrelevant on its own but we group it for symmetry.
+_DOCS_PATH_PREFIXES = ("/docs", "/redoc", "/openapi.json")
+
+
+def _is_docs_path(path: str) -> bool:
+    """True for FastAPI Swagger / ReDoc / OpenAPI surfaces."""
+    return any(path == p or path.startswith(p + "/") for p in _DOCS_PATH_PREFIXES)
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Middleware that adds security headers to all responses.
 
     Headers applied:
     - X-Content-Type-Options: nosniff (MIME sniffing prevention)
     - X-Frame-Options: DENY (clickjacking prevention)
-    - Content-Security-Policy: default-src 'self'; frame-ancestors 'none'
+    - Content-Security-Policy: strict on app routes; a relaxed variant
+      that permits ``cdn.jsdelivr.net`` is emitted for ``/docs``,
+      ``/redoc``, and ``/openapi.json`` so FastAPI's bundled Swagger UI
+      and ReDoc pages render. Without this scoped relaxation the docs
+      load blank because the strict default blocks the CDN-hosted JS/CSS.
+      For production lockdown set ``JVSPATIAL_DOCS_DISABLED=1`` —
+      ``AppBuilder.create_app`` then unpublishes the docs surface entirely
+      and this CSP never applies (no routes registered).
     - Strict-Transport-Security: max-age=31536000; includeSubDomains (if enabled)
 
     HSTS is only applied when the server configures hsts_enabled=True
@@ -43,7 +89,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; frame-ancestors 'none'"
+            _DOCS_CSP if _is_docs_path(request.url.path) else _DEFAULT_CSP
         )
         if self._hsts_enabled:
             response.headers["Strict-Transport-Security"] = (

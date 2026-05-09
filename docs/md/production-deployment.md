@@ -51,6 +51,25 @@ Security headers (X-Content-Type-Options, X-Frame-Options, X-XSS-Protection) are
 server = Server(security=dict(security_headers_enabled=False))
 ```
 
+The `Content-Security-Policy` header is strict by default on application
+routes. The bundled Swagger UI / ReDoc pages (`/docs`, `/redoc`,
+`/openapi.json`) get a relaxed CSP that permits `cdn.jsdelivr.net` so the
+docs render — no extra config needed in dev.
+
+#### Unpublishing the docs surface in production
+
+Set a single env var to remove `/docs`, `/redoc`, `/openapi.json`, and
+`/docs/oauth2-redirect` from the registered routes entirely (FastAPI
+returns 404 — no Swagger HTML, no OpenAPI JSON):
+
+```
+JVSPATIAL_DOCS_DISABLED=1
+```
+
+Truthy values: `1`, `true`, `yes`, `on` (case-insensitive). Unset or any
+other value keeps the docs published. Use this in production when the API
+surface should not be self-documenting.
+
 ### 4. CORS Configuration
 
 The default CORS configuration allows localhost origins. For production, restrict to your actual frontend domain(s):
@@ -104,6 +123,7 @@ JVSPATIAL_WEBHOOK_HMAC_SECRET=your-webhook-secret-minimum-32-chars
 | `JVSPATIAL_CORS_ORIGINS` | Your frontend domain(s), not `*` |
 | `JVSPATIAL_WEBHOOK_HMAC_SECRET` | Unique per environment, 32+ chars |
 | `JVSPATIAL_WEBHOOK_HTTPS_REQUIRED` | `true` |
+| `JVSPATIAL_DOCS_DISABLED` | `1` (unpublishes `/docs`, `/redoc`, `/openapi.json`) |
 
 ## Kubernetes / Container Deployment
 

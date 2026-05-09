@@ -31,6 +31,7 @@ For full examples and default values, see:
 - `JVSPATIAL_API_HEALTH` - Health route path.
 - `JVSPATIAL_API_ROOT` - Root route path.
 - `JVSPATIAL_GRAPH_ENDPOINT_ENABLED` - Enables graph REST endpoint.
+- `JVSPATIAL_DOCS_DISABLED` - When truthy (`1`/`true`/`yes`/`on`), unpublishes the documentation surface entirely: `/docs`, `/redoc`, `/openapi.json`, and `/docs/oauth2-redirect` are not registered (return 404). Recommended for production.
 
 ### CORS
 - `JVSPATIAL_CORS_ENABLED` - Enables CORS middleware.

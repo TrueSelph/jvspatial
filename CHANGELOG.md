@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `JVSPATIAL_DOCS_DISABLED` env var (truthy `1`/`true`/`yes`/`on`) — when set, `AppBuilder.create_app` constructs FastAPI with `docs_url=None`, `redoc_url=None`, `openapi_url=None`, and `swagger_ui_oauth2_redirect_url=None` so the documentation surface is fully unpublished (404 with no spec leak). Recommended for production.
+
+### Fixed
+
+- Security headers middleware now emits a relaxed Content-Security-Policy on `/docs`, `/redoc`, `/openapi.json` (and sub-paths) that permits `cdn.jsdelivr.net` so FastAPI's bundled Swagger UI / ReDoc pages render. The previous strict default blocked the CDN-hosted JS/CSS and the docs loaded blank. Application routes keep the strict default policy.
+
 ## [0.0.7] - 2026-05-08
 
 ### Security
