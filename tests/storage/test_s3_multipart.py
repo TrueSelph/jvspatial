@@ -51,20 +51,20 @@ def s3(mock_client, monkeypatch):
 class TestRoutingByThreshold:
     @pytest.mark.asyncio
     async def test_small_object_uses_put_object(self, s3, mock_client):
-        await s3.save_file("small.bin", b"x" * 100)
+        await s3.save_file("small.txt", b"x" * 100)
         assert mock_client.put_object.called
         assert not mock_client.upload_fileobj.called
 
     @pytest.mark.asyncio
     async def test_large_object_uses_upload_fileobj(self, s3, mock_client):
-        await s3.save_file("big.bin", b"x" * 2048)
+        await s3.save_file("big.txt", b"x" * 2048)
         assert mock_client.upload_fileobj.called
         assert not mock_client.put_object.called
 
     @pytest.mark.asyncio
     async def test_at_threshold_exactly_uses_multipart(self, s3, mock_client):
         # ``>=`` semantics: exactly threshold size triggers multipart.
-        await s3.save_file("threshold.bin", b"x" * 1024)
+        await s3.save_file("threshold.txt", b"x" * 1024)
         assert mock_client.upload_fileobj.called
         assert not mock_client.put_object.called
 
@@ -73,7 +73,7 @@ class TestExtraArgsForwarding:
     @pytest.mark.asyncio
     async def test_metadata_forwarded_to_extra_args_on_multipart(self, s3, mock_client):
         await s3.save_file(
-            "big.bin",
+            "big.txt",
             b"x" * 2048,
             metadata={"author": "test"},
         )
@@ -86,7 +86,7 @@ class TestExtraArgsForwarding:
     @pytest.mark.asyncio
     async def test_metadata_forwarded_on_put_object_too(self, s3, mock_client):
         await s3.save_file(
-            "small.bin",
+            "small.txt",
             b"x" * 100,
             metadata={"author": "test"},
         )
