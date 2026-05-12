@@ -165,7 +165,7 @@ class Edge(Object):
 
         # Don't override ID if already provided
         if "id" not in kwargs:
-            kwargs["id"] = generate_id("e", self.__class__.__name__)
+            kwargs["id"] = generate_id("e", self.__class__._entity_name())
 
         kwargs.update(
             {"source": source, "target": target, "bidirectional": bidirectional}
@@ -321,7 +321,7 @@ class Edge(Object):
                 bidirectional = data["context"].get("bidirectional", True)
 
             # Handle subclass instantiation based on stored entity
-            stored_entity = data.get("entity", cls.__name__)
+            stored_entity = data.get("entity", cls._entity_name())
             target_class = find_subclass_by_name(cls, stored_entity) or cls
 
             context_data = {

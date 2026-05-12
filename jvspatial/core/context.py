@@ -899,7 +899,7 @@ class GraphContext:
             return await self.find_nodes(entity_class, query, limit=limit)
 
         collection = self._get_collection_name(entity_type_code)
-        db_query = {"entity": entity_class.__name__, **query}
+        db_query = {"entity": entity_class._entity_name(), **query}
         results = await self.database.find(collection, db_query, limit=limit)
 
         entities = []
@@ -1263,7 +1263,7 @@ class GraphContext:
         collection = self._get_collection_name(self._get_entity_type_code(node_class))
 
         # Add class name filter to query for type safety
-        db_query = {"entity": node_class.__name__, **query}
+        db_query = {"entity": node_class._entity_name(), **query}
 
         db = self.database
         results = await db.find(collection, db_query)
@@ -1319,7 +1319,7 @@ class GraphContext:
         collection = self._get_collection_name(type_code)
 
         # Check if we've already ensured indexes for this collection
-        collection_key = f"{collection}:{entity_class.__name__}"
+        collection_key = f"{collection}:{entity_class._entity_name()}"
         if collection_key in _ensured_indexes:
             return  # Already ensured
 
@@ -1438,7 +1438,7 @@ class GraphContext:
             from .utils import find_subclass_by_name
 
             # Use entity field for class identification
-            stored_entity = data.get("entity", entity_class.__name__)
+            stored_entity = data.get("entity", entity_class._entity_name())
             entity_type_code = self._get_entity_type_code(entity_class)
 
             # Prefer requested class subtree, then (for Nodes) scan the entire Node hierarchy.
