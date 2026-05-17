@@ -1,353 +1,145 @@
-# JVspatial Documentation
+# jvspatial Documentation Index
 
-**Version**: 0.0.6
-**Last Updated**: 2025-03-16
+This directory holds detailed how-to and reference documentation. For higher-level orientation start at the repo root:
 
-Welcome to the jvspatial documentation! This guide will help you understand and use the jvspatial library effectively.
+- [README.md](../../README.md) — project overview and installation
+- [PRD.md](../../PRD.md) — *why* the library exists, target users, non-goals
+- [SPEC.md](../../SPEC.md) — *what* the library guarantees (technical contract)
+- [ROADMAP.md](../../ROADMAP.md) — forward direction and known gaps
+- [CLAUDE.md](../../CLAUDE.md) — agent maintenance guide
+- [CHANGELOG.md](../../CHANGELOG.md) — release history
 
-> **Developer Quickstart**: For minimal setup (Server with database + auth, import API modules, run), see [Auth Quickstart](auth-quickstart.md) and [Endpoint Registration Guide](endpoint-registration-guide.md).
-
----
-
-## 📚 **Documentation Index**
-
-### **Getting Started**
-
-| Document | Description | Audience |
-|----------|-------------|----------|
-| [Quick Start Guide](quick-start-guide.md) | Get started in 5 minutes | Beginners |
-| [Examples](examples.md) | Code examples and tutorials | All levels |
-| [Installation Guide](../README.md) | Installation and setup | Beginners |
-
-### **Core Concepts**
-
-| Document | Description | Audience |
-|----------|-------------|----------|
-| [Graph Traversal](graph-traversal.md) | Walker pattern and graph operations | Intermediate |
-| [Graph Visualization](graph-visualization.md) | Export graphs in DOT/Mermaid formats | All levels |
-| [Entity Reference](entity-reference.md) | Node, Edge, Walker classes | All levels |
-| [Context Management](context-management-guide.md) | GraphContext, ServerContext usage | Intermediate |
-| [Node Operations](node-operations.md) | Working with nodes | All levels |
-
-### **API & Server**
-
-| Document | Description | Audience |
-|----------|-------------|----------|
-| [REST API](rest-api.md) | API design and endpoints | All levels |
-| [API Architecture](api-architecture.md) | Server architecture | Advanced |
-| [Server API](server-api.md) | Server configuration | Intermediate |
-| [Endpoint Registration Guide](endpoint-registration-guide.md) | Recommended entrypoint and auto-registration | Intermediate |
-| [Examples](examples.md) | **Standard implementation examples** | ⭐ **Start Here** |
-| [Decorator Reference](decorator-reference.md) | All decorators explained | All levels |
-
-### **Authentication & Security**
-
-| Document | Description | Audience |
-|----------|-------------|----------|
-| [Authentication](authentication.md) | Auth system overview | Intermediate |
-| [Auth Quickstart](auth-quickstart.md) | Get auth working fast | Beginners |
-| [Testing Guide](testing-guide.md) | Test auth mode and isolated databases | Intermediate |
-| [Password Migration Guide](password-migration-guide.md) | bcrypt upgrade and transparent migration | Intermediate |
-
-### **Integrations**
-
-| Document | Description | Audience |
-|----------|-------------|----------|
-| [Webhooks Architecture](webhook-architecture.md) | Webhook system design | Advanced |
-| [Webhooks Quickstart](webhooks-quickstart.md) | Using webhooks | Intermediate |
-| [Scheduler](scheduler.md) | Background job scheduling | Intermediate |
-| [File Storage](file-storage-architecture.md) | File storage system | Intermediate |
-| [File Storage Usage](file-storage-usage.md) | Using file storage | All levels |
-
-### **Database & Caching**
-
-| Document | Description | Audience |
-|----------|-------------|----------|
-| [Graph Context](graph-context.md) | Database management and multi-database support (JSON, SQLite, MongoDB, DynamoDB) | Intermediate |
-| [DynamoDB Guide](dynamodb-guide.md) | DynamoDB setup and configuration | Intermediate |
-| [MongoDB Query Interface](mongodb-query-interface.md) | Database queries | Intermediate |
-| [Custom Database Guide](custom-database-guide.md) | Implementing custom database backends | Advanced |
-| [Caching](caching.md) | Cache strategies | Intermediate |
-| [Text Normalization](text-normalization.md) | Unicode to ASCII text normalization | All levels |
-
-### **Logging**
-
-| Document | Description | Audience |
-|----------|-------------|----------|
-| [Logging Service](logging-service.md) | Database logging with automatic persistence | All levels |
-| [Custom Log Levels](custom-log-levels.md) | Domain-specific log levels (AUDIT, SECURITY, etc.) | Intermediate |
-
-### **Advanced Topics**
-
-| Document | Description | Audience |
-|----------|-------------|----------|
-| [Architectural Decisions](architectural-decisions.md) | ADRs and design rationale | Advanced |
-| [Module Responsibility Matrix](module-responsibility-matrix.md) | Module organization | Advanced |
-| [Import Patterns](import-patterns.md) | Best practices for imports | Intermediate |
-| [Design Decisions](design-decisions.md) | Design philosophy | Advanced |
-| [Optimization](optimization.md) | Performance tuning | Advanced |
-| [Error Handling](error-handling.md) | Error patterns | Intermediate |
-
-### **Development**
-
-| Document | Description | Audience |
-|----------|-------------|----------|
-| [Contributing](contributing.md) | Contribution guide | Developers |
-| [Custom Database Guide](custom-database-guide.md) | Extending with custom databases | Advanced |
-| [Troubleshooting](troubleshooting.md) | Common issues | All levels |
-| [Migration Guide](migration.md) | Adopting jvspatial | Users |
-
-### **Reference**
-
-| Document | Description | Audience |
-|----------|-------------|----------|
-| [Attribute Annotations](attribute-annotations.md) | @attribute | All levels |
-| [Walker Events](walker-reporting-events.md) | Walker event system | Intermediate |
-| [Walker Queue](walker-queue-operations.md) | Queue management | Advanced |
-| [Walker Trail](walker-trail-tracking.md) | Trail tracking | Advanced |
-| [Pagination](pagination.md) | Paginating results | Intermediate |
-| [Environment Config](environment-configuration.md) | Configuration options | All levels |
-| [Environment Keys Reference](environment-keys-reference.md) | Canonical valid env key inventory | All levels |
-| [Infinite Walk Protection](infinite-walk-protection.md) | Preventing infinite loops | Advanced |
+The documents below answer *how* to use each subsystem. Every link resolves; entries marked **NEW** were added since the previous index revision.
 
 ---
 
-## 🎯 **Learning Paths**
+## Getting Started
 
-### **Path 1: Beginner → Intermediate**
+| Document | What's in it |
+|---|---|
+| [Quick Start Guide](quick-start-guide.md) | Minimal end-to-end setup: install, create a Server, define a Node, expose an endpoint. |
+| [Examples](examples.md) | Index of runnable scripts in [examples/](../../examples/). |
+| [Auth Quickstart](auth-quickstart.md) | Fast path to authenticated endpoints. |
+| [Endpoint Registration Guide](endpoint-registration-guide.md) | Recommended entrypoint pattern and auto-registration semantics. |
+| [Migration Guide](migration.md) | Adopting jvspatial in an existing project. |
 
-1. ✅ [Quick Start Guide](quick-start-guide.md)
-2. ✅ [Examples](examples.md)
-3. ✅ [Entity Reference](entity-reference.md)
-4. ✅ [Graph Traversal](graph-traversal.md)
-5. ✅ [REST API](rest-api.md)
-6. ✅ [Decorator Reference](decorator-reference.md)
+## Core Concepts
 
-### **Path 2: API Development**
+| Document | What's in it |
+|---|---|
+| [Entity Reference](entity-reference.md) | `Object`, `Node`, `Edge`, `Walker`, `Root` — fields, lifecycle, persistence shape. |
+| [Attribute Annotations](attribute-annotations.md) | `@attribute(protected, transient, private, indexed, …)` semantics. |
+| [Graph Context](graph-context.md) | Database + cache + monitor binding; multi-database setup. |
+| [Context Management Guide](context-management-guide.md) | When and how to scope `GraphContext` / `ServerContext`. |
+| [Graph Traversal](graph-traversal.md) | Walker pattern, queue semantics, visit hooks. |
+| [Graph Visualization](graph-visualization.md) | DOT / Mermaid export. |
+| [Node Operations](node-operations.md) | Connect / disconnect / neighbor queries. |
+| [Walker Events](walker-reporting-events.md) | Walker event bus and reporting. |
+| [Walker Queue Operations](walker-queue-operations.md) | Queue manipulation patterns. |
+| [Walker Trail Tracking](walker-trail-tracking.md) | Trail capture, metadata, summary. |
+| [Infinite Walk Protection](infinite-walk-protection.md) | `max_steps` / `max_visits_per_node` / `max_execution_time`. |
 
-1. ✅ [Quick Start Guide](quick-start-guide.md)
-2. ✅ [REST API](rest-api.md)
-3. ✅ [Decorator Reference](decorator-reference.md)
-4. ✅ [Endpoint Registration Guide](endpoint-registration-guide.md)
-5. ✅ [Authentication](authentication.md)
-6. ✅ [Server API](server-api.md)
-7. ✅ [Webhooks Quickstart](webhooks-quickstart.md)
+## API and Server
 
-### **Path 3: Advanced Architecture**
+| Document | What's in it |
+|---|---|
+| [REST API](rest-api.md) | Endpoint patterns and conventions. |
+| [Server API](server-api.md) | `Server` configuration surface. |
+| [API Architecture](api-architecture.md) | Mixin composition, request lifecycle, middleware stack. |
+| [Decorator Reference](decorator-reference.md) | Every decorator the library ships: `@endpoint`, `@attribute`, `@on_visit`, etc. |
+| [Pagination](pagination.md) | `ObjectPager` usage. |
+| [Rate Limiting](rate-limiting.md) | **NEW** Token-bucket rate limit configuration. |
+| [Error Handling](error-handling.md) | Exception taxonomy and propagation. |
 
-1. ✅ [Module Responsibility Matrix](module-responsibility-matrix.md)
-2. ✅ [Import Patterns](import-patterns.md)
-3. ✅ [API Architecture](api-architecture.md)
-4. ✅ [Architectural Decisions](architectural-decisions.md)
-5. ✅ [Design Decisions](design-decisions.md)
-6. ✅ [Optimization](optimization.md)
+## Authentication and Security
 
----
+| Document | What's in it |
+|---|---|
+| [Authentication](authentication.md) | JWT, API key, refresh-token flows. |
+| [API Keys](api-keys.md) | **NEW** Key management endpoints and hashing model. |
+| [Password Migration Guide](password-migration-guide.md) | bcrypt upgrade path. |
+| [Security Review](security-review.md) | **NEW** Audit findings and resolved fixes. |
+| [Security Operational Notes](security-operational-notes.md) | **NEW** Runtime security guidance. |
+| [Production Deployment](production-deployment.md) | **NEW** Hardening checklist for production. |
 
-## 🔍 **Quick Reference**
+## Database and Storage
 
-### **Common Tasks**
+| Document | What's in it |
+|---|---|
+| [MongoDB Query Interface](mongodb-query-interface.md) | Mongo-style operators across all backends. |
+| [Custom Database Guide](custom-database-guide.md) | Implementing and registering a new `Database` adapter. |
+| [DynamoDB Guide](dynamodb-guide.md) | DynamoDB-specific setup and limits. |
+| [File Storage Architecture](file-storage-architecture.md) | Storage interface, security layer, version model. |
+| [File Storage Usage](file-storage-usage.md) | Upload, list, download, versioning. |
+| [Caching](caching.md) | Memory / Redis / layered caches; read-through DB wrapper. |
+| [Text Normalization](text-normalization.md) | Unicode → ASCII normalization for query stability. |
 
-| Task | Document | Section |
-|------|----------|---------|
-| Create a node | [Quick Start](quick-start-guide.md) | Pattern 1 |
-| Define an endpoint | [Quick Start](quick-start-guide.md) | Step 3 |
-| Setup endpoint registration | [Endpoint Registration Guide](endpoint-registration-guide.md) | Recommended Entrypoint |
-| Build a walker | [Graph Traversal](graph-traversal.md) | Basic Walker |
-| Visualize graph | [Graph Visualization](graph-visualization.md) | Quick Start |
-| Query database | [MongoDB Query](mongodb-query-interface.md) | Query Builder |
-| Add authentication | [Auth Quickstart](auth-quickstart.md) | Setup |
-| Setup caching | [Caching](caching.md) | Configuration |
-| Handle files | [File Storage Usage](file-storage-usage.md) | Basic Usage |
-| Schedule jobs | [Scheduler](scheduler.md) | Basic Tasks |
-| Setup logging | [Logging Service](logging-service.md) | Quick Start |
-| Use custom log levels | [Custom Log Levels](custom-log-levels.md) | Quick Start |
+## Observability and Operations
 
-### **Common Issues**
+| Document | What's in it |
+|---|---|
+| [Observability](observability.md) | **NEW** Structured DB op logs, `MetricsRecorder`, slow-query threshold, OTEL adapter. |
+| [Logging Service](logging-service.md) | Persistent application logging. |
+| [Custom Log Levels](custom-log-levels.md) | Adding domain levels (`AUDIT`, `SECURITY`, …). |
+| [Benchmarks](benchmarks.md) | **NEW** Regression-detection bench suite. |
+| [Serverless Mode](serverless-mode.md) | **NEW** Detection precedence, mode-dependent defaults, LWA env. |
+| [Scheduler](scheduler.md) | In-process scheduler and decorators. |
+| [Webhook Architecture](webhook-architecture.md) | Webhook routing, signature verification. |
+| [Webhooks Quickstart](webhooks-quickstart.md) | Common webhook patterns. |
+| [Troubleshooting](troubleshooting.md) | Symptoms → root causes for common issues. |
 
-| Issue | Document | Solution |
-|-------|----------|----------|
-| Import errors | [Troubleshooting](troubleshooting.md) | Import Issues |
-| Context errors | [Context Management](context-management-guide.md) | Usage Patterns |
-| Import patterns | [Import Patterns](import-patterns.md) | Best Practices |
-| Authentication fails | [Troubleshooting](troubleshooting.md) | Auth Issues |
-| 401 with valid token | [Troubleshooting](troubleshooting.md) | Authentication: 401 with valid token |
-| Database path wrong | [Troubleshooting](troubleshooting.md) | Database path wrong |
+## Architecture and Conventions
 
----
+| Document | What's in it |
+|---|---|
+| [Architectural Decisions](architectural-decisions.md) | ADR-style design rationale. |
+| [Design Decisions](design-decisions.md) | Philosophy and tradeoffs. |
+| [Module Responsibility Matrix](module-responsibility-matrix.md) | Which package owns which concern. |
+| [Import Patterns](import-patterns.md) | Stable vs internal imports. |
+| [Stability](stability.md) | **NEW** Public / internal / experimental tiers + deprecation policy. |
+| [Optimization](optimization.md) | Performance tuning playbook. |
 
-## 📖 **Document Categories**
+## Configuration
 
-### **By Complexity**
+| Document | What's in it |
+|---|---|
+| [Environment Configuration](environment-configuration.md) | `JVSPATIAL_*` allowlist behavior and merge order. |
+| [Environment Keys Reference](environment-keys-reference.md) | Canonical inventory of every valid env key. |
 
-**Beginner** (⭐):
-- Quick Start Guide
-- Examples
-- Entity Reference
-- Node Operations
-- REST API
-- Auth Quickstart
-- Webhooks Quickstart
-- File Storage Usage
+## Contributing
 
-**Intermediate** (⭐⭐):
-- Graph Traversal
-- Context Management
-- Authentication
-- Server API
-- Scheduler
-- MongoDB Query Interface
-- Caching
-- Import Patterns
-- Error Handling
-
-**Advanced** (⭐⭐⭐):
-- API Architecture
-- Module Responsibility Matrix
-- Architectural Decisions
-- Design Decisions
-- Optimization
-- Webhook Architecture
-- File Storage Architecture
-- Walker Queue Operations
-- Walker Trail Tracking
-- Infinite Walk Protection
-
-### **By Topic**
-
-**Core Graph**:
-- Graph Traversal
-- Graph Visualization
-- Entity Reference
-- Node Operations
-- Walker Events
-- Walker Queue Operations
-- Walker Trail Tracking
-
-**API Development**:
-- REST API
-- API Architecture
-- Server API
-- Endpoint Registration Guide
-- Decorator Reference
-- Error Handling
-
-**Authentication & Security**:
-- Authentication
-- Auth Quickstart
-- Attribute Annotations
-
-**Integrations**:
-- Webhooks Architecture
-- Webhooks Quickstart
-- Scheduler
-- File Storage Architecture
-- File Storage Usage
-
-**Data Management**:
-- MongoDB Query Interface
-- Caching
-- Pagination
-- Text Normalization
-
-**Logging**:
-- Logging Service
-- Custom Log Levels
-
-**Architecture**:
-- Module Responsibility Matrix
-- Import Patterns
-- Architectural Decisions
-- Design Decisions
+| Document | What's in it |
+|---|---|
+| [Contributing](contributing.md) | Dev loop, conventions, label glossary. |
+| [Testing Guide](testing-guide.md) | Async test patterns, fixtures, auth-test isolation. |
+| [License](license.md) | MIT license reference. |
 
 ---
 
-## 🎓 **Glossary**
+## Quick Reference
 
-| Term | Definition |
-|------|------------|
-| **Node** | A data point in the graph |
-| **Edge** | A relationship between nodes |
-| **Walker** | A pattern for traversing the graph |
-| **Context** | Manages database and configuration |
-| **Root** | Entry point to the graph |
-| **Endpoint** | An API route |
-| **Query Builder** | Fluent interface for database queries |
-| **Cache Backend** | Storage for cached data |
-| **Storage Interface** | File storage abstraction |
-| **Decorator** | Function/class modifier |
+### Common Tasks
 
----
+| Task | Start here |
+|---|---|
+| Create your first node + endpoint | [Quick Start Guide](quick-start-guide.md) |
+| Switch from JSON to MongoDB | [Graph Context](graph-context.md) |
+| Add authentication | [Auth Quickstart](auth-quickstart.md) |
+| Implement a custom database backend | [Custom Database Guide](custom-database-guide.md) |
+| Deploy to AWS Lambda | [Serverless Mode](serverless-mode.md), [Production Deployment](production-deployment.md) |
+| Build a walker | [Graph Traversal](graph-traversal.md), [Walker Events](walker-reporting-events.md) |
+| Surface metrics | [Observability](observability.md) |
+| Verify SLA / catch regressions | [Benchmarks](benchmarks.md) |
+| Audit security posture | [Security Review](security-review.md), [Security Operational Notes](security-operational-notes.md) |
 
-## 🔧 **API Reference**
+### Authoritative Sources
 
-### **Core Modules**
+When documents disagree, this is the order of trust:
 
-```python
-# Core entities
-from jvspatial import Object, Node, Edge, Walker, Root
+1. Source code (cited in [SPEC.md](../../SPEC.md))
+2. [SPEC.md](../../SPEC.md) — contract
+3. [PRD.md](../../PRD.md) — product context
+4. [docs/md/](.) — how-to documentation
+5. [LLM-CODING-GUIDE.md](../../LLM-CODING-GUIDE.md) — legacy code-pattern cookbook (no longer authoritative on contracts)
 
-# Graph operations
-from jvspatial.core import GraphContext, on_visit, on_exit
-
-# Graph visualization
-from jvspatial.core.graph import generate_graph_dot, generate_graph_mermaid, export_graph
-
-# API
-from jvspatial.api import Server, ServerConfig, endpoint, get_auth_service
-
-# Database
-from jvspatial.db import create_database, Database
-
-# Cache
-from jvspatial.cache import create_cache
-
-# Storage
-from jvspatial.storage.interfaces import LocalFileInterface
-
-# Utils
-from jvspatial.utils import memoize, retry, NodeId
-```
-
----
-
-## 📊 **Version History**
-
-| Version | Date | Changes |
-|---------|------|---------|
-| **0.0.6** | 2025-03-16 | Auth streamlining: get_auth_service(), bootstrap_admin, on_user_registered/on_admin_bootstrapped/on_enrich_current_user callbacks, built-in /auth/me, user_id guarantee, exempt path auto-discovery, argon2 fix |
-| **0.0.5** | 2025-03-15 | JWT auth uses prime DB (fixes 401 with valid token), db_path_resolve, docs updates |
-| **0.0.4** | 2025-03-14 | Auto-registration for endpoints, Endpoint Registration Guide |
-| **0.0.3** | 2025-02-22 | Documentation updates, DynamoDB support |
-| **0.0.2** | 2025-xx-xx | Bug fixes and improvements |
-| **0.0.1** | 2025-xx-xx | Initial release |
-
----
-
-## 🤝 **Contributing**
-
-Want to improve the documentation?
-
-1. Read the [Contributing Guide](contributing.md)
-2. Check for open documentation issues
-3. Submit a pull request
-
----
-
-## 📧 **Support**
-
-- **Documentation Issues**: Open a GitHub issue
-- **Questions**: GitHub Discussions
-- **Email**: support@jvspatial.com
-
----
-
-## 📝 **License**
-
-See [License](license.md) for details.
-
----
-
-**Last Updated**: 2025-03-16
-**Version**: 0.0.6
-**Maintainer**: JVspatial Team
+If you find a doc in this directory that contradicts SPEC, the doc is wrong — open an issue.
