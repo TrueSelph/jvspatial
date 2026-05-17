@@ -156,7 +156,10 @@ class FileStorageService:
             HTTPException: On storage error
         """
         try:
-            success = self.file_interface.delete_file(file_path)
+            # ``delete_file`` is async on every backend; missing ``await``
+            # silently skipped the delete and assigned the coroutine to
+            # ``success`` (audit §3.3).
+            success = await self.file_interface.delete_file(file_path)
             return {"success": success, "file_path": file_path}
         except StorageError as e:
             raise HTTPException(status_code=500, detail=str(e))

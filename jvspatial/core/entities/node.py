@@ -423,7 +423,10 @@ class Node(Object):
             if isinstance(node, str):
                 entity_name = node
             elif isinstance(node, type):
-                entity_name = node.__name__
+                # Honor ``__entity_name__`` so subclasses with custom
+                # discriminators match their persisted ID prefix.
+                resolver = getattr(node, "_entity_name", None)
+                entity_name = resolver() if callable(resolver) else node.__name__
             if entity_name is not None:
                 try:
                     from ..context import get_default_context
@@ -558,7 +561,12 @@ class Node(Object):
                 "$or": [{"source": self.id}, {"target": self.id}]
             }
             if isinstance(edge_filter, type):
-                edge_query["name"] = edge_filter.__name__
+                # Persisted discriminator field is ``entity``; honor
+                # ``__entity_name__`` override (SPEC §1.2).
+                resolver = getattr(edge_filter, "_entity_name", None)
+                edge_query["entity"] = (
+                    resolver() if callable(resolver) else edge_filter.__name__
+                )
 
             # Cap edge fan-out so hub nodes don't accidentally load unbounded sets.
             edge_results = await context.database.find(
@@ -590,7 +598,10 @@ class Node(Object):
                 # Find incoming edges (where this node is the target)
                 query: Dict[str, Any] = {"target": self.id}
                 if isinstance(edge_filter, type):
-                    query["name"] = edge_filter.__name__
+                    resolver = getattr(edge_filter, "_entity_name", None)
+                    query["entity"] = (
+                        resolver() if callable(resolver) else edge_filter.__name__
+                    )
 
                 edge_results = await context.database.find("edge", query)
                 for edge_data in edge_results:
@@ -663,9 +674,17 @@ class Node(Object):
         Returns:
             True if node matches the filter
         """
+        # ``_entity_name()`` honors the ``__entity_name__`` override
+        # (SPEC §1.2). Falls back to ``__name__`` if absent so this helper
+        # works on non-Object types passed by mistake.
+        resolver = getattr(node_obj.__class__, "_entity_name", None)
+        obj_entity_name = (
+            resolver() if callable(resolver) else node_obj.__class__.__name__
+        )
+
         if isinstance(node_filter, str):
-            # Simple string filter - match by class name
-            return node_obj.__class__.__name__ == node_filter
+            # Simple string filter - match by entity_name
+            return obj_entity_name == node_filter
 
         elif isinstance(node_filter, type):
             # Class type filter - match by class or inheritance
@@ -674,18 +693,18 @@ class Node(Object):
         elif isinstance(node_filter, list):
             for filter_item in node_filter:
                 if isinstance(filter_item, str):
-                    # String in list - match by class name
-                    if node_obj.__class__.__name__ == filter_item:
+                    # String in list - match by entity_name
+                    if obj_entity_name == filter_item:
                         return True
                 elif isinstance(filter_item, type):
                     # Class type in list - match by class or inheritance
                     if isinstance(node_obj, filter_item):
                         return True
                 elif isinstance(filter_item, dict):
-                    # Dict filter - match by class name and criteria
+                    # Dict filter - match by entity_name and criteria
                     for class_name, criteria in filter_item.items():
                         if (
-                            node_obj.__class__.__name__ == class_name
+                            obj_entity_name == class_name
                             and self._matches_property_filter(node_obj, criteria)
                         ):
                             return True

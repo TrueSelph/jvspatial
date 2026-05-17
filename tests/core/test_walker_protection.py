@@ -27,6 +27,16 @@ from jvspatial.core.entities import (
     Root,
     Walker,
 )
+from jvspatial.exceptions import (
+    InfiniteLoopError,
+    WalkerExecutionError,
+    WalkerTimeoutError,
+)
+
+# Per SPEC §6.3 / audit §2.1: protection limits now raise the documented
+# exception types instead of being swallowed into the walker report. Tests
+# that intentionally trip a limit must wrap ``spawn`` in this tuple.
+PROTECTION_EXCS = (WalkerExecutionError, InfiniteLoopError, WalkerTimeoutError)
 
 
 class ProtectionTestNode(Node):
@@ -230,8 +240,9 @@ class TestMaxStepsProtection:
         walker = StepCountTestWalker(max_steps=5)
         start_node = ProtectionTestNode(name="start", value=0)
 
-        # Run walker and expect protection to trigger
-        await walker.spawn(start_node)
+        # SPEC §6.3: exceeding max_steps raises WalkerExecutionError.
+        with pytest.raises(WalkerExecutionError):
+            await walker.spawn(start_node)
 
         # Check protection was triggered by checking step count and limits
         # The protection system stops traversal when limits are exceeded
@@ -250,8 +261,10 @@ class TestMaxStepsProtection:
         walker = StepCountTestWalker(max_steps=50)
         start_node = ProtectionTestNode(name="start", value=0)
 
-        # Run walker - it will stop at 50 steps due to the walker's internal limit
-        await walker.spawn(start_node)
+        # Walker still hits the cap, but at 50 it is "effectively disabled"
+        # from the test's perspective; SPEC §6.3 says it still raises.
+        with pytest.raises(WalkerExecutionError):
+            await walker.spawn(start_node)
 
         # Check that walker ran more than the original 5 steps
         # but still stopped due to protection at 50
@@ -270,7 +283,9 @@ class TestMaxStepsProtection:
         walker = StepCountTestWalker(max_steps=10)
         start_node = ProtectionTestNode(name="start", value=0)
 
-        await walker.spawn(start_node)
+        # StepCountTestWalker is designed to trip max_steps.
+        with pytest.raises(WalkerExecutionError):
+            await walker.spawn(start_node)
 
         # Check step counting matches expected
         # The Walker should have taken some steps and stopped
@@ -291,7 +306,9 @@ class TestNodeVisitProtection:
         walker = NodeRevisitWalker(max_visits_per_node=3)
         start_node = ProtectionTestNode(name="revisit_test", value=0)
 
-        await walker.spawn(start_node)
+        # SPEC §6.3: max_visits_per_node raises InfiniteLoopError.
+        with pytest.raises(PROTECTION_EXCS):
+            await walker.spawn(start_node)
 
         # Check protection was triggered by checking visit counts
         # The protection system stops traversal when limits are exceeded
@@ -309,7 +326,8 @@ class TestNodeVisitProtection:
         walker = NodeRevisitWalker(max_visits_per_node=5)
         start_node = ProtectionTestNode(name="count_test", value=0)
 
-        await walker.spawn(start_node)
+        with pytest.raises(PROTECTION_EXCS):
+            await walker.spawn(start_node)
 
         # Check visit counting through protection component
         visit_counts = walker._protection.visit_counts
@@ -334,7 +352,8 @@ class TestNodeVisitProtection:
         walker = MultiNodeWalker(max_steps=20)
         start_node = ProtectionTestNode(name="multi_start")
 
-        await walker.spawn(start_node)
+        with pytest.raises(PROTECTION_EXCS):
+            await walker.spawn(start_node)
 
         # Check that multiple nodes were tracked
         visit_counts = walker._protection.visit_counts
@@ -397,7 +416,8 @@ class TestQueueSizeProtection:
         )
         start_node = ProtectionTestNode(name="queue_test")
 
-        await walker.spawn(start_node)
+        with pytest.raises(PROTECTION_EXCS):
+            await walker.spawn(start_node)
 
         # Check that protection triggered (should be max_steps since queue limiting doesn't stop traversal)
         # The protection system stops traversal when limits are exceeded
@@ -426,7 +446,8 @@ class TestQueueSizeProtection:
 
         start_node = ProtectionTestNode(name="queue_unlimited_test")
 
-        await walker.spawn(start_node)
+        with pytest.raises(PROTECTION_EXCS):
+            await walker.spawn(start_node)
 
         # With high queue limit, queue can grow larger
         # But step protection should still stop the walker
@@ -493,8 +514,9 @@ class TestProtectionStatusReporting:
         initial_step_count = walker.step_count
         initial_queue_size = len(walker.queue)
 
-        # Run walker
-        await walker.spawn(start_node)
+        # Run walker (expected to trip max_steps).
+        with pytest.raises(WalkerExecutionError):
+            await walker.spawn(start_node)
 
         # Check final status
         final_step_count = walker.step_count
@@ -534,7 +556,8 @@ class TestProtectionIntegration:
         )
         start_node = ProtectionTestNode(name="trail_protection_test")
 
-        await walker.spawn(start_node)
+        with pytest.raises(WalkerExecutionError):
+            await walker.spawn(start_node)
 
         # Check both protection and trail worked
         # The protection system stops traversal when limits are exceeded
@@ -570,7 +593,8 @@ class TestProtectionIntegration:
         walker = ResponseTestWalker(max_steps=5)
         start_node = ProtectionTestNode(name="response_test")
 
-        await walker.spawn(start_node)
+        with pytest.raises(WalkerExecutionError):
+            await walker.spawn(start_node)
 
         # Check protection data was added without overwriting custom data
         # The protection system stops traversal when limits are exceeded
@@ -597,7 +621,10 @@ class TestProtectionIntegration:
         )
         start_node = ProtectionTestNode(name="multi_protection_test")
 
-        await walker.spawn(start_node)
+        # Any of the three limits can fire first — accept all three exception
+        # types (SPEC §6.3).
+        with pytest.raises(PROTECTION_EXCS):
+            await walker.spawn(start_node)
 
         # One of the protections should have triggered
         # The protection system stops traversal when limits are exceeded

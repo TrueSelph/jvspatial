@@ -741,23 +741,30 @@ class GraphContext:
             else:
                 # For Objects, export returns nested format (id, entity, context)
                 record = await entity.export()
-                # Ensure ID follows proper format: type_code.ClassName.hex_id
-                # Check entity's ID directly (it's transient so not in export)
+                # Ensure ID follows proper format: type_code.entity_name.hex_id
+                # entity_name honors ``__entity_name__`` override (SPEC §1.2)
+                # so classes that disambiguate from a same-``__name__`` peer
+                # round-trip through save/load without ID rewriting.
                 entity_id = getattr(entity, "id", None)
                 if entity_id:
                     id_parts = entity_id.split(".")
-                    # Check if ID matches expected format: type_code.ClassName.hex_id
+                    entity_name_resolver = getattr(
+                        entity.__class__, "_entity_name", None
+                    )
+                    expected_entity_name = (
+                        entity_name_resolver()
+                        if callable(entity_name_resolver)
+                        else entity.__class__.__name__
+                    )
                     if (
                         len(id_parts) != 3
                         or id_parts[0] != entity.type_code
-                        or id_parts[1] != entity.__class__.__name__
+                        or id_parts[1] != expected_entity_name
                     ):
                         # ID doesn't match expected format, regenerate it
                         from jvspatial.core.utils import generate_id
 
-                        new_id = generate_id(
-                            entity.type_code, entity.__class__.__name__
-                        )
+                        new_id = generate_id(entity.type_code, expected_entity_name)
                         object.__setattr__(entity, "id", new_id)
                         record["id"] = new_id
                     # ID is in record from export()
@@ -1398,9 +1405,16 @@ class GraphContext:
         if target_id is not None:
             query["target"] = target_id
 
-        # Filter by edge class if specified
+        # Filter by edge class if specified — honor ``__entity_name__``
+        # override so subclasses persisted under a custom discriminator are
+        # found (SPEC §1.2).
         if edge_class:
-            query["entity"] = edge_class.__name__
+            entity_name_resolver = getattr(edge_class, "_entity_name", None)
+            query["entity"] = (
+                entity_name_resolver()
+                if callable(entity_name_resolver)
+                else edge_class.__name__
+            )
 
         # Add additional property filters
         for key, value in kwargs.items():

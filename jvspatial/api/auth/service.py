@@ -364,7 +364,12 @@ class AuthenticationService:
                 except Exception:
                     return False
         else:
-            return hashlib.sha256(token.encode()).hexdigest() == hashed
+            # Constant-time comparison is non-negotiable for any secret
+            # comparison (SPEC §15.2, CLAUDE.md invariant §2). The earlier
+            # ``==`` form was timing-leakable on partial hex prefix matches.
+            return hmac.compare_digest(
+                hashlib.sha256(token.encode()).hexdigest(), hashed
+            )
 
     def _generate_jwt_token(
         self,

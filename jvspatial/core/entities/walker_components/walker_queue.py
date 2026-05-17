@@ -6,8 +6,11 @@ including size limits and backing deque operations.
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from typing import Deque, Iterable, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class WalkerQueue:
@@ -27,13 +30,35 @@ class WalkerQueue:
             backing_deque if backing_deque is not None else deque()
         )
         self._max_size = max_size
+        # One-shot warning when ``max_size`` is hit — repeated drops are
+        # rate-limited so a runaway producer cannot flood logs.
+        self._drop_warned: bool = False
+
+    def _has_capacity(self) -> bool:
+        return self._max_size <= 0 or len(self._backing) < self._max_size
+
+    def _warn_drop(self, op: str, count: int) -> None:
+        """Warn once per queue when ``max_size`` causes drops (SPEC §6.3)."""
+        if not self._drop_warned:
+            logger.warning(
+                "WalkerQueue.%s: queue at max_size=%d, dropped %d node(s); "
+                "subsequent drops will be silent.",
+                op,
+                self._max_size,
+                count,
+            )
+            self._drop_warned = True
 
     async def visit(self, nodes: Iterable[object]) -> None:
         """Add nodes to queue, respecting max_size limit."""
+        dropped = 0
         for n in nodes:
-            # Only add if we haven't hit the limit
-            if self._max_size <= 0 or len(self._backing) < self._max_size:
+            if self._has_capacity():
                 self._backing.append(n)
+            else:
+                dropped += 1
+        if dropped:
+            self._warn_drop("visit", dropped)
 
     async def dequeue(self, nodes: object) -> List[object]:
         """Remove specified node(s) from the queue.
@@ -67,11 +92,21 @@ class WalkerQueue:
     async def prepend(self, nodes: Iterable[object]) -> None:
         """Add nodes to the front of the queue.
 
+        Respects ``max_size`` (audit §2.4 / SPEC §6.3) — earlier versions
+        of this method bypassed the cap, providing a silent protection
+        bypass via front-of-queue inserts.
+
         Args:
             nodes: Nodes to prepend to the queue
         """
+        dropped = 0
         for n in reversed(list(nodes)):
-            self._backing.appendleft(n)
+            if self._has_capacity():
+                self._backing.appendleft(n)
+            else:
+                dropped += 1
+        if dropped:
+            self._warn_drop("prepend", dropped)
 
     async def append(self, nodes: Iterable[object]) -> None:
         """Add nodes to the end of the queue.
@@ -79,19 +114,31 @@ class WalkerQueue:
         Args:
             nodes: Nodes to append to the queue
         """
+        dropped = 0
         for n in nodes:
-            # Only add if we haven't hit the limit
-            if self._max_size <= 0 or len(self._backing) < self._max_size:
+            if self._has_capacity():
                 self._backing.append(n)
+            else:
+                dropped += 1
+        if dropped:
+            self._warn_drop("append", dropped)
 
     async def add_next(self, nodes: Iterable[object]) -> None:
         """Add nodes to the front of the queue in the order provided.
 
+        Respects ``max_size`` (audit §2.4 / SPEC §6.3).
+
         Args:
             nodes: Nodes to add to the front of the queue
         """
+        dropped = 0
         for n in reversed(list(nodes)):
-            self._backing.appendleft(n)
+            if self._has_capacity():
+                self._backing.appendleft(n)
+            else:
+                dropped += 1
+        if dropped:
+            self._warn_drop("add_next", dropped)
 
     async def clear(self) -> None:
         """Clear all nodes from the queue."""
@@ -137,12 +184,15 @@ class WalkerQueue:
     ) -> List[object]:
         """Insert nodes after a target node in the queue.
 
+        Respects ``max_size`` (audit §2.4 / SPEC §6.3). Excess nodes are
+        dropped from the tail of the input rather than inserted.
+
         Args:
             target_node: The node to insert after
             nodes: Nodes to insert
 
         Returns:
-            List of inserted nodes
+            List of nodes that were actually inserted
 
         Raises:
             ValueError: If target node is not found in the queue
@@ -157,23 +207,32 @@ class WalkerQueue:
         except ValueError:
             raise ValueError(f"Target node {target_node} not found in queue")
 
-        # Insert after the target
-        for i, node in enumerate(nodes_list):
-            self._backing.insert(target_index + 1 + i, node)
+        inserted: List[object] = []
+        dropped = 0
+        for node in nodes_list:
+            if self._has_capacity():
+                self._backing.insert(target_index + 1 + len(inserted), node)
+                inserted.append(node)
+            else:
+                dropped += 1
+        if dropped:
+            self._warn_drop("insert_after", dropped)
 
-        return nodes_list
+        return inserted
 
     async def insert_before(
         self, target_node: object, nodes: Iterable[object]
     ) -> List[object]:
         """Insert nodes before a target node in the queue.
 
+        Respects ``max_size`` (audit §2.4 / SPEC §6.3).
+
         Args:
             target_node: The node to insert before
             nodes: Nodes to insert
 
         Returns:
-            List of inserted nodes
+            List of nodes that were actually inserted
 
         Raises:
             ValueError: If target node is not found in the queue
@@ -188,8 +247,15 @@ class WalkerQueue:
         except ValueError:
             raise ValueError(f"Target node {target_node} not found in queue")
 
-        # Insert before the target
-        for i, node in enumerate(nodes_list):
-            self._backing.insert(target_index + i, node)
+        inserted: List[object] = []
+        dropped = 0
+        for node in nodes_list:
+            if self._has_capacity():
+                self._backing.insert(target_index + len(inserted), node)
+                inserted.append(node)
+            else:
+                dropped += 1
+        if dropped:
+            self._warn_drop("insert_before", dropped)
 
-        return nodes_list
+        return inserted
