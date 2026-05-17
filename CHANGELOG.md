@@ -10,9 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `JVSPATIAL_DOCS_DISABLED` env var (truthy `1`/`true`/`yes`/`on`) — when set, `AppBuilder.create_app` constructs FastAPI with `docs_url=None`, `redoc_url=None`, `openapi_url=None`, and `swagger_ui_oauth2_redirect_url=None` so the documentation surface is fully unpublished (404 with no spec leak). Recommended for production.
+- `Walker.__entity_name__` / `Walker._entity_name()` — parallel to `Object._entity_name()` so walker IDs and the persisted `entity` discriminator honor the per-subclass override. (Audit §1.1, §1.2, §1.9.)
+- `TraversalProtection.start_if_needed()` — idempotent initializer for `Walker.run()`. Pause/resume cycles no longer reset step / visit / wall-clock counters. (Audit §2.2.)
+- `WalkerTrail(max_length=N)` — wires the previously-undocumented bound. `0` (default) means unlimited; positive integers cap the in-memory trail. Threaded through `Walker(max_trail_length=...)` and `JVSPATIAL_WALKER_MAX_TRAIL_LENGTH`. (Audit §2.3 / SPEC §6.4.)
+- `tests/core/test_entity_name_walker_and_save.py`, `tests/core/test_walker_protection_audit_fixes.py`, `tests/storage/test_versioning_path_sanitizer_audit.py`, `tests/api/test_webhook_hmac_audit_fix.py` — 28 new regression cases pinning Wave 1 audit fixes.
 
 ### Fixed
 
+- **BREAKING (behavioral):** `Walker.run()` now raises `InfiniteLoopError` / `WalkerTimeoutError` / `WalkerExecutionError` when protection limits trip, as SPEC §6.3 has always promised. Earlier behavior silently swallowed `ProtectionViolation` into `walker.report` and returned. Callers that relied on the swallow contract must wrap `spawn()` / `run()` in `try`/`except`. (Audit §2.1.)
+- `GraphContext.save_object` no longer rewrites entity IDs when `__entity_name__` differs from `cls.__name__`. Earlier the ID-validation check compared against `cls.__name__` and regenerated through `cls.__name__` — any entity using the override had its ID silently corrupted on every save. (Audit §1.3, §1.4.)
+- `GraphContext.find_edges_between` honors `__entity_name__` so override-using edges are findable. Earlier filtered `entity == edge_class.__name__`. (Audit §1.5.)
+- `Node._node_query` keys edge lookups by the persisted `entity` field (not the non-existent `name` column) and honors `__entity_name__`; `Node.count_neighbors` fast-path regex uses `_entity_name()`; `Node._matches_node_filter` compares against `_entity_name()`. (Audit §1.6-§1.8.)
+- `AuthenticationService._verify_refresh_token` SHA-256 fallback now uses `hmac.compare_digest` instead of `==`. Removes a timing oracle on refresh-token and password-reset-token hash comparison. (Audit §4.1 / SPEC §15.2.)
+- `LocalFileInterface.{create_version, get_version, list_versions, delete_version, get_latest_version}` route `file_path` through a new `_sanitized_version_base` helper. Earlier these computed `self.root_dir / f"{file_path}.versions"` without sanitization — a caller-supplied `../../etc/passwd` escaped the storage root entirely. (Audit §4.2 / SPEC §15.1.)
+- `verify_hmac_signature` no longer slices `expected_signature[len(prefix):]`. The earlier slice truncated 7 chars off a 64-char SHA-256 digest so `hmac.compare_digest` always returned False — webhook HMAC verification rejected every request. (Audit §4.3 / SPEC §15.2.)
+- Webhook walker `inject_walker_webhook_payload.enhanced_init` is now sync. Python ignores `async def __init__`; the earlier form returned a coroutine that was never awaited and leaked on every webhook walker construction. (Audit §3.1.)
+- `webhook_wrapper` now awaits `endpoint_func(**kwargs)` in the async branch. Both arms of the `if/else` were identical, so coroutines from async endpoints leaked unawaited. (Audit §3.2.)
+- `FileStorageService.handle_delete_file` now awaits `self.file_interface.delete_file(file_path)`. The missing `await` left `success` as the coroutine object and skipped the delete. (Audit §3.3.)
+- `generate_graph_dot` and `generate_graph_mermaid` now wrap `Path.write_text` in `asyncio.to_thread` so disk I/O does not block the event loop inside their async bodies. (Audit §3.4-§3.5.)
+- `WalkerQueue.prepend` / `append` / `add_next` / `insert_after` / `insert_before` now respect `max_size` and emit a one-shot WARNING on first drop. Earlier the front-of-queue and middle-insert paths bypassed the cap, providing a silent protection bypass. (Audit §2.4-§2.5.)
+- `DynamoDB.{find, count, batch_get, batch_write}` now route every `aioboto3` wire call through `_run_with_throttle_retry`. Earlier the helper was only applied to `save`/`get`/`delete`; `ProvisionedThroughputExceededException` and `ThrottlingException` from scan / query / batch ops surfaced to callers as immediate failures despite the documented backoff. (Audit §5.1 / SPEC §4.3.)
 - Security headers middleware now emits a relaxed Content-Security-Policy on `/docs`, `/redoc`, `/openapi.json` (and sub-paths) that permits `cdn.jsdelivr.net` so FastAPI's bundled Swagger UI / ReDoc pages render. The previous strict default blocked the CDN-hosted JS/CSS and the docs loaded blank. Application routes keep the strict default policy.
 
 ## [0.0.7] - 2026-05-08
