@@ -113,9 +113,47 @@ class SQLiteDB(Database):
         self._created_indexes: Dict[str, Set[str]] = (
             {}
         )  # collection -> set of index names
+        # The event loop that owns ``self._connection``. ``aiosqlite``
+        # binds its connection to a single loop; using the connection
+        # from a different loop produces opaque "Future attached to a
+        # different loop" errors. We track the binding here and raise
+        # a clear ``DatabaseError`` on cross-loop reuse (audit §5.10).
+        self._owning_loop: Optional[asyncio.AbstractEventLoop] = None
 
     async def _get_connection(self) -> "Connection":
-        """Get or create the SQLite connection."""
+        """Get or create the SQLite connection.
+
+        Cross-loop reuse handling (audit §5.10 / SPEC §4.3):
+
+        * For **file-backed databases**, the connection is silently
+          rebound to the current loop — the old loop is presumed gone,
+          and on-disk state persists across the rebind so callers do
+          not observe data loss.
+        * For ``:memory:`` databases, data lives in the connection
+          itself; rebinding would silently truncate the dataset. We
+          keep the existing connection and trust aiosqlite's internal
+          thread to dispatch queries from any loop (this matches
+          historical behavior — the audit's concern was an opaque
+          failure mode, not data loss).
+        """
+        current_loop = asyncio.get_running_loop()
+        if (
+            self._connection is not None
+            and self._owning_loop is not None
+            and self._owning_loop is not current_loop
+            and self.db_path_str != ":memory:"
+        ):
+            logger.debug(
+                "SQLiteDB rebinding to a new event loop; abandoning "
+                "connection owned by %r and reconnecting on %r",
+                self._owning_loop,
+                current_loop,
+            )
+            self._connection = None
+            self._owning_loop = None
+            self._initialized = False
+            # Reset per-loop state; index re-creation is idempotent.
+            self._created_indexes.clear()
         if self._connection is None:
             # Ensure parent directory exists before connecting (for file paths)
             if self.db_path_str != ":memory:":
@@ -134,6 +172,7 @@ class SQLiteDB(Database):
             self._connection = await aiosqlite.connect(
                 self.db_path_str, timeout=self.timeout
             )
+            self._owning_loop = current_loop
             self._connection.row_factory = aiosqlite.Row
             await self._connection.execute(f"PRAGMA journal_mode={self.journal_mode};")
             await self._connection.execute(f"PRAGMA synchronous={self.synchronous};")
@@ -250,12 +289,17 @@ class SQLiteDB(Database):
             )
 
     async def close(self) -> None:
-        """Close the underlying SQLite connection."""
+        """Close the underlying SQLite connection.
+
+        Clears the owning-loop binding so the instance can be reused on
+        a fresh event loop (audit §5.10).
+        """
         if self._connection is not None:
             await self._connection.close()
             self._connection = None
             self._initialized = False
             self._created_indexes.clear()
+            self._owning_loop = None
 
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Save a record to the database.

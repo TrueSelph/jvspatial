@@ -17,8 +17,7 @@ Different adapters offer different transaction guarantees:
   commit. Intended for testing, scripting, and local-dev workflows
   where the trade-off is acceptable.
 * **None.** Calling ``JsonDBTransaction()`` (without ``best_effort=True``)
-  or any operation on ``JSONTransaction`` raises
-  :class:`NotImplementedError`. Callers can detect this via the
+  raises :class:`NotImplementedError`. Callers can detect this via the
   ``Database.supports_transactions`` capability flag and fall back to
   non-transactional writes.
 """
@@ -240,9 +239,11 @@ class JsonDBTransaction(Transaction):
         if best_effort:
             # Emit a once-per-process ExperimentalWarning so adopters know
             # this surface may change. See docs/md/stability.md.
-            from jvspatial.utils.stability import _emit_once
+            # Uses the public ``emit_experimental_once`` hook rather than
+            # the underscore-prefixed implementation (audit §7.7).
+            from jvspatial.utils.stability import emit_experimental_once
 
-            _emit_once(
+            emit_experimental_once(
                 "JsonDBTransaction(best_effort=True)",
                 "Buffered-commit semantics are weaker than ACID and the "
                 "interface may evolve; track docs/md/stability.md.",
@@ -360,59 +361,6 @@ class JsonDBTransaction(Transaction):
         self.is_rolled_back = True
 
 
-class JSONTransaction(Transaction):
-    """JSON database transaction implementation (no-op for file-based storage)."""
-
-    def __init__(self, transaction_id: str):
-        """Initialize JSON transaction.
-
-        Args:
-            transaction_id: Unique identifier for this transaction
-        """
-        super().__init__(transaction_id)
-        self.is_active = True
-        # JSON database doesn't support true transactions, so we simulate them
-
-    async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Save a record within this JSON transaction (simulated)."""
-        # For JSON database, we just track operations but don't implement true transactions
-        raise NotImplementedError("JSON transaction save not implemented")
-
-    async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
-        """Retrieve a record by ID within this JSON transaction (simulated)."""
-        # For JSON database, we just track operations but don't implement true transactions
-        raise NotImplementedError("JSON transaction get not implemented")
-
-    async def delete(self, collection: str, id: str) -> bool:
-        """Delete a record within this JSON transaction (simulated)."""
-        # For JSON database, we just track operations but don't implement true transactions
-        raise NotImplementedError("JSON transaction delete not implemented")
-
-    async def find(
-        self,
-        collection: str,
-        query: Dict[str, Any],
-        *,
-        limit: Optional[int] = None,
-        sort: Optional[List[Tuple[str, int]]] = None,
-    ) -> List[Dict[str, Any]]:
-        """Find records matching query within this JSON transaction (simulated)."""
-        # For JSON database, we just track operations but don't implement true transactions
-        raise NotImplementedError("JSON transaction find not implemented")
-
-    async def commit(self) -> None:
-        """Commit this JSON transaction (simulated)."""
-        if self.is_active and not self.is_committed and not self.is_rolled_back:
-            self.is_active = False
-            self.is_committed = True
-
-    async def rollback(self) -> None:
-        """Rollback this JSON transaction (simulated)."""
-        if self.is_active and not self.is_committed and not self.is_rolled_back:
-            self.is_active = False
-            self.is_rolled_back = True
-
-
 @asynccontextmanager
 async def transaction_context(database, transaction_id: Optional[str] = None):
     """Context manager for database transactions.
@@ -449,6 +397,5 @@ __all__ = [
     "Transaction",
     "MongoDBTransaction",
     "JsonDBTransaction",
-    "JSONTransaction",
     "transaction_context",
 ]

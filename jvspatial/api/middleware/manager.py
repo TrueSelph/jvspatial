@@ -8,7 +8,7 @@ rate limit -> auth. See server._configure_auth_middleware().
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Dict, List
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,16 +47,23 @@ _DOCS_CSP = (
     "object-src 'none'"
 )
 
-# Documentation-page path prefixes. Both `/docs` and `/redoc` may carry
-# trailing path segments (Swagger's oauth2-redirect, ReDoc assets); match
-# exact path or `<prefix>/...`. `/openapi.json` is the JSON spec consumed
-# by both UIs — it's CSP-irrelevant on its own but we group it for symmetry.
-_DOCS_PATH_PREFIXES = ("/docs", "/redoc", "/openapi.json")
+# Default documentation-page path prefixes. Both ``/docs`` and ``/redoc``
+# may carry trailing path segments (Swagger's oauth2-redirect, ReDoc
+# assets); match exact path or ``<prefix>/...``. ``/openapi.json`` is
+# the JSON spec consumed by both UIs.
+#
+# These are FastAPI's *defaults*. When ``ServerConfig`` overrides
+# ``docs_url`` / ``redoc_url`` / ``openapi_url``, the middleware reads
+# the custom prefixes from the server config at construction time
+# (audit §7.13).
+_DEFAULT_DOCS_PATH_PREFIXES = ("/docs", "/redoc", "/openapi.json")
 
 
-def _is_docs_path(path: str) -> bool:
+def _is_docs_path(
+    path: str, prefixes: Tuple[str, ...] = _DEFAULT_DOCS_PATH_PREFIXES
+) -> bool:
     """True for FastAPI Swagger / ReDoc / OpenAPI surfaces."""
-    return any(path == p or path.startswith(p + "/") for p in _DOCS_PATH_PREFIXES)
+    return any(path == p or path.startswith(p + "/") for p in prefixes)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -79,9 +86,23 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     (off by default in development, on in production).
     """
 
-    def __init__(self, app, hsts_enabled: bool = False):
+    def __init__(
+        self,
+        app,
+        hsts_enabled: bool = False,
+        docs_path_prefixes: Optional[Tuple[str, ...]] = None,
+    ):
         super().__init__(app)
         self._hsts_enabled = hsts_enabled
+        # Derived from ``ServerConfig`` (``docs_url`` / ``redoc_url`` /
+        # ``openapi_url``) at install time so customizing the docs URL
+        # does not silently break Swagger UI with strict CSP
+        # (audit §7.13).
+        self._docs_path_prefixes: Tuple[str, ...] = (
+            docs_path_prefixes
+            if docs_path_prefixes is not None
+            else _DEFAULT_DOCS_PATH_PREFIXES
+        )
 
     async def dispatch(self, request, call_next):
         """Process request and add security headers to response."""
@@ -89,7 +110,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Content-Security-Policy"] = (
-            _DOCS_CSP if _is_docs_path(request.url.path) else _DEFAULT_CSP
+            _DOCS_CSP
+            if _is_docs_path(request.url.path, self._docs_path_prefixes)
+            else _DEFAULT_CSP
         )
         if self._hsts_enabled:
             response.headers["Strict-Transport-Security"] = (
@@ -173,7 +196,25 @@ class MiddlewareManager:
             return
 
         hsts_enabled = getattr(self.server.config.security, "hsts_enabled", False)
-        app.add_middleware(SecurityHeadersMiddleware, hsts_enabled=hsts_enabled)
+        # Derive docs-path prefixes from ServerConfig so customized
+        # ``docs_url`` / ``redoc_url`` / ``openapi_url`` keep Swagger UI
+        # rendering under the relaxed CSP (audit §7.13).
+        cfg = self.server.config
+        configured_prefixes = tuple(
+            p
+            for p in (
+                getattr(cfg, "docs_url", None),
+                getattr(cfg, "redoc_url", None),
+                getattr(cfg, "openapi_url", None),
+            )
+            if p
+        )
+        docs_path_prefixes = configured_prefixes or _DEFAULT_DOCS_PATH_PREFIXES
+        app.add_middleware(
+            SecurityHeadersMiddleware,
+            hsts_enabled=hsts_enabled,
+            docs_path_prefixes=docs_path_prefixes,
+        )
         self._logger.debug(f"{LogIcons.SUCCESS} Security headers middleware configured")
 
     def _configure_cors(self, app: FastAPI) -> None:
