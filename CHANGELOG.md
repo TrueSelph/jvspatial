@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/core/test_entity_name_walker_and_save.py`, `tests/core/test_walker_protection_audit_fixes.py`, `tests/storage/test_versioning_path_sanitizer_audit.py`, `tests/api/test_webhook_hmac_audit_fix.py` — 28 new regression cases pinning Wave 1 audit fixes.
 - Public `invalidate_api_key_cache(api_key)` and `invalidate_api_key_cache_hash(cache_key)` helpers in `jvspatial.api.integrations.webhooks.webhook_auth`. `APIKeyService.revoke_key` now invokes the latter so revocations are effective immediately rather than after the 5-minute TTL. (Audit §4.5.)
 - `tests/db/test_default_compound_ops_id_normalization.py`, `tests/core/test_pager_audit_fixes.py` — 11 new regression cases pinning Wave 2 audit fixes.
+- `jvspatial.db.database.BulkSaveResult` dataclass and `Database.bulk_save_detailed()` method. Reports `attempted` / `saved` / `failed_ids` per call so partial-success backends (JsonDB, DynamoDB) can no longer silently drop records. `bulk_save` is preserved as a thin int-returning wrapper for back-compat. (Audit §5.6-§5.7.)
+- `MongoDB.is_transactional()` async probe. Uses the `hello` admin command to detect replica-set / sharded topology and caches the result. Use this instead of the static `supports_transactions` flag when the caller intends to actually open a transaction. (Audit §5.9.)
+- `CORSConfig.cors_allow_wildcard` opt-out. When `cors_origins` contains a wildcard and this is `False` (default), a startup WARNING is emitted. SPEC §15.4 promised this; the audit found it missing. (Audit §4.12.)
+- `JVSPATIAL_STRICT_ENV_ALLOWLIST` env var. Truthy values turn unknown-`JVSPATIAL_*` key detection from a per-key WARNING into a startup `ValueError` so typos fail-fast. (Audit §7.1 / SPEC §10.2.)
+- `ALLOWED_ENV_KEYS` frozenset and `enforce_env_allowlist()` / `discover_unknown_jvspatial_env_keys()` helpers in `jvspatial.env_adapter`. Called from `validate_server_config_requirements()` at server startup.
+- New top-level / field-level `QueryEngine` operators: `$nor` (top-level logical), `$mod`, `$all`, `$type`, `$not` (field-level). Previously advertised by `QueryBuilder` but silently returned no matches. (Audit §5.2.)
+- `tests/api/test_env_allowlist_audit.py`, `tests/api/test_cors_wildcard_and_error_detail_audit.py`, `tests/db/test_query_operator_parity_audit.py`, `tests/db/test_bulk_save_detailed_audit.py` — 22 new regression cases pinning Wave 3 audit fixes.
 
 ### Fixed
 
@@ -42,6 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `_API_KEY_CACHE` (webhook layer) now holds a lock around reads, eviction, and miss-population. Removes a `KeyError` window when a size-cap cleanup races a reader. (Audit §4.7.)
 - `APIKeyService(context=None)` now defaults to the **prime** database instead of `get_default_context()`. Auth state is required to live on the prime DB (SPEC §9 / CLAUDE.md §1). (Audit §4.4.)
 - `APIKeyService.revoke_key` now invokes the new webhook cache-invalidation hook so a revoked key stops authenticating immediately rather than after the 5-minute TTL. (Audit §4.5.)
+- `JVSPATIAL_EXPOSE_ERROR_DETAILS=true` is now ignored when the runtime is signalled as production (`JVSPATIAL_ENVIRONMENT` or `ENVIRONMENT` set to `prod`/`production`). Emits a once-per-process WARNING explaining the suppression. Generic 500 message is returned. (Audit §4.10 / SPEC §15.5.)
+- `MongoDB.begin_transaction` now short-circuits to `None` on standalone deployments instead of attempting `start_session` / `start_transaction` every call. Topology is probed once via `is_transactional()` and cached. (Audit §5.9 / SPEC §4.2.)
+- `QueryEngine.match` and `QueryEngine._match_value` now raise `QueryError` on unsupported operators rather than silently returning False. Optimizer markers (`$hint`, `$select`) injected into queries are skipped explicitly instead of treated as unknown operators. (Audit §5.2 / SPEC §5.1.)
+- Bool parsing consolidated across `jvspatial.env`, `jvspatial.env_adapter`, `jvspatial.runtime.serverless`, and `jvspatial.api.components.app_builder`. All three of the latter delegate to `env.parse_bool`. `JVSPATIAL_DEBUG=on` and `SERVERLESS_MODE=on` now agree on truthiness. (Audit §7.2-§7.3.)
+- Unknown `JVSPATIAL_*` env keys now warn at startup (or raise in strict mode). Closes a SPEC §10.2 gap that allowed typos to silently no-op. (Audit §7.1.)
 
 ## [0.0.7] - 2026-05-08
 
