@@ -281,8 +281,9 @@ class TestObjectPagerNavigation:
             assert pager.has_next_page()
             assert len(page1) == 2
 
-            # Clear cache to ensure next call hits the database
-            pager._cache.clear()
+            # Audit §8.2: pager no longer has an in-memory ``_cache`` —
+            # every ``get_page`` hits the database. No explicit clear
+            # needed.
 
             # Get next page
             page2 = await pager.next_page()
@@ -340,11 +341,17 @@ class TestObjectPagerNavigation:
 
 
 class TestObjectPagerCaching:
-    """Test ObjectPager caching behavior."""
+    """Pager no longer caches results (audit §8.2)."""
 
     @pytest.mark.asyncio
-    async def test_page_caching(self, mock_context, sample_data):
-        """Test that pages are cached properly."""
+    async def test_get_page_does_not_cache(self, mock_context, sample_data):
+        """Every ``get_page`` call must hit the database.
+
+        The previous in-memory ``_cache`` was never invalidated on writes,
+        so callers got stale rows after any save/delete on the underlying
+        collection. The cache has been removed; ``is_cached`` is always
+        False.
+        """
         with patch(
             "jvspatial.core.context.get_default_context", return_value=mock_context
         ):
@@ -357,16 +364,17 @@ class TestObjectPagerCaching:
             mock_context._deserialize_entity.side_effect = mock_deserialize
 
             pager = ObjectPager(PaginationTestObject, page_size=2)
+            assert not hasattr(pager, "_cache")
 
-            # First call should hit the database
             results1 = await pager.get_page(1)
             assert not pager.is_cached
-            assert mock_context.database.find.call_count == 1
+            first_call_count = mock_context.database.find.call_count
+            assert first_call_count >= 1
 
-            # Second call to same page should use cache
+            # Second call to same page MUST re-fetch.
             results2 = await pager.get_page(1)
-            assert pager.is_cached
-            assert mock_context.database.find.call_count == 1  # No additional calls
+            assert not pager.is_cached
+            assert mock_context.database.find.call_count > first_call_count
 
             assert len(results1) == len(results2)
 

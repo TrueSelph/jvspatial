@@ -4,6 +4,7 @@ This module provides enhanced authentication capabilities including
 rate limiting, brute force protection, and session management.
 """
 
+import asyncio
 import hashlib
 import logging
 import time
@@ -244,6 +245,11 @@ class SessionManager:
         self._sessions: Dict[str, Dict[str, Any]] = {}
         self._user_sessions: Dict[str, Set[str]] = {}
         self._logger = logging.getLogger(__name__)
+        # Single lock guards both ``_sessions`` and ``_user_sessions`` so
+        # concurrent create/invalidate/cleanup cannot raise
+        # ``RuntimeError: dictionary changed size during iteration`` and
+        # ``max_sessions_per_user`` enforcement is not racy (audit §4.8).
+        self._lock = asyncio.Lock()
 
     async def create_session(self, user_id: str, user_data: Dict[str, Any]) -> str:
         """Create a new session for a user.
@@ -260,22 +266,33 @@ class SessionManager:
         session_id = str(uuid.uuid4())
         now = time.time()
 
-        # Clean up old sessions for this user
-        await self._cleanup_user_sessions(user_id)
+        async with self._lock:
+            # Inline expired-session sweep under the lock so the cap
+            # check below sees a coherent set.
+            self._sweep_user_sessions_locked(user_id, now)
 
-        # Create new session
-        self._sessions[session_id] = {
-            "user_id": user_id,
-            "created_at": now,
-            "last_accessed": now,
-            "user_data": user_data,
-            "is_active": True,
-        }
+            # Enforce per-user cap.
+            existing = self._user_sessions.get(user_id, set())
+            while len(existing) >= self.max_sessions_per_user:
+                # Drop the oldest by last_accessed.
+                oldest = min(
+                    (s for s in existing if s in self._sessions),
+                    key=lambda s: self._sessions[s].get("last_accessed", 0),
+                    default=None,
+                )
+                if oldest is None:
+                    break
+                self._invalidate_session_locked(oldest)
+                existing = self._user_sessions.get(user_id, set())
 
-        # Track user sessions
-        if user_id not in self._user_sessions:
-            self._user_sessions[user_id] = set()
-        self._user_sessions[user_id].add(session_id)
+            self._sessions[session_id] = {
+                "user_id": user_id,
+                "created_at": now,
+                "last_accessed": now,
+                "user_data": user_data,
+                "is_active": True,
+            }
+            self._user_sessions.setdefault(user_id, set()).add(session_id)
 
         self._logger.info(f"Created session {session_id} for user {user_id}")
         return session_id
@@ -289,21 +306,22 @@ class SessionManager:
         Returns:
             User data if session is valid, None otherwise
         """
-        if session_id not in self._sessions:
-            return None
+        async with self._lock:
+            if session_id not in self._sessions:
+                return None
 
-        session = self._sessions[session_id]
-        now = time.time()
+            session = self._sessions[session_id]
+            now = time.time()
 
-        # Check if session is expired
-        if now - session["last_accessed"] > self.session_timeout:
-            await self.invalidate_session(session_id)
-            return None
+            # Check if session is expired
+            if now - session["last_accessed"] > self.session_timeout:
+                self._invalidate_session_locked(session_id)
+                return None
 
-        # Update last accessed time
-        session["last_accessed"] = now
+            # Update last accessed time
+            session["last_accessed"] = now
 
-        return session["user_data"]
+            return session["user_data"]
 
     async def invalidate_session(self, session_id: str) -> bool:
         """Invalidate a session.
@@ -314,6 +332,11 @@ class SessionManager:
         Returns:
             True if session was invalidated, False otherwise
         """
+        async with self._lock:
+            return self._invalidate_session_locked(session_id)
+
+    def _invalidate_session_locked(self, session_id: str) -> bool:
+        """Remove ``session_id`` from internal maps. Caller holds ``_lock``."""
         if session_id not in self._sessions:
             return False
 
@@ -341,38 +364,31 @@ class SessionManager:
         Returns:
             Number of sessions invalidated
         """
-        if user_id not in self._user_sessions:
-            return 0
+        async with self._lock:
+            session_ids = list(self._user_sessions.get(user_id, set()))
+            count = 0
+            for session_id in session_ids:
+                if self._invalidate_session_locked(session_id):
+                    count += 1
+            return count
 
-        session_ids = list(self._user_sessions[user_id])
-        invalidated_count = 0
-
-        for session_id in session_ids:
-            if await self.invalidate_session(session_id):
-                invalidated_count += 1
-
-        return invalidated_count
-
-    async def _cleanup_user_sessions(self, user_id: str) -> None:
-        """Clean up old sessions for a user.
-
-        Args:
-            user_id: User ID to clean up sessions for
-        """
+    def _sweep_user_sessions_locked(self, user_id: str, now: float) -> None:
+        """Drop expired sessions for ``user_id``. Caller holds ``_lock``."""
         if user_id not in self._user_sessions:
             return
 
-        now = time.time()
-        sessions_to_remove = []
+        # Iterate a snapshot — _invalidate_session_locked mutates the set.
+        for session_id in list(self._user_sessions[user_id]):
+            session = self._sessions.get(session_id)
+            if session is None:
+                continue
+            if now - session["last_accessed"] > self.session_timeout:
+                self._invalidate_session_locked(session_id)
 
-        for session_id in self._user_sessions[user_id]:
-            if session_id in self._sessions:
-                session = self._sessions[session_id]
-                if now - session["last_accessed"] > self.session_timeout:
-                    sessions_to_remove.append(session_id)
-
-        for session_id in sessions_to_remove:
-            await self.invalidate_session(session_id)
+    async def _cleanup_user_sessions(self, user_id: str) -> None:
+        """Clean up old sessions for a user (acquires the lock)."""
+        async with self._lock:
+            self._sweep_user_sessions_locked(user_id, time.time())
 
     async def cleanup_expired_sessions(self) -> int:
         """Clean up all expired sessions.
@@ -380,17 +396,17 @@ class SessionManager:
         Returns:
             Number of sessions cleaned up
         """
-        now = time.time()
-        expired_sessions = []
-
-        for session_id, session in self._sessions.items():
-            if now - session["last_accessed"] > self.session_timeout:
-                expired_sessions.append(session_id)
-
-        for session_id in expired_sessions:
-            await self.invalidate_session(session_id)
-
-        return len(expired_sessions)
+        async with self._lock:
+            now = time.time()
+            # Snapshot keys so the locked invalidate helper can mutate.
+            expired = [
+                sid
+                for sid, s in self._sessions.items()
+                if now - s["last_accessed"] > self.session_timeout
+            ]
+            for sid in expired:
+                self._invalidate_session_locked(sid)
+            return len(expired)
 
 
 class AuthenticationEnhancer:

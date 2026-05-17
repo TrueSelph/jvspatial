@@ -391,8 +391,15 @@ class Walker(AttributeMixin, BaseModel):
         # Register with global event bus
         # Note: We need to register asynchronously, so we'll do it in spawn()
 
-    def __init_subclass__(cls: Type["Walker"]) -> None:
-        """Handle subclass initialization."""
+    def __init_subclass__(cls: Type["Walker"], **kwargs: Any) -> None:
+        """Handle subclass initialization.
+
+        Forwards through ``super().__init_subclass__`` so
+        ``AttributeMixin.__init_subclass__`` runs and registers
+        ``protected`` / ``transient`` / ``private`` attribute metadata
+        for Walker subclasses (audit §6.3).
+        """
+        super().__init_subclass__(**kwargs)
         cls._visit_hooks = {}
 
         for _name, method in inspect.getmembers(cls, inspect.isfunction):

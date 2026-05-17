@@ -67,10 +67,11 @@ class ObjectPager:
         self.total_pages = 1
         self.has_previous = False
         self.has_next = False
+        # Result caching removed (audit §8.2). The previous ``_cache``
+        # was never invalidated on writes so callers got stale rows after
+        # any save/delete on the underlying collection. Backend-level
+        # caches (``create_database(cache_get_size=...)``) remain.
         self.is_cached = False
-
-        # Internal cache for results (includes filter hash in key)
-        self._cache: Dict[str, List[T]] = {}
 
     async def get_page(
         self,
@@ -117,16 +118,20 @@ class ObjectPager:
 
         # --- Keyset (cursor) pagination ---
         if after_id is not None:
+            # Cursor semantics only hold when the sort key matches the
+            # cursor field. ``after_id`` filters by ``id > after_id`` so
+            # sorting by anything else would skip rows / return duplicates
+            # on writes between pages. Reject the combo loudly rather
+            # than silently return broken pages (audit §8.1).
+            if self.order_by:
+                raise ValueError(
+                    "ObjectPager: ``after_id`` (keyset pagination) cannot be "
+                    "combined with ``order_by``; the cursor only tracks id. "
+                    "Use offset pagination if you need a custom sort key."
+                )
             keyset_filter = dict(db_filter)
             keyset_filter["id"] = {"$gt": after_id}
             sort: Optional[List[Any]] = [("id", 1)]
-            if self.order_by:
-                sort = [
-                    (
-                        f"context.{self.order_by}",
-                        1 if self.order_direction.lower() == "asc" else -1,
-                    )
-                ]
             raw_items = await db.find(
                 collection, keyset_filter, limit=self.page_size + 1, sort=sort
             )
@@ -138,17 +143,11 @@ class ObjectPager:
                 obj = await context._deserialize_entity(self.object_class, item_data)
                 if obj:
                     objects.append(obj)
-            cache_key = f"keyset_{after_id}_{hash(str(additional_filters))}"
-            self._cache[cache_key] = objects  # type: ignore[assignment]
             self.is_cached = False
             return objects
 
         # --- Page-number (offset) pagination ---
         self.current_page = max(1, page)
-        cache_key = f"{self.current_page}_{hash(str(additional_filters))}"
-        if cache_key in self._cache:
-            self.is_cached = True
-            return self._cache[cache_key]  # type: ignore[return-value]
         self.is_cached = False
 
         self.total_items = await db.count(collection, db_filter)
@@ -211,7 +210,6 @@ class ObjectPager:
             if obj:
                 page_objects.append(obj)
 
-        self._cache[cache_key] = page_objects  # type: ignore[assignment]
         return page_objects
 
     async def next_page(

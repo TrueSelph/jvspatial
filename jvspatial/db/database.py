@@ -20,6 +20,24 @@ def _find_sort_key(record: Dict[str, Any], field: str) -> Tuple[bool, Any]:
     return (value is None, value)
 
 
+def _normalize_id_query(query: Dict[str, Any]) -> Dict[str, Any]:
+    """Map ``_id`` → ``id`` when only ``_id`` is present.
+
+    The default ``find_one_and_update`` / ``find_one_and_delete`` impls
+    feed the query into ``QueryEngine.match`` against records stored by
+    non-Mongo backends (JsonDB / SQLite / DynamoDB) which only persist
+    ``id``. Callers that follow the Mongo-style convention of querying
+    by ``_id`` would otherwise silently miss every row on those backends
+    (audit §5.3). When both keys are present the caller's intent is
+    preserved verbatim.
+    """
+    if "_id" in query and "id" not in query:
+        normalized = {k: v for k, v in query.items() if k != "_id"}
+        normalized["id"] = query["_id"]
+        return normalized
+    return query
+
+
 def finalize_find_results(
     records: List[Dict[str, Any]],
     *,
@@ -268,7 +286,10 @@ class Database(ABC):
         Returns:
             Deleted document if found, ``None`` otherwise
         """
-        doc = await self.find_one(collection, query)
+        # Non-Mongo backends store records keyed by ``id`` only. Normalize
+        # the Mongo-style ``_id`` filter so default matching works
+        # uniformly (audit §5.3 / SPEC §4.1).
+        doc = await self.find_one(collection, _normalize_id_query(query))
         if doc is None:
             return None
         record_id = doc.get("_id", doc.get("id"))
@@ -301,7 +322,11 @@ class Database(ABC):
         Returns:
             Updated document, or ``None`` if no match and ``upsert`` is ``False``
         """
-        doc = await self.find_one(collection, query)
+        # Non-Mongo backends store records keyed by ``id`` only. Normalize
+        # the Mongo-style ``_id`` filter so default matching works
+        # uniformly (audit §5.3 / SPEC §4.1).
+        normalized = _normalize_id_query(query)
+        doc = await self.find_one(collection, normalized)
         is_new = doc is None
         if is_new:
             if not upsert:

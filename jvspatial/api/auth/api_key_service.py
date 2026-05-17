@@ -23,11 +23,15 @@ class APIKeyService:
 
         Args:
             context: GraphContext instance for database operations.
-                    If None, uses the default context.
+                    If None, defaults to the prime database — never the
+                    application default context. Auth state must live on
+                    the prime DB (SPEC §9 / CLAUDE.md §1; audit §4.4).
         """
-        from jvspatial.core.context import get_default_context
+        if context is None:
+            from jvspatial.db import get_prime_database
 
-        self.context = context or get_default_context()
+            context = GraphContext(database=get_prime_database())
+        self.context = context
         self._logger = logging.getLogger(__name__)
         self.key_prefix = "sk_"  # Default prefix, can be configured
         self.key_length = 32  # Length of random part after prefix
@@ -241,6 +245,17 @@ class APIKeyService:
         if not api_key._graph_context:
             api_key._graph_context = self.context
         await self.context.save(api_key)
+
+        # Drop the webhook-layer cache entry so revocation is effective
+        # immediately rather than after the 5-minute TTL (audit §4.5).
+        try:
+            from jvspatial.api.integrations.webhooks.webhook_auth import (
+                invalidate_api_key_cache_hash,
+            )
+
+            invalidate_api_key_cache_hash(api_key.key_hash)
+        except Exception:  # pragma: no cover — webhook module is optional
+            pass
 
         self._logger.info(f"Revoked API key {key_id} for user {user_id}")
         return True
