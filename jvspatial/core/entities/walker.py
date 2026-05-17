@@ -21,8 +21,6 @@ if TYPE_CHECKING:
     from .node import Node
     from .edge import Edge
 
-from jvspatial.exceptions import JVSpatialError
-
 from ..annotations import AttributeMixin, attribute
 from ..events import event_bus
 from ..utils import generate_id
@@ -320,10 +318,16 @@ class Walker(AttributeMixin, BaseModel):
     def __init__(self: "Walker", **kwargs: Any) -> None:
         """Initialize a walker with auto-generated ID if not provided."""
         entity_name = self.__class__._entity_name()
+        # Force ``type_code='w'`` so SPEC §1.1 ID-format invariant
+        # (``w.EntityName.<hex>``) cannot be corrupted by a caller
+        # passing a different value (audit §2.10).
+        if kwargs.get("type_code", "w") != "w":
+            raise ValueError(
+                f"Walker.type_code must be 'w'; got {kwargs.get('type_code')!r}"
+            )
+        kwargs["type_code"] = "w"
         if "id" not in kwargs:
-            # Use class-level type_code or default from Field
-            type_code = kwargs.get("type_code", "w")
-            kwargs["id"] = generate_id(type_code, entity_name)
+            kwargs["id"] = generate_id("w", entity_name)
         # Set entity to class entity_name if not provided (protected attribute).
         # Honors ``__entity_name__`` override so subclasses with the same
         # Python ``__name__`` as a sibling persist a distinct discriminator.
@@ -803,9 +807,11 @@ class Walker(AttributeMixin, BaseModel):
                 else:
                     hook(self, target)
             except Exception as e:
-                # Check if this is a skip exception
-                if "Node skipped" in str(e):
-                    # Skip this node and continue
+                # Use the dedicated exception class instead of a fragile
+                # substring match (audit §2.9 / SPEC §6.5).
+                from . import TraversalSkipped
+
+                if isinstance(e, TraversalSkipped):
                     walker_hook_skipped = True
                     return
                 else:
@@ -866,9 +872,9 @@ class Walker(AttributeMixin, BaseModel):
                 else:
                     bound_hook(self)
             except Exception as e:
-                # Check if this is a skip exception
-                if "Node skipped" in str(e):
-                    # Skip this node and continue
+                from . import TraversalSkipped
+
+                if isinstance(e, TraversalSkipped):
                     return
                 else:
                     # Report error as structured data
@@ -924,11 +930,14 @@ class Walker(AttributeMixin, BaseModel):
     async def skip(self) -> None:
         """Skip the current node and continue traversal.
 
-        This method allows the walker to skip processing the current node
-        and continue with the next node in the queue.
+        Raises ``TraversalSkipped`` so the caller can recognize the
+        skip via ``except TraversalSkipped`` rather than the historical
+        substring match on ``"Node skipped"`` (audit §2.9 / SPEC §6.5).
         """
-        # Raise an exception to stop current node processing
-        raise JVSpatialError("Node skipped")
+        # Late import to avoid circular dep at module load.
+        from . import TraversalSkipped
+
+        raise TraversalSkipped("Node skipped")
 
     def pause(self, message: str = "Traversal paused") -> None:
         """Pause the walker's traversal.

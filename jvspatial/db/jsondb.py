@@ -151,14 +151,17 @@ class JsonDB(Database):
 
     @staticmethod
     def _list_collection_json_files(collection_dir: Path) -> List[Path]:
-        """Enumerate persisted ``*.json`` records, skipping in-flight tmps.
+        """Enumerate persisted ``*.json`` records.
 
         Called from inside ``asyncio.to_thread`` by ``count`` and ``find``
         so the directory scan does not block the event loop.
+
+        Note: in-flight ``*.jvtmp`` files are named
+        ``<id>.json.<pid>.<hex>.jvtmp`` (see ``_atomic._make_temp_path``)
+        so the ``*.json`` glob already excludes them — the historical
+        ``not endswith('.jvtmp')`` filter was dead (audit §5.16).
         """
-        return [
-            p for p in collection_dir.glob("*.json") if not p.name.endswith(".jvtmp")
-        ]
+        return list(collection_dir.glob("*.json"))
 
     async def _async_write_json(self, path: Path, data: Dict[str, Any]) -> None:
         """Write JSON data to file asynchronously.

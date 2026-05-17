@@ -26,9 +26,23 @@ def _deferred_invoke_disabled() -> bool:
 
 
 def _deferred_invoke_secret_ok(request: Request) -> bool:
+    """Authorize the internal deferred-invoke endpoint.
+
+    Fail-closed when ``JVSPATIAL_DEFERRED_INVOKE_SECRET`` is unset or
+    empty: the previous "no secret = allow everything" semantics were
+    a footgun — a misconfigured deployment exposed the internal
+    endpoint to any caller (audit §4.16 / SPEC §15.2). Disable the
+    route entirely via ``JVSPATIAL_DEFERRED_INVOKE_DISABLED=true`` if
+    you do not need it.
+    """
     secret = env("JVSPATIAL_DEFERRED_INVOKE_SECRET") or ""
     if not secret:
-        return True
+        logger.warning(
+            "Deferred-invoke route rejected: "
+            "JVSPATIAL_DEFERRED_INVOKE_SECRET is unset. Either set a "
+            "secret or set JVSPATIAL_DEFERRED_INVOKE_DISABLED=true."
+        )
+        return False
     hdr = (request.headers.get("X-JVSPATIAL-Deferred-Authorize") or "").strip()
     auth = request.headers.get("Authorization") or ""
     bearer = ""

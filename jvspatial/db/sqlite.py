@@ -315,7 +315,13 @@ class SQLiteDB(Database):
             connection = await self._get_connection()
 
             record = data.copy()
-            record_id = record.setdefault("id", str(uuid.uuid4()))
+            # Coerce id to ``str`` so non-string ids (int, uuid.UUID)
+            # round-trip cleanly through SQLite's TEXT column. The
+            # legacy code only stringified the default uuid and bound
+            # the raw value; ``get(collection, id)`` then missed when
+            # callers passed an int-typed id (audit §5.20).
+            record_id = str(record.setdefault("id", str(uuid.uuid4())))
+            record["id"] = record_id
             payload = json.dumps(record)
 
             await connection.execute(
