@@ -45,10 +45,42 @@ def _is_request_type(param_annotation: Any) -> bool:
     return False
 
 
-def _find_request_parameter(func_sig: inspect.Signature) -> Tuple[bool, Optional[str]]:
-    """Find Request parameter in function signature."""
+def _resolve_type_hints(func: Callable) -> Dict[str, Any]:
+    """Best-effort ``typing.get_type_hints`` for ``func``.
+
+    Resolves PEP 563 / ``from __future__ import annotations`` string
+    forward refs to real types so ``_is_request_type`` sees a class
+    object instead of the literal string ``"Request"``. Falls back to
+    an empty dict when resolution fails (unresolvable forward ref,
+    missing import) — callers then degrade to the raw
+    ``param.annotation`` value.
+    """
+    from typing import get_type_hints
+
+    try:
+        return get_type_hints(func)
+    except Exception:
+        return {}
+
+
+def _find_request_parameter(
+    func_sig: inspect.Signature, func: Optional[Callable] = None
+) -> Tuple[bool, Optional[str]]:
+    """Find Request parameter in function signature.
+
+    When ``func`` is supplied, annotations are resolved via
+    ``typing.get_type_hints`` so callers using
+    ``from __future__ import annotations`` (PEP 563) — which yields
+    string-typed ``param.annotation`` values — are still recognized
+    correctly. Mirrors the resolution that
+    ``ParameterModelFactory._create_function_model`` already performs.
+    """
+    type_hints: Dict[str, Any] = _resolve_type_hints(func) if func is not None else {}
     for param_name, param in func_sig.parameters.items():
-        if _is_request_type(param.annotation):
+        # Prefer the resolved type-hint when available; fall back to
+        # the raw signature annotation otherwise.
+        annotation = type_hints.get(param_name, param.annotation)
+        if _is_request_type(annotation):
             return True, param_name
     return False, None
 
@@ -121,7 +153,7 @@ def wrap_function_auth_only(
     from fastapi import Request as FastAPIRequest
 
     func_sig = inspect.signature(func)
-    has_request, _ = _find_request_parameter(func_sig)
+    has_request, _ = _find_request_parameter(func_sig, func)
     auth_required = getattr(func, "_jvspatial_endpoint_config", {}).get(
         "auth_required", False
     )
@@ -203,7 +235,7 @@ def wrap_function_with_params(
             for p in (*AUTH_INJECTED_PARAMS, *AUTH_INJECTED_USER_PARAMS)
         )
         if needs_auth_injection:
-            has_request, _ = _find_request_parameter(func_sig)
+            has_request, _ = _find_request_parameter(func_sig, func)
             auth_required = getattr(func, "_jvspatial_endpoint_config", {}).get(
                 "auth_required", False
             )
@@ -372,7 +404,7 @@ def wrap_function_with_params(
                 body_data.pop(excluded_param, None)
 
             combined = {**kwargs, **body_data}
-            orig_has_request_param, _ = _find_request_parameter(func_sig)
+            orig_has_request_param, _ = _find_request_parameter(func_sig, func)
             if (
                 orig_has_request_param
                 and request_param_name
@@ -426,7 +458,7 @@ def wrap_function_with_params(
             p in func_sig.parameters
             for p in (*AUTH_INJECTED_PARAMS, *AUTH_INJECTED_USER_PARAMS)
         ):
-            has_request, _ = _find_request_parameter(func_sig)
+            has_request, _ = _find_request_parameter(func_sig, func)
             auth_required = getattr(func, "_jvspatial_endpoint_config", {}).get(
                 "auth_required", False
             )
@@ -557,7 +589,7 @@ def wrap_function_with_params(
             for excluded_param in EXCLUDED_BODY_PARAMS:
                 data.pop(excluded_param, None)
 
-            orig_has_request_param, _ = _find_request_parameter(func_sig)
+            orig_has_request_param, _ = _find_request_parameter(func_sig, func)
             if (
                 orig_has_request_param
                 and request_param_name
