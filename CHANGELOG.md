@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ALLOWED_ENV_KEYS` frozenset and `enforce_env_allowlist()` / `discover_unknown_jvspatial_env_keys()` helpers in `jvspatial.env_adapter`. Called from `validate_server_config_requirements()` at server startup.
 - New top-level / field-level `QueryEngine` operators: `$nor` (top-level logical), `$mod`, `$all`, `$type`, `$not` (field-level). Previously advertised by `QueryBuilder` but silently returned no matches. (Audit §5.2.)
 - `tests/api/test_env_allowlist_audit.py`, `tests/api/test_cors_wildcard_and_error_detail_audit.py`, `tests/db/test_query_operator_parity_audit.py`, `tests/db/test_bulk_save_detailed_audit.py` — 22 new regression cases pinning Wave 3 audit fixes.
+- `jvspatial.utils.stability.emit_experimental_once(name, message)` — public hook for opt-in surfaces that need to emit the experimental warning without going through the `@experimental` decorator (replaces private `_emit_once` calls). (Audit §7.7.)
+- `tests/db/test_sqlite_cross_loop_audit.py`, `tests/utils/test_wave4_polish_audit.py` — 10 new regression cases pinning Wave 4 audit fixes.
 
 ### Fixed
 
@@ -54,6 +56,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `QueryEngine.match` and `QueryEngine._match_value` now raise `QueryError` on unsupported operators rather than silently returning False. Optimizer markers (`$hint`, `$select`) injected into queries are skipped explicitly instead of treated as unknown operators. (Audit §5.2 / SPEC §5.1.)
 - Bool parsing consolidated across `jvspatial.env`, `jvspatial.env_adapter`, `jvspatial.runtime.serverless`, and `jvspatial.api.components.app_builder`. All three of the latter delegate to `env.parse_bool`. `JVSPATIAL_DEBUG=on` and `SERVERLESS_MODE=on` now agree on truthiness. (Audit §7.2-§7.3.)
 - Unknown `JVSPATIAL_*` env keys now warn at startup (or raise in strict mode). Closes a SPEC §10.2 gap that allowed typos to silently no-op. (Audit §7.1.)
+- `SQLiteDB` instances now silently rebind their `aiosqlite` connection when reused across event loops for file-backed paths. The previous opaque "Future attached to a different loop" error from inside `aiosqlite` is replaced with transparent recovery. `:memory:` databases keep the existing connection (rebinding would silently truncate the dataset). (Audit §5.10 / SPEC §4.3.)
+- Security headers middleware derives the CSP-relaxation prefixes from `ServerConfig.docs_url` / `redoc_url` / `openapi_url` at install time. Callers customizing the docs URL (e.g. `docs_url=/api/docs`) keep Swagger UI rendering under the relaxed CSP. (Audit §7.13.)
+- JWT debug log no longer includes the secret length (narrowing a brute-force search space). Logs `secret_configured=bool(...)` instead. (Audit §4.11 / SPEC §15.5.)
+- `validate_token` warning logs `db_type=` instead of `db_path=` so the on-disk filesystem layout does not leak to log sinks. (Audit §4.13 / SPEC §15.5.)
+- `LoggingNoopTaskScheduler.schedule` downgraded from per-call WARNING to DEBUG so misconfigured serverless deployments do not flood CloudWatch — the once-per-process startup error from `serverless.factory._note_noop_in_serverless` is sufficient. (Audit §7.14.)
+
+### Deprecated
+
+- `jvspatial.core.utils.generate_id_async` — deprecated alias for `generate_id`. ID generation is pure computation (SPEC §3.2); the async signature was a vestige. Scheduled for removal in 0.1.0. (Audit §3.11.)
+
+### Removed
+
+- `jvspatial.db.transaction.JSONTransaction` — unused dead code superseded by `JsonDBTransaction`. (Audit §5.14.)
 
 ## [0.0.7] - 2026-05-08
 
