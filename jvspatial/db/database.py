@@ -6,10 +6,33 @@ unnecessary complexity while maintaining core functionality.
 
 import logging
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from jvspatial.db.query import QueryEngine
+
+
+@dataclass(frozen=True)
+class BulkSaveResult:
+    """Structured outcome of a :meth:`Database.bulk_save_detailed` call.
+
+    Adapters with partial-success semantics (JsonDB, DynamoDB, MongoDB
+    ``ordered=False``) report the per-record breakdown so callers can
+    distinguish "all saved" from "some lost" — previously every adapter
+    returned the same ``int`` and silent drops were indistinguishable
+    from success (audit §5.7 / §5.13).
+    """
+
+    attempted: int
+    saved: int
+    failed_ids: List[str] = field(default_factory=list)
+
+    @property
+    def all_saved(self) -> bool:
+        """Return True when every attempted record persisted."""
+        return self.saved == self.attempted and not self.failed_ids
+
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +76,9 @@ def finalize_find_results(
     out = records
     if sort:
         out = list(records)
-        for field, direction in reversed(sort):
+        for sort_field, direction in reversed(sort):
             out.sort(
-                key=partial(_find_sort_key, field=field),
+                key=partial(_find_sort_key, field=sort_field),
                 reverse=(direction == -1),
             )
     if limit is not None:
@@ -238,34 +261,68 @@ class Database(ABC):
         Returns:
             Number of records successfully saved.
 
+        For partial-success visibility (which IDs failed) use
+        :meth:`bulk_save_detailed`. Adapters with all-or-nothing
+        semantics (SQLite) raise rather than return a partial count.
+        """
+        result = await self.bulk_save_detailed(collection, records)
+        return result.saved
+
+    async def bulk_save_detailed(
+        self, collection: str, records: List[Dict[str, Any]]
+    ) -> BulkSaveResult:
+        """Save many records, returning a structured per-record outcome.
+
+        Args:
+            collection: Collection name.
+            records: Iterable of record dicts. Each must have an ``id``
+                field. Records without ``id`` raise ``ValueError`` (the
+                check is per-batch, before any save attempt).
+
+        Returns:
+            :class:`BulkSaveResult` with ``attempted`` / ``saved`` /
+            ``failed_ids``.
+
         Atomicity (per backend):
-            * MongoDB: ``bulk_write`` with ``ordered=False`` -- partial
+            * MongoDB: ``bulk_write`` with ``ordered=False`` — partial
               successes are reported; failures don't block other writes.
             * SQLite: single transaction with ``executemany``; **all
               records or none** land. A constraint violation rolls back
-              the whole batch.
+              the whole batch and raises (``failed_ids`` is unset).
             * DynamoDB: ``BatchWriteItem`` with unprocessed-item retry;
-              partial successes possible.
-            * JsonDB: parallel atomic per-file writes; partial successes
-              possible.
+              unprocessed items after retries land in ``failed_ids``.
+            * JsonDB: parallel atomic per-file writes; per-record
+              exceptions land in ``failed_ids``.
 
             The default implementation in this base class is a serial
-            loop of ``save()`` calls (partial success on failure), which
-            is correct but slow -- adapters should override.
+            loop of ``save()`` calls catching per-record exceptions.
+            Adapters should override for round-trip efficiency.
         """
         if not records:
-            return 0
-        for r in records:
+            return BulkSaveResult(attempted=0, saved=0, failed_ids=[])
+        for idx, r in enumerate(records):
             if "id" not in r:
-                raise ValueError(
-                    "bulk_save requires every record to have an 'id' field"
-                )
-        # Sequential save() calls; on any failure the exception
-        # propagates and the caller sees no return value, so reaching
-        # the ``return`` always means every record persisted.
+                # Caller error — surface the offending index for fast
+                # debugging (audit §5.15).
+                raise ValueError(f"bulk_save: record at index {idx} has no 'id' field")
+
+        saved = 0
+        failed_ids: List[str] = []
         for r in records:
-            await self.save(collection, dict(r))
-        return len(records)
+            try:
+                await self.save(collection, dict(r))
+                saved += 1
+            except Exception as e:  # pragma: no cover — defensive
+                logger.warning(
+                    "%s.bulk_save: record id=%r failed: %s",
+                    type(self).__name__,
+                    r.get("id"),
+                    e,
+                )
+                failed_ids.append(str(r.get("id", "")))
+        return BulkSaveResult(
+            attempted=len(records), saved=saved, failed_ids=failed_ids
+        )
 
     async def find_one_and_delete(
         self, collection: str, query: Dict[str, Any]

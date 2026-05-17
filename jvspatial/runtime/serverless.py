@@ -8,7 +8,24 @@ ServerlessProvider = Literal["aws", "azure", "gcp", "vercel", "unknown"]
 
 
 def _parse_bool(val: str) -> bool:
-    return str(val).strip().lower() in ("true", "1", "yes", "enabled")
+    """Truthy ``SERVERLESS_MODE`` env override.
+
+    Delegates to :func:`jvspatial.env.parse_bool` for the canonical set
+    (``true/false``, ``1/0``, ``yes/no``, ``on/off``) plus the historical
+    ``enabled`` alias kept for backward compatibility (audit §7.2).
+    """
+    # Late import to avoid circular dependency at module load.
+    from jvspatial.env import parse_bool
+
+    s = str(val).strip().lower()
+    if s == "enabled":
+        return True
+    if s == "disabled":
+        return False
+    try:
+        return parse_bool(s)
+    except ValueError:
+        return False
 
 
 @lru_cache(maxsize=1)

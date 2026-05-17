@@ -62,8 +62,12 @@ class MongoDB(Database):
     """Simplified MongoDB-based database implementation."""
 
     # Advertised capability. The adapter implements the transactional API;
-    # the deployment must be a replica set (even single-node) for the
-    # actual ``begin_transaction()`` call to succeed at runtime.
+    # actual transactional semantics also require a replica-set (or
+    # ``sharded`` 4.2+) deployment. The class attribute stays ``True``
+    # so callers branching on the static flag (the documented form) still
+    # see "MongoDB supports transactions". Use :meth:`is_transactional`
+    # for a runtime probe that honors the deployment topology
+    # (audit §5.9 / SPEC §4.2).
     supports_transactions: bool = True
 
     def __init__(
@@ -100,6 +104,10 @@ class MongoDB(Database):
         self._created_indexes: Dict[str, Set[str]] = (
             {}
         )  # collection -> set of index names
+        # Memoized result of the transactional-topology probe — ``None``
+        # until first checked, ``True`` if the deployment supports
+        # transactions, ``False`` otherwise. See :meth:`is_transactional`.
+        self._transactional_probe: Optional[bool] = None
 
     async def _ensure_connected(self) -> None:
         """Ensure database connection is established.
@@ -696,6 +704,41 @@ class MongoDB(Database):
         except PyMongoError as e:
             raise DatabaseError(f"MongoDB index creation error: {e}") from e
 
+    async def is_transactional(self) -> bool:
+        """Return True only when the deployment supports MongoDB transactions.
+
+        Probes the cluster topology on first call (``hello`` admin command)
+        and caches the result on the instance. Standalone deployments and
+        DocumentDB instances without transaction support return ``False``;
+        replica sets (single- or multi-node) and sharded clusters at
+        version 4.2+ return ``True``.
+
+        Use this instead of branching on the static
+        :attr:`supports_transactions` class attribute when the caller
+        intends to actually open a transaction (audit §5.9 / SPEC §4.2).
+        """
+        if self._transactional_probe is not None:
+            return self._transactional_probe
+        await self._ensure_connected()
+        if self._client is None:
+            self._transactional_probe = False
+            return False
+        try:
+            info = await self._client.admin.command("hello")
+            # Replica sets expose ``setName``; sharded clusters expose
+            # ``msg: "isdbgrid"``. Standalone deployments have neither.
+            is_replica_set = bool(info.get("setName"))
+            is_mongos = info.get("msg") == "isdbgrid"
+            self._transactional_probe = is_replica_set or is_mongos
+        except Exception:
+            logger.debug(
+                "MongoDB transaction-support probe failed; treating as "
+                "non-transactional",
+                exc_info=True,
+            )
+            self._transactional_probe = False
+        return self._transactional_probe
+
     async def begin_transaction(self):
         """Start a MongoDB transaction (requires replica set).
 
@@ -710,6 +753,11 @@ class MongoDB(Database):
         await self._ensure_connected()
         if self._client is None or self._db is None:
             return None
+        # Refuse to attempt a transaction on a topology that does not
+        # support it — saves an exception round-trip on every call after
+        # the first (audit §5.9).
+        if not await self.is_transactional():
+            return None
         try:
             import uuid
 
@@ -718,6 +766,8 @@ class MongoDB(Database):
             return MongoDBTransaction(str(uuid.uuid4()), session, self._db)
         except Exception:
             logger.debug("Transactions not available on this deployment", exc_info=True)
+            # Cache the negative probe so subsequent calls short-circuit.
+            self._transactional_probe = False
             return None
 
     async def commit_transaction(self, txn) -> None:

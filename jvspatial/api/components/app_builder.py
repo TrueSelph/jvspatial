@@ -5,7 +5,6 @@ of FastAPI application instances, following the single responsibility principle.
 """
 
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -55,14 +54,14 @@ class AppBuilder:
         Swagger UI HTML is emitted. Use this in production when the API
         surface should not be self-documenting.
         """
-        docs_disabled = (
-            os.getenv("JVSPATIAL_DOCS_DISABLED") or ""
-        ).strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
+        # Use the canonical boolean parser instead of an ad-hoc inline
+        # set so behavior matches the rest of the codebase
+        # (audit §7.2 / §7.12).
+        from jvspatial.env import env, parse_bool
+
+        docs_disabled = bool(
+            env("JVSPATIAL_DOCS_DISABLED", default=False, parse=parse_bool)
+        )
 
         app_kwargs: Dict[str, Any] = {
             "title": self.config.title,

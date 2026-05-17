@@ -10,11 +10,35 @@ import time
 from collections import OrderedDict
 from typing import Any, Callable, Dict, List, Optional, Union
 
+from jvspatial.exceptions import QueryError
+
 # Default upper bound for the per-instance ``optimize_query`` cache. The
 # previous implementation grew unboundedly which is fine for short-lived
 # processes but a slow leak in long-lived servers. 1024 entries holds
 # the working set of any realistic workload while bounding memory.
 DEFAULT_QUERY_CACHE_SIZE = 1024
+
+
+# Mapping from MongoDB ``$type`` operand strings to Python types used by
+# the in-memory matcher. BSON type codes are not carried through this
+# layer; Mongo callers using the native driver's ``$type`` get native
+# behavior. (Audit §5.2.)
+_TYPE_NAME_MAP = {
+    "string": str,
+    "str": str,
+    "int": int,
+    "long": int,
+    "double": float,
+    "float": float,
+    "bool": bool,
+    "boolean": bool,
+    "list": list,
+    "array": list,
+    "dict": dict,
+    "object": dict,
+    "null": type(None),
+    "none": type(None),
+}
 
 
 # Unified evaluation and builder in a single module
@@ -315,6 +339,13 @@ class QueryEngine:
         elif isinstance(current, dict):
             current.pop(last, None)
 
+    # Operators recognized at the top-level of a query document. Anything
+    # else is rejected to surface typos rather than silently match nothing
+    # (audit §5.2). Field-name keys are checked separately below.
+    _TOP_LEVEL_LOGICAL_OPERATORS = frozenset({"$and", "$or", "$nor", "$not"})
+    # Markers the query optimizer may inject; ignored by the matcher.
+    _IGNORED_TOP_LEVEL_MARKERS = frozenset({"$hint", "$select"})
+
     @staticmethod
     def match(document: Dict[str, Any], query: Optional[Dict[str, Any]]) -> bool:
         """Check if a document matches a query.
@@ -335,9 +366,31 @@ class QueryEngine:
             elif key == "$or":
                 if not any(QueryEngine.match(document, sub) for sub in condition or []):
                     return False
+            elif key == "$nor":
+                # Audit §5.2 / SPEC §5.1: QueryBuilder.nor_() existed
+                # but match() ignored ``$nor`` entirely. Now: ``$nor``
+                # matches when none of the sub-conditions match.
+                if any(QueryEngine.match(document, sub) for sub in condition or []):
+                    return False
             elif key == "$not":
                 if QueryEngine.match(document, condition):
                     return False
+            elif key in QueryEngine._IGNORED_TOP_LEVEL_MARKERS:
+                # Optimizer hints — irrelevant to in-memory matching.
+                continue
+            elif key.startswith("$"):
+                # Unknown top-level operator. Refuse silently-matching
+                # nothing — raise so callers see the bug immediately
+                # (audit §5.2).
+                raise QueryError(
+                    query=str(query),
+                    reason=(
+                        f"unsupported top-level query operator: {key!r}. "
+                        "Supported: $and, $or, $nor, $not. Field-level "
+                        "operators (e.g. $regex, $mod, $type, $size) live "
+                        "inside a field condition dict."
+                    ),
+                )
             else:
                 value = QueryEngine.get_field_value(document, key)
                 if not QueryEngine._match_value(value, condition):
@@ -422,8 +475,56 @@ class QueryEngine:
                     for elem in value
                 ):
                     return False
+            elif op == "$mod":
+                # MongoDB ``$mod`` — operand is ``[divisor, remainder]``.
+                # Previously the QueryBuilder.mod() helper produced this
+                # but the engine returned False for it (audit §5.2).
+                try:
+                    divisor, remainder = operand
+                    if not isinstance(value, (int, float)):
+                        return False
+                    if value % divisor != remainder:
+                        return False
+                except (TypeError, ValueError, ZeroDivisionError):
+                    return False
+            elif op == "$all":
+                # ``$all`` — value must be a list containing every operand
+                # element. Previously silently no-matched (audit §5.2).
+                if not isinstance(value, list):
+                    return False
+                try:
+                    operand_iter = list(operand)
+                except TypeError:
+                    return False
+                if not all(item in value for item in operand_iter):
+                    return False
+            elif op == "$type":
+                # MongoDB ``$type`` — accept a Python type name string
+                # (``"int"``, ``"string"``, ``"list"`` …) since we do not
+                # carry BSON type codes through.
+                expected = _TYPE_NAME_MAP.get(
+                    operand.lower() if isinstance(operand, str) else None
+                )
+                if expected is None:
+                    return False
+                if not isinstance(value, expected):
+                    return False
+            elif op == "$not":
+                # Field-level negation — operand is another condition dict.
+                if QueryEngine._match_value(value, operand):
+                    return False
             else:
-                return False
+                # Unknown field-level operator. Refuse silent no-match —
+                # raise so callers see the bug (audit §5.2).
+                raise QueryError(
+                    query=str(condition),
+                    reason=(
+                        f"unsupported field-level query operator: {op!r}. "
+                        "Supported: $eq, $ne, $gt, $gte, $lt, $lte, $in, "
+                        "$nin, $exists, $regex, $size, $elemMatch, $mod, "
+                        "$all, $type, $not."
+                    ),
+                )
         return True
 
     @staticmethod
