@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `TraversalProtection.start_if_needed()` — idempotent initializer for `Walker.run()`. Pause/resume cycles no longer reset step / visit / wall-clock counters. (Audit §2.2.)
 - `WalkerTrail(max_length=N)` — wires the previously-undocumented bound. `0` (default) means unlimited; positive integers cap the in-memory trail. Threaded through `Walker(max_trail_length=...)` and `JVSPATIAL_WALKER_MAX_TRAIL_LENGTH`. (Audit §2.3 / SPEC §6.4.)
 - `tests/core/test_entity_name_walker_and_save.py`, `tests/core/test_walker_protection_audit_fixes.py`, `tests/storage/test_versioning_path_sanitizer_audit.py`, `tests/api/test_webhook_hmac_audit_fix.py` — 28 new regression cases pinning Wave 1 audit fixes.
+- Public `invalidate_api_key_cache(api_key)` and `invalidate_api_key_cache_hash(cache_key)` helpers in `jvspatial.api.integrations.webhooks.webhook_auth`. `APIKeyService.revoke_key` now invokes the latter so revocations are effective immediately rather than after the 5-minute TTL. (Audit §4.5.)
+- `tests/db/test_default_compound_ops_id_normalization.py`, `tests/core/test_pager_audit_fixes.py` — 11 new regression cases pinning Wave 2 audit fixes.
 
 ### Fixed
 
@@ -31,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `WalkerQueue.prepend` / `append` / `add_next` / `insert_after` / `insert_before` now respect `max_size` and emit a one-shot WARNING on first drop. Earlier the front-of-queue and middle-insert paths bypassed the cap, providing a silent protection bypass. (Audit §2.4-§2.5.)
 - `DynamoDB.{find, count, batch_get, batch_write}` now route every `aioboto3` wire call through `_run_with_throttle_retry`. Earlier the helper was only applied to `save`/`get`/`delete`; `ProvisionedThroughputExceededException` and `ThrottlingException` from scan / query / batch ops surfaced to callers as immediate failures despite the documented backoff. (Audit §5.1 / SPEC §4.3.)
 - Security headers middleware now emits a relaxed Content-Security-Policy on `/docs`, `/redoc`, `/openapi.json` (and sub-paths) that permits `cdn.jsdelivr.net` so FastAPI's bundled Swagger UI / ReDoc pages render. The previous strict default blocked the CDN-hosted JS/CSS and the docs loaded blank. Application routes keep the strict default policy.
+- **BREAKING (behavioral):** `ObjectPager.get_page` no longer returns cached results. The in-memory `_cache` attribute is removed entirely; every call hits the database. Stale-after-write semantics are eliminated. Callers that relied on caching should use the backend-level read-through cache via `create_database(cache_get_size=...)`. (Audit §8.2.)
+- `ObjectPager.get_page(after_id=..., order_by=...)` now raises `ValueError`. Keyset pagination via `after_id` only tracks `id`; combining it with a custom sort key silently skipped or duplicated rows on writes between pages. Use offset pagination if you need a custom sort. (Audit §8.1.)
+- Default `Database.find_one_and_update` and `Database.find_one_and_delete` now normalize `{"_id": x}` queries to `{"id": x}` when only `_id` is present, so Mongo-style queries no longer silent-miss on JsonDB / SQLite / DynamoDB (which persist records keyed by `id` only). MongoDB native override is unaffected. (Audit §5.3 / SPEC §4.1.)
+- JsonDB no longer blocks the event loop. Every `Path.exists()` / `Path.glob()` call inside `async` methods (`_async_read_json`, `count`, `find_many`, `find`) is now wrapped in `asyncio.to_thread`. (Audit §3.6 / SPEC §3.3.)
+- `Node.__init_subclass__`, `Edge.__init_subclass__`, and `Walker.__init_subclass__` now call `super().__init_subclass__(**kwargs)` so `AttributeMixin.__init_subclass__` runs and `protected` / `transient` / `private` attribute registration completes for their subclasses. (Audit §6.1-§6.3 / SPEC §2.5.)
+- `SessionManager` mutations now hold an `asyncio.Lock` so concurrent create/invalidate/cleanup cannot raise `RuntimeError: dictionary changed size during iteration`. `max_sessions_per_user` enforcement is no longer racy — over-cap creation evicts the oldest session by `last_accessed`. (Audit §4.8.)
+- `_API_KEY_CACHE` (webhook layer) now holds a lock around reads, eviction, and miss-population. Removes a `KeyError` window when a size-cap cleanup races a reader. (Audit §4.7.)
+- `APIKeyService(context=None)` now defaults to the **prime** database instead of `get_default_context()`. Auth state is required to live on the prime DB (SPEC §9 / CLAUDE.md §1). (Audit §4.4.)
+- `APIKeyService.revoke_key` now invokes the new webhook cache-invalidation hook so a revoked key stops authenticating immediately rather than after the 5-minute TTL. (Audit §4.5.)
 
 ## [0.0.7] - 2026-05-08
 
