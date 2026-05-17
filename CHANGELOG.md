@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/api/test_env_allowlist_audit.py`, `tests/api/test_cors_wildcard_and_error_detail_audit.py`, `tests/db/test_query_operator_parity_audit.py`, `tests/db/test_bulk_save_detailed_audit.py` — 22 new regression cases pinning Wave 3 audit fixes.
 - `jvspatial.utils.stability.emit_experimental_once(name, message)` — public hook for opt-in surfaces that need to emit the experimental warning without going through the `@experimental` decorator (replaces private `_emit_once` calls). (Audit §7.7.)
 - `tests/db/test_sqlite_cross_loop_audit.py`, `tests/utils/test_wave4_polish_audit.py` — 10 new regression cases pinning Wave 4 audit fixes.
+- `jvspatial.core.entities.TraversalSkipped` and `TraversalPaused` exception classes. `Walker.skip()` now raises `TraversalSkipped` (caught via `except TraversalSkipped`); previously relied on substring-matching `"Node skipped"` in the message. (Audit §2.9 / SPEC §6.5.)
+- `PathSanitizer` rejects Windows-reserved filenames (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`) regardless of host OS. ``CON.txt`` is rejected; ``CONFIG.json`` passes. (Audit §4.18 / SPEC §15.1.)
+- `tests/storage/test_windows_reserved_audit.py`, `tests/core/test_wave5_walker_audit.py`, `tests/api/test_deferred_invoke_fail_closed_audit.py`, `tests/db/test_sqlite_id_coercion_audit.py` — 23 new regression cases pinning Wave 5 audit fixes.
 
 ### Fixed
 
@@ -61,6 +64,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JWT debug log no longer includes the secret length (narrowing a brute-force search space). Logs `secret_configured=bool(...)` instead. (Audit §4.11 / SPEC §15.5.)
 - `validate_token` warning logs `db_type=` instead of `db_path=` so the on-disk filesystem layout does not leak to log sinks. (Audit §4.13 / SPEC §15.5.)
 - `LoggingNoopTaskScheduler.schedule` downgraded from per-call WARNING to DEBUG so misconfigured serverless deployments do not flood CloudWatch — the once-per-process startup error from `serverless.factory._note_noop_in_serverless` is sufficient. (Audit §7.14.)
+- **BREAKING (behavioral):** the internal deferred-invoke route fails closed when `JVSPATIAL_DEFERRED_INVOKE_SECRET` is unset. Previous "no secret = allow everything" semantics exposed the endpoint to any caller on misconfigured deployments. Set the secret to enable the route, or set `JVSPATIAL_DEFERRED_INVOKE_DISABLED=true` to skip registering it entirely. (Audit §4.16 / SPEC §15.2.)
+- **BREAKING (behavioral):** `Walker(type_code=...)` raises `ValueError` when given a value other than `"w"`. The SPEC §1.1 ID-format invariant (`w.EntityName.<hex>`) cannot be corrupted by a stray kwarg. (Audit §2.10.)
+- Walker `skip()` raises `TraversalSkipped` rather than `JVSpatialError("Node skipped")`. Callers that catch the generic exception or match on the substring will need to update — `except TraversalSkipped:` is the new contract. (Audit §2.9.)
+- `SQLiteDB.save` coerces `record["id"]` to `str` so int / `uuid.UUID` ids round-trip correctly through SQLite's TEXT column. The persisted record now also stores the stringified id. (Audit §5.20.)
+- `runtime/serverless._parse_bool` logs a WARNING on unrecognized `SERVERLESS_MODE` values (still maps to False for back-compat). Silent garbage-to-False mapping hid typos. (Audit §7.3.)
+- `.env.example` CORS section corrected: `Default: *` and `JVSPATIAL_CORS_ORIGINS=*` example replaced with the actual default localhost whitelist, plus a note that wildcards trigger a startup WARNING. (Audit §7.5.)
+- `JsonDB._list_collection_json_files` drops the dead `not p.name.endswith('.jvtmp')` filter; tmp files are named `<id>.json.<pid>.<hex>.jvtmp` and never match the `*.json` glob. (Audit §5.16.)
 
 ### Deprecated
 
