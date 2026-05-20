@@ -94,6 +94,19 @@ CORS does **not** default to wildcard. CSP is strict on app routes, relaxed only
 
 ---
 
+## Graph modeling convention
+
+Convention for any application built on jvspatial. Not enforced by the library, but required by review and assumed by downstream tooling.
+
+1. **Every `Node` must be reachable from `Root`** — directly or through intermediate nodes. An orphaned node is a bug. If a record does not belong in the graph, it must not be a `Node`.
+2. **Applications declare an application-root node** — e.g. `class App(Node)`, `class MyApp(Node)`. Create exactly one instance, connect it to `Root`, and treat it as the entry point for all application state.
+3. **All application nodes extend from the app-root** — directly or under an appropriate branch / category node beneath it (e.g. `App -> Users -> User`, `App -> Catalog -> Product`). Do not connect application nodes directly to `Root`; `Root` belongs to the library, the app-root belongs to the application.
+4. **Use `Object` (not `Node`) for record-style data that does not benefit from graph membership** — audit/change-event records, denormalized snapshots, ledger entries, raw inbound payloads. `ChangeEvent` **must be an `Object`**, not a `Node`. Rule of thumb: if nothing will ever traverse to or from it, it is not a `Node`.
+
+When reviewing or generating code, reject `Node` subclasses that are never connected, and reject `Object` subclasses that are used as relationship endpoints.
+
+---
+
 ## Run the dev loop
 
 ```bash

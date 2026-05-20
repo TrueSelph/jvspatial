@@ -93,6 +93,15 @@ class Edge(Object):
     async def count(cls, query: Optional[dict] = None, **kwargs) -> int  # Inherited from Object
 ```
 
+#### Convention: `Node` vs `Object`
+
+The library lets you persist either as a `Node` (graph member) or an `Object` (flat record). Pick correctly — orphaned nodes and graph-traversed objects are both anti-patterns. Conventions for applications built on jvspatial:
+
+- **A `Node` MUST be connected to the graph.** Every node must be reachable from `Root`, directly or through intermediate nodes. If a record is never traversed to or from, it should not be a `Node`.
+- **Declare an application-root node.** Create a single top-level class — `App`, `MyApp`, or similar — extending `Node`. Instantiate once and connect to `Root`. Treat this app-root as the entry point for all application state.
+- **All application nodes hang off the app-root.** Connect them directly to the app-root, or beneath a branch/category node under it (e.g. `App -> Users -> User`, `App -> Catalog -> Product`). Do not connect application nodes directly to `Root`.
+- **Use `Object` for record-style data with no graph relationships.** Audit logs, change events, denormalized snapshots, ledger entries, and raw inbound payloads belong in `Object`, not `Node`. **`ChangeEvent` is an `Object`.** Rule of thumb: if nothing will ever traverse to or from the record, it is not a node.
+
 #### `Walker`
 Graph traversal agent with hook-based logic.
 
