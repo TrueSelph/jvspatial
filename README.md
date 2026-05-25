@@ -279,6 +279,12 @@ server = Server(
 - [Security Policy](https://github.com/TrueSelph/jvspatial/blob/main/SECURITY.md) - Vulnerability disclosure
 - [Code of Conduct](https://github.com/TrueSelph/jvspatial/blob/main/CODE_OF_CONDUCT.md) - Contributor Covenant 2.1
 
+## Authors & maintainers
+
+jvspatial — a foundational object-spatial application development framework — was created by **Eldon Marks** ([@eldonm](https://github.com/eldonm)), who serves as its lead maintainer.
+
+See [AUTHORS](https://github.com/TrueSelph/jvspatial/blob/main/AUTHORS) for the full list of authors and contributors. Copyright and licensing terms are set out in the [LICENSE](https://github.com/TrueSelph/jvspatial/blob/main/LICENSE).
+
 ## Contributors
 
 <p align="center">
