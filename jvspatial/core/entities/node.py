@@ -59,6 +59,28 @@ class Node(Object):
             "id",
         }  # edge_ids is stored as "edges" at top level; id is top-level on node docs
 
+    @classmethod
+    def get_indexes(cls: Type["Node"]) -> List[Dict[str, Any]]:
+        """Default node indexes.
+
+        Adds an index on the top-level ``entity`` discriminator. Every typed
+        find (``ClassName.find(...)`` / ``GraphContext.find_by_class(...)``)
+        is rewritten to ``{"entity": "<ClassName>", ...}``, so this index is
+        the universal first cut for any multi-type node collection. Generic
+        — it only touches fields jvspatial itself attaches to every node
+        document.
+        """
+        indexes = super().get_indexes()
+        indexes.append(
+            {
+                "field": "entity",
+                "unique": False,
+                "direction": 1,
+                "name": "idx_node_entity",
+            }
+        )
+        return indexes
+
     def __init_subclass__(cls: Type["Node"], **kwargs: Any) -> None:
         """Initialize subclass by registering visit hooks.
 
@@ -388,6 +410,36 @@ class Node(Object):
             edge_filter=edge,
             limit=limit,
             **kwargs,
+        )
+
+    @classmethod
+    async def nodes_bulk(
+        cls,
+        node_ids: List[str],
+        *,
+        direction: str = "out",
+        edge: Optional[List[Union[str, Type["Edge"]]]] = None,
+        node: Optional[List[Union[str, Type["Node"]]]] = None,
+        edge_filter: Optional[Dict[str, Any]] = None,
+        node_filter: Optional[Dict[str, Any]] = None,
+        limit: Optional[int] = None,
+    ) -> Dict[str, List["Node"]]:
+        """Batch version of ``nodes()`` for many source IDs.
+
+        Returns a mapping of ``source_id -> connected nodes`` using a single
+        edge-query pass in the active GraphContext.
+        """
+        from ..context import get_default_context
+
+        context = get_default_context()
+        return await context.nodes_bulk(
+            node_ids,
+            direction=direction,
+            edge=edge,
+            node=node,
+            edge_filter=edge_filter,
+            node_filter=node_filter,
+            limit=limit,
         )
 
     async def count_neighbors(

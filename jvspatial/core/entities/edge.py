@@ -240,13 +240,46 @@ class Edge(Object):
 
     @classmethod
     def get_indexes(cls: Type["Edge"]) -> List[Dict[str, Any]]:
-        """Get index definitions including unique compound index on (source, target, entity)."""
+        """Default indexes for every edge collection.
+
+        ``idx_source_target_entity_unique`` enforces edge uniqueness and serves
+        outgoing traversal via leftmost-prefix on ``source``. The remaining
+        indexes cover traversal shapes the unique index cannot:
+
+        - ``idx_target_entity`` — incoming traversal (``direction="in"``).
+        - ``idx_entity_source`` / ``idx_entity_target`` — typed-edge sweeps
+          that filter by ``entity`` without pinning a node.
+
+        All four are domain-agnostic — they only reference fields every Edge
+        document carries (``entity``, ``source``, ``target``).
+        """
         indexes = super().get_indexes()
         indexes.append(
             {
                 "fields": [("source", 1), ("target", 1), ("entity", 1)],
                 "unique": True,
                 "name": "idx_source_target_entity_unique",
+            }
+        )
+        indexes.append(
+            {
+                "fields": [("target", 1), ("entity", 1)],
+                "unique": False,
+                "name": "idx_target_entity",
+            }
+        )
+        indexes.append(
+            {
+                "fields": [("entity", 1), ("source", 1)],
+                "unique": False,
+                "name": "idx_entity_source",
+            }
+        )
+        indexes.append(
+            {
+                "fields": [("entity", 1), ("target", 1)],
+                "unique": False,
+                "name": "idx_entity_target",
             }
         )
         return indexes

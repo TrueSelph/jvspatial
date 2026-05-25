@@ -1,8 +1,10 @@
 """GraphContext for managing database dependencies."""
 
 import asyncio
+import base64
 import contextvars
 import inspect
+import json
 import logging
 import time
 from contextlib import asynccontextmanager, contextmanager, suppress
@@ -14,8 +16,10 @@ from typing import (
     List,
     Optional,
     Set,
+    Tuple,
     Type,
     TypeVar,
+    Union,
     cast,
 )
 
@@ -1288,6 +1292,196 @@ class GraphContext:
                 continue  # Skip invalid nodes
 
         return nodes
+
+    @staticmethod
+    def _resolve_entity_name(value: Any) -> Optional[str]:
+        """Normalize filter tokens (class/string) to persisted entity names."""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, type):
+            resolver = getattr(value, "_entity_name", None)
+            return resolver() if callable(resolver) else value.__name__
+        return None
+
+    async def find_page(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        sort: List[Tuple[str, int]],
+        after: Optional[Union[str, Dict[str, Any]]] = None,
+        limit: int = 50,
+    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """Find one keyset-paginated page and return ``(items, next_cursor)``.
+
+        ``sort`` is expected to include at least one field; ``id`` is appended as
+        a deterministic tiebreaker when missing.
+        """
+        page_limit = max(1, int(limit))
+        if not sort:
+            sort = [("id", 1)]
+        sort_fields: List[Tuple[str, int]] = list(sort)
+        if not any(field == "id" for field, _ in sort_fields):
+            sort_fields.append(("id", sort_fields[0][1]))
+
+        final_query: Dict[str, Any] = dict(query or {})
+        cursor_payload: Optional[Dict[str, Any]] = None
+        if isinstance(after, str) and after:
+            try:
+                cursor_payload = json.loads(
+                    base64.urlsafe_b64decode(after.encode()).decode()
+                )
+            except Exception:
+                cursor_payload = None
+        elif isinstance(after, dict):
+            cursor_payload = after
+
+        primary_field, primary_dir = sort_fields[0]
+        id_dir = sort_fields[-1][1]
+        if cursor_payload and "id" in cursor_payload and "sort" in cursor_payload:
+            sort_op = "$lt" if primary_dir < 0 else "$gt"
+            id_op = "$lt" if id_dir < 0 else "$gt"
+            keyset_filter = {
+                "$or": [
+                    {primary_field: {sort_op: cursor_payload["sort"]}},
+                    {
+                        "$and": [
+                            {primary_field: cursor_payload["sort"]},
+                            {"id": {id_op: cursor_payload["id"]}},
+                        ]
+                    },
+                ]
+            }
+            final_query = (
+                {"$and": [final_query, keyset_filter]} if final_query else keyset_filter
+            )
+
+        rows = await self.database.find(
+            collection, final_query, limit=page_limit + 1, sort=sort_fields
+        )
+        has_more = len(rows) > page_limit
+        page_rows = rows[:page_limit]
+
+        next_cursor: Optional[str] = None
+        if has_more and page_rows:
+            last = page_rows[-1]
+            payload = {"id": last.get("id"), "sort": last.get(primary_field)}
+            next_cursor = base64.urlsafe_b64encode(
+                json.dumps(payload, separators=(",", ":")).encode()
+            ).decode()
+
+        return page_rows, next_cursor
+
+    async def nodes_bulk(
+        self,
+        node_ids: List[str],
+        *,
+        direction: str = "out",
+        edge: Optional[List[Union[str, Type[Any]]]] = None,
+        node: Optional[List[Union[str, Type[Any]]]] = None,
+        edge_filter: Optional[Dict[str, Any]] = None,
+        node_filter: Optional[Dict[str, Any]] = None,
+        limit: Optional[int] = None,
+    ) -> Dict[str, List[Any]]:
+        """Batch traversal for many source IDs in one edge-query pass."""
+        from .entities.edge import Edge
+        from .entities.node import Node
+
+        unique_ids = [nid for nid in dict.fromkeys(node_ids) if nid]
+        out: Dict[str, List[Any]] = {nid: [] for nid in unique_ids}
+        if not unique_ids:
+            return out
+
+        edge_entities = [
+            en
+            for en in (self._resolve_entity_name(e) for e in (edge or []))
+            if en is not None
+        ]
+        node_entities = [
+            en
+            for en in (self._resolve_entity_name(n) for n in (node or []))
+            if en is not None
+        ]
+
+        if direction not in ("out", "in", "both"):
+            direction = "out"
+
+        edge_query: Dict[str, Any] = {}
+        if direction == "out":
+            edge_query["source"] = {"$in": unique_ids}
+        elif direction == "in":
+            edge_query["target"] = {"$in": unique_ids}
+        else:
+            edge_query["$or"] = [
+                {"source": {"$in": unique_ids}},
+                {"target": {"$in": unique_ids}},
+            ]
+
+        if edge_entities:
+            edge_query["entity"] = {"$in": edge_entities}
+        if edge_filter:
+            for k, v in edge_filter.items():
+                edge_query[f"context.{k}"] = v
+
+        edge_docs = await self.database.find(
+            self._get_collection_name(self._get_entity_type_code(Edge)),
+            edge_query,
+            limit=limit,
+        )
+
+        neighbor_ids: set = set()
+        links: Dict[str, List[str]] = {nid: [] for nid in unique_ids}
+        seen_pairs: set = set()
+
+        for edge_doc in edge_docs:
+            src = edge_doc.get("source")
+            dst = edge_doc.get("target")
+            if direction in ("out", "both") and src in links and dst:
+                pair = (src, dst)
+                if pair not in seen_pairs:
+                    links[src].append(dst)
+                    seen_pairs.add(pair)
+                    neighbor_ids.add(dst)
+            if direction in ("in", "both") and dst in links and src:
+                pair = (dst, src)
+                if pair not in seen_pairs:
+                    links[dst].append(src)
+                    seen_pairs.add(pair)
+                    neighbor_ids.add(src)
+
+        if not neighbor_ids:
+            return out
+
+        node_docs = await self.database.find(
+            self._get_collection_name(self._get_entity_type_code(Node)),
+            {"id": {"$in": list(neighbor_ids)}},
+        )
+        node_by_id: Dict[str, Any] = {}
+        for doc in node_docs:
+            if node_entities and doc.get("entity") not in node_entities:
+                continue
+            if node_filter:
+                fail = False
+                for k, v in node_filter.items():
+                    if doc.get("context", {}).get(k) != v:
+                        fail = True
+                        break
+                if fail:
+                    continue
+            obj = await self._deserialize_entity(Node, doc)
+            if obj is not None:
+                node_by_id[doc["id"]] = obj
+
+        for src_id, target_ids in links.items():
+            matched: List[Any] = []
+            for tid in target_ids:
+                obj = node_by_id.get(tid)
+                if obj is None:
+                    continue
+                matched.append(obj)
+                if limit is not None and len(matched) >= max(1, limit):
+                    break
+            out[src_id] = matched
+        return out
 
     async def ensure_indexes(self, entity_class: Type[T]) -> None:
         """Ensure indexes are created for the given entity class.

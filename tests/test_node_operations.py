@@ -263,6 +263,38 @@ async def test_node_method_optimizes_with_limit(context):
 
 
 @pytest.mark.asyncio
+async def test_nodes_bulk_returns_per_source_neighbors(context):
+    city1 = await City.create(name="NY")
+    city2 = await City.create(name="SF")
+    city3 = await City.create(name="LA")
+
+    await city1.connect(city2, edge=LocatedIn)
+    await city1.connect(city3, edge=LocatedIn)
+    await city2.connect(city3, edge=LocatedIn)
+
+    result = await Node.nodes_bulk(
+        [city1.id, city2.id], direction="out", edge=["LocatedIn"], node=["City"]
+    )
+
+    assert set(result.keys()) == {city1.id, city2.id}
+    assert {n.id for n in result[city1.id]} == {city2.id, city3.id}
+    assert {n.id for n in result[city2.id]} == {city3.id}
+
+
+@pytest.mark.asyncio
+async def test_nodes_bulk_supports_incoming_direction(context):
+    city1 = await City.create(name="One")
+    city2 = await City.create(name="Two")
+    city3 = await City.create(name="Three")
+    await city1.connect(city3, edge=LocatedIn)
+    await city2.connect(city3, edge=LocatedIn)
+
+    result = await Node.nodes_bulk([city3.id], direction="in", edge=["LocatedIn"])
+    assert city3.id in result
+    assert {n.id for n in result[city3.id]} == {city1.id, city2.id}
+
+
+@pytest.mark.asyncio
 async def test_node_method_use_case_example(context):
     """Test the real-world use case that motivated this method."""
     # This is the use case from the request:
