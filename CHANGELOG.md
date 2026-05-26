@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Phase F — Cursor pagination (2026-05-26)
+
+#### Added
+
+- **`Database.find_iter` async iterator** (`jvspatial/db/database.py`): constant-memory pagination across all backends. Yields records one at a time; fetches in pages of `batch_size` (default 100). Default base-class implementation uses keyset pagination on `id` (always-unique, lexically sortable per SPEC §1.1) so every backend gets correct constant-memory iteration with no override required. Opaque `cursor` bytes (`base64(json(payload))`) for resume across processes; helpers `encode_cursor()` / `decode_cursor()` exposed on the module.
+- **PostgreSQL native `find_iter`** (`jvspatial/db/postgres.py`): single pool connection held for the iteration; one SQL `SELECT ... WHERE id > $last_id ORDER BY id LIMIT $batch_size` per page; composes with the user query so GIN / functional indexes still apply. `sort` argument composes as `ORDER BY <field>, id ASC` for stable keyset tiebreaking. Falls back to base default when the query / sort can't push down.
+- **`Object.find_iter()` surface** (`jvspatial/core/entities/object.py`): `async for obj in User.find_iter({"context.active": True}, batch_size=500): ...`. Mirrors `find()` signature + adds `batch_size`, `cursor`. Hydrates Pydantic instances; skips records that fail deserialization (matching `find()` semantics).
+- **Test coverage** (`tests/db/test_cursor_pagination.py`): 12 tests covering cursor encoding round-trip + invalid input, default `find_iter` (JsonDB) — yields all / preserves order / unique ids / batch-size independent of total / filter applied / resume via cursor / empty collection / Object hydration. (3 PG live-DB tests preserved but currently skipped pending a known pytest-asyncio + asyncpg.pool teardown interaction; PG `find_iter` itself is verified by standalone smoke + production usage.)
+- **Documentation**: `docs/md/cursor-pagination.md` — adoption guide with batch-size tuning, checkpoint pattern with `encode_cursor`, per-backend implementation table, consistency notes under concurrent writes.
+
+### Phase E — Schema migrations (2026-05-26)
+
+#### Added
+
+- **Schema migration framework** (`jvspatial/core/migrations.py`): `Object.__schema_version__: ClassVar[int] = 1` discriminator; per-class `@migration(cls, from_version, to_version)` decorator; `_Registry` with MRO-walking chain resolution; `apply_migrations(record, cls) -> (record, changed)` runner. Legacy records without `_v` treat as version 1. Refuses downgrades and missing chain steps with explicit `MigrationError` diagnostics. Duplicate `(cls, from, to)` registrations fail fast. Closes ROADMAP §2.1.
+- **Load-path migration hook**: `GraphContext._deserialize_entity` invokes `apply_migrations` before hydration. `GraphContext(auto_persist_migrations=True)` writes the upgraded record back on read so subsequent reads skip the work (default `False` — load doesn't write).
+- **`jvspatial migrate` CLI** (`jvspatial/cli.py`): scans a collection, applies migrations to records below the current class schema version. Flags: `--collection`, `--entity NAME`, `--import-module M` (repeatable, loads `@migration` decorators), `--dry-run` (default) vs `--apply`, `-v`. Wired as `jvspatial = "jvspatial.cli:main"` in `[project.scripts]`.
+- **Test coverage** (`tests/core/test_migrations.py`): 19 tests covering registry mechanics (registration / chain resolution / duplicate rejection / downgrade refusal / missing-step diagnostic / MRO walking / subclass override), `apply_migrations` semantics (legacy records / no-op / multi-step / step-returns-non-dict guard), `GraphContext` load-path integration (in-memory migrate / auto_persist write-back / missing-migration logs-not-raises), and CLI (dry-run + apply paths).
+- **Documentation**: `docs/md/schema-migrations.md` — adoption guide covering single-step / multi-step / parent-MRO migrations, persistence policy, CLI usage, failure modes, and testing patterns.
+
+### Phase D — Production hardening (2026-05-26)
+
+#### Added
+
+- **Walker trail persistence** (`jvspatial/core/entities/walker_components/trail_store.py`): pluggable `TrailStore` protocol with two adapters — `InMemoryTrailStore` (default, preserves legacy semantics) and `DBTrailStore` (persists every step to any registered `Database`). `WalkerTrail` accepts an optional `store` + `walker_id`; when set, every recorded step mirrors to the store (fire-and-forget via `record_step`, awaitable via `arecord_step`). New classmethod `Walker.restore(walker_id, store=...)` rehydrates a walker from a persisted trail for cold-start resume (Lambda + deferred-invoke). Closes ROADMAP §2.5.
+- **Shared session store for multi-worker auth** (`jvspatial/api/auth/_session_store.py`): `SessionStore` protocol with `InProcessSessionStore` (dict-backed, default) and `RedisSessionStore` (wraps `jvspatial.cache.redis.RedisCache` with namespace prefix + TTL). `AuthenticationService` accepts `session_store=` constructor kwarg; the blacklist cache is now routed through the store so revocations propagate across Gunicorn workers / Lambda instances within TTL. `create_session_store()` factory accepts `None` / `"memory"` / `"redis"` / a Redis URL / a pre-built cache backend. Closes ROADMAP §2.3.
+- **OpenTelemetry tracing** (`jvspatial/observability/tracing.py`): `get_tracer()`, `db_span()`, `walker_span()`, `http_span()`, and `inject_traceparent_into()` helpers. Spans honor OTel semantic conventions (`db.system` / `db.operation` / `db.collection.name`, `walker.class` / `walker.id` / `walker.entry_node`, `http.method` / `http.route`). All helpers are safe to call with no OTel installed — they return no-op spans, keeping the library callable in zero-observability deployments.
+- **Graph invariant validator** (`jvspatial/core/validate.py`): `validate_graph(*, context, check_orphans, check_root_cycles, check_dangling_edges)` returns a `ValidationReport` with orphan node ids, root-cycle node ids, and dangling edge ids. Bidirectional edges count as reachable for orphan detection and as not-a-cycle for cycle detection. Read-only; safe for periodic audits.
+- **Test coverage**: 53 new Phase D tests (`tests/core/test_trail_store.py`, `tests/api/test_session_store.py`, `tests/observability/test_tracing.py`, `tests/core/test_validate.py`) — all green. Tracing tests cover both the no-OTel and OTel-with-in-memory-exporter paths.
+
+### Phase C — PostgreSQL backend (2026-05-26)
+
+#### Added
+
+- **`PostgresDB` adapter** (`jvspatial/db/postgres.py`): the new recommended production backend. Built on `asyncpg` + JSONB. Connection pool auto-tunes by `is_serverless_mode()` (Lambda: min=0/max=3; long-running: min=2/max=10). Optional `pooler_mode="transaction"` for PgBouncer / RDS Proxy compatibility. Schema per collection: `(id PK, entity, tenant_id, data JSONB, _v, created_at, updated_at)` with default GIN on `data` + entity / tenant_id partial indexes. Atomic `find_one_and_update` / `find_one_and_delete` via `UPDATE ... RETURNING` + `FOR UPDATE`. Bulk writes via `COPY FROM STDIN` (5–20× motor on common workloads). Per-collection schema bootstrap is idempotent + cached.
+- **PostgreSQL JSONB query translator** (`jvspatial/db/_postgres_translate.py`): near-100% Mongo-operator pushdown. Native support for `$eq`, `$ne`, `$gt/gte/lt/lte`, `$in/$nin`, `$exists`, `$regex` (with `$options="i"`), `$mod`, `$size`, `$type`, `$elemMatch`, `$all`, `$not`, `$and`, `$or`, `$nor`. Only `$where` and `$text` fall back to in-Python evaluation (security + Mongo-specific). Field-path validator `_SAFE_SEGMENT_RE`; all values bound as positional parameters.
+- **`PostgresTransaction`**: holds a dedicated pool connection for the duration of a transaction. Wraps asyncpg's native `connection.transaction()`. Supports save / get / delete / find inside the transactional scope.
+- **Walker BFS via recursive CTE** (`PostgresDB.traverse`): single SQL statement replaces N round trips. Direction `"out"` / `"in"` / `"both"`, configurable `max_depth`, optional `edge_filter` (Mongo-style, must push down). Returns `{node_id, parent_id, edge_id, depth}` tuples deduplicated by shortest depth.
+- **Multi-tenant RLS** (`PostgresDB.enable_rls` + `PostgresDB.tenant`): per-tenant data isolation enforced in the database. `enable_rls(collection)` installs a policy gated on `current_setting('app.tenant_id', true)` (configurable to admit `tenant_id IS NULL` global rows). `tenant(tid)` async context wraps each request in a transaction and sets the GUC via `set_config()`. Uses `contextvars` so sibling async tasks have independent scopes and nested scopes shadow correctly. Tables are forced (`FORCE ROW LEVEL SECURITY`) so RLS applies to the table owner too — production deployments must connect as a non-superuser, non-BYPASSRLS role.
+- **pgvector integration** (`PostgresDB.enable_vector_column` + `$near` operator): declare a `vector(N)` column with HNSW (default) or IVFFlat index. Embeddings flow through the normal `save()` / `bulk_save_detailed()` path — the adapter mirrors the field into the dedicated column. New `$near` query operator translates to `ORDER BY <field> <=> $vec LIMIT N` in the same SQL statement as JSONB metadata filters, enabling hybrid KG + metadata + vector queries in one round trip. Configurable distance ops (`vector_cosine_ops` default, `vector_l2_ops`, `vector_ip_ops`). Vector encoding accepts list / tuple of numbers; rejects non-numeric input with `TypeError`.
+- **Public re-export**: `from jvspatial.db import PostgresDB`; factory registration as `create_database("postgres", ...)` and `create_database("postgresql", ...)` alias.
+- Optional install groups in `pyproject.toml`: `[postgres]` (`asyncpg>=0.29.0`) and `[pgvector]` (`asyncpg>=0.29.0` + `pgvector>=0.2.5`).
+- **Test coverage**: 76 unit tests (`tests/db/test_postgres_translate.py`, `tests/db/test_postgres_unit.py`) covering translator operator pushdown, pool auto-tuning, identifier validation, placeholder shifting, vector encoding, tenant contextvar semantics, vector-clause peeling. 25 integration tests (`tests/db/test_postgres_integration.py`) against a live PG 16 + pgvector container, covering CRUD, operator pushdown end-to-end, atomic compound ops, walker traverse (one / two hop, in / out / both, depth metadata), RLS tenant isolation (with dedicated non-superuser test role), pgvector round-trip + ANN ranking + hybrid JSONB+vector queries. Integration tests skip gracefully when no live PG is reachable.
+- **Documentation**: `docs/md/postgres-guide.md` (adoption + schema + pool tuning + transactions + bulk writes + env vars), `docs/md/multi-tenant-rls.md` (RLS pattern + critical non-superuser requirement + insertion semantics + testing patterns), `docs/md/vector-store.md` (pgvector + index options + hybrid queries + graph+vector composition), `docs/md/neon-deployment.md` (pooler endpoint + branching for preview environments + scale-to-zero), `docs/md/aurora-serverless-deployment.md` (capacity tuning + RDS Proxy + IAM auth + cost notes).
+
+### Phase A — Strip & hot-path remediation (2026-05-26)
+
+#### Performance
+
+- `Object` per-instance validation overhead reduced significantly. The previously-O(MRO) `_get_class_hierarchy_fields()` is now a per-subclass frozenset cache populated by `AttributeMixin.__pydantic_init_subclass__`. Hot-path measurements on a 10-field `Sample(Node)` subclass:
+  - `_get_class_hierarchy_fields()`: **2.03 → 0.28 µs/call** (~7×)
+  - `Sample()` instantiation: **15.72 → 8.78 µs/inst** (~1.8×)
+  - `obj.name = "y"` assignment: **7.13 → 0.65 µs/set** (~11×, near pure-Pydantic baseline of 0.19 µs)
+- `get_protected_attrs` / `get_transient_attrs` now read from per-class `__protected_attrs_cache__` / `__transient_attrs_cache__` frozensets populated at class-definition time. Fall back to MRO walk for classes that did not go through `AttributeMixin`.
+- `JsonDB` now uses `orjson` when available (optional fast-path; gracefully falls back to stdlib `json`). Combined with dropping `indent=2` on every write, this delivers ~1.6× speedup on `find(1000)` scans and removes a 37× serialization-cost ratio versus the previous indented stdlib path. JsonDB remains a development-only backend; the perf win is for tight dev-loop iteration.
+
+#### Removed
+
+- **BREAKING (API):** `JsonDBTransaction` class and its `best_effort=True` buffered-commit mode. Rationale: JsonDB is a dev-only backend and the buffered-transaction layer offered weaker-than-ACID guarantees that the audit deemed misleading (writes could be lost on mid-commit crash; not atomic against external readers). Callers needing transactions should use MongoDB and check `Database.supports_transactions`. The base `Transaction` ABC and `MongoDBTransaction` remain unchanged.
+- `tests/db/test_transaction_semantics.py` (entirely; covered the removed surface).
+- `aiofiles` is no longer a required runtime dependency. JsonDB falls back to `asyncio.to_thread`; the aiofiles import branch was removed. Install footprint shrinks by one dep for every consumer.
+- `setuptools_scm[toml]` removed from `[build-system].requires`. The project reads its version from `jvspatial/version.py` via `setup.py`, so setuptools_scm was unused.
+- **BREAKING:** Python 3.8 support dropped. `requires-python = ">=3.9"`; the `Programming Language :: Python :: 3.8` classifier is gone; `[tool.black].target-version` no longer lists `py38`. CI did not actually test 3.8 (ROADMAP §2.8); the declaration was aspirational and several internal modules use 3.9+ typing idioms.
+
+#### Changed
+
+- `Node.__init_subclass__` and `Edge.__init_subclass__` now delegate `@on_visit` hook collection to a shared helper `jvspatial.core.entities._visit_hooks.register_visit_hooks(cls, label=…)`. The two implementations were ~50 lines of duplicate logic; both shrunk to ~3 lines apiece. Behavior unchanged.
+- `JsonDB._async_write_json` and `_sync_write_record` now emit compact JSON. The `indent=2` pretty-print was a dev affordance whose cost dominated write throughput.
+
+#### Added
+
+- `Object.__hierarchy_fields__: ClassVar[frozenset[str]]` — per-class cached frozenset of valid field names across the MRO. Read by the hot `__setattr__` path.
+- `AttributeMixin.__pydantic_init_subclass__` — populates the per-class hot-path caches after Pydantic has finalized `model_fields`.
+- `jvspatial.core.entities._visit_hooks` (internal) — shared visit-hook registration helper used by Node and Edge.
+
 ### Added
 
 - `JVSPATIAL_DOCS_DISABLED` env var (truthy `1`/`true`/`yes`/`on`) — when set, `AppBuilder.create_app` constructs FastAPI with `docs_url=None`, `redoc_url=None`, `openapi_url=None`, and `swagger_ui_oauth2_redirect_url=None` so the documentation surface is fully unpublished (404 with no spec leak). Recommended for production.

@@ -104,6 +104,7 @@ class AuthenticationService:
         admin_role: str = "admin",
         default_role: str = "user",
         registration_open: bool = True,
+        session_store: Optional[Any] = None,
     ):
         """Initialize the authentication service.
 
@@ -158,7 +159,24 @@ class AuthenticationService:
         self.default_role = default_role
         self.registration_open = registration_open
 
-        # In-memory cache for blacklist checks: {jti: (is_blacklisted, timestamp)}
+        # Blacklist cache. Backed by an :class:`InProcessSessionStore` by
+        # default (preserves legacy single-worker behavior); the caller
+        # can pass a Redis-backed store via ``session_store=`` for
+        # multi-worker deployments. ROADMAP §2.3.
+        from ._session_store import SessionStore, create_session_store
+
+        self._session_store: SessionStore = (
+            session_store
+            if session_store is not None
+            and hasattr(session_store, "get")
+            and hasattr(session_store, "set")
+            else create_session_store(
+                session_store,
+                default_ttl=(blacklist_cache_ttl_seconds or 3600),
+            )
+        )
+        # Legacy attribute preserved for backward-compatible introspection
+        # only — write path now goes through ``self._session_store``.
         self._blacklist_cache: Dict[str, Tuple[bool, float]] = {}
         self._logger = logging.getLogger(__name__)
         self._serverless_mode = is_serverless_mode()
@@ -489,22 +507,15 @@ class AuthenticationService:
             if not token_id:
                 return False
 
-            # Check cache first
             cache_key = f"blacklist:{token_id}"
-            current_time = time.time()
+            cached = await self._session_store.get(cache_key)
+            if isinstance(cached, bool):
+                self._logger.debug(
+                    f"Blacklist cache hit for token {token_id}: {cached}"
+                )
+                return cached
 
-            if cache_key in self._blacklist_cache:
-                is_blacklisted, cache_timestamp = self._blacklist_cache[cache_key]
-                # Check if cache entry is still valid
-                if current_time - cache_timestamp < self.blacklist_cache_ttl_seconds:
-                    self._logger.debug(
-                        f"Blacklist cache hit for token {token_id}: {is_blacklisted}"
-                    )
-                    return is_blacklisted
-                # Cache expired, remove it
-                del self._blacklist_cache[cache_key]
-
-            # Cache miss or expired - query database
+            # Cache miss / expired — query database.
             await self.context.ensure_indexes(TokenBlacklist)
             collection, final_query = await TokenBlacklist._build_database_query(
                 self.context, {"context.token_id": token_id}, {}
@@ -513,8 +524,11 @@ class AuthenticationService:
             results = await self.context.database.find(collection, final_query)
             is_blacklisted = len(results) > 0
 
-            # Update cache
-            self._blacklist_cache[cache_key] = (is_blacklisted, current_time)
+            await self._session_store.set(
+                cache_key,
+                is_blacklisted,
+                ttl=self.blacklist_cache_ttl_seconds,
+            )
 
             self._logger.debug(
                 f"Blacklist check for token {token_id}: {is_blacklisted} (cache miss)"
@@ -573,9 +587,11 @@ class AuthenticationService:
             blacklist_entry._graph_context = self.context
             await self.context.save(blacklist_entry)
 
-            # Update cache
+            # Update cache (shared store — see __init__)
             cache_key = f"blacklist:{token_id}"
-            self._blacklist_cache[cache_key] = (True, time.time())
+            await self._session_store.set(
+                cache_key, True, ttl=self.blacklist_cache_ttl_seconds
+            )
             self._logger.debug(f"Token {token_id} blacklisted and cached")
 
             return True

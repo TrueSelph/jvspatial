@@ -213,17 +213,15 @@ class MockDatabase(Database):
         return True
 
     async def begin_transaction(self):
-        """Begin a new transaction."""
-        from jvspatial.db.transaction import JsonDBTransaction
-
-        return JsonDBTransaction(self)
+        """Mock backend does not support transactions."""
+        return None
 
     async def commit_transaction(self, transaction):
-        """Commit a transaction."""
+        """Commit a transaction (no-op for mock)."""
         pass
 
     async def rollback_transaction(self, transaction):
-        """Rollback a transaction."""
+        """Rollback a transaction (no-op for mock)."""
         pass
 
 

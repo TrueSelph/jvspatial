@@ -40,14 +40,17 @@ class TestBaseLoggingServiceNoDatabase:
         mock_db = MagicMock()
         mock_context = MagicMock()
         mock_context.database.find = AsyncMock(return_value=[])
-        with patch(
-            "jvspatial.logging.service.GraphContext",
-            return_value=mock_context,
-        ), patch(
-            "jvspatial.logging.service.get_database_manager",
-            return_value=MagicMock(
-                list_databases=MagicMock(return_value=["logs"]),
-                get_database=MagicMock(return_value=mock_db),
+        with (
+            patch(
+                "jvspatial.logging.service.GraphContext",
+                return_value=mock_context,
+            ),
+            patch(
+                "jvspatial.logging.service.get_database_manager",
+                return_value=MagicMock(
+                    list_databases=MagicMock(return_value=["logs"]),
+                    get_database=MagicMock(return_value=mock_db),
+                ),
             ),
         ):
             svc = BaseLoggingService(database_name="logs")
