@@ -11,6 +11,12 @@ from jvspatial.api.config import ServerConfig
 class TestDatabaseConfigurator:
     """Test DatabaseConfigurator functionality."""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_observability_env(self, monkeypatch):
+        """create_database observability kwargs must not leak from host .env."""
+        monkeypatch.delenv("JVSPATIAL_OBSERVABILITY_ENABLED", raising=False)
+        monkeypatch.delenv("JVSPATIAL_SLOW_QUERY_MS", raising=False)
+
     @pytest.fixture
     def config(self):
         """Create test server config."""
@@ -62,6 +68,8 @@ class TestDatabaseConfigurator:
                             mock_create.assert_called_once_with(
                                 db_type="json",
                                 base_path="./test_db",
+                                observe=False,
+                                slow_query_ms=100.0,
                             )
 
     @pytest.mark.asyncio
@@ -107,6 +115,8 @@ class TestDatabaseConfigurator:
                                 db_type="mongodb",
                                 uri="mongodb://localhost:27017",
                                 db_name="testdb",
+                                observe=False,
+                                slow_query_ms=100.0,
                             )
 
     def test_resolve_mongodb_uses_config_uri_only(self, monkeypatch):
@@ -133,6 +143,54 @@ class TestDatabaseConfigurator:
         uri, db_name = configurator._resolve_mongodb_connection()
         assert uri == "mongodb://cfg:27017"
         assert db_name == "cfgdb"
+
+    def test_resolve_observability_kwargs_defaults(self, configurator):
+        assert configurator._resolve_observability_kwargs() == {
+            "observe": False,
+            "slow_query_ms": 100.0,
+        }
+
+    def test_resolve_observability_kwargs_from_env(self, configurator, monkeypatch):
+        monkeypatch.setenv("JVSPATIAL_OBSERVABILITY_ENABLED", "true")
+        monkeypatch.setenv("JVSPATIAL_SLOW_QUERY_MS", "250")
+        assert configurator._resolve_observability_kwargs() == {
+            "observe": True,
+            "slow_query_ms": 250.0,
+        }
+
+    @pytest.mark.asyncio
+    async def test_initialize_graph_context_passes_observability_from_env(
+        self, configurator, monkeypatch
+    ):
+        monkeypatch.setenv("JVSPATIAL_OBSERVABILITY_ENABLED", "1")
+        monkeypatch.setenv("JVSPATIAL_SLOW_QUERY_MS", "42")
+
+        with patch(
+            "jvspatial.api.components.database_configurator.create_database"
+        ) as mock_create:
+            mock_create.return_value = MagicMock()
+            with patch(
+                "jvspatial.api.components.database_configurator.get_database_manager",
+                side_effect=RuntimeError(),
+            ):
+                with patch(
+                    "jvspatial.api.components.database_configurator.set_database_manager"
+                ):
+                    with patch(
+                        "jvspatial.api.components.database_configurator.GraphContext",
+                        return_value=MagicMock(),
+                    ):
+                        with patch(
+                            "jvspatial.api.components.database_configurator.set_default_context"
+                        ):
+                            configurator.initialize_graph_context()
+
+            mock_create.assert_called_once_with(
+                db_type="json",
+                base_path="./test_db",
+                observe=True,
+                slow_query_ms=42.0,
+            )
 
     def test_resolve_mongodb_empty_config_uses_localhost_jvdb(self, monkeypatch):
         monkeypatch.delenv("JVSPATIAL_MONGODB_URI", raising=False)
@@ -187,6 +245,8 @@ class TestDatabaseConfigurator:
                                 endpoint_url=None,
                                 aws_access_key_id=None,
                                 aws_secret_access_key=None,
+                                observe=False,
+                                slow_query_ms=100.0,
                             )
 
     @pytest.mark.asyncio
@@ -250,6 +310,8 @@ class TestDatabaseConfigurator:
                                 mock_create.assert_called_once_with(
                                     db_type="json",
                                     base_path="/opt/backend/track75_db",
+                                    observe=False,
+                                    slow_query_ms=100.0,
                                 )
 
     def test_resolve_db_path_absolute_unchanged(self, configurator):

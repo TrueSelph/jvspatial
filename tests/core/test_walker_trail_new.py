@@ -368,15 +368,24 @@ class TestTrailIntegrationWithTraversal:
 
     @pytest.mark.asyncio
     async def test_trail_with_protection(self):
-        """Test trail recording with protection limits."""
+        """Test trail recording with protection limits.
+
+        SPEC §6.3 / audit §2.1: tripping ``max_steps`` now raises
+        ``WalkerExecutionError`` instead of being silently absorbed into the
+        walker report. The trail captured up to the violation is still
+        readable after the exception unwinds.
+        """
+        from jvspatial.exceptions import WalkerExecutionError
+
         walker = TrailTrackingWalker(max_steps=2)
         nodes = [TrailTestNode(name=f"node{i}") for i in range(5)]
 
         # Add nodes to queue
         await walker.visit(nodes)
 
-        # Spawn with protection should record trail steps
-        await walker.spawn(nodes[0])
+        # Spawn with protection should record trail steps and then raise.
+        with pytest.raises(WalkerExecutionError):
+            await walker.spawn(nodes[0])
 
         # Check that trail was recorded
         trail = walker.get_trail()

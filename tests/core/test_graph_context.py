@@ -855,3 +855,52 @@ class TestGraphContextPerformanceMonitoring:
         # Check structure
         assert "total_operations" in stats
         assert isinstance(stats["total_operations"], int)
+
+
+class TestGraphContextFindPage:
+    @pytest.fixture
+    def temp_context(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import uuid
+
+            unique_path = f"{tmpdir}/test_{uuid.uuid4().hex}"
+            database = create_database("json", base_path=unique_path)
+            context = GraphContext(database=database)
+            set_default_context(context)
+            yield context
+
+    @pytest.mark.asyncio
+    async def test_find_page_returns_next_cursor(self, temp_context):
+        await temp_context.database.save("node", {"id": "a", "ts": 3})
+        await temp_context.database.save("node", {"id": "b", "ts": 2})
+        await temp_context.database.save("node", {"id": "c", "ts": 1})
+
+        page1, cursor = await temp_context.find_page(
+            "node", {}, sort=[("ts", -1)], limit=2
+        )
+        assert [row["id"] for row in page1] == ["a", "b"]
+        assert cursor
+
+        page2, next2 = await temp_context.find_page(
+            "node", {}, sort=[("ts", -1)], after=cursor, limit=2
+        )
+        assert [row["id"] for row in page2] == ["c"]
+        assert next2 is None
+
+    @pytest.mark.asyncio
+    async def test_find_page_accepts_dict_cursor_payload(self, temp_context):
+        await temp_context.database.save("node", {"id": "a", "ts": 2})
+        await temp_context.database.save("node", {"id": "b", "ts": 2})
+        await temp_context.database.save("node", {"id": "c", "ts": 1})
+
+        page1, _ = await temp_context.find_page("node", {}, sort=[("ts", -1)], limit=1)
+        assert page1[0]["id"] in ("a", "b")
+
+        page2, _ = await temp_context.find_page(
+            "node",
+            {},
+            sort=[("ts", -1)],
+            after={"sort": page1[0]["ts"], "id": page1[0]["id"]},
+            limit=2,
+        )
+        assert len(page2) >= 1

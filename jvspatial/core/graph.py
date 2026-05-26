@@ -169,9 +169,12 @@ async def generate_graph_dot(
 
     # Optionally save to file
     if output_file:
+        import asyncio
         from pathlib import Path
 
-        Path(output_file).write_text(result, encoding="utf-8")
+        # ``write_text`` is sync I/O and blocks the event loop in an async
+        # function (audit §3.4 / SPEC §3.3).
+        await asyncio.to_thread(Path(output_file).write_text, result, encoding="utf-8")
 
     return result
 
@@ -327,9 +330,12 @@ async def generate_graph_mermaid(
 
     # Optionally save to file
     if output_file:
+        import asyncio
         from pathlib import Path
 
-        Path(output_file).write_text(result, encoding="utf-8")
+        # Same blocking-write issue as generate_graph_dot
+        # (audit §3.5 / SPEC §3.3).
+        await asyncio.to_thread(Path(output_file).write_text, result, encoding="utf-8")
 
     return result
 

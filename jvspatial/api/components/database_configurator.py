@@ -8,7 +8,7 @@ import inspect
 import logging
 import os
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from jvspatial.core.context import GraphContext, set_default_context
 from jvspatial.db.factory import create_database
@@ -79,6 +79,17 @@ class DatabaseConfigurator:
         db_name = (db.db_database_name or "").strip() or "jvdb"
         return uri, db_name
 
+    def _resolve_observability_kwargs(self) -> Dict[str, Any]:
+        """Resolve optional DB observability wrapper kwargs from env."""
+        raw_enabled = str(os.environ.get("JVSPATIAL_OBSERVABILITY_ENABLED", "")).lower()
+        observe = raw_enabled in ("1", "true", "yes", "on")
+        slow_raw = os.environ.get("JVSPATIAL_SLOW_QUERY_MS", "")
+        try:
+            slow_query_ms = float(slow_raw) if slow_raw != "" else 100.0
+        except ValueError:
+            slow_query_ms = 100.0
+        return {"observe": observe, "slow_query_ms": slow_query_ms}
+
     def initialize_graph_context(self) -> Optional[GraphContext]:
         """Initialize GraphContext with current database configuration.
 
@@ -102,6 +113,7 @@ class DatabaseConfigurator:
         try:
             # Create prime database based on configuration FIRST.
             prime_db = None
+            observability_kwargs = self._resolve_observability_kwargs()
 
             if db_type == "json":
                 # Check if db_path is an S3 path (not supported for file-based databases)
@@ -121,6 +133,7 @@ class DatabaseConfigurator:
                 prime_db = create_database(
                     db_type="json",
                     base_path=db_path,
+                    **observability_kwargs,
                 )
             elif db_type == "mongodb":
                 mongo_uri, mongo_db_name = self._resolve_mongodb_connection()
@@ -128,6 +141,7 @@ class DatabaseConfigurator:
                     db_type="mongodb",
                     uri=mongo_uri,
                     db_name=mongo_db_name,
+                    **observability_kwargs,
                 )
             elif db_type == "sqlite":
                 # Check if db_path is an S3 path (not supported for file-based databases)
@@ -147,6 +161,7 @@ class DatabaseConfigurator:
                 prime_db = create_database(
                     db_type="sqlite",
                     db_path=db_path,
+                    **observability_kwargs,
                 )
             elif db_type == "dynamodb":
                 prime_db = create_database(
@@ -156,6 +171,7 @@ class DatabaseConfigurator:
                     endpoint_url=self.config.database.dynamodb_endpoint_url,
                     aws_access_key_id=self.config.database.dynamodb_access_key_id,
                     aws_secret_access_key=self.config.database.dynamodb_secret_access_key,
+                    **observability_kwargs,
                 )
             else:
                 raise ValueError(f"Unsupported database type: {db_type}")

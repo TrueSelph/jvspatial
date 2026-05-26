@@ -79,6 +79,36 @@ class CORSConfig(BaseModel):
     cors_headers: List[str] = Field(
         default_factory=lambda: ["Content-Type", "Authorization", "X-API-Key"]
     )
+    # Set to ``True`` to silence the startup warning that fires when
+    # ``cors_origins`` contains a wildcard. Default opt-in is loud so
+    # accidental wildcards in production surface as logs (audit §4.12 /
+    # SPEC §15.4).
+    cors_allow_wildcard: bool = False
+
+    @model_validator(mode="after")
+    def _warn_on_wildcard_origin(self) -> "CORSConfig":
+        """Emit a startup warning when CORS origins include a wildcard.
+
+        SPEC §15.4: "Wildcard origins must be set explicitly and trigger
+        a startup warning." Browsers reject ``allow_origins=["*"]`` when
+        ``allow_credentials=True`` at runtime, but the surprise factor
+        of a permissive wildcard left in by mistake warrants a loud
+        warning here too (audit §4.12).
+        """
+        import logging
+
+        if not self.cors_enabled:
+            return self
+        wildcards = [o for o in self.cors_origins if o.strip() == "*" or "*" in o]
+        if wildcards and not self.cors_allow_wildcard:
+            logging.getLogger(__name__).warning(
+                "CORSConfig: wildcard origins detected: %s. This permits "
+                "any origin and is rarely correct in production. Set "
+                "cors_allow_wildcard=True on CORSConfig to silence this "
+                "warning.",
+                wildcards,
+            )
+        return self
 
 
 class AuthConfig(BaseModel):

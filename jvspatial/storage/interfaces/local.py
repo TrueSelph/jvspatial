@@ -159,6 +159,30 @@ class LocalFileInterface(FileStorageInterface):
 
         return full_path
 
+    def _sanitized_version_base(self, file_path: str) -> Path:
+        """Return a sandboxed base path for versioning helpers.
+
+        ``create_version`` / ``get_version`` / ``list_versions`` /
+        ``delete_version`` / ``get_latest_version`` all derive ``.versions``
+        and ``.latest`` paths from ``file_path``. Without sanitization here,
+        a caller-supplied ``file_path`` like ``../../etc/passwd`` escapes
+        ``self.root_dir`` (audit §4.2 / SPEC §15.1). Centralizing the check
+        in one helper guarantees uniform coverage across every versioning
+        entry point.
+        """
+        sanitized = PathSanitizer.sanitize_path(file_path, base_dir=str(self.root_dir))
+        base = self.root_dir / sanitized
+        try:
+            # ``resolve(strict=False)`` traverses any existing symlinks but
+            # tolerates non-existent leaves (versioned bases often don't
+            # exist yet). The ``relative_to`` check then enforces the root.
+            resolved = base.resolve()
+            resolved.relative_to(self.root_dir)
+        except (ValueError, RuntimeError):
+            logger.error(f"Version path escape attempt blocked: {file_path}")
+            raise PathTraversalError("Path escapes root directory", path=file_path)
+        return base
+
     def _http_file_url(self, file_path: str) -> str:
         """Full URL for HTTP GET ``{FILES_ROOT}/{file_path}`` (FileStorageService)."""
         return f"{self.base_url.rstrip('/')}{APIRoutes.FILES_ROOT}/{file_path}"
@@ -203,8 +227,9 @@ class LocalFileInterface(FileStorageInterface):
         if version is None:
             version = f"v{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
-        # Create version directory (use .versions suffix to avoid conflicts)
-        version_dir = self.root_dir / f"{file_path}.versions"
+        # Sanitize ``file_path`` and derive sandboxed version paths.
+        version_base = self._sanitized_version_base(file_path)
+        version_dir = version_base.with_name(version_base.name + ".versions")
         await to_thread(version_dir.mkdir, parents=True, exist_ok=True)
 
         version_metadata = {
@@ -217,7 +242,7 @@ class LocalFileInterface(FileStorageInterface):
 
         version_file = version_dir / f"{version}.bin"
         metadata_file = version_dir / f"{version}.meta.json"
-        latest_file = self.root_dir / f"{file_path}.latest"
+        latest_file = version_base.with_name(version_base.name + ".latest")
 
         # 1) Write content atomically (fully durable).
         await to_thread(atomic_write_bytes, version_file, content)
@@ -249,7 +274,9 @@ class LocalFileInterface(FileStorageInterface):
         Returns:
             Dictionary with version information and content
         """
-        version_file = self.root_dir / f"{file_path}.versions" / f"{version}.bin"
+        version_base = self._sanitized_version_base(file_path)
+        version_dir = version_base.with_name(version_base.name + ".versions")
+        version_file = version_dir / f"{version}.bin"
 
         if not await to_thread(version_file.exists):
             return None
@@ -257,7 +284,7 @@ class LocalFileInterface(FileStorageInterface):
         content = await to_thread(version_file.read_bytes)
 
         # Try to get metadata
-        metadata_file = self.root_dir / f"{file_path}.versions" / f"{version}.meta.json"
+        metadata_file = version_dir / f"{version}.meta.json"
         metadata = {}
         if await to_thread(metadata_file.exists):
             try:
@@ -285,7 +312,8 @@ class LocalFileInterface(FileStorageInterface):
         Returns:
             List of version information dictionaries
         """
-        versions_dir = self.root_dir / f"{file_path}.versions"
+        version_base = self._sanitized_version_base(file_path)
+        versions_dir = version_base.with_name(version_base.name + ".versions")
 
         if not await to_thread(versions_dir.exists):
             return []
@@ -324,7 +352,8 @@ class LocalFileInterface(FileStorageInterface):
         Returns:
             True if version was deleted, False otherwise
         """
-        versions_dir = self.root_dir / f"{file_path}.versions"
+        version_base = self._sanitized_version_base(file_path)
+        versions_dir = version_base.with_name(version_base.name + ".versions")
 
         if not await to_thread(versions_dir.exists):
             return False
@@ -353,7 +382,8 @@ class LocalFileInterface(FileStorageInterface):
         Returns:
             Latest version information dictionary, or None if no versions exist
         """
-        latest_file = self.root_dir / f"{file_path}.latest"
+        version_base = self._sanitized_version_base(file_path)
+        latest_file = version_base.with_name(version_base.name + ".latest")
 
         if not await to_thread(latest_file.exists):
             return None

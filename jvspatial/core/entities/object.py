@@ -1,7 +1,7 @@
 """Base Object class for jvspatial entities."""
 
 import inspect
-from typing import Any, Dict, List, Optional, Set, Type, Union
+from typing import Any, ClassVar, Dict, List, Optional, Set, Type, Union
 
 from pydantic import BaseModel, ConfigDict
 
@@ -27,6 +27,21 @@ class Object(AttributeMixin, BaseModel):
     """
 
     model_config = ConfigDict(extra="ignore")
+
+    # Per-class override of the persisted ``entity`` discriminator. Defaults to
+    # ``cls.__name__``. Set this on a subclass when two unrelated ``Object``
+    # subtrees share a Python class name (e.g. host-app ``App`` vs library
+    # ``App``) and must remain distinguishable at the storage layer.
+    __entity_name__: ClassVar[Optional[str]] = None
+
+    @classmethod
+    def _entity_name(cls) -> str:
+        """Return the persisted entity discriminator for this class.
+
+        Honors ``__entity_name__`` when set on the class (not inherited from a
+        parent that happens to set it), otherwise falls back to ``cls.__name__``.
+        """
+        return cls.__dict__.get("__entity_name__") or cls.__name__
 
     id: str = attribute(
         protected=True, transient=True, description="Unique identifier for the object"
@@ -82,10 +97,10 @@ class Object(AttributeMixin, BaseModel):
                     type_code = type_code_field.default
                 else:
                     type_code = "o"  # Default type code
-            kwargs["id"] = generate_id(type_code, self.__class__.__name__)
+            kwargs["id"] = generate_id(type_code, self.__class__._entity_name())
         # Set entity to class name if not provided (protected attribute)
         if "entity" not in kwargs:
-            kwargs["entity"] = self.__class__.__name__
+            kwargs["entity"] = self.__class__._entity_name()
 
         # Call super().__init__() first to initialize Pydantic model (including __pydantic_private__)
         # The _initializing attribute defaults to True, so it's already set during Pydantic initialization
@@ -592,7 +607,7 @@ class Object(AttributeMixin, BaseModel):
         Returns:
             Set of class names including the class itself and all imported subclasses
         """
-        names: Set[str] = {cls.__name__}
+        names: Set[str] = {cls._entity_name()}
 
         # Add all imported subclasses recursively
         for subclass in cls.__subclasses__():

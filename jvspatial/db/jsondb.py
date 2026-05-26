@@ -149,6 +149,20 @@ class JsonDB(Database):
         collection_dir = self._get_collection_dir(collection)
         return collection_dir / f"{record_id}.json"
 
+    @staticmethod
+    def _list_collection_json_files(collection_dir: Path) -> List[Path]:
+        """Enumerate persisted ``*.json`` records.
+
+        Called from inside ``asyncio.to_thread`` by ``count`` and ``find``
+        so the directory scan does not block the event loop.
+
+        Note: in-flight ``*.jvtmp`` files are named
+        ``<id>.json.<pid>.<hex>.jvtmp`` (see ``_atomic._make_temp_path``)
+        so the ``*.json`` glob already excludes them — the historical
+        ``not endswith('.jvtmp')`` filter was dead (audit §5.16).
+        """
+        return list(collection_dir.glob("*.json"))
+
     async def _async_write_json(self, path: Path, data: Dict[str, Any]) -> None:
         """Write JSON data to file asynchronously.
 
@@ -165,7 +179,10 @@ class JsonDB(Database):
         Uses aiofiles if available, otherwise falls back to asyncio.to_thread.
         Returns None if file doesn't exist or is invalid.
         """
-        if not path.exists():
+        # ``Path.exists`` performs a stat() syscall — blocking I/O inside
+        # an async function (audit §3.6 / SPEC §3.3). Offload to the
+        # default executor instead.
+        if not await asyncio.to_thread(path.exists):
             return None
 
         try:
@@ -247,12 +264,14 @@ class JsonDB(Database):
         """
         q = query or {}
         collection_dir = self._get_collection_dir(collection)
-        if not collection_dir.exists():
+        # Sync ``exists``/``glob`` block the event loop — offload both
+        # (audit §3.6 / SPEC §3.3).
+        if not await asyncio.to_thread(collection_dir.exists):
             return 0
 
-        json_files = [
-            p for p in collection_dir.glob("*.json") if not p.name.endswith(".jvtmp")
-        ]
+        json_files = await asyncio.to_thread(
+            self._list_collection_json_files, collection_dir
+        )
 
         if not q:
             return len(json_files)
@@ -283,7 +302,8 @@ class JsonDB(Database):
         # Build (id, path) pairs first so we can short-circuit when
         # the collection dir doesn't exist.
         collection_dir = self._get_collection_dir(collection)
-        if not collection_dir.exists():
+        # Sync stat blocks the event loop (audit §3.6 / SPEC §3.3).
+        if not await asyncio.to_thread(collection_dir.exists):
             return {}
         paths = [
             (rec_id, self._get_record_path(collection, rec_id)) for rec_id in unique_ids
@@ -352,15 +372,17 @@ class JsonDB(Database):
         """
         collection_dir = self._get_collection_dir(collection)
 
-        if not collection_dir.exists():
+        # Sync ``exists``/``glob`` block the event loop — offload both
+        # (audit §3.6 / SPEC §3.3).
+        if not await asyncio.to_thread(collection_dir.exists):
             return []
 
         # Get all JSON files in the collection directory.
         # Skip ``*.jvtmp`` files left behind by an in-flight write -- they
         # are not yet part of the published dataset.
-        json_files = [
-            p for p in collection_dir.glob("*.json") if not p.name.endswith(".jvtmp")
-        ]
+        json_files = await asyncio.to_thread(
+            self._list_collection_json_files, collection_dir
+        )
 
         if not json_files:
             return []

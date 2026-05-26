@@ -364,7 +364,12 @@ class AuthenticationService:
                 except Exception:
                     return False
         else:
-            return hashlib.sha256(token.encode()).hexdigest() == hashed
+            # Constant-time comparison is non-negotiable for any secret
+            # comparison (SPEC §15.2, CLAUDE.md invariant §2). The earlier
+            # ``==`` form was timing-leakable on partial hex prefix matches.
+            return hmac.compare_digest(
+                hashlib.sha256(token.encode()).hexdigest(), hashed
+            )
 
     def _generate_jwt_token(
         self,
@@ -423,8 +428,10 @@ class AuthenticationService:
             import logging
 
             logger = logging.getLogger(__name__)
+            # Do not log secret length — that narrows the search space
+            # for a brute force (audit §4.11 / SPEC §15.5).
             logger.debug(
-                f"JWT token decode failed: {e}, secret length: {len(self.jwt_secret) if self.jwt_secret else 0}"
+                f"JWT token decode failed: {e}, secret_configured={bool(self.jwt_secret)}"
             )
             return None
 
@@ -1049,13 +1056,13 @@ class AuthenticationService:
             )
 
         if not user:
-            db_path = getattr(
-                getattr(self.context, "database", None), "base_path", None
-            )
+            # Avoid logging the filesystem path of the database — leaks
+            # on-disk layout to log sinks (audit §4.13 / SPEC §15.5).
+            db_type = type(getattr(self.context, "database", None)).__name__
             self._logger.warning(
-                "[validate_token] failed: user %s not found in database (db_path=%s)",
+                "[validate_token] failed: user %s not found in database (db_type=%s)",
                 user_id,
-                db_path,
+                db_type,
             )
             return None
 

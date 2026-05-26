@@ -132,7 +132,11 @@ def inject_walker_webhook_payload(walker_class: type) -> type:
     """
     original_init = walker_class.__init__  # type: ignore
 
-    async def enhanced_init(self, *args: Any, **kwargs: Any) -> None:
+    # ``__init__`` is a sync protocol — Python ignores ``async def __init__``
+    # and returns the coroutine to the constructor, which then never gets
+    # awaited. The earlier ``async def`` here leaked a coroutine on every
+    # webhook walker construction (audit §3.1 / SPEC §3.1).
+    def enhanced_init(self, *args: Any, **kwargs: Any) -> None:
         # Extract webhook data from kwargs if present
         webhook_data = kwargs.pop("webhook_data", {})
 
@@ -212,9 +216,12 @@ def create_webhook_wrapper(endpoint_func: Callable) -> Callable:
                 # For any other required parameters, we'll let the function handle it
                 # and raise an error if needed
 
-            # Call original function with only the parameters it expects
+            # Call original function with only the parameters it expects.
+            # The async branch must ``await``; previously both arms were
+            # identical, so coroutines leaked unawaited (audit §3.2 /
+            # SPEC §3.1).
             if asyncio.iscoroutinefunction(endpoint_func):
-                result = endpoint_func(**kwargs)
+                result = await endpoint_func(**kwargs)
             else:
                 result = endpoint_func(**kwargs)
 

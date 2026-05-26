@@ -8,7 +8,38 @@ ServerlessProvider = Literal["aws", "azure", "gcp", "vercel", "unknown"]
 
 
 def _parse_bool(val: str) -> bool:
-    return str(val).strip().lower() in ("true", "1", "yes", "enabled")
+    """Truthy ``SERVERLESS_MODE`` env override.
+
+    Delegates to :func:`jvspatial.env.parse_bool` for the canonical set
+    (``true/false``, ``1/0``, ``yes/no``, ``on/off``) plus the historical
+    ``enabled``/``disabled`` aliases kept for backward compatibility
+    (audit §7.2).
+
+    Unrecognized non-empty values are now logged (audit §7.3): silently
+    mapping garbage to ``False`` hid typos. Returns ``False`` either way
+    so existing deployments with typo'd ``SERVERLESS_MODE`` keep their
+    previous effective behavior — but the warning surfaces the typo.
+    """
+    import logging
+
+    # Late import to avoid circular dependency at module load.
+    from jvspatial.env import parse_bool
+
+    s = str(val).strip().lower()
+    if s == "enabled":
+        return True
+    if s == "disabled":
+        return False
+    try:
+        return parse_bool(s)
+    except ValueError:
+        logging.getLogger(__name__).warning(
+            "Unrecognized boolean env value %r for SERVERLESS_MODE; "
+            "treating as False. Use one of: true/false, 1/0, yes/no, "
+            "on/off, enabled/disabled.",
+            val,
+        )
+        return False
 
 
 @lru_cache(maxsize=1)

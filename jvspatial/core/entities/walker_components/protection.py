@@ -53,6 +53,10 @@ class TraversalProtection:
         # Track visit violations for O(1) check_limits() - set when any node
         # reaches max_visits_per_node (before raising exception)
         self._visit_violation_detected: bool = False
+        # Whether the traversal session has begun. ``start_if_needed`` flips
+        # this once per session so ``resume()`` cannot reset step / visit /
+        # timer counters (audit §2.2 / SPEC §6.3).
+        self._started: bool = False
 
     async def increment_step(self) -> None:
         """Increment the step counter and check protection limits."""
@@ -116,11 +120,30 @@ class TraversalProtection:
             )
 
     async def reset(self) -> None:
-        """Reset protection state and start timing."""
+        """Reset protection state and start timing.
+
+        Explicit reset for callers that want to restart a traversal from
+        scratch. ``Walker.run()`` should call :meth:`start_if_needed`
+        instead — calling ``reset`` on every ``run`` (including from
+        ``resume()``) lets pause/resume cycle around the configured limits
+        (audit §2.2 / SPEC §6.3).
+        """
         self._steps = 0
         self._visit_counts.clear()
         self._visit_violation_detected = False
         self._start_time = time.time()
+        self._started = True
+
+    async def start_if_needed(self) -> None:
+        """Initialize the timer / counters on first call, then no-op.
+
+        Idempotent across ``Walker.run()`` invocations so ``resume()`` does
+        not wipe accumulated step / visit / timer state. Callers wanting a
+        fresh session must call :meth:`reset` explicitly.
+        """
+        if self._started:
+            return
+        await self.reset()
 
     @property
     def step_count(self) -> int:

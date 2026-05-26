@@ -69,6 +69,49 @@ class PathSanitizer:
     # Known internal storage markers (directory placeholders, sandbox roots)
     _ALLOWED_HIDDEN_SEGMENTS = frozenset({".jvdirectory", ".jvagent_sandbox"})
 
+    # Windows-reserved filename stems. CMD / Win32 reject these regardless
+    # of extension, so allowing them in a cross-platform storage layer
+    # creates write-failure footguns and lets an attacker DoS a Windows
+    # host by uploading e.g. ``CON.txt`` (audit §4.18 / SPEC §15.1).
+    _WINDOWS_RESERVED_NAMES = frozenset(
+        {
+            "CON",
+            "PRN",
+            "AUX",
+            "NUL",
+            "COM1",
+            "COM2",
+            "COM3",
+            "COM4",
+            "COM5",
+            "COM6",
+            "COM7",
+            "COM8",
+            "COM9",
+            "LPT1",
+            "LPT2",
+            "LPT3",
+            "LPT4",
+            "LPT5",
+            "LPT6",
+            "LPT7",
+            "LPT8",
+            "LPT9",
+        }
+    )
+
+    @classmethod
+    def _is_windows_reserved(cls, part: str) -> bool:
+        """Return True when ``part`` matches a Windows-reserved name.
+
+        Checked regardless of host OS so cross-platform storage is
+        uniformly safe.
+        """
+        # Match the stem before any extension. ``CON.txt`` is reserved
+        # because Windows resolves the device first.
+        stem = part.split(".", 1)[0].upper()
+        return stem in cls._WINDOWS_RESERVED_NAMES
+
     @classmethod
     def sanitize_path(
         cls, file_path: str, base_dir: Optional[str] = None, allow_hidden: bool = False
@@ -170,6 +213,13 @@ class PathSanitizer:
                     path=file_path,
                 )
 
+            # Reject Windows-reserved filenames cross-platform (audit §4.18).
+            if cls._is_windows_reserved(part):
+                raise InvalidPathError(
+                    f"Reserved Windows filename not allowed: {part}",
+                    path=file_path,
+                )
+
             # Check filename length
             if len(part) > cls.MAX_FILENAME_LENGTH:
                 raise InvalidPathError(
@@ -237,6 +287,10 @@ class PathSanitizer:
             # Remove invalid characters
             filename = re.sub(r"[^a-zA-Z0-9_\-\.]", "_", filename)
             logger.info("Filename sanitized by removing invalid characters")
+
+        # Reject Windows-reserved filenames cross-platform (audit §4.18).
+        if cls._is_windows_reserved(filename):
+            raise InvalidPathError(f"Reserved Windows filename not allowed: {filename}")
 
         # Enforce length limit
         if len(filename) > cls.MAX_FILENAME_LENGTH:

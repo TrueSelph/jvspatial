@@ -19,6 +19,7 @@ from jvspatial.db._cache import CachingDatabase
 from jvspatial.db._observable import ObservableDatabase
 from jvspatial.db.factory import create_database
 from jvspatial.db.jsondb import JsonDB
+from jvspatial.observability import db_op_counter
 
 
 class _CapturingRecorder:
@@ -160,6 +161,17 @@ class TestMetrics:
             c for c in rec.counters if c[0] == "jvspatial.db.op.slow_count"
         ]
         assert slow_counters, "slow op should emit slow_count counter"
+
+    async def test_db_op_counter_increments_per_operation(self, jsondb):
+        wrapped = ObservableDatabase(jsondb)
+        tok = db_op_counter.set(0)
+        try:
+            await wrapped.save("node", {"id": "x", "v": 1})
+            await wrapped.get("node", "x")
+            await wrapped.find("node", {})
+            assert db_op_counter.get() == 3
+        finally:
+            db_op_counter.reset(tok)
 
 
 # ---------------------- error path ------------------------------------

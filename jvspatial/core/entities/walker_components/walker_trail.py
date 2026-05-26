@@ -6,15 +6,31 @@ during graph traversals, including metadata about each step.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from collections import deque
+from typing import Any, Deque, Dict, List, Optional
 
 
 class WalkerTrail:
-    """Tracks traversal steps and metadata."""
+    """Tracks traversal steps and metadata.
 
-    def __init__(self) -> None:
-        """Initialize the trail tracker."""
-        self._trail: List[Dict[str, Any]] = []
+    ``max_length`` bounds the trail so long traversals cannot blow memory
+    (SPEC §6.4 — ``0`` means unlimited, the documented Walker contract).
+    Older steps are dropped from the front when the bound is hit.
+    """
+
+    def __init__(self, max_length: int = 0) -> None:
+        """Initialize the trail tracker.
+
+        Args:
+            max_length: Maximum number of steps retained. ``0`` (default)
+                means unlimited. Use a positive integer to cap memory on
+                long-running traversals.
+        """
+        self._max_length = max(0, int(max_length))
+        # ``maxlen=None`` makes the deque unbounded. Annotating in one place
+        # so mypy knows the element type regardless of which branch ran.
+        bound: Optional[int] = self._max_length if self._max_length > 0 else None
+        self._trail: Deque[Dict[str, Any]] = deque(maxlen=bound)
 
     def record_step(
         self, node_id: Any, edge_id: Optional[Any] = None, **metadata: Any
@@ -41,7 +57,9 @@ class WalkerTrail:
         """Get most recent node IDs from trail."""
         if count <= 0:
             return []
-        return [step["node"] for step in self._trail[-count:]]
+        # ``deque`` does not support slice access; materialize once.
+        trail_list = list(self._trail)
+        return [step["node"] for step in trail_list[-count:]]
 
     def get_length(self) -> int:
         """Get trail length."""

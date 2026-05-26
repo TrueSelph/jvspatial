@@ -2,14 +2,33 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Dict, List, Optional
 
+from jvspatial.env import parse_bool
 from jvspatial.runtime.eventbridge_readiness import resolve_eventbridge_lambda_arn
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_bool(val: str) -> bool:
-    return str(val).strip().lower() in ("true", "1", "yes")
+    """Permissive boolean parser; consolidated with :func:`jvspatial.env.parse_bool`.
+
+    Accepts ``true/false``, ``1/0``, ``yes/no``, ``on/off`` (case
+    insensitive). Falls back to ``False`` for unrecognized values rather
+    than raising — preserves prior behavior for misconfigured env values
+    (audit §7.2-§7.3).
+    """
+    try:
+        return parse_bool(val)
+    except ValueError:
+        logger.warning(
+            "env_adapter: unrecognized boolean env value %r; treating as False. "
+            "Use one of: true/false, 1/0, yes/no, on/off.",
+            val,
+        )
+        return False
 
 
 def _split_csv_list(raw: Optional[str]) -> Optional[List[str]]:
@@ -193,8 +212,198 @@ def server_config_overrides_from_env() -> Dict[str, Any]:
     return o
 
 
+# Canonical allowlist of every ``JVSPATIAL_*`` environment variable the
+# library reads. Anything outside this set is rejected at startup so
+# typos (``JVSPATIAL_JWT_SECRET`` for ``JVSPATIAL_JWT_SECRET_KEY`` and
+# similar) surface immediately rather than silently no-op'ing.
+# SPEC §10.2: "Unknown JVSPATIAL_* keys are rejected at startup to catch
+# typos and removed settings." Audit §7.1 closed.
+ALLOWED_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        # API metadata / server runtime
+        "JVSPATIAL_TITLE",
+        "JVSPATIAL_API_TITLE",
+        "JVSPATIAL_DESCRIPTION",
+        "JVSPATIAL_API_DESCRIPTION",
+        "JVSPATIAL_VERSION",
+        "JVSPATIAL_API_VERSION",
+        "JVSPATIAL_API_PREFIX",
+        "JVSPATIAL_API_HEALTH",
+        "JVSPATIAL_API_ROOT",
+        "JVSPATIAL_HOST",
+        "JVSPATIAL_PORT",
+        "JVSPATIAL_DEBUG",
+        "JVSPATIAL_LOG_LEVEL",
+        "JVSPATIAL_GRAPH_ENDPOINT_ENABLED",
+        "JVSPATIAL_ENVIRONMENT",
+        "JVSPATIAL_DOCS_DISABLED",
+        # Database
+        "JVSPATIAL_DB_TYPE",
+        "JVSPATIAL_DB_PATH",
+        "JVSPATIAL_MONGODB_URI",
+        "JVSPATIAL_MONGODB_DB_NAME",
+        "JVSPATIAL_MONGODB_MAX_POOL_SIZE",
+        "JVSPATIAL_MONGODB_MIN_POOL_SIZE",
+        "JVSPATIAL_DYNAMODB_TABLE_NAME",
+        "JVSPATIAL_DYNAMODB_REGION",
+        "JVSPATIAL_DYNAMODB_ENDPOINT_URL",
+        "JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX",
+        "JVSPATIAL_AUTO_CREATE_INDEXES",
+        # Auth
+        "JVSPATIAL_AUTH_ENABLED",
+        "JVSPATIAL_AUTH_STRICT_HASHING",
+        "JVSPATIAL_AUTH_BLACKLIST_FAIL_CLOSED",
+        "JVSPATIAL_JWT_SECRET_KEY",
+        "JVSPATIAL_JWT_ALGORITHM",
+        "JVSPATIAL_JWT_EXPIRE_MINUTES",
+        "JVSPATIAL_JWT_REFRESH_EXPIRE_DAYS",
+        "JVSPATIAL_BCRYPT_ROUNDS",
+        "JVSPATIAL_BCRYPT_ROUNDS_SERVERLESS",
+        # CORS
+        "JVSPATIAL_CORS_ENABLED",
+        "JVSPATIAL_CORS_ORIGINS",
+        "JVSPATIAL_CORS_METHODS",
+        "JVSPATIAL_CORS_HEADERS",
+        # Rate limiting
+        "JVSPATIAL_RATE_LIMIT_ENABLED",
+        "JVSPATIAL_RATE_LIMIT_DEFAULT_REQUESTS",
+        "JVSPATIAL_RATE_LIMIT_DEFAULT_WINDOW",
+        # File storage
+        "JVSPATIAL_FILE_STORAGE_ENABLED",
+        "JVSPATIAL_FILE_STORAGE_PROVIDER",
+        "JVSPATIAL_FILE_STORAGE_BASE_URL",
+        "JVSPATIAL_FILE_STORAGE_MAX_SIZE",
+        "JVSPATIAL_FILE_STORAGE_SERVERLESS_SHARED",
+        "JVSPATIAL_FILES_ROOT_PATH",
+        "JVSPATIAL_FILES_PUBLIC_READ",
+        "JVSPATIAL_FILE_INTERFACE",
+        "JVSPATIAL_S3_BUCKET_NAME",
+        "JVSPATIAL_S3_REGION",
+        "JVSPATIAL_S3_ACCESS_KEY",
+        "JVSPATIAL_S3_SECRET_KEY",
+        "JVSPATIAL_S3_ENDPOINT_URL",
+        "JVSPATIAL_S3_MULTIPART_THRESHOLD",
+        # URL proxy
+        "JVSPATIAL_PROXY_ENABLED",
+        "JVSPATIAL_PROXY_DEFAULT_EXPIRATION",
+        "JVSPATIAL_PROXY_MAX_EXPIRATION",
+        "JVSPATIAL_PROXY_PREFIX",
+        # Cache
+        "JVSPATIAL_CACHE_BACKEND",
+        "JVSPATIAL_CACHE_SIZE",
+        "JVSPATIAL_REDIS_URL",
+        "JVSPATIAL_REDIS_TTL",
+        "JVSPATIAL_REDIS_SERIALIZATION",
+        # Scheduler / deferred / serverless
+        "JVSPATIAL_SCHEDULER_ENABLED",
+        "JVSPATIAL_SCHEDULER_INTERVAL",
+        "JVSPATIAL_DEFERRED_TASK_PROVIDER",
+        "JVSPATIAL_DEFERRED_INVOKE_DISABLED",
+        "JVSPATIAL_DEFERRED_INVOKE_SECRET",
+        "JVSPATIAL_ENABLE_DEFERRED_SAVES",
+        "JVSPATIAL_AWS_DEFERRED_TRANSPORT",
+        "JVSPATIAL_AWS_SQS_QUEUE_URL",
+        "JVSPATIAL_EVENTBRIDGE_LAMBDA_ARN",
+        "JVSPATIAL_EVENTBRIDGE_ROLE_ARN",
+        "JVSPATIAL_EVENTBRIDGE_SCHEDULER_ENABLED",
+        "JVSPATIAL_EVENTBRIDGE_SCHEDULER_GROUP",
+        "JVSPATIAL_LWA_ENV_DEFAULTS",
+        # Webhooks
+        "JVSPATIAL_WEBHOOK_HMAC_ALGORITHM",
+        "JVSPATIAL_WEBHOOK_HMAC_SECRET",
+        "JVSPATIAL_WEBHOOK_HTTPS_REQUIRED",
+        "JVSPATIAL_WEBHOOK_IDEMPOTENCY_TTL",
+        "JVSPATIAL_WEBHOOK_MAX_PAYLOAD_SIZE",
+        # Walkers
+        "JVSPATIAL_WALKER_MAX_STEPS",
+        "JVSPATIAL_WALKER_MAX_VISITS_PER_NODE",
+        "JVSPATIAL_WALKER_MAX_EXECUTION_TIME",
+        "JVSPATIAL_WALKER_MAX_QUEUE_SIZE",
+        "JVSPATIAL_WALKER_MAX_TRAIL_LENGTH",
+        "JVSPATIAL_WALKER_PROTECTION_ENABLED",
+        # Logging
+        "JVSPATIAL_DB_LOGGING_ENABLED",
+        "JVSPATIAL_DB_LOGGING_API_ENABLED",
+        "JVSPATIAL_DB_LOGGING_DB_NAME",
+        "JVSPATIAL_DB_LOGGING_LEVELS",
+        "JVSPATIAL_DB_LOG_SERVERLESS_ASYNC",
+        "JVSPATIAL_DB_LOG_SERVERLESS_JOIN_TIMEOUT",
+        "JVSPATIAL_LOG_DB_TYPE",
+        "JVSPATIAL_LOG_DB_NAME",
+        "JVSPATIAL_LOG_DB_PATH",
+        "JVSPATIAL_LOG_DB_URI",
+        "JVSPATIAL_LOG_DB_REGION",
+        "JVSPATIAL_LOG_DB_TABLE_NAME",
+        "JVSPATIAL_LOG_DB_ENDPOINT_URL",
+        # Collections
+        "JVSPATIAL_COLLECTION_API_KEYS",
+        "JVSPATIAL_COLLECTION_SCHEDULED_TASKS",
+        "JVSPATIAL_COLLECTION_SESSIONS",
+        "JVSPATIAL_COLLECTION_USERS",
+        "JVSPATIAL_COLLECTION_WEBHOOKS",
+        "JVSPATIAL_COLLECTION_WEBHOOK_REQUESTS",
+        # Work-claim helpers
+        "JVSPATIAL_WORK_CLAIM_STALE_SECONDS",
+        # Misc
+        "JVSPATIAL_TEXT_NORMALIZATION_ENABLED",
+        "JVSPATIAL_EXPOSE_ERROR_DETAILS",
+        "JVSPATIAL_STRICT_ENV_ALLOWLIST",
+    }
+)
+
+
+def discover_unknown_jvspatial_env_keys() -> List[str]:
+    """Return any ``JVSPATIAL_*`` env keys not present in :data:`ALLOWED_ENV_KEYS`.
+
+    Pure helper — callers decide the strictness of the response.
+    """
+    return sorted(
+        k
+        for k in os.environ
+        if k.startswith("JVSPATIAL_") and k not in ALLOWED_ENV_KEYS
+    )
+
+
+def enforce_env_allowlist() -> None:
+    """Reject (strict) or warn (default) on unknown ``JVSPATIAL_*`` env keys.
+
+    Toggled by ``JVSPATIAL_STRICT_ENV_ALLOWLIST``: when truthy, unknown
+    keys raise ``ValueError`` at server startup, surfacing typos
+    immediately. Default emits a single warning per unknown key per
+    process so existing deployments don't break on upgrade.
+
+    Closes audit §7.1 / SPEC §10.2.
+    """
+    unknown = discover_unknown_jvspatial_env_keys()
+    if not unknown:
+        return
+
+    strict = False
+    raw_strict = os.environ.get("JVSPATIAL_STRICT_ENV_ALLOWLIST", "").strip()
+    if raw_strict:
+        try:
+            strict = parse_bool(raw_strict)
+        except ValueError:
+            strict = False
+
+    if strict:
+        raise ValueError(
+            "Unknown JVSPATIAL_* environment variables detected: "
+            + ", ".join(unknown)
+            + ". Either remove the variable or add it to ALLOWED_ENV_KEYS in "
+            "jvspatial/env_adapter.py."
+        )
+    for key in unknown:
+        logger.warning(
+            "Unknown JVSPATIAL_* env var %r ignored. Set "
+            "JVSPATIAL_STRICT_ENV_ALLOWLIST=true to fail-fast on typos.",
+            key,
+        )
+
+
 def validate_server_config_requirements(config: Any) -> None:
     """Raise ``ValueError`` when required settings for enabled features are missing."""
+    enforce_env_allowlist()
     auth = config.auth
     if auth.auth_enabled:
         secret = (auth.jwt_secret or "").strip()

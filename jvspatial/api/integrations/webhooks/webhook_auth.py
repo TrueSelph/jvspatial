@@ -20,14 +20,46 @@ _API_KEY_CACHE: Dict[str, Tuple[float, Any]] = {}
 _API_KEY_CACHE_TTL = 300.0
 _API_KEY_CACHE_MAX_SIZE = 500
 _API_KEY_VALIDATE_TIMEOUT = 10.0
+# Single lock guards every read/write/eviction of ``_API_KEY_CACHE`` so
+# concurrent webhook requests cannot trip a ``KeyError`` when the size-cap
+# eviction races a cache read (audit §4.7).
+_API_KEY_CACHE_LOCK = asyncio.Lock()
 
 
-def _api_key_cache_cleanup() -> None:
-    """Remove expired entries from API key cache."""
+def _api_key_cache_cleanup_locked() -> None:
+    """Remove expired entries from API key cache. Caller holds the lock."""
     now = time.time()
     expired = [k for k, (exp, _) in _API_KEY_CACHE.items() if exp <= now]
     for k in expired:
         del _API_KEY_CACHE[k]
+
+
+async def invalidate_api_key_cache(api_key: Optional[str] = None) -> None:
+    """Drop a single key (or all keys) from the webhook API-key cache.
+
+    ``APIKeyService.revoke_key`` calls this so revoking a key is reflected
+    immediately, not after the up-to-5-minute TTL (audit §4.5).
+    """
+    async with _API_KEY_CACHE_LOCK:
+        if api_key is None:
+            _API_KEY_CACHE.clear()
+            return
+        cache_key = hashlib.sha256(api_key.encode()).hexdigest()
+        _API_KEY_CACHE.pop(cache_key, None)
+
+
+def invalidate_api_key_cache_hash(cache_key: str) -> None:
+    """Drop a single hashed cache key (sync variant).
+
+    Callers that already hold the cache hash (e.g. ``APIKeyService``
+    working with the persisted hash, not the plaintext key) can invoke
+    this from sync code paths such as ``APIKeyService.revoke_key``.
+
+    The unlocked ``pop`` accepts a one-shot race where a concurrent
+    reader sees the stale entry once — preferable to failing in callers
+    that have no bound event loop.
+    """
+    _API_KEY_CACHE.pop(cache_key, None)
 
 
 async def authenticate_webhook_api_key(
@@ -144,17 +176,24 @@ async def authenticate_webhook_api_key(
         cache_key = hashlib.sha256(api_key.encode()).hexdigest()
         now = time.time()
         cache_hit = False
-        if cache_key in _API_KEY_CACHE:
-            cached_expiry, cached_entity = _API_KEY_CACHE[cache_key]
-            if cached_expiry > now and cached_entity is not None:
-                api_key_entity = cached_entity
-                cache_hit = True
-                logger.debug(f"Webhook API key cache hit: key_id={cached_entity.id}")
+        # Single lock around read + eviction + miss-population so a
+        # concurrent size-cap cleanup cannot ``KeyError`` a reader and
+        # the size cap is not racy (audit §4.7).
+        async with _API_KEY_CACHE_LOCK:
+            cached = _API_KEY_CACHE.get(cache_key)
+            if cached is not None:
+                cached_expiry, cached_entity = cached
+                if cached_expiry > now and cached_entity is not None:
+                    api_key_entity = cached_entity
+                    cache_hit = True
+                    logger.debug(
+                        f"Webhook API key cache hit: key_id={cached_entity.id}"
+                    )
+                else:
+                    api_key_entity = None
+                    _API_KEY_CACHE.pop(cache_key, None)
             else:
                 api_key_entity = None
-                del _API_KEY_CACHE[cache_key]
-        else:
-            api_key_entity = None
 
         prime_ctx = None
         service = None
@@ -175,12 +214,13 @@ async def authenticate_webhook_api_key(
                     detail="Service temporarily unavailable",
                 )
             if api_key_entity:
-                if len(_API_KEY_CACHE) >= _API_KEY_CACHE_MAX_SIZE:
-                    _api_key_cache_cleanup()
-                _API_KEY_CACHE[cache_key] = (
-                    now + _API_KEY_CACHE_TTL,
-                    api_key_entity,
-                )
+                async with _API_KEY_CACHE_LOCK:
+                    if len(_API_KEY_CACHE) >= _API_KEY_CACHE_MAX_SIZE:
+                        _api_key_cache_cleanup_locked()
+                    _API_KEY_CACHE[cache_key] = (
+                        now + _API_KEY_CACHE_TTL,
+                        api_key_entity,
+                    )
 
         if not api_key_entity:
             raise HTTPException(status_code=401, detail="Invalid or expired API key")

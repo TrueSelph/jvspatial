@@ -21,8 +21,6 @@ if TYPE_CHECKING:
     from .node import Node
     from .edge import Edge
 
-from jvspatial.exceptions import JVSpatialError
-
 from ..annotations import AttributeMixin, attribute
 from ..events import event_bus
 from ..utils import generate_id
@@ -115,6 +113,21 @@ class Walker(AttributeMixin, BaseModel):
     """
 
     model_config = ConfigDict(extra="allow")
+
+    # Per-class override of the persisted ``entity`` discriminator. Mirrors
+    # ``Object.__entity_name__`` so Walker subclasses can disambiguate from
+    # same-``__name__`` peers without subclassing Object.
+    __entity_name__: ClassVar[Optional[str]] = None
+
+    @classmethod
+    def _entity_name(cls) -> str:
+        """Return the persisted entity discriminator for this walker class.
+
+        Honors ``__entity_name__`` when set directly on the class (not
+        inherited), otherwise falls back to ``cls.__name__``.
+        """
+        return cls.__dict__.get("__entity_name__") or cls.__name__
+
     type_code: str = attribute(transient=True, default="w")
     id: str = attribute(
         protected=True, transient=True, description="Unique identifier for the walker"
@@ -137,7 +150,9 @@ class Walker(AttributeMixin, BaseModel):
     ] = {}
     _paused: bool = attribute(private=True, default=False)
 
-    # Trail tracking
+    # Trail tracking. Default factory creates an unbounded trail; Walker
+    # ``__init__`` rebuilds with ``max_trail_length`` from kwargs/env so
+    # SPEC §6.4 ``max_trail_length`` is actually wired (audit §2.3).
     _trail_tracker: WalkerTrail = attribute(private=True, default_factory=WalkerTrail)
 
     # Trail-related methods (sync for pure computations, async for I/O)
@@ -302,13 +317,22 @@ class Walker(AttributeMixin, BaseModel):
 
     def __init__(self: "Walker", **kwargs: Any) -> None:
         """Initialize a walker with auto-generated ID if not provided."""
+        entity_name = self.__class__._entity_name()
+        # Force ``type_code='w'`` so SPEC §1.1 ID-format invariant
+        # (``w.EntityName.<hex>``) cannot be corrupted by a caller
+        # passing a different value (audit §2.10).
+        if kwargs.get("type_code", "w") != "w":
+            raise ValueError(
+                f"Walker.type_code must be 'w'; got {kwargs.get('type_code')!r}"
+            )
+        kwargs["type_code"] = "w"
         if "id" not in kwargs:
-            # Use class-level type_code or default from Field
-            type_code = kwargs.get("type_code", "w")
-            kwargs["id"] = generate_id(type_code, self.__class__.__name__)
-        # Set entity to class name if not provided (protected attribute)
+            kwargs["id"] = generate_id("w", entity_name)
+        # Set entity to class entity_name if not provided (protected attribute).
+        # Honors ``__entity_name__`` override so subclasses with the same
+        # Python ``__name__`` as a sibling persist a distinct discriminator.
         if "entity" not in kwargs:
-            kwargs["entity"] = self.__class__.__name__
+            kwargs["entity"] = entity_name
 
         # Extract component configuration from kwargs (before super().__init__)
         from jvspatial.env import env, parse_bool_basic
@@ -327,6 +351,12 @@ class Walker(AttributeMixin, BaseModel):
         max_queue_size = kwargs.pop(
             "max_queue_size",
             int(env("JVSPATIAL_WALKER_MAX_QUEUE_SIZE", default="1000")),
+        )
+        # 0 = unlimited (SPEC §6.4). Bounds the in-memory trail so long
+        # traversals cannot blow memory (audit §2.3).
+        max_trail_length = kwargs.pop(
+            "max_trail_length",
+            int(env("JVSPATIAL_WALKER_MAX_TRAIL_LENGTH", default="0")),
         )
         paused = kwargs.pop("paused", False)
 
@@ -347,7 +377,9 @@ class Walker(AttributeMixin, BaseModel):
         # Initialize composition components
         self._queue: deque[Any] = deque()  # Create new deque for queue manager
         self.queue = WalkerQueue(backing_deque=self._queue, max_size=max_queue_size)
-        # Trail is initialized as _trail_tracker class attribute
+        # Replace default unbounded trail with a (possibly bounded) one so
+        # ``max_trail_length`` from kwargs/env is honored (SPEC §6.4).
+        self._trail_tracker = WalkerTrail(max_length=max_trail_length)
         self._protection = TraversalProtection(
             max_steps=max_steps,
             max_visits_per_node=max_visits_per_node,
@@ -363,8 +395,15 @@ class Walker(AttributeMixin, BaseModel):
         # Register with global event bus
         # Note: We need to register asynchronously, so we'll do it in spawn()
 
-    def __init_subclass__(cls: Type["Walker"]) -> None:
-        """Handle subclass initialization."""
+    def __init_subclass__(cls: Type["Walker"], **kwargs: Any) -> None:
+        """Handle subclass initialization.
+
+        Forwards through ``super().__init_subclass__`` so
+        ``AttributeMixin.__init_subclass__`` runs and registers
+        ``protected`` / ``transient`` / ``private`` attribute metadata
+        for Walker subclasses (audit §6.3).
+        """
+        super().__init_subclass__(**kwargs)
         cls._visit_hooks = {}
 
         for _name, method in inspect.getmembers(cls, inspect.isfunction):
@@ -647,8 +686,19 @@ class Walker(AttributeMixin, BaseModel):
         Returns:
             List of all reported items
         """
-        # Reset protection state
-        await self._protection.reset()
+        # Initialize protection state once per traversal session.
+        # ``start_if_needed`` is idempotent so ``resume()`` does not reset
+        # the step / visit / timer counters (audit §2.2 / SPEC §6.3).
+        await self._protection.start_if_needed()
+
+        # Late import to avoid circular dependency at module load.
+        from jvspatial.exceptions import (
+            InfiniteLoopError,
+            WalkerExecutionError,
+            WalkerTimeoutError,
+        )
+
+        from .walker_components.protection import ProtectionViolation
 
         # Process queue until empty or paused
         while self.queue and not self._paused:
@@ -681,8 +731,33 @@ class Walker(AttributeMixin, BaseModel):
                 # Execute visit hooks
                 await self._execute_visit_hooks(current)
 
+            except ProtectionViolation as pv:
+                # SPEC §6.3 / §17: surface protection violations as the
+                # documented exception types instead of swallowing them
+                # into the walker report (audit §2.1).
+                walker_class = type(self).__name__
+                ptype = pv.protection_type
+                if ptype == "max_visits_per_node":
+                    raise InfiniteLoopError(
+                        walker_class=walker_class,
+                        node_id=pv.details.get("node_id", ""),
+                        visit_count=pv.details.get("visit_count", 0),
+                    ) from pv
+                if ptype == "timeout":
+                    raise WalkerTimeoutError(
+                        walker_class=walker_class,
+                        timeout_seconds=pv.details.get(
+                            "max_execution_time", self._max_execution_time
+                        ),
+                    ) from pv
+                # ``max_steps`` and any future protection types.
+                raise WalkerExecutionError(
+                    walker_class=walker_class,
+                    reason=f"protection_triggered: {ptype}",
+                    details=pv.details,
+                ) from pv
             except Exception as e:
-                # Handle errors gracefully
+                # Handle other (non-protection) errors gracefully.
                 await self.report(f"Error during traversal: {e}")
                 break
 
@@ -732,9 +807,11 @@ class Walker(AttributeMixin, BaseModel):
                 else:
                     hook(self, target)
             except Exception as e:
-                # Check if this is a skip exception
-                if "Node skipped" in str(e):
-                    # Skip this node and continue
+                # Use the dedicated exception class instead of a fragile
+                # substring match (audit §2.9 / SPEC §6.5).
+                from . import TraversalSkipped
+
+                if isinstance(e, TraversalSkipped):
                     walker_hook_skipped = True
                     return
                 else:
@@ -795,9 +872,9 @@ class Walker(AttributeMixin, BaseModel):
                 else:
                     bound_hook(self)
             except Exception as e:
-                # Check if this is a skip exception
-                if "Node skipped" in str(e):
-                    # Skip this node and continue
+                from . import TraversalSkipped
+
+                if isinstance(e, TraversalSkipped):
                     return
                 else:
                     # Report error as structured data
@@ -853,11 +930,14 @@ class Walker(AttributeMixin, BaseModel):
     async def skip(self) -> None:
         """Skip the current node and continue traversal.
 
-        This method allows the walker to skip processing the current node
-        and continue with the next node in the queue.
+        Raises ``TraversalSkipped`` so the caller can recognize the
+        skip via ``except TraversalSkipped`` rather than the historical
+        substring match on ``"Node skipped"`` (audit §2.9 / SPEC §6.5).
         """
-        # Raise an exception to stop current node processing
-        raise JVSpatialError("Node skipped")
+        # Late import to avoid circular dep at module load.
+        from . import TraversalSkipped
+
+        raise TraversalSkipped("Node skipped")
 
     def pause(self, message: str = "Traversal paused") -> None:
         """Pause the walker's traversal.

@@ -169,12 +169,23 @@ def cleanup_orphan_tmp_files(roots: Iterable[Union[str, Path]]) -> int:
     if is_serverless_mode():
         return 0
 
+    current_pid = os.getpid()
     removed = 0
     for root in roots:
         root_path = Path(root)
         if not root_path.exists() or not root_path.is_dir():
             continue
         for orphan in root_path.rglob(f"*{TMP_SUFFIX}"):
+            # Tmp filenames embed the writer's pid (see ``_make_temp_path``)
+            # so the sweep can distinguish in-flight writes (current process)
+            # from orphans left by a previously-crashed process. Never reap
+            # a file owned by the current pid — it's either mid-write right
+            # now (deleting it races ``os.replace`` and corrupts the write)
+            # or will get reaped on the next process startup. Filename shape:
+            # ``<stem>.<pid>.<hex>.jvtmp``.
+            parts = orphan.name.rsplit(".", 3)
+            if len(parts) == 4 and parts[1].isdigit() and int(parts[1]) == current_pid:
+                continue
             try:
                 orphan.unlink()
                 removed += 1

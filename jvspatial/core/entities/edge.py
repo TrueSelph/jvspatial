@@ -63,8 +63,13 @@ class Edge(Object):
         """
         return "both" if self.bidirectional else "out"
 
-    def __init_subclass__(cls: Type["Edge"]) -> None:
-        """Initialize subclass by registering visit hooks."""
+    def __init_subclass__(cls: Type["Edge"], **kwargs: Any) -> None:
+        """Initialize subclass by registering visit hooks.
+
+        Forwards through ``super().__init_subclass__`` so
+        ``AttributeMixin.__init_subclass__`` runs (audit §6.2).
+        """
+        super().__init_subclass__(**kwargs)
         cls._visit_hooks = {}
         cls._is_visit_hook = {}
 
@@ -165,7 +170,7 @@ class Edge(Object):
 
         # Don't override ID if already provided
         if "id" not in kwargs:
-            kwargs["id"] = generate_id("e", self.__class__.__name__)
+            kwargs["id"] = generate_id("e", self.__class__._entity_name())
 
         kwargs.update(
             {"source": source, "target": target, "bidirectional": bidirectional}
@@ -235,13 +240,46 @@ class Edge(Object):
 
     @classmethod
     def get_indexes(cls: Type["Edge"]) -> List[Dict[str, Any]]:
-        """Get index definitions including unique compound index on (source, target, entity)."""
+        """Default indexes for every edge collection.
+
+        ``idx_source_target_entity_unique`` enforces edge uniqueness and serves
+        outgoing traversal via leftmost-prefix on ``source``. The remaining
+        indexes cover traversal shapes the unique index cannot:
+
+        - ``idx_target_entity`` — incoming traversal (``direction="in"``).
+        - ``idx_entity_source`` / ``idx_entity_target`` — typed-edge sweeps
+          that filter by ``entity`` without pinning a node.
+
+        All four are domain-agnostic — they only reference fields every Edge
+        document carries (``entity``, ``source``, ``target``).
+        """
         indexes = super().get_indexes()
         indexes.append(
             {
                 "fields": [("source", 1), ("target", 1), ("entity", 1)],
                 "unique": True,
                 "name": "idx_source_target_entity_unique",
+            }
+        )
+        indexes.append(
+            {
+                "fields": [("target", 1), ("entity", 1)],
+                "unique": False,
+                "name": "idx_target_entity",
+            }
+        )
+        indexes.append(
+            {
+                "fields": [("entity", 1), ("source", 1)],
+                "unique": False,
+                "name": "idx_entity_source",
+            }
+        )
+        indexes.append(
+            {
+                "fields": [("entity", 1), ("target", 1)],
+                "unique": False,
+                "name": "idx_entity_target",
             }
         )
         return indexes
@@ -321,7 +359,7 @@ class Edge(Object):
                 bidirectional = data["context"].get("bidirectional", True)
 
             # Handle subclass instantiation based on stored entity
-            stored_entity = data.get("entity", cls.__name__)
+            stored_entity = data.get("entity", cls._entity_name())
             target_class = find_subclass_by_name(cls, stored_entity) or cls
 
             context_data = {

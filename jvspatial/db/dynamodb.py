@@ -16,6 +16,7 @@ Summary:
 import asyncio
 import json
 import logging
+from functools import partial
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple, Union
 
 try:
@@ -637,8 +638,13 @@ class DynamoDB(Database):
             }
 
             try:
-                # Execute batch get
-                response = await client.batch_get_item(RequestItems=request_items)
+                # Throttle-retry wraps the wire call so transient
+                # ProvisionedThroughputExceeded / ThrottlingException are
+                # backed off (audit §5.1 / SPEC §4.3).
+                response = await self._run_with_throttle_retry(
+                    "batch_get_item",
+                    lambda: client.batch_get_item(RequestItems=request_items),
+                )
 
                 # Process responses
                 items = response.get("Responses", {}).get(table_name, [])
@@ -653,10 +659,11 @@ class DynamoDB(Database):
                     logger.debug(
                         f"Unprocessed keys in batch_get for collection '{collection}': {len(unprocessed.get(table_name, {}).get('Keys', []))}"
                     )
-                    # Retry unprocessed keys once
+                    # Retry unprocessed keys once (also throttle-aware).
                     retry_items = {table_name: unprocessed[table_name]}
-                    retry_response = await client.batch_get_item(
-                        RequestItems=retry_items
+                    retry_response = await self._run_with_throttle_retry(
+                        "batch_get_item_retry",
+                        lambda: client.batch_get_item(RequestItems=retry_items),
                     )
                     retry_items_list = retry_response.get("Responses", {}).get(
                         table_name, []
@@ -739,8 +746,11 @@ class DynamoDB(Database):
             request_items = {table_name: write_requests}
 
             try:
-                # Execute batch write
-                response = await client.batch_write_item(RequestItems=request_items)
+                # Throttle-retry wraps the wire call (audit §5.1 / SPEC §4.3).
+                response = await self._run_with_throttle_retry(
+                    "batch_write_item",
+                    lambda: client.batch_write_item(RequestItems=request_items),
+                )
 
                 # Handle unprocessed items with retry logic
                 unprocessed = response.get("UnprocessedItems", {})
@@ -756,8 +766,13 @@ class DynamoDB(Database):
                     # Wait before retry (exponential backoff)
                     await asyncio.sleep(0.1 * (2 ** (retry_count - 1)))
 
-                    retry_response = await client.batch_write_item(
-                        RequestItems=unprocessed
+                    # ``partial`` snapshots kwargs at construction time, so
+                    # the closure does not refer to the loop variable
+                    # ``unprocessed`` (flake8-bugbear B023). The retry
+                    # helper awaits the resulting coroutine inline.
+                    retry_response = await self._run_with_throttle_retry(
+                        "batch_write_item_retry",
+                        partial(client.batch_write_item, RequestItems=unprocessed),
                     )
                     unprocessed = retry_response.get("UnprocessedItems", {})
 
@@ -993,7 +1008,10 @@ class DynamoDB(Database):
 
                         total = 0
                         while True:
-                            resp = await client.query(**params)
+                            resp = await self._run_with_throttle_retry(
+                                "count_query",
+                                lambda: client.query(**params),
+                            )
                             total += int(resp.get("Count", 0))
                             if "LastEvaluatedKey" not in resp:
                                 break
@@ -1042,7 +1060,10 @@ class DynamoDB(Database):
                 }
                 total = 0
                 while True:
-                    resp = await client.scan(**scan_params)
+                    resp = await self._run_with_throttle_retry(
+                        "count_scan",
+                        lambda: client.scan(**scan_params),
+                    )
                     total += int(resp.get("Count", 0))
                     if "LastEvaluatedKey" not in resp:
                         break
@@ -1146,7 +1167,10 @@ class DynamoDB(Database):
                     if filter_expr:
                         query_params["FilterExpression"] = filter_expr
 
-                    response = await client.query(**query_params)
+                    response = await self._run_with_throttle_retry(
+                        "find_query",
+                        lambda: client.query(**query_params),
+                    )
 
                     results = []
                     for item in response.get("Items", []):
@@ -1170,7 +1194,10 @@ class DynamoDB(Database):
                         query_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
                         if fetch_limit:
                             query_params["Limit"] = fetch_limit - len(results)
-                        response = await client.query(**query_params)
+                        response = await self._run_with_throttle_retry(
+                            "find_query",
+                            lambda: client.query(**query_params),
+                        )
 
                         for item in response.get("Items", []):
                             data = json.loads(item["data"]["S"])
@@ -1226,7 +1253,10 @@ class DynamoDB(Database):
             if fetch_limit:
                 scan_params["Limit"] = fetch_limit
 
-            response = await client.scan(**scan_params)
+            response = await self._run_with_throttle_retry(
+                "find_scan",
+                lambda: client.scan(**scan_params),
+            )
 
             results = []
             for item in response.get("Items", []):
@@ -1247,7 +1277,10 @@ class DynamoDB(Database):
                 scan_params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
                 if fetch_limit:
                     scan_params["Limit"] = fetch_limit - len(results)
-                response = await client.scan(**scan_params)
+                response = await self._run_with_throttle_retry(
+                    "find_scan",
+                    lambda: client.scan(**scan_params),
+                )
 
                 for item in response.get("Items", []):
                     data = json.loads(item["data"]["S"])

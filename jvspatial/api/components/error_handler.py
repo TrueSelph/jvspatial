@@ -22,9 +22,46 @@ _GENERIC_INTERNAL_ERROR_MESSAGE = (
 )
 
 
+def _is_production_environment() -> bool:
+    """Return True when the runtime is signalled as production.
+
+    Looks at ``JVSPATIAL_ENVIRONMENT`` (canonical) and ``ENVIRONMENT``
+    (fallback) for values ``prod`` / ``production``. Used to fail-closed
+    on the ``JVSPATIAL_EXPOSE_ERROR_DETAILS`` toggle (audit §4.10 /
+    SPEC §15.5).
+    """
+    import os
+
+    for var in ("JVSPATIAL_ENVIRONMENT", "ENVIRONMENT"):
+        raw = (os.environ.get(var) or "").strip().lower()
+        if raw in ("prod", "production"):
+            return True
+    return False
+
+
 def _expose_error_details_to_clients() -> bool:
-    """When true, unhandled 500 responses may include exception text (dev only)."""
-    return bool(env("JVSPATIAL_EXPOSE_ERROR_DETAILS", default=False, parse=parse_bool))
+    """When true, unhandled 500 responses may include exception text.
+
+    Refuses to honor the flag in production environments — leaking raw
+    exception text (which can include DB query fragments, file paths,
+    and secret-bearing config values) is a footgun (audit §4.10).
+    Emits a one-shot warning when the flag is requested but suppressed.
+    """
+    requested = bool(
+        env("JVSPATIAL_EXPOSE_ERROR_DETAILS", default=False, parse=parse_bool)
+    )
+    if requested and _is_production_environment():
+        if not getattr(_expose_error_details_to_clients, "_warned", False):
+            logging.getLogger(__name__).warning(
+                "JVSPATIAL_EXPOSE_ERROR_DETAILS is set but the runtime "
+                "appears to be production (JVSPATIAL_ENVIRONMENT). "
+                "Ignoring the flag — 500 responses will use the generic "
+                "message. Unset JVSPATIAL_ENVIRONMENT or change the value "
+                "to enable detailed errors."
+            )
+            _expose_error_details_to_clients._warned = True  # type: ignore[attr-defined]
+        return False
+    return requested
 
 
 # Context variable to track exceptions that have been logged by our handler

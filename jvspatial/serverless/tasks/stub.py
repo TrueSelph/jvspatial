@@ -23,6 +23,13 @@ class LoggingNoopTaskScheduler(TaskScheduler):
         retry_config: Optional[RetryConfig] = None,
         run_at: Optional[float] = None,
     ) -> str:
-        """Log and return a synthetic reference; see base class."""
-        logger.warning("%s (task_type=%s)", self._message, task_type)
+        """Log and return a synthetic reference; see base class.
+
+        Downgraded to DEBUG so a misconfigured serverless deployment does
+        not flood CloudWatch with one WARNING per dispatch. The
+        once-per-process startup error from
+        ``serverless.factory._note_noop_in_serverless`` is sufficient
+        (audit §7.14 / SPEC §11.2).
+        """
+        logger.debug("%s (task_type=%s)", self._message, task_type)
         return f"noop-{uuid.uuid4()}"

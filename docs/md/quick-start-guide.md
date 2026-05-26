@@ -27,9 +27,11 @@ pip install jvspatial[all]    # All optional deps
 jvspatial is built on three key concepts:
 
 ### **1. Graph Entities**
-- **Nodes**: Data points in your graph
+- **Nodes**: Data points in your graph — every `Node` must be reachable from `Root` (directly or indirectly)
 - **Edges**: Relationships between nodes
-- **Root**: Entry point to your graph
+- **Root**: Library-owned entry point to the graph
+- **App-root node**: Convention — define your own top-level node (e.g. `class App(Node)`), connect it to `Root` once, and hang all application nodes off it. See [Entity Reference → Convention: Node vs Object](entity-reference.md#convention-node-vs-object).
+- **Objects**: Record-style data with no graph relationships (audit logs, change events, snapshots). Use `Object`, not `Node`.
 
 ### **2. Walkers**
 - Traverse the graph

@@ -172,8 +172,13 @@ def verify_hmac_signature(
             payload, secret, algorithm, ""
         )  # No prefix for comparison
 
-        # Use constant-time comparison to prevent timing attacks
-        return hmac.compare_digest(signature, expected_signature[len(prefix) :])
+        # ``signature`` is the incoming digest after prefix stripping above,
+        # and ``expected_signature`` is generated with ``prefix=""`` so it is
+        # already the bare hex digest. The earlier ``[len(prefix):]`` slice
+        # truncated 7 chars off a 64-char SHA-256 digest, making
+        # ``compare_digest`` always return False — webhook HMAC verification
+        # was effectively broken (audit §4.3 / SPEC §15.2).
+        return hmac.compare_digest(signature, expected_signature)
 
     except Exception:
         return False

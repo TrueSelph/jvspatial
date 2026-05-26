@@ -78,7 +78,10 @@ async def test_dispatch_malformed_task_type(body: dict):
         await dispatch_deferred_invoke(body)
 
 
-def test_deferred_invoke_http_route():
+def test_deferred_invoke_http_route(monkeypatch):
+    # Audit §4.16: route is now fail-closed when the secret is unset.
+    # Set a secret + send matching header for the happy-path test.
+    monkeypatch.setenv("JVSPATIAL_DEFERRED_INVOKE_SECRET", "test-secret-value")
     app = FastAPI()
 
     async def handler(event: dict) -> dict:
@@ -97,17 +100,23 @@ def test_deferred_invoke_http_route():
             "sender": "u1",
             "media_batch_window": 1.5,
         },
+        headers={"X-JVSPATIAL-Deferred-Authorize": "test-secret-value"},
     )
     assert r.status_code == 200
     assert r.json() == {"ok": True, "sender": "u1"}
 
 
-def test_deferred_invoke_http_unknown_returns_404():
+def test_deferred_invoke_http_unknown_returns_404(monkeypatch):
+    monkeypatch.setenv("JVSPATIAL_DEFERRED_INVOKE_SECRET", "test-secret-value")
     app = FastAPI()
     register_deferred_invoke_route(app)
     client = TestClient(app)
     path = APIRoutes.deferred_invoke_full_path()
-    r = client.post(path, json={"task_type": "no.such.task"})
+    r = client.post(
+        path,
+        json={"task_type": "no.such.task"},
+        headers={"X-JVSPATIAL-Deferred-Authorize": "test-secret-value"},
+    )
     assert r.status_code == 404
     assert "Unknown task_type" in r.json()["detail"]
 

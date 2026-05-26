@@ -38,6 +38,7 @@ import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
 from jvspatial.db.database import Database
+from jvspatial.observability import db_op_counter
 from jvspatial.observability.metrics import (
     MetricsRecorder,
     NullMetricsRecorder,
@@ -118,6 +119,8 @@ class ObservableDatabase(Database):
             success = False
             raise
         finally:
+            # Increment per-flow DB operation count even on failures.
+            db_op_counter.set(db_op_counter.get() + 1)
             duration_s = time.monotonic() - start
             duration_ms = duration_s * 1000.0
             result_count: Optional[int] = None
