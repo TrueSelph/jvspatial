@@ -34,7 +34,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from jvspatial.api.auth.oauth import keys
-from jvspatial.api.auth.oauth.metadata import build_as_metadata
+from jvspatial.api.auth.oauth.metadata import build_as_metadata, build_prm
 from jvspatial.api.auth.oauth.requests import (
     StarletteOAuth2Request,
     build_oauth2_request,
@@ -182,6 +182,15 @@ def build_oauth_routers(
             prefix=auth_config.oauth_prefix,
             scopes_supported=list(auth_config.oauth_supported_scopes or []),
             api_prefix=APIRoutes.PREFIX,
+        )
+
+    @well_known_router.get("/.well-known/oauth-protected-resource")
+    async def protected_resource_metadata() -> dict:
+        """Serve the RFC 9728 Protected Resource Metadata document."""
+        return build_prm(
+            resource=auth_config.oauth_issuer_url,
+            issuer=auth_config.oauth_issuer_url,
+            scopes_supported=list(auth_config.oauth_supported_scopes or []),
         )
 
     @well_known_router.get("/.well-known/jwks.json")

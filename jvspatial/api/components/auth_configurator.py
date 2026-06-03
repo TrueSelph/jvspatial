@@ -591,6 +591,7 @@ class AuthConfigurator:
             [
                 "/.well-known/oauth-authorization-server",
                 "/.well-known/jwks.json",
+                "/.well-known/oauth-protected-resource",
             ]
         )
         if getattr(self._auth_config, "oauth_enabled", False):
