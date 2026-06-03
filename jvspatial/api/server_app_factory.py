@@ -69,6 +69,13 @@ class ServerAppFactoryMixin:
         if self._auth_endpoints_registered and hasattr(self, "_auth_router"):
             app.include_router(self._auth_router, prefix=APIRoutes.PREFIX)
 
+        # OAuth routers (opt-in): token/register/revoke/authorize under the API
+        # prefix; the /.well-known discovery documents at root.
+        if getattr(self, "_oauth_router", None) is not None:
+            app.include_router(self._oauth_router, prefix=APIRoutes.PREFIX)
+        if getattr(self, "_well_known_router", None) is not None:
+            app.include_router(self._well_known_router, prefix="")
+
         self.app_builder.configure_openapi_security(app, self._has_auth_endpoints)
 
         return app

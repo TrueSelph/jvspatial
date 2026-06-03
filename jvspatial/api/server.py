@@ -257,6 +257,8 @@ class Server(
         self._auth_endpoints_registered = auth_configurator.has_auth_endpoints
         self._has_auth_endpoints = auth_configurator.has_auth_endpoints
         self._auth_service = auth_configurator.auth_service
+        self._oauth_router = auth_configurator.oauth_router
+        self._well_known_router = auth_configurator.well_known_router
 
         if (
             self._auth_service

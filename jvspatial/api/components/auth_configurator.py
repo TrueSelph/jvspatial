@@ -62,6 +62,8 @@ class AuthConfigurator:
         self._auth_router: Optional[APIRouter] = None
         self._auth_endpoints_registered = False
         self._auth_service: Optional[AuthenticationService] = None
+        self._oauth_router: Optional[APIRouter] = None
+        self._well_known_router: Optional[APIRouter] = None
 
     def configure(self) -> Optional[AuthConfig]:
         """Configure authentication middleware and register auth endpoints if enabled.
@@ -579,6 +581,92 @@ class AuthConfigurator:
         # Store auth router
         self._auth_router = auth_router
         self._auth_endpoints_registered = True
+
+        # OAuth 2.1 authorization server (opt-in). The /.well-known discovery
+        # documents are public by spec (RFC 8615), so they are exempted from the
+        # bearer middleware unconditionally — when the routes are not mounted
+        # (oauth disabled) the exemption simply lets FastAPI return its natural
+        # 404 instead of a spurious 401 from the deny-by-default resolver.
+        self._exempt_oauth_paths(
+            [
+                "/.well-known/oauth-authorization-server",
+                "/.well-known/jwks.json",
+            ]
+        )
+        if getattr(self._auth_config, "oauth_enabled", False):
+            self._configure_oauth_endpoints()
+
+    def _configure_oauth_endpoints(self) -> None:
+        """Build the OAuth routers, exempt their paths, and register the key hook.
+
+        The token/register/revoke/authorize endpoints are client-authenticated
+        (or public), never bearer-gated, so their prefix-relative paths are added
+        to the auth-exempt set (the deny-by-default endpoint resolver would
+        otherwise 401 these plain FastAPI routes). The signing key is generated at
+        startup via a lifecycle hook so the first JWKS / token request is warm.
+        """
+        from jvspatial.api.auth.oauth.routes import build_oauth_routers
+
+        self._oauth_router, self._well_known_router = build_oauth_routers(
+            self._auth_config
+        )
+
+        prefix = getattr(self._auth_config, "oauth_prefix", "/oauth") or "/oauth"
+        prefix = "/" + prefix.strip("/")
+        self._exempt_oauth_paths(
+            [
+                f"{prefix}/{name}"
+                for name in ("token", "register", "revoke", "authorize")
+            ]
+        )
+
+        if self._server is not None:
+            self._server.lifecycle_manager.add_startup_hook(
+                self._ensure_oauth_signing_key
+            )
+
+    def _exempt_oauth_paths(self, paths: List[str]) -> None:
+        """Add *paths* to the auth-config exempt list (idempotent).
+
+        The auth middleware constructs its :class:`PathMatcher` from
+        ``auth_config.exempt_paths`` when the app is built (after this configurator
+        runs), so mutating the list here is reflected at request time. PathMatcher
+        expands both prefixed (``/api/oauth/token``) and bare (``/oauth/token``)
+        variants, so prefix-relative entries suffice.
+        """
+        if self._auth_config is None:
+            return
+        existing = list(self._auth_config.exempt_paths or [])
+        for path in paths:
+            if path not in existing:
+                existing.append(path)
+        self._auth_config.exempt_paths = existing
+
+    async def _ensure_oauth_signing_key(self) -> None:
+        """Startup hook: ensure an active RS256 OAuth signing key exists."""
+        from jvspatial.api.auth.oauth import keys
+
+        await keys.ensure_signing_key()
+
+    @property
+    def oauth_router(self) -> Optional[APIRouter]:
+        """Get the OAuth router (token/register/revoke/authorize), or None.
+
+        Returns:
+            The API-prefixed OAuth :class:`APIRouter` when oauth is enabled,
+            otherwise ``None``.
+        """
+        return self._oauth_router
+
+    @property
+    def well_known_router(self) -> Optional[APIRouter]:
+        """Get the root-mounted OAuth discovery router, or None.
+
+        Returns:
+            The :class:`APIRouter` serving ``/.well-known`` metadata + JWKS when
+            oauth is enabled, otherwise ``None``.
+        """
+        return self._well_known_router
 
     @property
     def auth_config(self) -> Optional[AuthConfig]:
