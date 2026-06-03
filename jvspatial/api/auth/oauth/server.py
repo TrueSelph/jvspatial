@@ -32,6 +32,7 @@ from authlib.oauth2.rfc9068 import JWTBearerTokenGenerator
 from joserfc.jwk import KeySet, RSAKey
 
 from jvspatial.api.auth.oauth import keys as keystore
+from jvspatial.api.auth.oauth import refresh_store
 from jvspatial.api.auth.oauth.bridge import call_async, run_sync_with_async_bridge
 from jvspatial.api.auth.oauth.client_adapter import OAuthClientAdapter
 from jvspatial.api.auth.oauth.models import AuthorizationCode, OAuthClient
@@ -72,6 +73,39 @@ class RequiredS256CodeChallenge(CodeChallenge):
 
 #: Authorization codes are single-use and short-lived (RFC 6749 §4.1.2).
 DEFAULT_CODE_TTL_SECONDS = 600
+
+#: Refresh token lifetime in days.
+DEFAULT_REFRESH_TOKEN_TTL_DAYS = 7
+
+
+def _generate_refresh_token(**kwargs: Any) -> str:
+    """Generate an opaque refresh token string (``rt_`` prefix + 48 url-safe bytes)."""
+    import secrets  # stdlib — always available
+
+    return "rt_" + secrets.token_urlsafe(48)
+
+
+async def _persist_refresh(
+    token_str: str,
+    user_id: str,
+    client_id: str,
+    scope: str,
+    resource: Optional[str],
+    ttl_days: int,
+) -> None:
+    """Async shim that persists a refresh token via :mod:`refresh_store`.
+
+    ``call_async`` passes only positional args, so all parameters here are
+    positional even though ``mint_refresh_token`` is keyword-only.
+    """
+    await refresh_store.mint_refresh_token(
+        token=token_str,
+        user_id=user_id,
+        client_id=client_id,
+        scope=scope,
+        resource=resource,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=ttl_days),
+    )
 
 
 def _sha256(value: str) -> str:
@@ -215,8 +249,13 @@ class JvSpatialJWTTokenGenerator(JWTBearerTokenGenerator):
     """
 
     def __init__(self, issuer: str, resource: str) -> None:
-        """Configure the generator with the *issuer* and audience *resource*."""
-        super().__init__(issuer=issuer)
+        """Configure the generator with the *issuer* and audience *resource*.
+
+        Wires :func:`_generate_refresh_token` so that Authlib's
+        ``BearerTokenGenerator.generate`` includes a ``refresh_token`` field
+        when the client's ``grant_types`` list contains ``refresh_token``.
+        """
+        super().__init__(issuer=issuer, refresh_token_generator=_generate_refresh_token)
         self._resource = resource
 
     def get_jwks(self) -> KeySet:
@@ -359,8 +398,35 @@ class JvSpatialAuthorizationServer(AuthorizationServer):
         return OAuthClientAdapter(client) if client else None
 
     def save_token(self, token: Any, request: Any) -> None:
-        """No-op: access tokens are stateless JWTs (refresh persistence is M1b-2)."""
-        return None
+        """Persist the refresh token (hashed) when one was issued.
+
+        Access tokens are stateless RS256 JWTs and require no persistence.
+        When a ``refresh_token`` is present in *token* (i.e. the client has
+        ``refresh_token`` in its ``grant_types``), the plaintext is stored
+        hashed via :func:`refresh_store.mint_refresh_token`.
+
+        ``request.user`` at token-endpoint time is a :class:`_GrantUser`
+        produced by :meth:`JvSpatialAuthCodeGrant.authenticate_user`, so
+        ``_grant_user_id`` reliably extracts the subject identifier.
+        """
+        rt = token.get("refresh_token")
+        if not rt:
+            return
+        user_id = _grant_user_id(getattr(request, "user", None))
+        client_id: str = ""
+        client = getattr(request, "client", None)
+        if client is not None:
+            client_id = client.get_client_id()
+        scope: str = token.get("scope", "")
+        call_async(
+            _persist_refresh,
+            rt,
+            user_id,
+            client_id,
+            scope,
+            self._resource,
+            DEFAULT_REFRESH_TOKEN_TTL_DAYS,
+        )
 
     def send_signal(self, name: str, *args: Any, **kwargs: Any) -> None:
         """No-op signal sink (no framework signal system is wired here)."""

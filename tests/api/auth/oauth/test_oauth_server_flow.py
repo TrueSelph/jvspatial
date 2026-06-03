@@ -282,6 +282,66 @@ async def test_confidential_client_without_pkce_is_rejected(temp_context):
 
 
 @pytest.mark.asyncio
+async def test_authcode_flow_issues_persisted_refresh_token(temp_context):
+    import base64
+    import hashlib
+    import secrets
+    from urllib.parse import parse_qs, urlparse
+
+    await keystore.ensure_signing_key()
+    await OAuthClient(
+        client_id="cli_pub",
+        client_secret_hash=None,
+        redirect_uris=["https://c.example/cb"],
+        grant_types=["authorization_code", "refresh_token"],
+        response_types=["code"],
+        scope="mcp",
+        token_endpoint_auth_method="none",
+    ).save()
+    server = build_authorization_server(issuer=ISSUER, resource=RESOURCE)
+    verifier = secrets.token_urlsafe(64)
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+        .rstrip(b"=")
+        .decode()
+    )
+    a = StarletteOAuth2Request(
+        method="POST",
+        uri=f"{ISSUER}/oauth/authorize",
+        query={
+            "response_type": "code",
+            "client_id": "cli_pub",
+            "redirect_uri": "https://c.example/cb",
+            "scope": "mcp",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        },
+        form={},
+        headers={},
+    )
+    r = await server.async_create_authorization_response(a, grant_user={"id": "u_1"})
+    code = parse_qs(urlparse(r.headers["location"]).query)["code"][0]
+    t = StarletteOAuth2Request(
+        method="POST",
+        uri=f"{ISSUER}/oauth/token",
+        query={},
+        form={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": "https://c.example/cb",
+            "client_id": "cli_pub",
+            "code_verifier": verifier,
+        },
+        headers={},
+    )
+    body = (await server.async_create_token_response(t)).body_json
+    assert body.get("refresh_token")
+    from jvspatial.api.auth.oauth import refresh_store
+
+    assert await refresh_store.find_active(body["refresh_token"]) is not None
+
+
+@pytest.mark.asyncio
 async def test_plain_pkce_method_is_rejected(temp_context):
     """code_challenge_method=plain must be rejected (S256 only)."""
     await keystore.ensure_signing_key()
