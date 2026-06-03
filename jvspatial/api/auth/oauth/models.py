@@ -87,3 +87,22 @@ class AuthorizationCode(Object):
         default_factory=lambda: datetime.now(timezone.utc),
         description="Creation timestamp",
     )
+
+
+class OAuthSigningKey(Object):
+    """A persisted RS256 signing keypair.
+
+    Active keys sign new tokens; inactive-but-recent keys remain in JWKS for the
+    verification window (rotation). Private PEM is stored as-is here; production
+    deployments should wrap it (env/KMS) — see plan assumptions.
+    """
+
+    kid: str = Field(..., description="Key ID (JWKS 'kid')")
+    public_pem: str = Field(..., description="PEM-encoded public key")
+    private_pem: str = Field(..., description="PEM-encoded private key")
+    algorithm: str = Field(default="RS256", description="Signing algorithm")
+    active: bool = Field(default=True, description="Whether this key signs new tokens")
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Creation timestamp",
+    )
