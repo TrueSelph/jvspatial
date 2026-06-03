@@ -37,6 +37,7 @@ dependencies = [
     "motor>=3.0.0",
     "pymongo>=4.0.0",
     "PyJWT>=2.0.0",  # JWT token handling for authentication
+    "cryptography>=42.0.0",  # RS256 keypair generation + PyJWT RS256 signing/verification (OAuth)
     "bcrypt>=4.0.0",  # Password hashing for authentication
     "email-validator>=2.0.0",  # Email validation for Pydantic EmailStr
     "schedule>=1.2.2",  # Job scheduling
