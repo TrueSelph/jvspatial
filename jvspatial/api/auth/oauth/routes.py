@@ -33,6 +33,7 @@ from jvspatial.api.auth.oauth.server import (
     OAuthHttpResponse,
     build_authorization_server,
 )
+from jvspatial.api.constants import APIRoutes
 
 
 def _to_response(holder: OAuthHttpResponse) -> Response:
@@ -100,6 +101,7 @@ def build_oauth_routers(auth_config: Any) -> tuple[APIRouter, APIRouter]:
             issuer=issuer,
             prefix=auth_config.oauth_prefix,
             scopes_supported=list(auth_config.oauth_supported_scopes or []),
+            api_prefix=APIRoutes.PREFIX,
         )
 
     @well_known_router.get("/.well-known/jwks.json")
@@ -124,9 +126,24 @@ def build_oauth_routers(auth_config: Any) -> tuple[APIRouter, APIRouter]:
 
     @oauth_router.post("/register")
     async def register(request: Request) -> Response:
-        """RFC 7591 dynamic client registration endpoint."""
+        """RFC 7591 dynamic client registration endpoint.
+
+        DCR bodies arrive as JSON (RFC 7591 §3.1), not
+        ``application/x-www-form-urlencoded``.  We read the JSON payload first,
+        then build a minimal ``StarletteOAuth2Request`` that carries the correct
+        method/URI/headers without attempting a second form-body parse on the
+        already-consumed stream.
+        """
+        from jvspatial.api.auth.oauth.requests import StarletteOAuth2Request
+
         body = await request.json()
-        req = await build_oauth2_request(request)
+        req = StarletteOAuth2Request(
+            method=request.method,
+            uri=str(request.url),
+            query=dict(request.query_params),
+            form={},
+            headers=dict(request.headers),
+        )
         return _to_response(await server.async_register_client(req, body))
 
     @oauth_router.post("/revoke")
