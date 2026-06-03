@@ -238,3 +238,84 @@ async def test_security_self_checks(temp_context):
     assert "BEGIN PRIVATE KEY" not in body_str
     assert "client_secret" not in body_str
     assert key.private_pem.strip() not in body_str
+
+
+@pytest.mark.asyncio
+async def test_confidential_client_without_pkce_is_rejected(temp_context):
+    """A confidential client must NOT be able to skip PKCE at authorize."""
+    from jvspatial.api.auth.oauth.models import hash_client_secret
+
+    await keystore.ensure_signing_key()
+    await OAuthClient(
+        client_id="cli_conf",
+        client_secret_hash=hash_client_secret("s3cret"),
+        redirect_uris=["https://c.example/cb"],
+        grant_types=["authorization_code"],
+        response_types=["code"],
+        scope="mcp",
+        token_endpoint_auth_method="client_secret_post",
+    ).save()
+    server = build_authorization_server(issuer=ISSUER, resource=RESOURCE)
+    authorize_req = StarletteOAuth2Request(
+        method="POST",
+        uri=f"{ISSUER}/oauth/authorize",
+        query={
+            "response_type": "code",
+            "client_id": "cli_conf",
+            "redirect_uri": "https://c.example/cb",
+            "scope": "mcp",
+            # NO code_challenge — must be rejected
+        },
+        form={},
+        headers={},
+    )
+    resp = await server.async_create_authorization_response(
+        authorize_req, grant_user={"id": "u_2"}
+    )
+    # Must NOT issue a code — accepted as redirect-with-error or a 400/401
+    if resp.status_code in (302, 303):
+        q = parse_qs(urlparse(resp.headers["location"]).query)
+        assert "code" not in q, "confidential client bypassed PKCE and got a code"
+        assert "error" in q
+    else:
+        assert resp.status_code in (400, 401)
+
+
+@pytest.mark.asyncio
+async def test_plain_pkce_method_is_rejected(temp_context):
+    """code_challenge_method=plain must be rejected (S256 only)."""
+    await keystore.ensure_signing_key()
+    await OAuthClient(
+        client_id="cli_pub",
+        client_secret_hash=None,
+        redirect_uris=["https://c.example/cb"],
+        grant_types=["authorization_code"],
+        response_types=["code"],
+        scope="mcp",
+        token_endpoint_auth_method="none",
+    ).save()
+    server = build_authorization_server(issuer=ISSUER, resource=RESOURCE)
+    authorize_req = StarletteOAuth2Request(
+        method="POST",
+        uri=f"{ISSUER}/oauth/authorize",
+        query={
+            "response_type": "code",
+            "client_id": "cli_pub",
+            "redirect_uri": "https://c.example/cb",
+            "scope": "mcp",
+            "code_challenge": "plain-value-plain-value-plain-value-plain-value",
+            "code_challenge_method": "plain",
+        },
+        form={},
+        headers={},
+    )
+    resp = await server.async_create_authorization_response(
+        authorize_req, grant_user={"id": "u_1"}
+    )
+    # Must NOT issue a code — accepted as redirect-with-error or a 400/401
+    if resp.status_code in (302, 303):
+        q = parse_qs(urlparse(resp.headers["location"]).query)
+        assert "code" not in q, "plain PKCE method was accepted but must be rejected"
+        assert "error" in q
+    else:
+        assert resp.status_code in (400, 401)

@@ -24,6 +24,7 @@ from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 from authlib.oauth2.rfc6749 import AuthorizationServer
+from authlib.oauth2.rfc6749.errors import InvalidRequestError
 from authlib.oauth2.rfc6749.grants import AuthorizationCodeGrant
 from authlib.oauth2.rfc6749.requests import BasicOAuth2Payload
 from authlib.oauth2.rfc7636 import CodeChallenge
@@ -35,6 +36,39 @@ from jvspatial.api.auth.oauth.bridge import call_async, run_sync_with_async_brid
 from jvspatial.api.auth.oauth.client_adapter import OAuthClientAdapter
 from jvspatial.api.auth.oauth.models import AuthorizationCode, OAuthClient
 from jvspatial.api.auth.oauth.requests import StarletteOAuth2Request
+
+
+class RequiredS256CodeChallenge(CodeChallenge):
+    """PKCE mandatory for ALL clients (public and confidential), S256 only.
+
+    Authlib's stock ``CodeChallenge(required=True)`` only enforces PKCE when
+    ``request.auth_method == "none"`` (public clients).  A confidential client
+    authenticated via ``client_secret_post`` or ``client_secret_basic`` can
+    silently bypass the challenge.  This subclass overrides
+    ``validate_code_challenge`` — the authorize-step hook — so that:
+
+    * a missing ``code_challenge`` is always rejected (regardless of auth method);
+    * ``code_challenge_method=plain`` is rejected (S256 only per current best
+      practice; plain leaks the verifier to any party that sees the authorize URL).
+
+    The ``validate_code_verifier`` hook (token-step) is inherited unchanged; it
+    already rejects a missing verifier when a challenge was stored, and rejects
+    a verifier supplied against a code that had no challenge.
+    """
+
+    SUPPORTED_CODE_CHALLENGE_METHOD = ["S256"]
+    DEFAULT_CODE_CHALLENGE_METHOD = "S256"
+
+    def validate_code_challenge(self, grant, redirect_uri):  # type: ignore[override]
+        """Reject missing challenge or non-S256 method at authorize step."""
+        challenge = grant.request.payload.data.get("code_challenge")
+        method = grant.request.payload.data.get("code_challenge_method")
+        if not challenge:
+            raise InvalidRequestError("PKCE code_challenge is required")
+        if method and method != "S256":
+            raise InvalidRequestError("only S256 code_challenge_method is allowed")
+        return super().validate_code_challenge(grant, redirect_uri)
+
 
 #: Authorization codes are single-use and short-lived (RFC 6749 §4.1.2).
 DEFAULT_CODE_TTL_SECONDS = 600
@@ -384,7 +418,9 @@ def build_authorization_server(
         resource=resource,
         scopes_supported=None,
     )
-    server.register_grant(JvSpatialAuthCodeGrant, [CodeChallenge(required=True)])
+    server.register_grant(
+        JvSpatialAuthCodeGrant, [RequiredS256CodeChallenge(required=True)]
+    )
     server.register_token_generator(
         "default", JvSpatialJWTTokenGenerator(issuer=issuer, resource=resource)
     )
