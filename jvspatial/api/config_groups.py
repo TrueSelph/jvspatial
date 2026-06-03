@@ -283,6 +283,15 @@ class AuthConfig(BaseModel):
         default=False,
         description="Resource-server: accept OAuth access tokens on auth=True endpoints",
     )
+    oauth_dcr_rate_limit_per_minute: int = Field(
+        default=12,
+        description=(
+            "Maximum DCR (/oauth/register) requests per minute per client IP when "
+            "oauth_enabled. Protects against open-registration DB-fill / resource-"
+            "exhaustion DoS (security review I-1). Set to 0 to disable the override "
+            "(leaves the endpoint subject to the server-wide rate limit, if any)."
+        ),
+    )
 
     # Backward compatibility: allow access via auth_enabled/auth_exempt_paths
     @property

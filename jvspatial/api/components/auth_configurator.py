@@ -633,6 +633,55 @@ class AuthConfigurator:
             self._server.lifecycle_manager.add_startup_hook(
                 self._ensure_oauth_signing_key
             )
+            self._wire_dcr_rate_limit(prefix)
+
+    def _wire_dcr_rate_limit(self, oauth_prefix: str) -> None:
+        """Register a tight rate-limit override for the DCR endpoint (I-1).
+
+        Dynamic Client Registration is unauthenticated, so an uncapped endpoint
+        can be abused to fill the database with junk clients (resource-exhaustion
+        DoS). When ``oauth_enabled`` and ``oauth_dcr_rate_limit_per_minute > 0``,
+        we write a per-path override onto ``server.config.rate_limit`` BEFORE
+        ``get_app()`` calls ``_configure_rate_limit_middleware``, which reads the
+        override dict at build time.
+
+        We also enable ``rate_limit_enabled`` when it is still False, so that an
+        application that has not explicitly configured rate limiting still gets the
+        DCR protection. We never flip the flag back to False — if the caller already
+        set ``rate_limit_enabled=True`` we leave it alone.
+
+        Args:
+            oauth_prefix: The OAuth router prefix (e.g. ``/oauth``), already
+                normalised to a leading slash by the caller.
+        """
+        if self._server is None or self._auth_config is None:
+            return
+        cap = getattr(self._auth_config, "oauth_dcr_rate_limit_per_minute", 0)
+        if not cap:
+            return
+
+        from jvspatial.api.constants import APIRoutes
+
+        # Full path that the rate-limit middleware matches against request.url.path.
+        # oauth_prefix is already "/oauth"; the DCR handler is at "/register".
+        # The oauth_router is mounted with prefix=APIRoutes.PREFIX ("/api"), so the
+        # full path is "/api/oauth/register".  We store it with the full prefix so
+        # _build_rate_limit_config does not double-add it.
+        dcr_path = f"{APIRoutes.PREFIX}{oauth_prefix}/register"
+
+        rl = self._server.config.rate_limit
+        rl.rate_limit_overrides[dcr_path] = {"requests": cap, "window": 60}
+
+        # Enable rate limiting when it has not been explicitly turned on yet.
+        # This ensures open-DCR protection even when the server operator has not
+        # configured rate_limit_enabled=True globally.
+        if not rl.rate_limit_enabled:
+            rl.rate_limit_enabled = True
+            self._logger.debug(
+                "rate_limit_enabled implicitly set to True for DCR protection (I-1)"
+            )
+
+        self._logger.debug("DCR rate limit: %d req/min on %s (I-1)", cap, dcr_path)
 
     def _exempt_oauth_paths(self, paths: List[str]) -> None:
         """Add *paths* to the auth-config exempt list (idempotent).
