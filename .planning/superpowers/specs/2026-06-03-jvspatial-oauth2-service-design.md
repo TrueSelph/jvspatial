@@ -121,3 +121,36 @@ pyproject.toml                   # add authlib (modify)
 ## Out of scope (later milestones)
 - **M2:** Integral MCP server endpoint (jvspatial `@endpoint`s driving the `mcp` SDK `StreamableHTTPSessionManager.handle_request`, secured by this RS, tools from `mcp_adapter`, in-process dispatch).
 - **M3:** Agents-settings UI surfacing the endpoint + connect flow.
+
+---
+
+# M1b Design Addendum — Authlib AS integration (decisions + wiring map)
+
+**Date:** 2026-06-03. Captures M1b architecture decisions + the Authlib/jvspatial integration facts researched before planning. M1a (foundation) is built on `feat/oauth2-service`.
+
+## Locked M1b decisions
+- **Library:** Authlib 1.x framework-agnostic `authlib.oauth2.rfc6749.AuthorizationServer` (no Flask/Django integration; we write the Starlette binding).
+- **Async/sync bridge:** Authlib core is **synchronous**; jvspatial DB is **async-only** (no sync path; asyncpg has no sync API). Bridge = **anyio thread-bridge**: route handlers run Authlib via `await anyio.to_thread.run_sync(server.create_*_response, oauth_req)`; inside Authlib's sync grant hooks, reach M1a async storage via `anyio.from_thread.run(async_fn, *args)` (valid because the worker was started by `to_thread.run_sync`, which installs the blocking portal). The process-default `GraphContext` is a boot-time singleton, reachable on the host loop where `from_thread.run` executes.
+- **Access tokens:** RFC 9068 `authlib.oauth2.rfc9068.JWTBearerTokenGenerator` (subclass; `get_jwks()` returns the M1a active **private** JWK with `kid`+`alg=RS256`; `authlib.jose.jwt.encode` auto-stamps `kid` into the `at+jwt` header). `get_audiences()` returns the resource indicator. Registered via `server.register_token_generator("default", gen)`.
+- **PKCE:** `server.register_grant(AuthCodeGrant, [authlib.oauth2.rfc7636.CodeChallenge(required=True)])` — mandatory S256.
+- **Grants/endpoints:** `AuthorizationCodeGrant` (save/query/delete code + authenticate_user, hooks bridge to `AuthorizationCode` Object), `RefreshTokenGrant` (`INCLUDE_NEW_REFRESH_TOKEN=True` rotation, reuse `RefreshToken` Object), `rfc7591.ClientRegistrationEndpoint` (DCR → `OAuthClient`), `rfc7009.RevocationEndpoint`. AS metadata (RFC 8414) is **hand-served** JSON (Authlib only validates via `rfc8414.AuthorizationServerMetadata`).
+- **Client adapter:** a wrapper over `OAuthClient` satisfying `ClientMixin` (`get_client_id`, `get_default_redirect_uri`, `check_redirect_uri` exact-match, `check_client_secret` via M1a `verify_client_secret`, `check_endpoint_auth_method("none","token")` true for public/PKCE, `check_response_type`, `check_grant_type`, `get_allowed_scope`).
+- **Version traps:** don't pass `OAuth2Request(body=...)` (deprecated 1.6.x) and don't read `request.data`/`.client_id` (deprecated → `request.payload.*`); bind by subclassing `OAuth2Request` and overriding `args`/`form` to return dicts.
+
+## jvspatial wiring map (file:line)
+- **Route registration:** `AuthConfigurator` creates `APIRouter(prefix="/auth", tags=["Auth"])` (`auth_configurator.py:136`); mounted `app.include_router(router, prefix=APIRoutes.PREFIX)` (`server_app_factory.py:70`, `APIRoutes.PREFIX` default `/api`). Add a parallel `oauth_router` gated on `oauth_enabled`, mounted the same way. **Wrinkle:** `.well-known/oauth-authorization-server`, `.well-known/jwks.json`, and PRM must sit at **root**, not under `/api` — mount those on the app without the `/api` prefix (or set `issuer_url` to include `/api` and serve metadata at `{issuer}/.well-known/...` per RFC 8414 path-insertion). Resolve in M1b-3.
+- **AuthConfig at runtime:** `Server._configure_authentication()` (`server.py:241-266`) stores `self._auth_config`; route handlers read it via the server instance or a `get_oauth_config()` dependency mirroring `get_auth_service()` (`auth_configurator.py:131`).
+- **Session user for `/authorize`:** `get_current_user` dependency (`auth_configurator.py:145-161`) returns `UserResponse(id,email,name,roles,permissions,...)` but reads a **bearer** (`HTTPAuthorizationCredentials`), not a cookie. **Wrinkle:** browser OAuth authorize flows usually carry a session cookie. M1b must decide how the consent step identifies the user — options: (a) integral frontend drives `/authorize` with the user's bearer; (b) add a session-cookie auth path for the authorize GET. Resolve in M1b-2 (consent), coordinate with M2/M3.
+- **Startup hook:** `server.lifecycle_manager.add_startup_hook(func)` (`lifecycle.py:50-72`, async-aware) — register `ensure_signing_key()` when `oauth_enabled`, mirroring the admin-bootstrap pattern (`server.py:203-239`).
+- **HTML/redirect:** plain `starlette.responses.HTMLResponse`/`RedirectResponse`; no template dir (consent page = inline HTML or a module string).
+- **anyio:** available via Starlette; `anyio.to_thread.run_sync` + `anyio.from_thread.run` confirmed.
+
+## M1b phasing (each its own plan + subagent-driven build)
+- **M1b-1 — Core AS + bridge:** Starlette `OAuth2Request` wrapper + `AuthorizationServer` subclass (3 binding methods + `query_client`/`save_token`), anyio thread-bridge helper, `ClientMixin` adapter over `OAuthClient`, `AuthorizationCodeGrant` + PKCE bridged to `AuthorizationCode`, RFC 9068 RS256 token generator wired to `keys.py`, `/oauth/token` + `/oauth/authorize` (consent-approve POST issuing a code; GET consent stub). Tests: PKCE authcode→token happy path + tampered-verifier reject (drive the server in-process with a fake authenticated user).
+- **M1b-2 — Refresh + consent + session:** `RefreshTokenGrant` (rotation), consent page + the session-user resolution decision, scope = requested ∩ user permissions.
+- **M1b-3 — DCR + revocation + metadata routes:** `ClientRegistrationEndpoint`, `RevocationEndpoint`, hand-served RFC 8414 metadata + `/.well-known/jwks.json` (root-mounted), `oauth_router` registration + startup key hook.
+
+## M1a carry-ins for M1b
+- Add `AuthConfig.oauth_signing_key_source` (`generate|env`) before wiring `ensure_signing_key()` into boot.
+- `keys._jwks_keys()` needs a rotation/time-window filter when rotation lands.
+- `OAuthClient` gains DCR metadata fields (`software_id`, etc.) in M1b-3.
