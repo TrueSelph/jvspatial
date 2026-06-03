@@ -373,11 +373,15 @@ class JvSpatialAuthCodeGrant(AuthorizationCodeGrant):
     ) -> Optional[StoredAuthCode]:
         """Return the stored, unconsumed, unexpired code for *client* or None.
 
-        Atomic single-use enforcement (closes TOCTOU): the code is marked
-        consumed and persisted here — BEFORE returning to the grant — so a
-        concurrent duplicate exchange sees ``consumed=True`` and is rejected.
-        ``delete_authorization_code`` is left as-is (idempotent); it is still
-        called by Authlib's grant flow after ``create_token_response`` succeeds.
+        READ-ONLY: the code is NOT marked consumed here.  Consuming before
+        redirect_uri and PKCE validation would burn the code on any failed
+        request, locking out the legitimate client's retry (DoS vector).
+
+        Authlib calls this method first, then validates redirect_uri and the
+        PKCE ``code_verifier`` (via the ``after_validate_token_request`` hook),
+        and only on the success path calls ``delete_authorization_code``.  The
+        single-use point is therefore ``delete_authorization_code``, which runs
+        after all validation passes.
         """
         record = call_async(self._find_code, _sha256(code))
         if record is None or record.consumed:
@@ -389,13 +393,27 @@ class JvSpatialAuthCodeGrant(AuthorizationCodeGrant):
             expires_at = expires_at.replace(tzinfo=timezone.utc)
         if expires_at <= datetime.now(timezone.utc):
             return None
-        # Atomically mark consumed before returning so no concurrent request
-        # can exchange the same code.
-        call_async(self._consume_code, record)
         return StoredAuthCode(record)
 
     def delete_authorization_code(self, authorization_code: StoredAuthCode) -> None:
-        """Mark the code consumed so it can never be exchanged twice."""
+        """Consume the code so it can never be exchanged again (single-use point).
+
+        Authlib calls this AFTER redirect_uri + PKCE ``code_verifier`` + user
+        authentication all pass, and after ``save_token`` completes.  Marking
+        consumed here — not in ``query_authorization_code`` — ensures a request
+        with a wrong ``code_verifier`` or wrong ``redirect_uri`` does NOT burn
+        the code for a legitimate retry.
+
+        Idempotent: if ``consumed`` is already ``True`` (e.g. a concurrent
+        success race in a future multi-worker deployment), the save is a no-op
+        in effect.
+
+        Note on atomicity: single-use is serialized by the single-process anyio
+        bridge, NOT a DB-level compare-and-swap.  Under multi-worker or
+        multi-process deployment a conditional-update primitive is required to
+        prevent a TOCTOU race between two simultaneous legitimate exchanges of
+        the same code (tracked for a later phase).
+        """
         call_async(self._consume_code, authorization_code.record)
 
     def authenticate_user(self, authorization_code: StoredAuthCode) -> _GrantUser:
