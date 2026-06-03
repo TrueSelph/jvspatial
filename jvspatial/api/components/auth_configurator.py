@@ -594,21 +594,30 @@ class AuthConfigurator:
             ]
         )
         if getattr(self._auth_config, "oauth_enabled", False):
-            self._configure_oauth_endpoints()
+            self._configure_oauth_endpoints(get_current_user)
 
-    def _configure_oauth_endpoints(self) -> None:
+    def _configure_oauth_endpoints(self, get_current_user: Any) -> None:
         """Build the OAuth routers, exempt their paths, and register the key hook.
 
-        The token/register/revoke/authorize endpoints are client-authenticated
-        (or public), never bearer-gated, so their prefix-relative paths are added
-        to the auth-exempt set (the deny-by-default endpoint resolver would
-        otherwise 401 these plain FastAPI routes). The signing key is generated at
+        The token/register/revoke endpoints are client-authenticated (or public),
+        never bearer-gated, so their prefix-relative paths are added to the
+        auth-exempt set (the deny-by-default endpoint resolver would otherwise
+        401 these plain FastAPI routes). ``/authorize`` is likewise exempt from
+        the middleware, but its GET/POST handlers gate on the *session user* via
+        ``Depends(get_current_user)`` — the consent step needs the authenticated
+        resource owner so its permissions (never client/request input) can be
+        intersected with the requested scope. The signing key is generated at
         startup via a lifecycle hook so the first JWKS / token request is warm.
+
+        Args:
+            get_current_user: The session-user dependency closure from
+                :meth:`_register_auth_endpoints`, threaded into the authorize
+                route so it can resolve the bearer-authenticated resource owner.
         """
         from jvspatial.api.auth.oauth.routes import build_oauth_routers
 
         self._oauth_router, self._well_known_router = build_oauth_routers(
-            self._auth_config
+            self._auth_config, get_current_user=get_current_user
         )
 
         prefix = getattr(self._auth_config, "oauth_prefix", "/oauth") or "/oauth"

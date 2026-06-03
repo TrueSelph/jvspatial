@@ -550,6 +550,27 @@ class JvSpatialAuthorizationServer(AuthorizationServer):
             partial(self.create_authorization_response, req, grant_user=grant_user)
         )
 
+    async def async_get_consent_grant(
+        self, req: StarletteOAuth2Request, end_user: Any
+    ) -> Any:
+        """Validate an authorize request off-thread and return the consent grant.
+
+        Wraps Authlib's synchronous :meth:`get_consent_grant` (which queries the
+        client through the storage hooks) so it runs inside the anyio bridge,
+        like the other authorize/token wrappers.  The returned grant exposes the
+        validated ``client`` adapter and ``request`` (with the client-filtered
+        ``scope``) for rendering the consent page.
+
+        Raises:
+            authlib.oauth2.OAuth2Error: when the request is invalid (unknown
+                client, bad redirect_uri, unsupported response_type, missing or
+                non-S256 PKCE challenge, etc.).
+        """
+        _ensure_payload(req)
+        return await run_sync_with_async_bridge(
+            partial(self.get_consent_grant, req, end_user=end_user)
+        )
+
     async def async_create_token_response(
         self, req: StarletteOAuth2Request
     ) -> OAuthHttpResponse:

@@ -7,9 +7,13 @@ on :attr:`AuthConfig.oauth_enabled`:
   authorization-server metadata and the public JWKS. These are unauthenticated
   discovery documents.
 * ``oauth_router`` — mounted under the API prefix at ``oauth_prefix``, serving
-  the token, dynamic-client-registration, and revocation endpoints (plus a
-  placeholder ``/authorize`` whose consent/session body is completed in a later
-  task). These endpoints are client-authenticated (or public), never bearer-gated.
+  the token, dynamic-client-registration, and revocation endpoints. These are
+  client-authenticated (or public), never bearer-gated. The ``/authorize``
+  endpoint is the exception: its GET (consent page) and POST (approve/deny)
+  handlers gate on the *authenticated session user* via ``Depends(get_current_user)``.
+  The session user's effective permissions — resolved server-side, NEVER from
+  client/request input — are what the authorization server intersects with the
+  requested scope, so a token can never carry a scope the resource owner lacks.
 
 A single :class:`~jvspatial.api.auth.oauth.server.JvSpatialAuthorizationServer`
 is built once per call and shared by the handlers via closure. Handlers convert
@@ -21,18 +25,25 @@ Starlette response via :func:`_to_response`.
 
 from __future__ import annotations
 
-from typing import Any
+from html import escape
+from typing import Any, Callable, Optional
+from urllib.parse import urlencode, urlparse, urlunparse
 
-from fastapi import APIRouter, Request
+from authlib.oauth2 import OAuth2Error
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from jvspatial.api.auth.oauth import keys
 from jvspatial.api.auth.oauth.metadata import build_as_metadata
-from jvspatial.api.auth.oauth.requests import build_oauth2_request
+from jvspatial.api.auth.oauth.requests import (
+    StarletteOAuth2Request,
+    build_oauth2_request,
+)
 from jvspatial.api.auth.oauth.server import (
     OAuthHttpResponse,
     build_authorization_server,
 )
+from jvspatial.api.auth.rbac import get_effective_permissions
 from jvspatial.api.constants import APIRoutes
 
 
@@ -71,7 +82,70 @@ def _to_response(holder: OAuthHttpResponse) -> Response:
     )
 
 
-def build_oauth_routers(auth_config: Any) -> tuple[APIRouter, APIRouter]:
+#: Authorize-request parameters re-carried through the consent form so the
+#: approve POST reconstructs the exact authorization request the GET validated.
+_AUTHORIZE_PARAMS = (
+    "response_type",
+    "client_id",
+    "redirect_uri",
+    "scope",
+    "state",
+    "code_challenge",
+    "code_challenge_method",
+)
+
+
+def _redirect_with_query(redirect_uri: str, params: dict[str, str]) -> RedirectResponse:
+    """Return a 302 to *redirect_uri* with *params* merged into its query string.
+
+    Empty-valued params are dropped so a missing ``state`` is not echoed back as
+    ``state=``.
+    """
+    parts = urlparse(redirect_uri)
+    query = urlencode({k: v for k, v in params.items() if v})
+    merged = f"{parts.query}&{query}" if parts.query else query
+    return RedirectResponse(
+        url=urlunparse(parts._replace(query=merged)), status_code=302
+    )
+
+
+def _render_consent_page(
+    client_name: str, scopes: list[str], form: dict[str, str]
+) -> str:
+    """Render the default consent HTML (approve/deny form re-carrying OAuth params).
+
+    The client name and each requested scope are HTML-escaped. The authorize
+    request parameters are re-emitted as hidden inputs so the approve/deny POST
+    reconstructs the same request; the submit buttons carry ``decision``.
+    """
+    name = escape(client_name or form.get("client_id", "Unknown client"))
+    scope_items = (
+        "".join(f"<li><code>{escape(s)}</code></li>" for s in scopes)
+        or "<li><em>(no scopes requested)</em></li>"
+    )
+    hidden = "".join(
+        f'<input type="hidden" name="{escape(k)}" value="{escape(v)}">'
+        for k, v in form.items()
+        if k in _AUTHORIZE_PARAMS and v
+    )
+    return (
+        '<!doctype html><html><head><meta charset="utf-8">'
+        "<title>Authorize</title></head><body>"
+        f"<h1>Authorize {name}</h1>"
+        f"<p><strong>{name}</strong> is requesting access with these scopes:</p>"
+        f"<ul>{scope_items}</ul>"
+        '<form method="post">'
+        f"{hidden}"
+        '<button type="submit" name="decision" value="approve">Approve</button>'
+        '<button type="submit" name="decision" value="deny">Deny</button>'
+        "</form></body></html>"
+    )
+
+
+def build_oauth_routers(
+    auth_config: Any,
+    get_current_user: Optional[Callable[..., Any]] = None,
+) -> tuple[APIRouter, APIRouter]:
     """Build the OAuth ``(oauth_router, well_known_router)`` pair.
 
     The authorization server is constructed once and captured by the handler
@@ -80,7 +154,13 @@ def build_oauth_routers(auth_config: Any) -> tuple[APIRouter, APIRouter]:
 
     Args:
         auth_config: The active :class:`~jvspatial.api.auth.config.AuthConfig`
-            (``oauth_issuer_url``, ``oauth_prefix``, ``oauth_supported_scopes``).
+            (``oauth_issuer_url``, ``oauth_prefix``, ``oauth_supported_scopes``,
+            ``role_permission_mapping``).
+        get_current_user: The session-user dependency from the auth configurator.
+            Required for the ``/authorize`` consent flow — the GET/POST handlers
+            depend on it to resolve the bearer-authenticated resource owner whose
+            permissions bound the granted scope. When ``None`` (e.g. a caller
+            that does not wire it), ``/authorize`` returns 503.
 
     Returns:
         ``(oauth_router, well_known_router)`` — the API-prefixed OAuth router and
@@ -134,8 +214,6 @@ def build_oauth_routers(auth_config: Any) -> tuple[APIRouter, APIRouter]:
         method/URI/headers without attempting a second form-body parse on the
         already-consumed stream.
         """
-        from jvspatial.api.auth.oauth.requests import StarletteOAuth2Request
-
         body = await request.json()
         req = StarletteOAuth2Request(
             method=request.method,
@@ -152,17 +230,127 @@ def build_oauth_routers(auth_config: Any) -> tuple[APIRouter, APIRouter]:
         req = await build_oauth2_request(request)
         return _to_response(await server.async_revoke_token(req))
 
-    @oauth_router.get("/authorize")
-    async def authorize() -> HTMLResponse:
-        """Placeholder authorize endpoint.
+    if get_current_user is None:
+        # No session-user dependency wired — the consent flow cannot resolve the
+        # resource owner, so /authorize is unavailable rather than insecure.
+        @oauth_router.api_route("/authorize", methods=["GET", "POST"])
+        async def authorize_unavailable() -> Response:
+            """Return 503 when the consent flow has no session-user dependency."""
+            return JSONResponse({"error": "temporarily_unavailable"}, status_code=503)
 
-        Consent rendering and session-user permission resolution are completed
-        in a later task; this stub keeps the route mounted (and discoverable in
-        the AS metadata) without 404-ing.
+        return oauth_router, well_known_router
+
+    @oauth_router.get("/authorize", response_class=HTMLResponse)
+    async def authorize_get(
+        request: Request,
+        user: Any = Depends(get_current_user),  # noqa: B008
+    ) -> Response:
+        """Render the consent page for an authenticated resource owner.
+
+        The bearer-authenticated session user is resolved by ``get_current_user``
+        (401 when no/invalid bearer). The request is validated through the AS's
+        :meth:`async_get_consent_grant`; on success the validated client name and
+        client-filtered scope are rendered into an approve/deny form that
+        re-carries the OAuth parameters. A request that fails validation yields a
+        400 error page rather than a redirect — the supplied ``redirect_uri`` has
+        not been proven to belong to a registered client, so honouring it would
+        be an open-redirect (see :func:`_consent_error_response`).
+
+        An optional ``auth_config.oauth_consent_handler`` may override rendering;
+        it receives ``(request, client, scopes, form)`` and returns HTML.
         """
-        return HTMLResponse("<html><body>consent</body></html>")
+        req = await build_oauth2_request(request)
+        try:
+            grant = await server.async_get_consent_grant(req, end_user={"id": user.id})
+        except OAuth2Error as error:
+            return _consent_error_response(error)
+
+        client = grant.client.client  # OAuthClientAdapter -> OAuthClient record
+        granted_scope = grant.request.scope or req.args.get("scope", "")
+        scopes = granted_scope.split()
+        form = dict(req.args)
+
+        consent_handler = getattr(auth_config, "oauth_consent_handler", None)
+        if consent_handler is not None:
+            html = consent_handler(request, client, scopes, form)
+            return HTMLResponse(html)
+        return HTMLResponse(_render_consent_page(client.client_name, scopes, form))
+
+    @oauth_router.post("/authorize")
+    async def authorize_post(
+        request: Request,
+        user: Any = Depends(get_current_user),  # noqa: B008
+    ) -> Response:
+        """Complete the consent decision for an authenticated resource owner.
+
+        On *approve* the ``grant_user`` is built ONLY from the server-resolved
+        session user: its id, and its effective permissions computed via
+        :func:`get_effective_permissions` over the user's roles/permissions and
+        the configured ``role_permission_mapping``. The AS intersects the
+        requested scope with those permissions (scope ∩ permissions), so the
+        issued token can never carry a scope the resource owner lacks — the
+        permission set is NEVER read from client or request input.
+
+        On *deny* (or any non-approve decision) the client is redirected back to
+        its ``redirect_uri`` with ``error=access_denied`` (RFC 6749 §4.1.2.1),
+        carrying ``state`` when present, and no code is issued.
+        """
+        # Coerce to a str->str dict: the consent form carries only text fields
+        # (no file uploads), and StarletteOAuth2Request expects plain strings.
+        form = {k: v for k, v in (await request.form()).items() if isinstance(v, str)}
+        decision = form.get("decision", "deny")
+        redirect_uri = form.get("redirect_uri", "")
+        state = form.get("state", "")
+
+        if decision != "approve":
+            return _redirect_with_query(
+                redirect_uri, {"error": "access_denied", "state": state}
+            )
+
+        # TRUST BOUNDARY: permissions come ONLY from the authenticated session
+        # user resolved server-side — never from the request/form.
+        permissions = sorted(
+            get_effective_permissions(
+                getattr(user, "roles", None) or [],
+                getattr(user, "permissions", None) or [],
+                getattr(auth_config, "role_permission_mapping", None) or {},
+            )
+        )
+        grant_user = {"id": user.id, "permissions": permissions}
+
+        req = StarletteOAuth2Request(
+            method="POST",
+            uri=str(request.url),
+            query=dict(request.query_params),
+            form=form,
+            headers=dict(request.headers),
+        )
+        return _to_response(
+            await server.async_create_authorization_response(req, grant_user=grant_user)
+        )
 
     return oauth_router, well_known_router
+
+
+def _consent_error_response(error: OAuth2Error) -> Response:
+    """Render an authorize-validation failure as a 400 HTML page.
+
+    The supplied ``redirect_uri`` cannot be trusted to belong to a registered
+    client (the validation error may itself BE an invalid redirect_uri / unknown
+    client), so we do NOT open-redirect: a 400 page describing the error is
+    returned. This is the conservative reading of RFC 6749 §4.1.2.1 for the
+    validation-failure path.
+    """
+    description = escape(
+        error.get_error_description() or error.error or "invalid_request"
+    )
+    body = (
+        '<!doctype html><html><head><meta charset="utf-8">'
+        "<title>Authorization error</title></head><body>"
+        f"<h1>Authorization request rejected</h1><p>{description}</p>"
+        "</body></html>"
+    )
+    return HTMLResponse(body, status_code=400)
 
 
 __all__ = ["build_oauth_routers"]
