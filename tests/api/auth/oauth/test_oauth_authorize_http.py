@@ -249,3 +249,48 @@ def test_authorize_deny_redirects_with_error_and_no_code():
         assert q.get("error") == ["access_denied"], location
         assert "code" not in q
         assert q.get("state") == ["st-deny"]
+
+
+def test_authorize_deny_does_not_open_redirect_to_unregistered_uri():
+    """Deny with a forged redirect_uri must NOT 302 to it (open-redirect guard).
+
+    The consent form re-carries redirect_uri as a hidden field; an attacker who
+    crafts the authorize link controls it. The deny branch must re-validate the
+    request against the registered client (same as the GET) and redirect ONLY to
+    a client-validated redirect_uri — a forged/unregistered URI yields the 400
+    error page, never a 302 to the attacker's destination.
+    """
+    with tempfile.TemporaryDirectory() as tmp, TestClient(_app(tmp)) as c:
+        bearer, _ = _bearer_for_mcp_user(c)
+        client = _register_public_client(c, scope="mcp")
+        _, challenge = _pkce()
+        evil = "https://evil.attacker.example/phish"
+
+        # Deny with an unregistered redirect_uri but a valid client_id.
+        denied = c.post(
+            "/api/oauth/authorize",
+            data={
+                "response_type": "code",
+                "client_id": client["client_id"],
+                "redirect_uri": evil,
+                "scope": "mcp",
+                "state": "s",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "decision": "deny",
+            },
+            headers={"Authorization": f"Bearer {bearer}"},
+            follow_redirects=False,
+        )
+        assert denied.status_code == 400, denied.text
+        assert "location" not in {k.lower() for k in denied.headers}
+
+        # Deny with NO client_id and a forged redirect_uri — also no open redirect.
+        denied2 = c.post(
+            "/api/oauth/authorize",
+            data={"redirect_uri": evil, "state": "s", "decision": "deny"},
+            headers={"Authorization": f"Bearer {bearer}"},
+            follow_redirects=False,
+        )
+        assert denied2.status_code == 400, denied2.text
+        assert "location" not in {k.lower() for k in denied2.headers}

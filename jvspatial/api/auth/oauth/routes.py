@@ -293,18 +293,42 @@ def build_oauth_routers(
 
         On *deny* (or any non-approve decision) the client is redirected back to
         its ``redirect_uri`` with ``error=access_denied`` (RFC 6749 §4.1.2.1),
-        carrying ``state`` when present, and no code is issued.
+        carrying ``state`` when present, and no code is issued. The deny path
+        re-validates the request through the AS first (same as the GET consent
+        step), so it redirects ONLY to a ``redirect_uri`` proven to belong to the
+        registered client — an unregistered/forged ``redirect_uri`` yields the
+        400 error page rather than an open redirect.
         """
         # Coerce to a str->str dict: the consent form carries only text fields
         # (no file uploads), and StarletteOAuth2Request expects plain strings.
         form = {k: v for k, v in (await request.form()).items() if isinstance(v, str)}
         decision = form.get("decision", "deny")
-        redirect_uri = form.get("redirect_uri", "")
         state = form.get("state", "")
 
         if decision != "approve":
+            # Re-validate before redirecting: the form-supplied redirect_uri has
+            # not yet been proven to belong to the client, so honouring it as-is
+            # would be an open redirect (the deny branch never reaches Authlib's
+            # create_authorization_response, which is what validates it on the
+            # approve path). Validate via the consent-grant path and redirect ONLY
+            # to the client-validated redirect_uri; on failure render the 400 page.
+            req = StarletteOAuth2Request(
+                method="POST",
+                uri=str(request.url),
+                query=dict(request.query_params),
+                form=form,
+                headers=dict(request.headers),
+            )
+            try:
+                grant = await server.async_get_consent_grant(
+                    req, end_user={"id": user.id}
+                )
+            except OAuth2Error as error:
+                return _consent_error_response(error)
+            # grant.redirect_uri is the client-validated value stored by
+            # validate_consent_request (falls back to the client's default).
             return _redirect_with_query(
-                redirect_uri, {"error": "access_denied", "state": state}
+                grant.redirect_uri, {"error": "access_denied", "state": state}
             )
 
         # TRUST BOUNDARY: permissions come ONLY from the authenticated session
