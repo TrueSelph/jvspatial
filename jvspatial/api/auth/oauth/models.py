@@ -106,3 +106,23 @@ class OAuthSigningKey(Object):
         default_factory=lambda: datetime.now(timezone.utc),
         description="Creation timestamp",
     )
+
+
+class OAuthRefreshToken(Object):
+    """An OAuth refresh token (opaque, stored hashed).
+
+    Distinct from the session-auth ``RefreshToken`` so OAuth carries
+    client/scope/resource without disturbing session auth.
+    """
+
+    token_hash: str = Field(..., description="SHA-256 hash of the refresh token")
+    user_id: str = Field(..., description="Resource-owner user id")
+    client_id: str = Field(..., description="Owning client_id")
+    scope: str = Field(default="", description="Granted scope (space-delimited)")
+    resource: Optional[str] = Field(default=None, description="Audience/resource")
+    expires_at: datetime = Field(..., description="Expiry")
+    is_active: bool = Field(default=True, description="False once revoked/rotated")
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Creation timestamp",
+    )
