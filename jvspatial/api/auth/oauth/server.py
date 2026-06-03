@@ -38,6 +38,7 @@ from jvspatial.api.auth.oauth import keys as keystore
 from jvspatial.api.auth.oauth import refresh_store
 from jvspatial.api.auth.oauth.bridge import call_async, run_sync_with_async_bridge
 from jvspatial.api.auth.oauth.client_adapter import OAuthClientAdapter
+from jvspatial.api.auth.oauth.dcr import JvSpatialClientRegistrationEndpoint
 from jvspatial.api.auth.oauth.models import AuthorizationCode, OAuthClient
 from jvspatial.api.auth.oauth.requests import StarletteOAuth2Request
 
@@ -557,6 +558,35 @@ class JvSpatialAuthorizationServer(AuthorizationServer):
             partial(self.create_token_response, req)
         )
 
+    async def async_register_client(
+        self, req: StarletteOAuth2Request, json_body: Dict[str, Any]
+    ) -> OAuthHttpResponse:
+        """Run the DCR (RFC 7591) registration flow off-thread.
+
+        The :class:`~authlib.oauth2.rfc7591.ClientRegistrationEndpoint` reads
+        client metadata from ``request.payload.data`` (not form-data).  We
+        attach a :class:`~authlib.oauth2.rfc6749.requests.BasicOAuth2Payload`
+        wrapping *json_body* onto the request before dispatching through the
+        anyio bridge so the endpoint sees the JSON dict as if it arrived in
+        the request body.
+
+        Args:
+            req: A :class:`StarletteOAuth2Request` with ``method="POST"`` and
+                the registration URI (no query/form fields required for DCR).
+            json_body: The parsed JSON registration-metadata dict from the
+                HTTP request body (``redirect_uris``, ``grant_types``, etc.).
+
+        Returns:
+            :class:`OAuthHttpResponse` with status 201 and the registered
+            client metadata (including the generated ``client_id``).
+        """
+        # Wire the JSON body into the request's payload so the DCR endpoint's
+        # extract_client_metadata (which reads request.payload.data) sees it.
+        req.payload = BasicOAuth2Payload(json_body)
+        return await run_sync_with_async_bridge(
+            partial(self.create_endpoint_response, "client_registration", req)
+        )
+
     @staticmethod
     async def _load_client(client_id: str) -> Optional[OAuthClient]:
         """Fetch the stored :class:`OAuthClient` for *client_id*, or ``None``."""
@@ -702,4 +732,5 @@ def build_authorization_server(
     server.register_token_generator(
         "default", JvSpatialJWTTokenGenerator(issuer=issuer, resource=resource)
     )
+    server.register_endpoint(JvSpatialClientRegistrationEndpoint)
     return server
