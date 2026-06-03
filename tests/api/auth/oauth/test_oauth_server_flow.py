@@ -379,3 +379,91 @@ async def test_plain_pkce_method_is_rejected(temp_context):
         assert "error" in q
     else:
         assert resp.status_code in (400, 401)
+
+
+@pytest.mark.asyncio
+async def test_refresh_token_rotation_and_revocation(temp_context):
+    import base64
+    import hashlib
+    import secrets
+    from urllib.parse import parse_qs, urlparse
+
+    await keystore.ensure_signing_key()
+    await OAuthClient(
+        client_id="cli_pub",
+        client_secret_hash=None,
+        redirect_uris=["https://c.example/cb"],
+        grant_types=["authorization_code", "refresh_token"],
+        response_types=["code"],
+        scope="mcp",
+        token_endpoint_auth_method="none",
+    ).save()
+    server = build_authorization_server(issuer=ISSUER, resource=RESOURCE)
+    verifier = secrets.token_urlsafe(64)
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+        .rstrip(b"=")
+        .decode()
+    )
+    a = StarletteOAuth2Request(
+        method="POST",
+        uri=f"{ISSUER}/oauth/authorize",
+        query={
+            "response_type": "code",
+            "client_id": "cli_pub",
+            "redirect_uri": "https://c.example/cb",
+            "scope": "mcp",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        },
+        form={},
+        headers={},
+    )
+    r = await server.async_create_authorization_response(a, grant_user={"id": "u_1"})
+    code = parse_qs(urlparse(r.headers["location"]).query)["code"][0]
+    t = StarletteOAuth2Request(
+        method="POST",
+        uri=f"{ISSUER}/oauth/token",
+        query={},
+        form={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": "https://c.example/cb",
+            "client_id": "cli_pub",
+            "code_verifier": verifier,
+        },
+        headers={},
+    )
+    first = (await server.async_create_token_response(t)).body_json
+    rt1 = first["refresh_token"]
+
+    t2 = StarletteOAuth2Request(
+        method="POST",
+        uri=f"{ISSUER}/oauth/token",
+        query={},
+        form={
+            "grant_type": "refresh_token",
+            "refresh_token": rt1,
+            "client_id": "cli_pub",
+        },
+        headers={},
+    )
+    second = (await server.async_create_token_response(t2)).body_json
+    assert second.get("access_token")
+    rt2 = second.get("refresh_token")
+    assert rt2 and rt2 != rt1  # rotated
+
+    t3 = StarletteOAuth2Request(
+        method="POST",
+        uri=f"{ISSUER}/oauth/token",
+        query={},
+        form={
+            "grant_type": "refresh_token",
+            "refresh_token": rt1,
+            "client_id": "cli_pub",
+        },
+        headers={},
+    )
+    resp3 = await server.async_create_token_response(t3)
+    assert resp3.status_code in (400, 401)
+    assert "access_token" not in (resp3.body_json or {})

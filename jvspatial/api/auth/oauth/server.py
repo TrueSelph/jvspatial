@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union, cast
 from authlib.oauth2.rfc6749 import AuthorizationServer
 from authlib.oauth2.rfc6749.errors import InvalidRequestError
 from authlib.oauth2.rfc6749.grants import AuthorizationCodeGrant
+from authlib.oauth2.rfc6749.grants.refresh_token import RefreshTokenGrant
 from authlib.oauth2.rfc6749.requests import BasicOAuth2Payload
 from authlib.oauth2.rfc7636 import CodeChallenge
 from authlib.oauth2.rfc9068 import JWTBearerTokenGenerator
@@ -464,6 +465,94 @@ class JvSpatialAuthorizationServer(AuthorizationServer):
         return matches[0] if matches else None
 
 
+class _RefreshCredential:
+    """Adapter over ``OAuthRefreshToken`` for Authlib's ``RefreshTokenGrant``.
+
+    Exposes the interface ``validate_token_request`` reads (authlib 1.7.2):
+
+    * ``check_client(client) -> bool``
+    * ``get_scope() -> str``
+
+    ``is_expired`` / ``is_revoked`` are NOT called by the 1.7.2 validate path
+    — ``find_active`` already filters on those before this object is built.
+    ``authenticate_user`` and ``revoke_old_credential`` receive this same object.
+    """
+
+    def __init__(self, rec: Any) -> None:
+        """Wrap the persisted ``OAuthRefreshToken`` record."""
+        self.record = rec
+        # Surface user_id so authenticate_user can build a _GrantUser.
+        self.user_id: str = rec.user_id
+
+    # --- interface required by RefreshTokenGrant._validate_request_token ---
+
+    def check_client(self, client: Any) -> bool:
+        """True when the record's client_id matches the authenticated client."""
+        return self.record.client_id == client.get_client_id()
+
+    def get_scope(self) -> str:
+        """Return the scope that was granted when this refresh token was minted."""
+        return self.record.scope or ""
+
+    # --- convenience attributes (not called by authlib 1.7.2 validate path) ---
+
+    def is_expired(self) -> bool:
+        """``find_active`` already filters expired tokens; always False here."""
+        return False
+
+    def is_revoked(self) -> bool:
+        """``find_active`` only returns active records; always False here."""
+        return not self.record.is_active
+
+
+class JvSpatialRefreshTokenGrant(RefreshTokenGrant):
+    """Refresh-token grant with rotation: old token revoked, new one issued + persisted.
+
+    The ``authenticate_refresh_token`` → ``authenticate_user`` → ``revoke_old_credential``
+    lifecycle is driven by Authlib's :class:`RefreshTokenGrant` base class.
+    Storage calls bridge to the async ``refresh_store`` via :func:`call_async`.
+    """
+
+    TOKEN_ENDPOINT_AUTH_METHODS = [
+        "client_secret_basic",
+        "client_secret_post",
+        "none",
+    ]
+
+    #: Issue a new refresh token on every exchange (rotation).
+    INCLUDE_NEW_REFRESH_TOKEN = True
+
+    def authenticate_refresh_token(
+        self, refresh_token: str
+    ) -> Optional[_RefreshCredential]:
+        """Look up the active, unexpired token record; return ``None`` on miss/revoke.
+
+        Authlib passes the *plaintext* ``refresh_token`` string from the form.
+        :func:`refresh_store.find_active` hashes it internally before querying.
+        """
+        rec = call_async(refresh_store.find_active, refresh_token)
+        if rec is None:
+            return None
+        return _RefreshCredential(rec)
+
+    def authenticate_user(self, credential: _RefreshCredential) -> _GrantUser:
+        """Return the resource owner stored in the credential.
+
+        ``credential`` is the :class:`_RefreshCredential` returned by
+        :meth:`authenticate_refresh_token` — carries ``user_id``.
+        """
+        return _GrantUser(credential.user_id)
+
+    def revoke_old_credential(self, credential: _RefreshCredential) -> None:
+        """Revoke the old refresh token record (rotation enforcement).
+
+        Called by Authlib's base class *after* the new token has been saved.
+        ``credential`` is the same :class:`_RefreshCredential` object produced
+        by :meth:`authenticate_refresh_token`.
+        """
+        call_async(refresh_store.revoke, credential.record)
+
+
 def build_authorization_server(
     issuer: str, resource: str
 ) -> JvSpatialAuthorizationServer:
@@ -487,6 +576,7 @@ def build_authorization_server(
     server.register_grant(
         JvSpatialAuthCodeGrant, [RequiredS256CodeChallenge(required=True)]
     )
+    server.register_grant(JvSpatialRefreshTokenGrant)
     server.register_token_generator(
         "default", JvSpatialJWTTokenGenerator(issuer=issuer, resource=resource)
     )
