@@ -41,6 +41,7 @@ from jvspatial.api.auth.oauth.client_adapter import OAuthClientAdapter
 from jvspatial.api.auth.oauth.dcr import JvSpatialClientRegistrationEndpoint
 from jvspatial.api.auth.oauth.models import AuthorizationCode, OAuthClient
 from jvspatial.api.auth.oauth.requests import StarletteOAuth2Request
+from jvspatial.api.auth.oauth.revocation import JvSpatialRevocationEndpoint
 
 
 class RequiredS256CodeChallenge(CodeChallenge):
@@ -587,6 +588,34 @@ class JvSpatialAuthorizationServer(AuthorizationServer):
             partial(self.create_endpoint_response, "client_registration", req)
         )
 
+    async def async_revoke_token(
+        self, req: StarletteOAuth2Request
+    ) -> OAuthHttpResponse:
+        """Run the RFC 7009 revocation flow off-thread and return the response.
+
+        The revocation request is form-encoded (``token``, ``token_type_hint``,
+        ``client_id``).  :meth:`create_oauth2_request` populates
+        ``request.payload`` from the combined ``args`` + ``form`` dict, so the
+        ``authenticate_none`` client-auth method can read ``client_id`` off
+        ``request.payload.client_id`` without any additional wiring.
+
+        Returns HTTP 200 regardless of whether the token was found; that is the
+        RFC 7009 §2.2 requirement when the token does not exist or has already
+        been revoked.
+
+        Args:
+            req: A :class:`StarletteOAuth2Request` with ``method="POST"`` and
+                the revocation URI; ``form`` must contain ``token`` and
+                optionally ``token_type_hint`` and ``client_id``.
+
+        Returns:
+            :class:`OAuthHttpResponse` with status 200 on success.
+        """
+        _ensure_payload(req)
+        return await run_sync_with_async_bridge(
+            partial(self.create_endpoint_response, "revocation", req)
+        )
+
     @staticmethod
     async def _load_client(client_id: str) -> Optional[OAuthClient]:
         """Fetch the stored :class:`OAuthClient` for *client_id*, or ``None``."""
@@ -733,4 +762,5 @@ def build_authorization_server(
         "default", JvSpatialJWTTokenGenerator(issuer=issuer, resource=resource)
     )
     server.register_endpoint(JvSpatialClientRegistrationEndpoint)
+    server.register_endpoint(JvSpatialRevocationEndpoint)
     return server
