@@ -19,11 +19,35 @@ bridge.  The base ``extract_client_metadata`` reads ``request.payload.data``
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
-from authlib.oauth2.rfc7591 import ClientRegistrationEndpoint
+from authlib.oauth2.rfc7591 import (
+    ClientRegistrationEndpoint,
+    InvalidClientMetadataError,
+)
 
 from jvspatial.api.auth.oauth.bridge import call_async
 from jvspatial.api.auth.oauth.models import OAuthClient, hash_client_secret
+
+
+def _redirect_uri_allowed(uri: str) -> bool:
+    """Return True when *uri* is safe for code delivery (OAuth 2.1 BCP).
+
+    Permitted:
+    * Any ``https://`` URI.
+    * Loopback ``http://`` URIs: ``127.0.0.1``, ``localhost``, ``[::1]``
+      (RFC 8252 §8.3 — native/dev clients that cannot obtain a TLS cert).
+
+    Cleartext ``http://`` URIs to non-loopback hosts are rejected because
+    the authorization code travels in the redirect location and is exposed
+    to network observers on the cleartext leg.
+    """
+    p = urlparse(uri)
+    if p.scheme == "https":
+        return True
+    if p.scheme == "http" and p.hostname in ("127.0.0.1", "localhost", "::1"):
+        return True
+    return False
 
 
 class JvSpatialClientRegistrationEndpoint(ClientRegistrationEndpoint):
@@ -84,6 +108,42 @@ class JvSpatialClientRegistrationEndpoint(ClientRegistrationEndpoint):
             "response_types_supported": ["code"],
             "code_challenge_methods_supported": ["S256"],
         }
+
+    # ------------------------------------------------------------------ #
+    # Redirect-URI security guard (OAuth 2.1 BCP)                        #
+    # ------------------------------------------------------------------ #
+
+    def extract_client_metadata(self, request: Any) -> Dict[str, Any]:
+        """Validate redirect URIs before persisting (OAuth 2.1 BCP).
+
+        Delegates to the base ``extract_client_metadata`` for all standard
+        RFC 7591 metadata validation, then enforces that every registered
+        ``redirect_uri`` is either:
+
+        * an ``https://`` URI (any host), or
+        * an ``http://`` loopback URI — ``127.0.0.1``, ``localhost``,
+          or ``[::1]`` — permitted for native/dev clients (RFC 8252 §8.3).
+
+        Cleartext ``http://`` URIs to non-loopback hosts are rejected with
+        ``invalid_client_metadata`` (HTTP 400) because the authorization
+        code is delivered via redirect and is exposed in plaintext to any
+        network observer on that leg.
+
+        Raises:
+            InvalidClientMetadataError: When any redirect URI fails the check.
+        """
+        client_metadata = super().extract_client_metadata(request)
+        invalid_uris = [
+            uri
+            for uri in (client_metadata.get("redirect_uris") or [])
+            if not _redirect_uri_allowed(uri)
+        ]
+        if invalid_uris:
+            raise InvalidClientMetadataError(
+                "redirect_uris must use https (or loopback http for native clients): "
+                + ", ".join(invalid_uris)
+            )
+        return client_metadata
 
     def save_client(
         self,
