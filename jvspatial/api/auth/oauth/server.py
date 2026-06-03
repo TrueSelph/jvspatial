@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
@@ -222,6 +223,28 @@ class _GrantUser:
         return self.user_id
 
 
+def _intersect_scope(scope: str, permissions: Optional[List[str]]) -> str:
+    """Return the intersection of *scope* and *permissions*.
+
+    When *permissions* is ``None`` or empty the original *scope* is returned
+    unchanged (back-compat: callers that do not supply ``permissions`` keep
+    the full client-allowed scope).  When *permissions* is provided only
+    tokens whose name appears in *permissions* are kept.
+
+    Args:
+        scope: Space-delimited scope string (already client-filtered).
+        permissions: Resource-owner permission list, or ``None``.
+
+    Returns:
+        Space-delimited scope string with tokens not in *permissions* removed,
+        or the original *scope* when *permissions* is absent.
+    """
+    if not permissions:  # None / [] => no narrowing (back-compat)
+        return scope or ""
+    allowed = set(permissions)
+    return " ".join(s for s in (scope or "").split() if s in allowed)
+
+
 def _grant_user_id(grant_user: Any) -> str:
     """Extract a stable user id from the ``grant_user`` Authlib carries.
 
@@ -270,6 +293,23 @@ class JvSpatialJWTTokenGenerator(JWTBearerTokenGenerator):
         )
         return KeySet([rsa_key])
 
+    def get_extra_claims(
+        self, client: Any, grant_type: str, user: Any, scope: Any
+    ) -> Dict[str, Any]:
+        """Merge base extra claims with ``nbf`` (Not Before, RFC 7519 §4.1.5).
+
+        ``nbf`` is set to the current epoch second — i.e. the token is valid
+        immediately.  Adding it makes the token verifiable by strict validators
+        that require ``nbf`` to be present (RFC 9068 recommends it).
+
+        The base :class:`~authlib.oauth2.rfc9068.JWTBearerTokenGenerator`
+        ``get_extra_claims`` returns ``{}``; we call super and merge so any
+        future upstream additions are preserved.
+        """
+        base: Dict[str, Any] = super().get_extra_claims(client, grant_type, user, scope)
+        base["nbf"] = int(time.time())
+        return base
+
     def get_audiences(self, client: Any, user: Any, scope: Any) -> str:
         """Return the protected-resource audience for the ``aud`` claim."""
         return self._resource
@@ -289,7 +329,18 @@ class JvSpatialAuthCodeGrant(AuthorizationCodeGrant):
     ]
 
     def save_authorization_code(self, code: str, request: Any) -> None:
-        """Persist a single-use authorization code (PKCE challenge included)."""
+        """Persist a single-use authorization code (PKCE challenge included).
+
+        The stored scope is the intersection of the client-allowed requested
+        scope (``request.scope``) and the resource-owner's permissions (taken
+        from ``request.user["permissions"]`` when present).  When no
+        ``permissions`` key is supplied the full client-allowed scope is stored
+        unchanged (back-compat with M1b-1 callers that pass only ``{"id": ...}``).
+
+        Because the token generator reads scope from ``authorization_code.get_scope()``
+        at token-issue time, narrowing here is sufficient: no further intersection
+        is needed in the generator.
+        """
         payload_data = request.payload.data
         challenge = payload_data.get("code_challenge") or ""
         method = payload_data.get("code_challenge_method") or "S256"
@@ -299,6 +350,11 @@ class JvSpatialAuthCodeGrant(AuthorizationCodeGrant):
         expires_at = datetime.now(timezone.utc) + timedelta(
             seconds=getattr(self.server, "_code_ttl", DEFAULT_CODE_TTL_SECONDS)
         )
+        # Extract permissions from grant_user dict (absent => no narrowing).
+        permissions: Optional[List[str]] = None
+        if isinstance(request.user, dict):
+            permissions = request.user.get("permissions") or None
+        granted_scope = _intersect_scope(request.scope or "", permissions)
         record = AuthorizationCode(
             code_hash=_sha256(code),
             client_id=client_id,
@@ -306,7 +362,7 @@ class JvSpatialAuthCodeGrant(AuthorizationCodeGrant):
             redirect_uri=request.payload.redirect_uri or "",
             code_challenge=challenge,
             code_challenge_method=method,
-            scope=request.scope or "",
+            scope=granted_scope,
             resource=resource,
             expires_at=expires_at,
         )
@@ -315,7 +371,14 @@ class JvSpatialAuthCodeGrant(AuthorizationCodeGrant):
     def query_authorization_code(
         self, code: str, client: Any
     ) -> Optional[StoredAuthCode]:
-        """Return the stored, unconsumed, unexpired code for *client* or None."""
+        """Return the stored, unconsumed, unexpired code for *client* or None.
+
+        Atomic single-use enforcement (closes TOCTOU): the code is marked
+        consumed and persisted here — BEFORE returning to the grant — so a
+        concurrent duplicate exchange sees ``consumed=True`` and is rejected.
+        ``delete_authorization_code`` is left as-is (idempotent); it is still
+        called by Authlib's grant flow after ``create_token_response`` succeeds.
+        """
         record = call_async(self._find_code, _sha256(code))
         if record is None or record.consumed:
             return None
@@ -326,6 +389,9 @@ class JvSpatialAuthCodeGrant(AuthorizationCodeGrant):
             expires_at = expires_at.replace(tzinfo=timezone.utc)
         if expires_at <= datetime.now(timezone.utc):
             return None
+        # Atomically mark consumed before returning so no concurrent request
+        # can exchange the same code.
+        call_async(self._consume_code, record)
         return StoredAuthCode(record)
 
     def delete_authorization_code(self, authorization_code: StoredAuthCode) -> None:
