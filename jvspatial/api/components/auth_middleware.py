@@ -120,6 +120,22 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 request.url.path,
                 has_auth,
             )
+            response_headers: dict[str, str] = {}
+            if getattr(self.auth_config, "accept_oauth_bearer", False):
+                issuer = getattr(self.auth_config, "oauth_issuer_url", "") or ""
+                if issuer:
+                    # RFC 9728 §5.1 — emit WWW-Authenticate so MCP clients can
+                    # auto-discover the Authorization Server via PRM discovery.
+                    try:
+                        from jvspatial.api.auth.oauth.metadata import (
+                            www_authenticate_header,
+                        )
+
+                        response_headers["WWW-Authenticate"] = www_authenticate_header(
+                            issuer
+                        )
+                    except ImportError:
+                        pass  # oauth subpackage unavailable; skip header
             return JSONResponse(
                 status_code=401,
                 content={
@@ -127,6 +143,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                     "message": "Authentication required",
                     "path": request.url.path,
                 },
+                headers=response_headers or None,
             )
 
         # Normalize user to have roles and permissions
