@@ -249,8 +249,39 @@ class AuthConfig(BaseModel):
             "/auth/forgot-password",
             "/auth/reset-password",
             "/_internal/deferred",
+            "/_internal/retention",
         ],
         validation_alias="auth_exempt_paths",
+    )
+
+    # --- OAuth 2.1 service (opt-in; see api/auth/oauth/). All off/empty by
+    # default so existing apps are unaffected. ---
+    oauth_enabled: bool = Field(
+        default=False, description="Enable the OAuth 2.1 authorization server"
+    )
+    oauth_issuer_url: str = Field(
+        default="",
+        description="OAuth issuer URL (https origin) for token iss + metadata",
+    )
+    oauth_prefix: str = Field(
+        default="/oauth", description="Route prefix for OAuth endpoints"
+    )
+    oauth_supported_scopes: List[str] = Field(
+        default_factory=list,
+        description="Advertised OAuth scopes (RBAC permission strings)",
+    )
+    oauth_dcr_enabled: bool = Field(
+        default=True, description="Enable Dynamic Client Registration (RFC 7591)"
+    )
+    oauth_access_token_ttl_minutes: int = Field(
+        default=60, description="OAuth access token lifetime (minutes)"
+    )
+    oauth_code_ttl_seconds: int = Field(
+        default=300, description="Authorization code lifetime (seconds)"
+    )
+    accept_oauth_bearer: bool = Field(
+        default=False,
+        description="Resource-server: accept OAuth access tokens on auth=True endpoints",
     )
 
     # Backward compatibility: allow access via auth_enabled/auth_exempt_paths
@@ -340,6 +371,47 @@ class ProxyConfig(BaseModel):
     proxy_max_expiration: int = Field(default=86400)  # 24 hours
 
 
+class RetentionConfig(BaseModel):
+    """Garbage-collection settings for framework transient Objects."""
+
+    retention_enabled: bool = Field(
+        default=True,
+        description="Enable scheduled and manual retention runs",
+    )
+    retention_schedule: str = Field(
+        default="daily at 02:00",
+        description="Scheduler spec for periodic retention when scheduler is enabled",
+    )
+    max_deletes_per_entity: int = Field(
+        default=1000,
+        ge=1,
+        description="Maximum rows deleted per entity rule per run",
+    )
+    max_runtime_seconds: int = Field(
+        default=300,
+        ge=1,
+        description="Stop the janitor after this many seconds",
+    )
+    batch_size: int = Field(
+        default=100,
+        ge=1,
+        description="Records fetched per database round trip",
+    )
+    password_reset_used_grace_hours: int = Field(
+        default=24,
+        ge=0,
+        description="Hours to keep used password-reset tokens before deletion",
+    )
+    log_retention_days: Optional[int] = Field(
+        default=None,
+        description="Reserved: DBLog retention (not implemented in v1)",
+    )
+    retention_invoke_disabled: bool = Field(
+        default=False,
+        description="When True, do not register POST /_internal/retention",
+    )
+
+
 __all__ = [
     "DatabaseConfig",
     "SecurityConfig",
@@ -349,4 +421,5 @@ __all__ = [
     "FileStorageConfig",
     "WebhookConfig",
     "ProxyConfig",
+    "RetentionConfig",
 ]
