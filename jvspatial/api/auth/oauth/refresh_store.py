@@ -21,6 +21,7 @@ async def mint_refresh_token(
     scope: str,
     resource: Optional[str],
     expires_at: datetime,
+    family_id: str = "",
 ) -> str:
     """Persist a refresh token (hashed); return the plaintext for the caller to emit."""
     rec = OAuthRefreshToken(
@@ -31,6 +32,7 @@ async def mint_refresh_token(
         resource=resource,
         expires_at=expires_at,
         is_active=True,
+        family_id=family_id,
     )
     await rec.save()
     return token
@@ -53,6 +55,40 @@ async def find_active(token: str) -> Optional[OAuthRefreshToken]:
     if exp < datetime.now(timezone.utc):
         return None
     return rec
+
+
+async def find_any(token: str) -> Optional[OAuthRefreshToken]:
+    """Return any record for ``token`` regardless of ``is_active`` or expiry.
+
+    Used by reuse detection: a revoked token that is replayed will not appear
+    in ``find_active`` but will appear here, revealing the family_id so the
+    entire family can be killed.
+    """
+    rows = cast(
+        List[OAuthRefreshToken],
+        await OAuthRefreshToken.find({"context.token_hash": _hash(token)}),
+    )
+    return rows[0] if rows else None
+
+
+async def revoke_family(family_id: str) -> int:
+    """Revoke all tokens that share ``family_id`` (reuse-detection kill-switch).
+
+    Returns the count of records deactivated.
+    """
+    if not family_id:
+        return 0
+    rows = cast(
+        List[OAuthRefreshToken],
+        await OAuthRefreshToken.find({"context.family_id": family_id}),
+    )
+    count = 0
+    for rec in rows:
+        if rec.is_active:
+            rec.is_active = False
+            await rec.save()
+            count += 1
+    return count
 
 
 async def revoke(rec: OAuthRefreshToken) -> None:

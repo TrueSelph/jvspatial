@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
@@ -94,12 +95,18 @@ async def _persist_refresh(
     scope: str,
     resource: Optional[str],
     ttl_days: int,
+    family_id: str = "",
 ) -> None:
     """Async shim that persists a refresh token via :mod:`refresh_store`.
 
     ``call_async`` passes only positional args, so all parameters here are
     positional even though ``mint_refresh_token`` is keyword-only.
+    ``family_id`` is inherited from the old token on rotation (passed from
+    ``save_token`` via the request's ``_oauth_family_id`` sentinel), or a fresh
+    UUID hex when minting the first token of a new grant.
     """
+    if not family_id:
+        family_id = uuid.uuid4().hex
     await refresh_store.mint_refresh_token(
         token=token_str,
         user_id=user_id,
@@ -107,6 +114,7 @@ async def _persist_refresh(
         scope=scope,
         resource=resource,
         expires_at=datetime.now(timezone.utc) + timedelta(days=ttl_days),
+        family_id=family_id,
     )
 
 
@@ -493,6 +501,13 @@ class JvSpatialAuthorizationServer(AuthorizationServer):
         ``request.user`` at token-endpoint time is a :class:`_GrantUser`
         produced by :meth:`JvSpatialAuthCodeGrant.authenticate_user`, so
         ``_grant_user_id`` reliably extracts the subject identifier.
+
+        **Family threading (reuse detection):** :meth:`JvSpatialRefreshTokenGrant
+        .authenticate_refresh_token` stashes the old token's ``family_id`` on
+        ``request._oauth_family_id`` before this method runs.  That value is
+        forwarded to ``_persist_refresh`` so the new (rotated) token inherits
+        the same family.  On the auth-code path no sentinel is set, so
+        ``_persist_refresh`` generates a fresh ``uuid4().hex`` family_id.
         """
         rt = token.get("refresh_token")
         if not rt:
@@ -503,6 +518,8 @@ class JvSpatialAuthorizationServer(AuthorizationServer):
         if client is not None:
             client_id = client.get_client_id()
         scope: str = token.get("scope", "")
+        # Inherit the rotation family if set by authenticate_refresh_token.
+        family_id: str = getattr(request, "_oauth_family_id", "") or ""
         call_async(
             _persist_refresh,
             rt,
@@ -511,6 +528,7 @@ class JvSpatialAuthorizationServer(AuthorizationServer):
             scope,
             self._resource,
             DEFAULT_REFRESH_TOKEN_TTL_DAYS,
+            family_id,
         )
 
     def send_signal(self, name: str, *args: Any, **kwargs: Any) -> None:
@@ -613,11 +631,31 @@ class JvSpatialRefreshTokenGrant(RefreshTokenGrant):
 
         Authlib passes the *plaintext* ``refresh_token`` string from the form.
         :func:`refresh_store.find_active` hashes it internally before querying.
+
+        **Reuse detection (OAuth 2.1 §rotation family kill):**
+        If ``find_active`` returns nothing but ``find_any`` returns a record that
+        is already inactive (``is_active=False``), this is a replay of a rotated
+        or revoked token — a potential compromise signal.  The entire rotation
+        family is immediately revoked via :func:`refresh_store.revoke_family` and
+        ``None`` is returned to reject the request.
+
+        **Family threading:** on a VALID token, the record's ``family_id`` is
+        stashed on ``self.request._oauth_family_id`` so :meth:`~JvSpatialAuthorizationServer
+        .save_token` can forward it when minting the rotated replacement.
         """
         rec = call_async(refresh_store.find_active, refresh_token)
-        if rec is None:
-            return None
-        return _RefreshCredential(rec)
+        if rec is not None:
+            # Happy path: stash family_id so save_token inherits it.
+            self.request._oauth_family_id = rec.family_id  # type: ignore[attr-defined]
+            return _RefreshCredential(rec)
+
+        # Token not active — check if it ever existed (replay detection).
+        revoked = call_async(refresh_store.find_any, refresh_token)
+        if revoked is not None and not revoked.is_active:
+            # Rotated/revoked token replayed → kill the whole family.
+            call_async(refresh_store.revoke_family, revoked.family_id)
+
+        return None
 
     def authenticate_user(self, credential: _RefreshCredential) -> _GrantUser:
         """Return the resource owner stored in the credential.

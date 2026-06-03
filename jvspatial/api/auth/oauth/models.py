@@ -122,6 +122,10 @@ class OAuthRefreshToken(Object):
     resource: Optional[str] = Field(default=None, description="Audience/resource")
     expires_at: datetime = Field(..., description="Expiry")
     is_active: bool = Field(default=True, description="False once revoked/rotated")
+    family_id: str = Field(
+        default="",
+        description="Rotation family; shared across all rotations of one grant",
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="Creation timestamp",
