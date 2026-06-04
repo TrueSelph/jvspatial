@@ -26,7 +26,7 @@ from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 from authlib.oauth2.rfc6749 import AuthorizationServer
-from authlib.oauth2.rfc6749.errors import InvalidRequestError
+from authlib.oauth2.rfc6749.errors import InvalidGrantError, InvalidRequestError
 from authlib.oauth2.rfc6749.grants import AuthorizationCodeGrant
 from authlib.oauth2.rfc6749.grants.refresh_token import RefreshTokenGrant
 from authlib.oauth2.rfc6749.requests import BasicOAuth2Payload
@@ -443,15 +443,19 @@ class JvSpatialAuthCodeGrant(AuthorizationCodeGrant):
         with a wrong ``code_verifier`` or wrong ``redirect_uri`` does NOT burn
         the code for a legitimate retry.
 
-        Idempotent: if ``consumed`` is already ``True`` (e.g. a concurrent
-        success race in a future multi-worker deployment), the save is a no-op
-        in effect.
+        Single-use is enforced by an atomic compare-and-swap in
+        :meth:`_consume_code` (a ``find_one_and_update`` predicated on
+        ``consumed=False``), NOT a blind write.  If two exchanges of the same
+        code race, only the one that flips ``consumed`` False->True wins; the
+        loser's CAS returns no match and :meth:`_consume_code` raises
+        ``InvalidGrantError``, aborting token issuance for that exchange.
 
-        Note on atomicity: single-use is serialized by the single-process anyio
-        bridge, NOT a DB-level compare-and-swap.  Under multi-worker or
-        multi-process deployment a conditional-update primitive is required to
-        prevent a TOCTOU race between two simultaneous legitimate exchanges of
-        the same code (tracked for a later phase).
+        Atomicity: on the postgres adapter (``SELECT ... FOR UPDATE``) and the
+        mongo adapter (native ``findOneAndUpdate``) the CAS is truly atomic, so
+        the multi-worker / multi-process TOCTOU window is closed.  The base
+        adapters (sqlite / json) fall back to read-modify-write and remain
+        best-effort under concurrency — no regression versus the prior blind
+        write, which already serialized only on the single-process anyio bridge.
         """
         call_async(self._consume_code, authorization_code.record)
 
@@ -472,9 +476,46 @@ class JvSpatialAuthCodeGrant(AuthorizationCodeGrant):
 
     @staticmethod
     async def _consume_code(record: AuthorizationCode) -> None:
-        """Flip ``consumed`` and persist (single-use enforcement)."""
+        """Atomically flip ``consumed`` False->True (single-use, compare-and-swap).
+
+        Mirrors the work-claim CAS idiom (:mod:`jvspatial.db.work_claim`): a
+        single ``find_one_and_update`` scoped by ``{_id, context.consumed: False}``
+        that sets ``context.consumed`` to ``True``. A ``None`` result means the
+        predicate did not match — the row was already consumed by a concurrent
+        exchange — so this exchange lost the race and MUST reject. We raise the
+        same :class:`~authlib.oauth2.rfc6749.errors.InvalidGrantError` a replayed
+        / already-consumed code produces via ``query_authorization_code`` (which
+        returns ``None`` => Authlib raises ``InvalidGrantError`` in
+        ``validate_token_request``). Because :meth:`delete_authorization_code`
+        runs inside Authlib's ``create_token_response`` *before* it returns the
+        ``200`` token tuple, raising here aborts token issuance for the loser.
+
+        Atomicity: the postgres adapter implements ``find_one_and_update`` as
+        ``SELECT ... FOR UPDATE`` and mongo as native ``findOneAndUpdate``, so
+        the read-and-flip is a true DB-level CAS that closes the multi-worker
+        TOCTOU window. The base adapters (sqlite / json) fall back to a
+        read-modify-write and remain best-effort under concurrency — no
+        regression versus the prior blind ``consumed = True; save()``.
+        """
+        context = await record.get_context()
+        collection = record.get_collection_name()
+        result = await context.database.find_one_and_update(
+            collection,
+            {"_id": record.id, "context.consumed": False},
+            {"$set": {"context.consumed": True}},
+        )
+        if result is None:
+            # Lost the CAS: the code was already consumed concurrently. Reject
+            # with the consumed-code error path — never issue a second token.
+            raise InvalidGrantError("Invalid 'code' in request.")
+        # find_one_and_update writes through the DB layer, bypassing the
+        # GraphContext object cache (mirrors the atomic_* helpers in
+        # core/context.py). Keep the in-memory record consistent and drop the
+        # cached copy so any subsequent read re-hydrates the consumed flag —
+        # otherwise a stale cached entry could report consumed=False and let a
+        # replay slip through query_authorization_code.
         record.consumed = True
-        await record.save()
+        await context._remove_from_cache(record.id)
 
 
 class JvSpatialAuthorizationServer(AuthorizationServer):

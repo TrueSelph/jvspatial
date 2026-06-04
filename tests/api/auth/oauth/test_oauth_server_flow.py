@@ -800,3 +800,104 @@ async def test_admin_wildcard_ceilinged_to_supported(temp_context):
         supported_scopes=["mcp"],
     )
     assert granted == {"mcp"}
+
+
+@pytest.mark.asyncio
+async def test_concurrent_code_exchange_only_one_succeeds(temp_context):
+    """Two concurrent consumes of the same code: exactly one wins.
+
+    Drives the single-use point (``_consume_code``) directly as a
+    compare-and-swap. The first consume matches ``consumed=False`` and flips
+    it to ``True``; the second consume of the *same* record sees the row
+    already consumed, loses the CAS, and raises the same ``InvalidGrantError``
+    a replayed/consumed code produces at the token endpoint — so no second
+    token can ever be issued.
+
+    Backend note: the test suite runs on the JSON adapter, whose
+    ``find_one_and_update`` is the best-effort read-modify-write base path
+    (not a true atomic CAS — that guarantee is for the postgres/mongo
+    adapters, which issue ``SELECT ... FOR UPDATE`` / native ``findOneAndUpdate``).
+    The assertion here pins the *logical* contract that holds on every
+    backend: once the row reads ``consumed=True``, a second consume rejects.
+    """
+    from authlib.oauth2.rfc6749.errors import InvalidGrantError
+
+    from jvspatial.api.auth.oauth.models import AuthorizationCode
+    from jvspatial.api.auth.oauth.server import JvSpatialAuthCodeGrant, _sha256
+
+    await keystore.ensure_signing_key()
+    await OAuthClient(
+        client_id="cli_pub",
+        client_secret_hash=None,
+        redirect_uris=["https://c.example/cb"],
+        grant_types=["authorization_code"],
+        response_types=["code"],
+        scope="mcp",
+        token_endpoint_auth_method="none",
+    ).save()
+    server = build_authorization_server(issuer=ISSUER, resource=RESOURCE)
+    _, challenge = _pkce()
+    code = await _issue_code(server, challenge)
+
+    # Look up the persisted, still-unconsumed code record.
+    record = await JvSpatialAuthCodeGrant._find_code(_sha256(code))
+    assert record is not None and record.consumed is False
+
+    # First consume wins the CAS (consumed flips False -> True).
+    await JvSpatialAuthCodeGrant._consume_code(record)
+    refreshed = await AuthorizationCode.get(record.id)
+    assert refreshed is not None and refreshed.consumed is True
+
+    # Second consume of the same record loses the CAS (already consumed) and
+    # rejects with the consumed-code error path — no token, no double-spend.
+    with pytest.raises(InvalidGrantError):
+        await JvSpatialAuthCodeGrant._consume_code(refreshed)
+
+    # And a full token exchange after the code is consumed still rejects.
+    verifier_mismatch = StarletteOAuth2Request(
+        method="POST",
+        uri=f"{ISSUER}/oauth/token",
+        query={},
+        form={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": "https://c.example/cb",
+            "client_id": "cli_pub",
+            "code_verifier": "anything",
+        },
+        headers={},
+    )
+    replay = await server.async_create_token_response(verifier_mismatch)
+    assert replay.status_code in (400, 401)
+    assert "access_token" not in (replay.body_json or {})
+
+
+@pytest.mark.asyncio
+async def test_full_exchange_issues_exactly_one_token_after_cas(temp_context):
+    """Regression guard: the happy single exchange still issues one token.
+
+    Confirms the CAS consume does not break the normal authorize -> token
+    path: a single valid exchange returns 200 with an access token, and an
+    immediate replay of the same code is rejected (single-use preserved).
+    """
+    await keystore.ensure_signing_key()
+    await OAuthClient(
+        client_id="cli_pub",
+        client_secret_hash=None,
+        redirect_uris=["https://c.example/cb"],
+        grant_types=["authorization_code"],
+        response_types=["code"],
+        scope="mcp",
+        token_endpoint_auth_method="none",
+    ).save()
+    server = build_authorization_server(issuer=ISSUER, resource=RESOURCE)
+    verifier, challenge = _pkce()
+    code = await _issue_code(server, challenge)
+
+    first = await server.async_create_token_response(_token_req(code, verifier))
+    assert first.status_code == 200
+    assert first.body_json.get("access_token")
+
+    replay = await server.async_create_token_response(_token_req(code, verifier))
+    assert replay.status_code in (400, 401)
+    assert "access_token" not in (replay.body_json or {})
