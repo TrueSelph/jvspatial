@@ -94,6 +94,18 @@ class JvSpatialClientRegistrationEndpoint(ClientRegistrationEndpoint):
         Authlib's :class:`~authlib.oauth2.rfc7591.claims.ClientMetadataClaims`
         cross-checks ``token_endpoint_auth_method`` etc. against the values
         advertised here, so this dict must cover all supported values.
+
+        .. note::
+            ``scopes_supported`` is deliberately NOT advertised here. Authlib's
+            :meth:`ClientMetadataClaims.get_claims_options` turns an advertised
+            ``scopes_supported`` into a *hard* validation
+            (``scopes_supported.issuperset(requested)``) that rejects an
+            out-of-set scope with ``invalid_client_metadata`` (HTTP 400) inside
+            the base ``extract_client_metadata`` — before our filter can run.
+            That would defeat the silent-filter contract (drop unsupported
+            tokens, keep registering) that this endpoint enforces for
+            zero-config MCP clients. The supported-scope ceiling is applied by
+            :meth:`extract_client_metadata` (silent intersection) instead.
         """
         return {
             "token_endpoint_auth_methods_supported": [
@@ -114,20 +126,38 @@ class JvSpatialClientRegistrationEndpoint(ClientRegistrationEndpoint):
     # ------------------------------------------------------------------ #
 
     def extract_client_metadata(self, request: Any) -> Dict[str, Any]:
-        """Validate redirect URIs before persisting (OAuth 2.1 BCP).
+        """Validate redirect URIs and filter requested scope before persisting.
 
         Delegates to the base ``extract_client_metadata`` for all standard
-        RFC 7591 metadata validation, then enforces that every registered
-        ``redirect_uri`` is either:
+        RFC 7591 metadata validation, then:
 
-        * an ``https://`` URI (any host), or
-        * an ``http://`` loopback URI — ``127.0.0.1``, ``localhost``,
-          or ``[::1]`` — permitted for native/dev clients (RFC 8252 §8.3).
+        1. Enforces that every registered ``redirect_uri`` is either:
 
-        Cleartext ``http://`` URIs to non-loopback hosts are rejected with
-        ``invalid_client_metadata`` (HTTP 400) because the authorization
-        code is delivered via redirect and is exposed in plaintext to any
-        network observer on that leg.
+           * an ``https://`` URI (any host), or
+           * an ``http://`` loopback URI — ``127.0.0.1``, ``localhost``,
+             or ``[::1]`` — permitted for native/dev clients (RFC 8252 §8.3).
+
+           Cleartext ``http://`` URIs to non-loopback hosts are rejected with
+           ``invalid_client_metadata`` (HTTP 400) because the authorization
+           code is delivered via redirect and is exposed in plaintext to any
+           network observer on that leg.
+
+        2. Filters the requested ``scope`` against the authorization server's
+           supported scopes WHEN a ceiling is declared
+           (``server._supported_scopes`` non-empty). Unsupported tokens are
+           silently dropped (RFC 7591 permits the AS to filter rather than
+           reject — gentler than a hard 400 for zero-config MCP clients), so a
+           client cannot self-register an unsupported / elevated scope. When no
+           ceiling is declared (the default), the requested scope is left
+           verbatim for back-compat. This is defense-in-depth; the authorize-time
+           supported-scope ceiling in
+           :meth:`~jvspatial.api.auth.oauth.server.JvSpatialAuthCodeGrant.save_authorization_code`
+           is the primary bound on issued-token scope.
+
+        Filtering here (rather than in :meth:`save_client`) keeps a single
+        source of truth: the base ``create_registration_response`` builds the
+        201 body from this returned metadata, so both the persisted record and
+        the echoed ``scope`` reflect the filtered value.
 
         Raises:
             InvalidClientMetadataError: When any redirect URI fails the check.
@@ -142,6 +172,13 @@ class JvSpatialClientRegistrationEndpoint(ClientRegistrationEndpoint):
             raise InvalidClientMetadataError(
                 "redirect_uris must use https (or loopback http for native clients): "
                 + ", ".join(invalid_uris)
+            )
+        supported = list(getattr(self.server, "_supported_scopes", None) or [])
+        if supported:
+            allowed = set(supported)
+            requested = client_metadata.get("scope") or ""
+            client_metadata["scope"] = " ".join(
+                s for s in requested.split() if s in allowed
             )
         return client_metadata
 
