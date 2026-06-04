@@ -292,6 +292,14 @@ class AuthConfig(BaseModel):
             "(leaves the endpoint subject to the server-wide rate limit, if any)."
         ),
     )
+    oauth_authorize_login_redirect: str = Field(
+        default="",
+        description=(
+            "When set and an unauthenticated browser hits GET /oauth/authorize, "
+            "302-redirect to this SPA URL with the original OAuth query string appended "
+            "(e.g. https://app.example.com/oauth/authorize). Empty = legacy 401."
+        ),
+    )
 
     # Backward compatibility: allow access via auth_enabled/auth_exempt_paths
     @property

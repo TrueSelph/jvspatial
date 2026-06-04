@@ -249,15 +249,58 @@ def build_oauth_routers(
 
         return oauth_router, well_known_router
 
+    async def _optional_current_user(request: Request) -> Any:
+        """Non-raising variant of ``get_current_user`` for the GET consent page.
+
+        ``get_current_user`` raises 401 for a missing/invalid bearer; the GET
+        ``/authorize`` handler needs to *branch* on the unauthenticated case (to
+        offer the configured login-SPA redirect) rather than fail outright.
+
+        We invoke ``get_current_user`` IMPERATIVELY — extracting the bearer from
+        the request ourselves and passing it as the ``credentials`` argument —
+        rather than via ``Depends(get_current_user)``. Were it a FastAPI
+        sub-dependency, its 401 would be raised during dependency resolution,
+        BEFORE this body runs, and could never be caught. Invoking it directly
+        lets us convert its 401 ``HTTPException`` into ``None`` and re-raise any
+        other status unchanged. POST ``/authorize`` and every other consumer keep
+        the raising ``Depends(get_current_user)`` — only this GET seam is
+        non-raising, so the authed-GET and POST behaviours are untouched.
+        """
+        from fastapi import HTTPException
+        from fastapi.security import HTTPAuthorizationCredentials
+
+        auth_header = request.headers.get("authorization") or ""
+        scheme, _, token = auth_header.partition(" ")
+        credentials = (
+            HTTPAuthorizationCredentials(scheme=scheme, credentials=token.strip())
+            if scheme and token.strip()
+            else None
+        )
+        try:
+            return await get_current_user(credentials=credentials)
+        except HTTPException as exc:
+            if exc.status_code == 401:
+                return None
+            raise
+
     @oauth_router.get("/authorize", response_class=HTMLResponse)
     async def authorize_get(
         request: Request,
-        user: Any = Depends(get_current_user),  # noqa: B008
+        user: Any = Depends(_optional_current_user),  # noqa: B008
     ) -> Response:
         """Render the consent page for an authenticated resource owner.
 
         The bearer-authenticated session user is resolved by ``get_current_user``
-        (401 when no/invalid bearer). The request is validated through the AS's
+        (via the non-raising ``_optional_current_user`` seam). When no/invalid
+        bearer is present, ``user`` is ``None``: if
+        ``auth_config.oauth_authorize_login_redirect`` is set we 302-redirect the
+        browser to that SPA login URL with the original OAuth query string
+        appended (so the authorization-code browser flow is completable);
+        otherwise we preserve the legacy 401. The redirect target is ONLY the
+        configured (trusted) base + the original query — never a request-derived
+        host — so it cannot be turned into an open redirect.
+
+        For an authenticated user the request is validated through the AS's
         :meth:`async_get_consent_grant`; on success the validated client name and
         client-filtered scope are rendered into an approve/deny form that
         re-carries the OAuth parameters. A request that fails validation yields a
@@ -268,6 +311,17 @@ def build_oauth_routers(
         An optional ``auth_config.oauth_consent_handler`` may override rendering;
         it receives ``(request, client, scopes, form)`` and returns HTML.
         """
+        if user is None:
+            base = getattr(auth_config, "oauth_authorize_login_redirect", "") or ""
+            if base:
+                query = request.url.query
+                sep = "&" if "?" in base else "?"
+                target = f"{base}{sep}{query}" if query else base
+                return RedirectResponse(target, status_code=302)
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=401, detail="Not authenticated")
+
         req = await build_oauth2_request(request)
         try:
             grant = await server.async_get_consent_grant(req, end_user={"id": user.id})
