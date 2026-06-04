@@ -67,7 +67,7 @@ async def test_authorization_code_persist_and_consume(temp_context):
         code_challenge="abc",
         code_challenge_method="S256",
         scope="mcp",
-        resource="https://integral.example.com/api/mcp",
+        resource="https://app.example.com/api/mcp",
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
     await code.save()

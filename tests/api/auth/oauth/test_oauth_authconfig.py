@@ -20,13 +20,13 @@ def test_oauth_defaults_off():
 def test_oauth_fields_overridable():
     cfg = AuthConfig(
         oauth_enabled=True,
-        oauth_issuer_url="https://integral.example.com",
+        oauth_issuer_url="https://app.example.com",
         oauth_supported_scopes=["mcp"],
         accept_oauth_bearer=True,
         oauth_authorize_login_redirect="https://app.example.com/oauth/authorize",
     )
     assert cfg.oauth_enabled is True
-    assert cfg.oauth_issuer_url == "https://integral.example.com"
+    assert cfg.oauth_issuer_url == "https://app.example.com"
     assert cfg.oauth_supported_scopes == ["mcp"]
     assert cfg.accept_oauth_bearer is True
     assert (
