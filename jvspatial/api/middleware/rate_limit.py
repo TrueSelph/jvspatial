@@ -68,8 +68,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def _get_client_identifier(self, request: Request) -> str:
         """Get a unique identifier for the client.
 
-        Uses IP address by default, but can be enhanced to use API key or
-        user ID if available from request state.
+        Authenticated requests bucket by ``user:{id}``. Unauthenticated requests
+        bucket by source IP ONLY (sha256-hashed) — the User-Agent header is
+        deliberately excluded because it is attacker-controlled and would
+        otherwise allow per-request rotation to evade the per-IP cap.
 
         Args:
             request: FastAPI request object
@@ -90,13 +92,22 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 if user_id:
                     return f"user:{user_id}"
 
-        # Fall back to IP address
+        # Fall back to IP address.
+        #
+        # The bucket key is the IP ALONE. We deliberately do NOT fold in the
+        # User-Agent header: it is fully attacker-controlled, so including it
+        # would let an unauthenticated client rotate the UA on every request to
+        # mint a fresh bucket and evade the per-IP cap entirely. Keying on IP
+        # only gives a single coarse bucket per source address.
+        #
+        # Known limitation: ``request.client.host`` is the immediate peer. Behind
+        # a reverse proxy / load balancer all clients can collapse onto the proxy
+        # IP. Trusted-proxy X-Forwarded-For parsing is intentionally deferred
+        # (item 7b) and NOT done here.
         client_ip = request.client.host if request.client else "unknown"
-        # Include user agent for additional uniqueness
-        user_agent = request.headers.get("user-agent", "")
-        # Create a hash for privacy
-        identifier = f"{client_ip}:{user_agent}"
-        return hashlib.sha256(identifier.encode()).hexdigest()[:16]
+        # Hash for privacy + a fixed-width key (callers concatenate this with the
+        # endpoint key downstream).
+        return hashlib.sha256(client_ip.encode()).hexdigest()[:16]
 
     def _match_endpoint(self, path: str) -> Optional[str]:
         """Match request path to configured endpoint.

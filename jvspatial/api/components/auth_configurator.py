@@ -651,6 +651,12 @@ class AuthConfigurator:
         DCR protection. We never flip the flag back to False — if the caller already
         set ``rate_limit_enabled=True`` we leave it alone.
 
+        Multi-worker note: this cap inherits whatever backend the rate-limit
+        middleware selects. The default in-memory backend counts per process, so
+        under ``N`` workers the DCR endpoint effectively allows ``N × cap``
+        registrations/min. For a hard global DCR cap, supply a shared backend via
+        ``ServerConfig.rate_limit_backend`` (e.g. ``RedisRateLimitBackend``).
+
         Args:
             oauth_prefix: The OAuth router prefix (e.g. ``/oauth``), already
                 normalised to a leading slash by the caller.

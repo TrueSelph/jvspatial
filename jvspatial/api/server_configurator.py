@@ -102,10 +102,12 @@ class ServerConfigurator:
             )
 
             rate_limits = self._build_rate_limit_config()
-            backend = (
-                getattr(server.config, "rate_limit_backend", None)
-                or MemoryRateLimitBackend()
-            )
+            # ``rate_limit_backend`` is a first-class ServerConfig field
+            # (Optional[RateLimitBackend], default None). None falls back to a
+            # process-local MemoryRateLimitBackend — under N workers the in-memory
+            # counter is per-process, so the effective cap is N × configured. For
+            # a hard global cap supply a shared backend (e.g. RedisRateLimitBackend).
+            backend = server.config.rate_limit_backend or MemoryRateLimitBackend()
 
             app.add_middleware(
                 RateLimitMiddleware,
