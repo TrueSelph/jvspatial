@@ -4,8 +4,8 @@
 Security. The policy is enforced **in the database**, so a misconfigured
 query or a SQL-injection vulnerability in application code cannot leak rows
 across tenants. This is the cleanest path to multi-tenant SaaS on jvspatial
-and the load-bearing isolation primitive for the
-[Integral](https://example.com) platform.
+and a load-bearing isolation primitive for any multi-tenant platform built
+on it.
 
 ## How it works
 

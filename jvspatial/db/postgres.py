@@ -193,8 +193,9 @@ def _translate_partial_filter_expression(
     Used by ``PostgresDB.create_index`` to honor the cross-backend
     partial-filter kwarg without falling through to a global unique
     index. Supports a deliberately small dialect — enough to express
-    the partial filters jvspatial / jvagent / integral declare today
-    (entity-discriminator equality + ``$gt`` "non-empty" sentinels):
+    the partial filters declared by jvspatial and its downstream
+    applications (entity-discriminator equality + ``$gt`` "non-empty"
+    sentinels):
 
     - ``{field: scalar}`` → ``<extract> = '<literal>'``
     - ``{field: {"$eq": scalar}}`` → same
