@@ -677,3 +677,126 @@ async def test_scope_unfiltered_when_no_permissions_provided(temp_context):
         body["access_token"], key.public_pem, algorithms=["RS256"], audience=RESOURCE
     )
     assert "mcp" in decoded.get("scope", "")
+
+
+async def _granted_scope(
+    *,
+    client_scope: str,
+    requested_scope: str,
+    grant_user: dict,
+    supported_scopes=None,
+) -> set:
+    """Run authorize -> token and return the granted scope set from the JWT.
+
+    Builds a fresh public PKCE client and authorization server (optionally with
+    a ``supported_scopes`` ceiling), approves the request as *grant_user*, then
+    exchanges the code and decodes the issued RS256 access token's ``scope``.
+    """
+    await keystore.ensure_signing_key()
+    await OAuthClient(
+        client_id="cli_pub",
+        client_secret_hash=None,
+        redirect_uris=["https://c.example/cb"],
+        grant_types=["authorization_code"],
+        response_types=["code"],
+        scope=client_scope,
+        token_endpoint_auth_method="none",
+    ).save()
+    server = build_authorization_server(
+        issuer=ISSUER, resource=RESOURCE, supported_scopes=supported_scopes
+    )
+    verifier, challenge = _pkce()
+    a = StarletteOAuth2Request(
+        method="POST",
+        uri=f"{ISSUER}/oauth/authorize",
+        query={
+            "response_type": "code",
+            "client_id": "cli_pub",
+            "redirect_uri": "https://c.example/cb",
+            "scope": requested_scope,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        },
+        form={},
+        headers={},
+    )
+    r = await server.async_create_authorization_response(a, grant_user=grant_user)
+    code = parse_qs(urlparse(r.headers["location"]).query)["code"][0]
+    t = StarletteOAuth2Request(
+        method="POST",
+        uri=f"{ISSUER}/oauth/token",
+        query={},
+        form={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": "https://c.example/cb",
+            "client_id": "cli_pub",
+            "code_verifier": verifier,
+        },
+        headers={},
+    )
+    body = (await server.async_create_token_response(t)).body_json
+    key = await keystore.get_active_signing_key()
+    decoded = pyjwt.decode(
+        body["access_token"], key.public_pem, algorithms=["RS256"], audience=RESOURCE
+    )
+    return set(decoded.get("scope", "").split())
+
+
+@pytest.mark.asyncio
+async def test_scope_empty_permissions_grants_nothing(temp_context):
+    """Footgun fix: a present-but-empty 'permissions' list narrows to nothing.
+
+    Previously ``permissions=[]`` was collapsed to ``None`` and the full
+    requested scope was granted. Now an explicit empty permission set means the
+    resource owner authorizes no scopes.
+    """
+    granted = await _granted_scope(
+        client_scope="mcp",
+        requested_scope="mcp",
+        grant_user={"id": "u_1", "permissions": []},
+    )
+    assert granted == set()
+
+
+@pytest.mark.asyncio
+async def test_scope_supported_ceiling(temp_context):
+    """A non-empty ``supported_scopes`` ceilings the granted scope.
+
+    The user is permitted ``mcp admin`` and requests ``mcp admin``, but the
+    server only supports ``mcp`` — so ``admin`` is ceiling'd out. With no
+    ceiling declared the permission-intersected scope passes through unchanged.
+    """
+    ceilinged = await _granted_scope(
+        client_scope="mcp admin",
+        requested_scope="mcp admin",
+        grant_user={"id": "u_1", "permissions": ["mcp", "admin"]},
+        supported_scopes=["mcp"],
+    )
+    assert ceilinged == {"mcp"}
+
+    uncapped = await _granted_scope(
+        client_scope="mcp admin",
+        requested_scope="mcp admin",
+        grant_user={"id": "u_1", "permissions": ["mcp", "admin"]},
+        supported_scopes=[],
+    )
+    assert uncapped == {"mcp", "admin"}
+
+
+@pytest.mark.asyncio
+async def test_admin_wildcard_ceilinged_to_supported(temp_context):
+    """Wildcard admin permission grants all requested scope, bounded by support.
+
+    A user whose permissions are ``["*"]`` matches every requested scope (fixes
+    the inverted-admin footgun where a literal ``*`` matched nothing), but the
+    ``supported_scopes`` ceiling still bounds the result — so requesting
+    ``mcp admin`` against supported ``["mcp"]`` yields exactly ``mcp``.
+    """
+    granted = await _granted_scope(
+        client_scope="mcp admin",
+        requested_scope="mcp admin",
+        grant_user={"id": "u_1", "permissions": ["*"]},
+        supported_scopes=["mcp"],
+    )
+    assert granted == {"mcp"}

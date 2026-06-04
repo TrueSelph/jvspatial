@@ -236,20 +236,34 @@ class _GrantUser:
 def _intersect_scope(scope: str, permissions: Optional[List[str]]) -> str:
     """Return the intersection of *scope* and *permissions*.
 
-    When *permissions* is ``None`` or empty the original *scope* is returned
-    unchanged (back-compat: callers that do not supply ``permissions`` keep
-    the full client-allowed scope).  When *permissions* is provided only
-    tokens whose name appears in *permissions* are kept.
+    Three cases, in order:
+
+    * *permissions* is ``None`` — the key was absent.  No narrowing: the
+      original *scope* is returned unchanged (back-compat for callers that
+      supply only ``{"id": ...}`` and never declare a permission set).
+    * *permissions* contains ``"*"`` — wildcard / admin grant.  No narrowing:
+      every requested scope is authorized.  The caller's supported-scope
+      ceiling (see :meth:`JvSpatialAuthCodeGrant.save_authorization_code`)
+      then bounds the result.
+    * otherwise — membership filter.  Only tokens whose name appears in
+      *permissions* are kept.  A present-but-empty list therefore narrows to
+      the empty scope (an explicit "authorize nothing").
 
     Args:
         scope: Space-delimited scope string (already client-filtered).
-        permissions: Resource-owner permission list, or ``None``.
+        permissions: Resource-owner permission list, or ``None`` when absent.
 
     Returns:
-        Space-delimited scope string with tokens not in *permissions* removed,
-        or the original *scope* when *permissions* is absent.
+        Space-delimited scope string narrowed per the rules above.
+
+    .. note::
+        Behaviour change vs. M1b-1: a present-but-empty ``permissions`` ``[]``
+        is no longer collapsed to "no narrowing".  It now denies all scope.
+        Only the *absent* key (``None``) preserves the full requested scope.
     """
-    if not permissions:  # None / [] => no narrowing (back-compat)
+    if permissions is None:  # key absent => no narrowing (back-compat)
+        return scope or ""
+    if "*" in permissions:  # wildcard / admin => authorize all requested scope
         return scope or ""
     allowed = set(permissions)
     return " ".join(s for s in (scope or "").split() if s in allowed)
@@ -341,11 +355,18 @@ class JvSpatialAuthCodeGrant(AuthorizationCodeGrant):
     def save_authorization_code(self, code: str, request: Any) -> None:
         """Persist a single-use authorization code (PKCE challenge included).
 
-        The stored scope is the intersection of the client-allowed requested
-        scope (``request.scope``) and the resource-owner's permissions (taken
-        from ``request.user["permissions"]`` when present).  When no
-        ``permissions`` key is supplied the full client-allowed scope is stored
-        unchanged (back-compat with M1b-1 callers that pass only ``{"id": ...}``).
+        The stored scope is narrowed in two stages:
+
+        1. **Permission intersection** — against the resource-owner's
+           permissions (``request.user["permissions"]``).  When the key is
+           *absent* the full client-allowed scope is kept unchanged
+           (back-compat with M1b-1 callers that pass only ``{"id": ...}``); a
+           present-but-empty ``[]`` narrows to nothing; a ``"*"`` entry
+           authorizes all requested scope.  See :func:`_intersect_scope`.
+        2. **Supported-scope ceiling** — when the server was built with a
+           non-empty ``supported_scopes`` set, any token outside that set is
+           dropped.  An empty (default) supported set is a no-op, so callers
+           that do not declare supported scopes are unaffected.
 
         Because the token generator reads scope from ``authorization_code.get_scope()``
         at token-issue time, narrowing here is sufficient: no further intersection
@@ -360,11 +381,19 @@ class JvSpatialAuthCodeGrant(AuthorizationCodeGrant):
         expires_at = datetime.now(timezone.utc) + timedelta(
             seconds=getattr(self.server, "_code_ttl", DEFAULT_CODE_TTL_SECONDS)
         )
-        # Extract permissions from grant_user dict (absent => no narrowing).
+        # Extract permissions from grant_user dict. A present-but-empty list is
+        # preserved as [] (=> deny all scope); only an absent key stays None
+        # (=> no narrowing). Do NOT collapse [] to None here.
         permissions: Optional[List[str]] = None
         if isinstance(request.user, dict):
-            permissions = request.user.get("permissions") or None
+            permissions = request.user.get("permissions")
         granted_scope = _intersect_scope(request.scope or "", permissions)
+        # Apply the supported-scope ceiling when one is declared. Empty
+        # (the default) is a no-op so undeclared callers are unaffected.
+        supported = getattr(self.server, "_supported_scopes", None) or []
+        if supported:
+            ceiling = set(supported)
+            granted_scope = " ".join(s for s in granted_scope.split() if s in ceiling)
         record = AuthorizationCode(
             code_hash=_sha256(code),
             client_id=client_id,
@@ -457,12 +486,29 @@ class JvSpatialAuthorizationServer(AuthorizationServer):
     coroutine entry points callers ``await``.
     """
 
-    def __init__(self, issuer: str, resource: str, **kwargs: Any) -> None:
-        """Configure the server with its *issuer*, audience *resource*, knobs."""
+    def __init__(
+        self,
+        issuer: str,
+        resource: str,
+        supported_scopes: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Configure the server with its *issuer*, audience *resource*, knobs.
+
+        Args:
+            issuer: The ``iss`` claim / authorization-server identifier.
+            resource: The protected-resource audience for issued tokens.
+            supported_scopes: Optional scope ceiling. When non-empty, granted
+                scope is intersected against this set in
+                :meth:`JvSpatialAuthCodeGrant.save_authorization_code`. An empty
+                list / ``None`` (the default) declares no ceiling — a no-op for
+                back-compat with callers that do not constrain supported scopes.
+        """
         super().__init__(**kwargs)
         self._issuer = issuer
         self._resource = resource
         self._code_ttl = DEFAULT_CODE_TTL_SECONDS
+        self._supported_scopes = list(supported_scopes or [])
 
     def create_oauth2_request(self, request: Any) -> StarletteOAuth2Request:
         """Return the request with its ``payload`` populated.
@@ -756,7 +802,9 @@ class JvSpatialRefreshTokenGrant(RefreshTokenGrant):
 
 
 def build_authorization_server(
-    issuer: str, resource: str
+    issuer: str,
+    resource: str,
+    supported_scopes: Optional[List[str]] = None,
 ) -> JvSpatialAuthorizationServer:
     """Build a jvspatial authorization server for the given issuer/resource.
 
@@ -766,6 +814,11 @@ def build_authorization_server(
     Args:
         issuer: The ``iss`` claim / authorization-server identifier.
         resource: The protected-resource audience for issued tokens (``aud``).
+        supported_scopes: Optional scope ceiling for issued tokens. When
+            non-empty, granted scope is intersected against this set at
+            authorization-code persistence time. Defaults to ``None`` (no
+            ceiling) so existing callers are unaffected — secure-by-default
+            only kicks in once a ceiling is declared.
 
     Returns:
         A configured :class:`JvSpatialAuthorizationServer`.
@@ -773,6 +826,7 @@ def build_authorization_server(
     server = JvSpatialAuthorizationServer(
         issuer=issuer,
         resource=resource,
+        supported_scopes=supported_scopes,
         scopes_supported=None,
     )
     server.register_grant(

@@ -170,7 +170,11 @@ def build_oauth_routers(
     issuer = auth_config.oauth_issuer_url
     # resource defaults to the issuer for now; per-request RFC 8707 resource
     # binding (token audience varies per protected resource) is a later item.
-    server = build_authorization_server(issuer=issuer, resource=issuer)
+    server = build_authorization_server(
+        issuer=issuer,
+        resource=issuer,
+        supported_scopes=list(auth_config.oauth_supported_scopes or []),
+    )
 
     well_known_router = APIRouter(tags=["OAuth"])
 
