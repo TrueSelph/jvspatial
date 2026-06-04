@@ -108,6 +108,37 @@ class OAuthSigningKey(Object):
     )
 
 
+class OAuthRevokedToken(Object):
+    """A denylisted access-token ``jti`` (RFC 7009 access-token revocation).
+
+    Access tokens are stateless RS256 JWTs that would otherwise remain valid
+    until their ``exp``. This row records a single revoked token by its ``jti``
+    so the Resource-Server verifier can reject it before expiry.
+
+    Self-expiring: ``expires_at`` mirrors the token's own ``exp`` — once the
+    token has naturally expired the verifier rejects it on ``exp`` anyway, so
+    there is no value in retaining the denylist row past that point (a cleanup
+    job may prune ``expires_at < now`` rows).
+
+    .. note::
+        This is **per-token** revocation: a holder revokes a token they
+        possess. Revoking *all* of a (user, client)'s outstanding tokens at
+        once is a separate, future primitive — it needs a per-(user, client)
+        ``revoked-after`` watermark because stateless ``jti`` values cannot be
+        enumerated. See the verifier/endpoint docstrings.
+    """
+
+    jti: str = Field(..., description="JWT ID of the revoked access token")
+    expires_at: datetime = Field(
+        ...,
+        description="The token's own exp; row self-expires (prune after this)",
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Revocation timestamp",
+    )
+
+
 class OAuthRefreshToken(Object):
     """An OAuth refresh token (opaque, stored hashed).
 

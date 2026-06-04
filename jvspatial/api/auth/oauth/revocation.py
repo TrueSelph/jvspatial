@@ -5,10 +5,22 @@ Implements :class:`JvSpatialRevocationEndpoint`, a subclass of Authlib's
 :class:`~jvspatial.api.auth.oauth.server.JvSpatialAuthorizationServer` via
 :func:`~jvspatial.api.auth.oauth.server.build_authorization_server`.
 
-**Refresh-token revocation only** — access tokens are stateless RS256 JWTs; a
-denial/denylist for them is out of scope for this phase.  Revoking a refresh
-token is the meaningful operation: the client can no longer use it to obtain
-new access tokens.
+Handles **both** token types:
+
+* **Refresh tokens** — opaque, stored hashed as ``OAuthRefreshToken``.
+  Revoking marks the record inactive so it can no longer be exchanged.
+* **Access tokens** — stateless RS256 JWTs. They cannot be "deleted"; instead
+  the token's ``jti`` is added to the :mod:`~jvspatial.api.auth.oauth.denylist`
+  so the Resource-Server verifier rejects it before its natural ``exp``.
+
+**Per-token revocation (RFC 7009 §2.1).** The caller must *present* the token
+they want revoked and authenticate as its owning client. Both conditions are
+enforced before anything is denylisted (see :meth:`authenticate_token` →
+``check_client``), so a caller can only revoke a token they actually hold —
+there is no "denylist an arbitrary jti" DoS surface. Mass revocation of *all*
+of a (user, client)'s tokens at once is a separate future primitive (it needs a
+per-(user, client) ``revoked-after`` watermark; stateless jtis can't be
+enumerated) and is intentionally **not** implemented here.
 
 **Public client auth** — the default :class:`~authlib.oauth2.rfc6749.TokenEndpoint`
 ``CLIENT_AUTH_METHODS`` list is ``["client_secret_basic"]``, which would reject
@@ -28,12 +40,14 @@ this works correctly without any extra wiring.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from authlib.oauth2.rfc7009 import RevocationEndpoint
 
-from jvspatial.api.auth.oauth import refresh_store
+from jvspatial.api.auth.oauth import denylist, refresh_store
 from jvspatial.api.auth.oauth.bridge import call_async
+from jvspatial.api.auth.oauth.resource import verify_oauth_access_token
 
 
 class _RevocableToken:
@@ -55,20 +69,41 @@ class _RevocableToken:
         return self.record.client_id == client.get_client_id()
 
 
+class _RevocableAccessToken:
+    """Adapter over the validated claims of a JWT access token.
+
+    Returned by :meth:`~JvSpatialRevocationEndpoint.query_token` when the
+    presented token is a JWT access token rather than a stored refresh token.
+    Carries the ``jti`` and ``exp`` needed to denylist it and the ``client_id``
+    claim used to enforce RFC 7009's "issued to this client" check.
+    """
+
+    def __init__(self, claims: dict) -> None:
+        """Wrap verified JWT *claims* (``jti``, ``exp``, ``client_id``)."""
+        self.claims = claims
+
+    def check_client(self, client: Any) -> bool:
+        """Return ``True`` when the token's ``client_id`` claim matches *client*.
+
+        RFC 9068 access tokens carry the issuing ``client_id`` claim, so a
+        caller can only revoke a token that was issued to the client they have
+        authenticated as.
+        """
+        return self.claims.get("client_id") == client.get_client_id()
+
+
 class JvSpatialRevocationEndpoint(RevocationEndpoint):
-    """RFC 7009 revocation endpoint backed by jvspatial refresh-token storage.
+    """RFC 7009 revocation endpoint backed by jvspatial token storage.
 
     The two required hooks:
 
-    * :meth:`query_token` — find the ``OAuthRefreshToken`` record for the
-      presented token string (or ``None`` if unknown).
-    * :meth:`revoke_token` — mark the record inactive via
-      :func:`~jvspatial.api.auth.oauth.refresh_store.revoke`.
-
-    **Access tokens are out of scope.** This endpoint only handles refresh
-    tokens stored in the ``OAuthRefreshToken`` Object store. Revoking a
-    stateless JWT access token would require a denylist (e.g. Redis-backed
-    ``jti`` blocklist) — planned for a future phase.
+    * :meth:`query_token` — resolve the presented token to a revocable object:
+      an ``OAuthRefreshToken`` record (refresh tokens) or a
+      :class:`_RevocableAccessToken` (validated JWT access tokens).
+    * :meth:`revoke_token` — mark a refresh record inactive via
+      :func:`~jvspatial.api.auth.oauth.refresh_store.revoke`, or denylist a JWT
+      access token's ``jti`` via
+      :func:`~jvspatial.api.auth.oauth.denylist.revoke_jti`.
     """
 
     #: Allow public clients (``token_endpoint_auth_method="none"``) to revoke
@@ -78,46 +113,75 @@ class JvSpatialRevocationEndpoint(RevocationEndpoint):
     CLIENT_AUTH_METHODS = ["none", "client_secret_basic", "client_secret_post"]
 
     def query_token(self, token_string: str, token_type_hint: Optional[str]) -> Any:
-        """Look up the ``OAuthRefreshToken`` record for *token_string*.
+        """Resolve *token_string* to a revocable token object (or ``None``).
 
-        Uses :func:`~jvspatial.api.auth.oauth.refresh_store.find_any` (no
-        ``is_active`` filter) so that an already-revoked token is still
-        found and validated against its owning client before being silently
-        accepted per RFC 7009 §2.2 ("the server responds with HTTP 200").
+        Resolution order:
 
-        Access tokens (stateless JWTs) are not stored, so they return
-        ``None``; per RFC 7009 §2.2 the server MUST respond 200 even when
-        the token is unknown, so ``None`` here is safe.
+        1. **Refresh token** — :func:`~jvspatial.api.auth.oauth.refresh_store.find_any`
+           (no ``is_active`` filter) so an already-revoked token is still found
+           and validated against its owning client per RFC 7009 §2.2. Skipped
+           when ``token_type_hint == "access_token"``.
+        2. **Access token (JWT)** — if not a refresh token (or the hint says
+           ``access_token``), validate the token as a JWT via
+           :func:`~jvspatial.api.auth.oauth.resource.verify_oauth_access_token`
+           (signature / ``iss`` / ``aud`` / ``exp``). On success return a
+           :class:`_RevocableAccessToken` carrying ``jti``/``exp``/``client_id``.
+
+        Anything that matches neither returns ``None``; per RFC 7009 §2.2 the
+        server MUST respond 200 even for an unknown token, so ``None`` is safe.
 
         Args:
             token_string: The plaintext token value from the ``token`` form
                 parameter.
             token_type_hint: Optional hint (``"refresh_token"`` /
-                ``"access_token"``).  Not used for dispatch because we have
-                only one storage backend (refresh tokens only).
+                ``"access_token"``). Used to skip the refresh lookup when the
+                caller explicitly says ``access_token``.
 
         Returns:
-            A :class:`_RevocableToken` wrapping the persisted
-            :class:`~jvspatial.api.auth.oauth.models.OAuthRefreshToken` record,
-            or ``None`` if not found.  The wrapper exposes ``check_client`` as
-            required by Authlib's :meth:`authenticate_token`.
+            A :class:`_RevocableToken` (refresh), a :class:`_RevocableAccessToken`
+            (JWT access token), or ``None``. The wrapper exposes ``check_client``
+            as required by Authlib's :meth:`authenticate_token`.
         """
-        rec = call_async(refresh_store.find_any, token_string)
-        return _RevocableToken(rec) if rec is not None else None
+        if token_type_hint != "access_token":
+            rec = call_async(refresh_store.find_any, token_string)
+            if rec is not None:
+                return _RevocableToken(rec)
+
+        # Not a known refresh token (or the caller hinted access_token): try to
+        # validate it as a JWT access token. verify_* returns None on any
+        # failure (bad sig/iss/aud/expired/missing jti/already denylisted).
+        issuer = self.server._issuer
+        resource = self.server._resource
+
+        async def _verify() -> Optional[dict]:
+            return await verify_oauth_access_token(
+                token_string, issuer=issuer, resource=resource
+            )
+
+        claims = call_async(_verify)
+        if claims and claims.get("jti"):
+            return _RevocableAccessToken(claims)
+        return None
 
     def revoke_token(self, token: Any, request: Any) -> None:
-        """Mark the ``OAuthRefreshToken`` *token* record as inactive.
+        """Revoke *token* — either a refresh record or a JWT access token.
 
-        *token* is the :class:`~jvspatial.api.auth.oauth.models.OAuthRefreshToken`
-        record returned by :meth:`query_token` — NOT a string.  Authlib's
-        base :meth:`~authlib.oauth2.rfc7009.RevocationEndpoint.create_endpoint_response`
+        *token* is the object returned by :meth:`query_token` (NOT a string);
+        Authlib's base
+        :meth:`~authlib.oauth2.rfc7009.RevocationEndpoint.create_endpoint_response`
         calls :meth:`query_token` first and passes the result directly here.
 
+        * :class:`_RevocableToken` (refresh) → mark the
+          ``OAuthRefreshToken`` record inactive.
+        * :class:`_RevocableAccessToken` (JWT) → add its ``jti`` to the
+          denylist until the token's own ``exp`` (self-expiring row).
+
         Args:
-            token: A :class:`_RevocableToken` wrapping the persisted
-                ``OAuthRefreshToken`` record (as returned by
-                :meth:`query_token`).
-            request: The Authlib OAuth2 request (not used; included for
-                signature compatibility).
+            token: The revocable object from :meth:`query_token`.
+            request: The Authlib OAuth2 request (unused; signature compat).
         """
+        if isinstance(token, _RevocableAccessToken):
+            exp = datetime.fromtimestamp(int(token.claims["exp"]), tz=timezone.utc)
+            call_async(denylist.revoke_jti, token.claims["jti"], exp)
+            return
         call_async(refresh_store.revoke, token.record)
