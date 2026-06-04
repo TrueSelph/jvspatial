@@ -202,6 +202,10 @@ consumer are the documented `[]`⇒deny footgun fix and the strictly-more-protec
 IP-only rate-limit key; no M4 change weakens another auth path; and the two
 deferrals are uniformly absent rather than half-implemented.
 
+### Cross-repo verification (integral consumer, editable install)
+
+The full test verification (separate from the security pass) ran both repos. **jvspatial:** oauth slice **74 passed**, middleware green; only the pre-existing `tests/storage/*` libmagic/MIME failures remain (M4 touches no storage code). **integral:** the test run initially FAILED — 2 consent escalation tests over-granted `admin` — because integral's *separate* consent authorization-server (`backend/app/api/oauth_consent.py`) was built without declaring `supported_scopes`, so M4's new `'*'`-wildcard branch (which is *meant* to be bounded by the supported-scope ceiling) had no ceiling to apply on integral's path. This is the exact composition gap the security pass could not see (it reviewed jvspatial's flow where the ceiling is declared). **Fixed integral-side** in commit `1bb5f5a` (`feat/m3-agents-ui`): the consent `_AS` now passes `supported_scopes=settings.OAUTH_SUPPORTED_SCOPES` (`["integral"]`), parity with the mounted server. **Post-fix: integral consent 10 passed, broad oauth/mcp slice green, boot OK.** Lesson: any consumer that builds its own `build_authorization_server(...)` instance MUST declare `supported_scopes` to get the M4 ceiling — the `'*'` branch is unbounded without it. Both repos now green.
+
 - **Critical:** none.
 - **Important:** none.
 - **Minor (benign, surfaced in per-task reviews; documented, not blocking):**
