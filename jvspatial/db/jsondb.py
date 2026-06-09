@@ -48,7 +48,7 @@ try:
     _HAS_ORJSON = True
 
     def _dumps(data: Dict[str, Any]) -> bytes:
-        return orjson.dumps(data)
+        return orjson.dumps(data, option=orjson.OPT_INDENT_2)
 
     def _loads(content: bytes) -> Dict[str, Any]:
         return orjson.loads(content)  # type: ignore[no-any-return]
@@ -57,7 +57,7 @@ except ImportError:
     _HAS_ORJSON = False
 
     def _dumps(data: Dict[str, Any]) -> bytes:
-        return json.dumps(data).encode("utf-8")
+        return json.dumps(data, indent=2).encode("utf-8")
 
     def _loads(content: bytes) -> Dict[str, Any]:
         return json.loads(content)  # type: ignore[no-any-return]
