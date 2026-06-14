@@ -14,6 +14,10 @@ from typing import Iterator
 
 import pytest
 
+# PostgresDB imports asyncpg at module load; skip the whole module when the
+# optional [postgres] extra isn't installed instead of erroring on import.
+pytest.importorskip("asyncpg")
+
 from jvspatial.db.postgres import (
     PostgresDB,
     _safe_collection,

@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Starlette ≥ 0.52 compatibility: included routes became invisible to auth/OpenAPI introspection.** Newer Starlette wraps `app.include_router(...)` results in an `_IncludedRouter` object instead of flattening `APIRoute`s into `app.routes`. jvspatial's auth resolver only inspected top-level `APIRoute`s, so included routes (e.g. file-storage endpoints) were treated as unregistered and denied by default (spurious 401s); OpenAPI security/padlocks were also dropped. Added `jvspatial/api/_route_utils.py::iter_api_routes` and routed all route-table introspection through it (auth resolver, OpenAPI security wiring, dynamic-walker registration, duplicate-route detection). Works across old and new Starlette.
 - **Docs: authentication examples used a flat `auth_enabled=True` kwarg** that `ServerConfig` silently ignores (auth stayed disabled). Corrected README and `docs/md/{authentication,api-keys,migration}.md` to the nested `auth=dict(...)` form.
 - Layered cache fell back to `print()` for Redis-unavailable warnings; now uses `logging.warning` (`jvspatial/cache/layered.py`).
 

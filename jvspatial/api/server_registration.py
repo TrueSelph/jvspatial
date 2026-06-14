@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional, Type, Union, cast
 
+from jvspatial.api._route_utils import iter_api_routes
 from jvspatial.api.constants import APIRoutes
 from jvspatial.api.endpoints.router import EndpointRouter
 from jvspatial.core.entities import Walker
@@ -112,7 +113,7 @@ class ServerRegistrationMixin:
                 endpoint_info.router = dynamic_router
             self.app.include_router(dynamic_router.router, prefix=APIRoutes.PREFIX)
 
-            for route in self.app.routes:
+            for route in iter_api_routes(self.app.routes):
                 if hasattr(route, "path") and path in route.path:
                     route_handler = route.endpoint
                     route_handler._auth_required = getattr(

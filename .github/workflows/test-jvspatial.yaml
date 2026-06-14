@@ -26,8 +26,11 @@ jobs:
       run: |
         python -m pip install --upgrade pip
 
-    - name: Install jvspatial package with test and lambda dependencies
-      run: pip install -e '.[test,lambda]'
+    - name: Install jvspatial package with test, lambda, and postgres dependencies
+      # postgres/pgvector pull in asyncpg so the Postgres *unit* tests run in CI
+      # (translator pushdown, pool auto-tuning, vector encoding). Live-DB
+      # integration tests still skip without JVSPATIAL_POSTGRES_TEST_DSN.
+      run: pip install -e '.[test,lambda,postgres,pgvector]'
 
     # Coverage on every matrix Python version spikes memory (~1.6k tests); the runner often OOM-kills
     # the process (shown as "The operation was canceled"). Run full suite everywhere; enforce

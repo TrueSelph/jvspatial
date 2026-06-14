@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Request
 
+from jvspatial.api._route_utils import iter_api_routes
 from jvspatial.api.constants import APIRoutes
 
 
@@ -172,7 +173,7 @@ class EndpointAuthResolver:
             if hasattr(self._server, "app") and self._server.app:
                 from fastapi.routing import APIRoute
 
-                for route in self._server.app.routes:
+                for route in iter_api_routes(self._server.app.routes):
                     if not isinstance(route, APIRoute):
                         continue
                     route_paths = _route_paths_for_comparison(route.path)
@@ -267,7 +268,7 @@ class EndpointAuthResolver:
             if api_prefix and request_path.startswith(api_prefix):
                 normalized_path = request_path[len(api_prefix) :] or "/"
 
-            for route in self._server.app.routes:
+            for route in iter_api_routes(self._server.app.routes):
                 if not isinstance(route, APIRoute):
                     continue
                 route_paths = _route_paths_for_comparison(route.path)
@@ -334,7 +335,7 @@ class EndpointAuthResolver:
             if hasattr(self._server, "app") and self._server.app:
                 from fastapi.routing import APIRoute
 
-                for route in self._server.app.routes:
+                for route in iter_api_routes(self._server.app.routes):
                     if not isinstance(route, APIRoute):
                         continue
                     route_paths = _route_paths_for_comparison(route.path)

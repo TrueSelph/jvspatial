@@ -292,8 +292,7 @@ class AppBuilder:
         """
         from contextlib import suppress
 
-        from fastapi.routing import APIRoute
-
+        from jvspatial.api._route_utils import iter_api_routes
         from jvspatial.api.endpoints.factory import ParameterModelFactory
         from jvspatial.api.endpoints.graph_visualization import (
             make_graph_expand_handler,
@@ -309,10 +308,8 @@ class AppBuilder:
                     if "GET" in ep.methods:
                         return True
             if any(
-                isinstance(route, APIRoute)
-                and route.path == path_full
-                and "GET" in route.methods
-                for route in app.routes
+                route.path == path_full and "GET" in route.methods
+                for route in iter_api_routes(app.routes)
             ):
                 return True
             return False
