@@ -24,10 +24,11 @@ A clear and concise description of what you expected to happen.
 If applicable, add screenshots to help explain your problem.
 
 **Environment (please complete the following information):**
+ - jvspatial Version [e.g. 0.0.9]
  - Python Version [e.g. 3.12]
- - Jaclang Version [e.g. 0.7.27]
- - Jivas Version [e.g. 2.0.0]
-- jvspatial Version [e.g 0.0.1]
+ - OS [e.g. Ubuntu 24.04, macOS 14]
+ - Database backend [e.g. JSON, SQLite, PostgreSQL, MongoDB, DynamoDB]
+ - Serverless mode [yes / no]
 
 **Additional context**
 Add any other context about the problem here.

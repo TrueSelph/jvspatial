@@ -64,7 +64,7 @@ If you prefer to use an API token instead:
 - **Triggers:** Automatically runs on pushes to the `main` branch (including PR merges)
 - **Source Code Detection:** Only triggers when source code files change:
   - Python files in `jvspatial/` directory
-  - `setup.py`, `pyproject.toml`, `requirements*.txt`
+  - `pyproject.toml`
   - `jvspatial/version.py` (version changes)
 - **Ignores:** Documentation, examples, tests, and build artifacts
 - **Tag Creation:** Automatically creates git tag if it doesn't exist

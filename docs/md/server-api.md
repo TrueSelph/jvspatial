@@ -386,7 +386,7 @@ my_walkers/
     __init__.py          # Export walkers
     walkers.py           # Walker implementations
     models.py            # Node models (optional)
-    setup.py             # Package configuration
+    pyproject.toml       # Package configuration
 ```
 
 ### Walker Package Example

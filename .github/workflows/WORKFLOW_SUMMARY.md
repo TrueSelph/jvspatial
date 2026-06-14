@@ -10,9 +10,7 @@ The `publish.yml` workflow automatically creates git tags and publishes to PyPI 
 - Code is **pushed to `main` branch** (includes PR merges)
 - **AND** source code files have changed:
   - Python files in `jvspatial/` directory
-  - `setup.py`
   - `pyproject.toml`
-  - `requirements*.txt` files
   - `jvspatial/version.py`
 
 ### ❌ Does NOT Trigger When:

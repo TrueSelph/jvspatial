@@ -9,14 +9,12 @@ on:
   pull_request:
     paths:
       - 'pyproject.toml'
-      - 'requirements*.txt'
       - '.github/workflows/security.yml'
   push:
     branches:
       - main
     paths:
       - 'pyproject.toml'
-      - 'requirements*.txt'
   schedule:
     # Mondays at 06:00 UTC. Catches CVEs disclosed over the weekend
     # before adopters hit them.

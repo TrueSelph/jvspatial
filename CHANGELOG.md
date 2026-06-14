@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-06-14
+
+### Packaging
+
+- Removed `setup.py`; `pyproject.toml` is now the single source of build metadata. Version resolves dynamically from `jvspatial/version.py` via `[tool.setuptools.dynamic]`. Fixes a metadata conflict where the wheel published `Requires-Python: >=3.8` while the project targets `>=3.9`.
+- Added the `cache` extra (`redis[hiredis]`) so `pip install jvspatial[cache]` works; it backs `jvspatial.cache.redis`.
+- Completed the `all` extra to cover every runtime-optional backend/feature (lambda, postgres, pgvector, otel, cache, scheduler).
+- Removed the redundant top-level `requirements*.txt` files; dependencies live solely in `pyproject.toml` extras.
+
 ### Phase F — Cursor pagination (2026-05-26)
 
 #### Added
