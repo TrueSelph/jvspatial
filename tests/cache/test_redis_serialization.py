@@ -31,11 +31,34 @@ def test_json_mode_roundtrip():
         assert cache._deserialize(raw) == value
 
 
-def test_json_mode_reads_legacy_pickle():
+def test_json_mode_rejects_legacy_pickle_by_default():
+    # Safe-by-default: an unprefixed (legacy pickle / attacker-controlled) blob
+    # must NOT be unpickled in json mode. _deserialize raises; get() turns that
+    # into a cache miss so the value is simply recomputed.
     cache = RedisCache(redis_url="redis://localhost:6379", serialization="json")
     legacy = pickle.dumps({"legacy": True})
     assert not legacy.startswith(_JSON_VALUE_PREFIX)
+    assert cache._allow_legacy_pickle is False
+    with pytest.raises(ValueError):
+        cache._deserialize(legacy)
+
+
+def test_json_mode_reads_legacy_pickle_when_opted_in():
+    # Operator explicitly opted into legacy reads on a trusted keyspace.
+    cache = RedisCache(
+        redis_url="redis://localhost:6379",
+        serialization="json",
+        allow_legacy_pickle=True,
+    )
+    legacy = pickle.dumps({"legacy": True})
+    assert not legacy.startswith(_JSON_VALUE_PREFIX)
     assert cache._deserialize(legacy) == {"legacy": True}
+
+
+def test_allow_legacy_pickle_from_env(monkeypatch):
+    monkeypatch.setenv("JVSPATIAL_REDIS_ALLOW_LEGACY_PICKLE", "true")
+    cache = RedisCache(redis_url="redis://localhost:6379", serialization="json")
+    assert cache._allow_legacy_pickle is True
 
 
 def test_pickle_mode_roundtrip():

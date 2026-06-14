@@ -29,9 +29,11 @@ from jvspatial.api import Server
 
 server = Server(
     title="My API",
-    auth_enabled=True,  # Master switch - enables both JWT and API key auth
-    api_key_management_enabled=True,  # Enable API key management endpoints (/auth/api-keys)
-    api_key_prefix="sk_",  # Optional: custom prefix
+    auth=dict(
+        auth_enabled=True,  # Master switch - enables both JWT and API key auth
+        api_key_management_enabled=True,  # Enable /auth/api-keys endpoints
+        api_key_prefix="sk_",  # Optional: custom prefix
+    ),
     db_type="json"
 )
 ```

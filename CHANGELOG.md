@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.9] - 2026-06-14
 
+### Security
+
+- **Redis cache no longer unpickles untrusted blobs in the default JSON mode** (`jvspatial/cache/redis.py`). Previously, an unprefixed value in `json` serialization mode fell through to `pickle.loads`, so anyone able to write to the Redis keyspace could achieve remote code execution even with the "safe" default. JSON mode now refuses non-JSON values (treated as a cache miss → recompute). Legacy pickle entries are readable only when explicitly opted in via `allow_legacy_pickle=True` / `JVSPATIAL_REDIS_ALLOW_LEGACY_PICKLE=true` on a trusted keyspace. Explicit `pickle` mode is unchanged.
+
+### Fixed
+
+- **Docs: authentication examples used a flat `auth_enabled=True` kwarg** that `ServerConfig` silently ignores (auth stayed disabled). Corrected README and `docs/md/{authentication,api-keys,migration}.md` to the nested `auth=dict(...)` form.
+- Layered cache fell back to `print()` for Redis-unavailable warnings; now uses `logging.warning` (`jvspatial/cache/layered.py`).
+
 ### Packaging
 
 - Removed `setup.py`; `pyproject.toml` is now the single source of build metadata. Version resolves dynamically from `jvspatial/version.py` via `[tool.setuptools.dynamic]`. Fixes a metadata conflict where the wheel published `Requires-Python: >=3.8` while the project targets `>=3.9`.

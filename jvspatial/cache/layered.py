@@ -4,6 +4,7 @@ This module provides a two-tier caching strategy that combines the speed
 of in-memory caching with the distributed capabilities of Redis.
 """
 
+import logging
 from typing import Any, Dict, Optional
 
 from jvspatial.env import env
@@ -11,6 +12,8 @@ from jvspatial.env import env
 from .base import CacheBackend
 from .memory import MemoryCache
 from .redis import RedisCache
+
+logger = logging.getLogger(__name__)
 
 
 class LayeredCache(CacheBackend):
@@ -69,12 +72,14 @@ class LayeredCache(CacheBackend):
             # Redis not installed
             if not fallback_to_l1:
                 raise
-            print("Redis not available, using L1 (memory) cache only")
+            logger.warning("Redis not available, using L1 (memory) cache only")
         except Exception as e:
             # Redis connection error
             if not fallback_to_l1:
                 raise
-            print(f"Redis connection failed: {e}. Using L1 (memory) cache only")
+            logger.warning(
+                "Redis connection failed: %s. Using L1 (memory) cache only", e
+            )
 
     async def get(self, key: str) -> Optional[Any]:
         """Retrieve value from layered cache.
