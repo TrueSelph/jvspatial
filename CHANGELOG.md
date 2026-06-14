@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Lifted the Starlette upper version cap (`<1.0.0`) so installs resolve to a patched release.** Starlette 0.52.x carries PYSEC-2026-161 (fixed in 1.0.1); the old `<1.0.0` cap pinned consumers to the vulnerable line. Dependency is now `starlette>=0.46.0`. jvspatial's lifecycle hooks use its own `LifecycleManager` (FastAPI lifespan), not the `Router(on_startup/on_shutdown)` API removed in Starlette 1.0, and route introspection is version-agnostic (see the `iter_api_routes` fix below). Verified against Starlette 1.3.1.
 - **Redis cache no longer unpickles untrusted blobs in the default JSON mode** (`jvspatial/cache/redis.py`). Previously, an unprefixed value in `json` serialization mode fell through to `pickle.loads`, so anyone able to write to the Redis keyspace could achieve remote code execution even with the "safe" default. JSON mode now refuses non-JSON values (treated as a cache miss → recompute). Legacy pickle entries are readable only when explicitly opted in via `allow_legacy_pickle=True` / `JVSPATIAL_REDIS_ALLOW_LEGACY_PICKLE=true` on a trusted keyspace. Explicit `pickle` mode is unchanged.
 
 ### Fixed

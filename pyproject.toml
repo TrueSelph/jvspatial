@@ -30,8 +30,11 @@ classifiers = [
 dependencies = [
     "pydantic>=2.0",
     "fastapi>=0.100.0",
-    # Starlette 1.0 drops Router(on_startup/on_shutdown); older FastAPI APIRouter still passes them.
-    "starlette>=0.40.0,<1.0.0",
+    # No upper cap: Starlette 0.52.x carries PYSEC-2026-161 (fixed in 1.0.1).
+    # jvspatial's lifecycle hooks go through its own LifecycleManager (FastAPI
+    # lifespan), not the Router(on_startup/on_shutdown) API that 1.0 removed, and
+    # route introspection is version-agnostic via _route_utils.iter_api_routes.
+    "starlette>=0.46.0",
     "uvicorn>=0.23.0",
     "python-multipart>=0.0.6",
     "motor>=3.0.0",
