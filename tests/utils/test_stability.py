@@ -131,35 +131,3 @@ class TestUserSuppression:
             warnings.simplefilter("ignore", ExperimentalWarning)
             f()
         assert caught == []
-
-
-class TestJsonDBTransactionMarker:
-    """The one currently-experimental surface should fire the warning."""
-
-    def test_best_effort_emits_warning(self):
-        import tempfile
-
-        from jvspatial.db.jsondb import JsonDB
-        from jvspatial.db.transaction import JsonDBTransaction
-
-        with tempfile.TemporaryDirectory() as tmp:
-            db = JsonDB(base_path=tmp)
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always", ExperimentalWarning)
-                JsonDBTransaction(db, best_effort=True)
-            assert any("best_effort" in str(w.message) for w in caught), [
-                str(w.message) for w in caught
-            ]
-
-    def test_strict_does_not_emit_warning(self):
-        import tempfile
-
-        from jvspatial.db.jsondb import JsonDB
-        from jvspatial.db.transaction import JsonDBTransaction
-
-        with tempfile.TemporaryDirectory() as tmp:
-            db = JsonDB(base_path=tmp)
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always", ExperimentalWarning)
-                JsonDBTransaction(db)  # strict mode
-            assert caught == []

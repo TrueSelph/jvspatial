@@ -1,14 +1,14 @@
 [build-system]
-requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "jvspatial"
-dynamic = ["version"]  # Version is read from jvspatial/version.py via setup.py
+dynamic = ["version"]  # Read from jvspatial/version.py (see [tool.setuptools.dynamic] below)
 # Update jvspatial/version.py to release a new version - the workflow will create the tag automatically
 description = "An asynchronous object-spatial Python library for persistence and business logic application layers."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
     {name = "TrueSelph Inc.", email = "adminh@trueselph.com"},
@@ -18,7 +18,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -31,25 +30,36 @@ classifiers = [
 dependencies = [
     "pydantic>=2.0",
     "fastapi>=0.100.0",
-    # Starlette 1.0 drops Router(on_startup/on_shutdown); older FastAPI APIRouter still passes them.
-    "starlette>=0.40.0,<1.0.0",
+    # No upper cap: Starlette 0.52.x carries PYSEC-2026-161 (fixed in 1.0.1).
+    # jvspatial's lifecycle hooks go through its own LifecycleManager (FastAPI
+    # lifespan), not the Router(on_startup/on_shutdown) API that 1.0 removed, and
+    # route introspection is version-agnostic via _route_utils.iter_api_routes.
+    "starlette>=0.46.0",
     "uvicorn>=0.23.0",
     "python-multipart>=0.0.6",
     "motor>=3.0.0",
     "pymongo>=4.0.0",
     "PyJWT>=2.0.0",  # JWT token handling for authentication
+    "cryptography>=42.0.0",  # RS256 keypair generation + PyJWT RS256 signing/verification (OAuth)
+    "authlib>=1.3",  # OAuth 2.1 authorization server core (framework-agnostic)
     "bcrypt>=4.0.0",  # Password hashing for authentication
     "email-validator>=2.0.0",  # Email validation for Pydantic EmailStr
     "schedule>=1.2.2",  # Job scheduling
     "typing-extensions>=4.0.0",  # For @override decorator and enhanced typing
     "aiosqlite>=0.19.0",  # SQLite database backend
-    "aiofiles>=23.0.0",  # Async file operations for JsonDB
 ]
 
 [project.optional-dependencies]
 lambda = [
     "aioboto3>=15.5.0",  # DynamoDB (async) + AWS SDK stack
     "boto3>=1.28.0",  # Sync Lambda / EventBridge / SQS clients in serverless tasks
+]
+postgres = [
+    "asyncpg>=0.29.0",  # PostgreSQL async driver — the new default production backend
+]
+pgvector = [
+    "asyncpg>=0.29.0",
+    "pgvector>=0.2.5",  # pgvector codec for asyncpg (HNSW/IVFFlat index support)
 ]
 dev = [
     "pytest>=7.0",
@@ -76,22 +86,34 @@ otel = [
     # their own OTel stack don't pay for duplicates.
     "opentelemetry-api>=1.20.0",
 ]
+cache = [
+    "redis[hiredis]>=5.0.0",  # Redis client with C parser; backs jvspatial.cache.redis
+]
+# Convenience meta-extra: every runtime-optional backend/feature.
+# Test/dev tooling intentionally excluded -- use the dev/test extras for that.
 all = [
-    "pytest>=7.0",
-    "pytest-asyncio>=0.21.0",
-    "httpx>=0.24.0",
-    "pre-commit>=3.0.0",
-    "python-dotenv>=1.0.0",
-    "psutil>=5.9.0",
     "aioboto3>=15.5.0",
     "boto3>=1.28.0",
+    "asyncpg>=0.29.0",
+    "pgvector>=0.2.5",
+    "opentelemetry-api>=1.20.0",
+    "redis[hiredis]>=5.0.0",
+    "psutil>=5.9.0",
 ]
+
+[project.scripts]
+jvspatial = "jvspatial.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/TrueSelph/jvspatial"
 Repository = "https://github.com/TrueSelph/jvspatial"
 Issues = "https://github.com/TrueSelph/jvspatial/issues"
 Documentation = "https://github.com/TrueSelph/jvspatial/tree/main/docs"
+
+[tool.setuptools.dynamic]
+# Single source of version truth: jvspatial/version.py (__version__).
+# version.py imports nothing, so attr-resolution is safe at build time.
+version = {attr = "jvspatial.version.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -128,7 +150,7 @@ filterwarnings = [
 
 [tool.black]
 line-length = 88
-target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
+target-version = ['py39', 'py310', 'py311', 'py312']
 
 [tool.isort]
 profile = "black"

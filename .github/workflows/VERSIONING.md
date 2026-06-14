@@ -72,7 +72,7 @@ The workflow triggers when:
 
 **Source code changes that trigger publishing:**
 - Python files in `jvspatial/` directory
-- `setup.py`, `pyproject.toml`, `requirements*.txt`
+- `pyproject.toml`
 - `jvspatial/version.py` (version changes)
 
 **Files that do NOT trigger publishing:**

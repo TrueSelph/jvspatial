@@ -120,6 +120,22 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 request.url.path,
                 has_auth,
             )
+            response_headers: dict[str, str] = {}
+            if getattr(self.auth_config, "accept_oauth_bearer", False):
+                issuer = getattr(self.auth_config, "oauth_issuer_url", "") or ""
+                if issuer:
+                    # RFC 9728 §5.1 — emit WWW-Authenticate so MCP clients can
+                    # auto-discover the Authorization Server via PRM discovery.
+                    try:
+                        from jvspatial.api.auth.oauth.metadata import (
+                            www_authenticate_header,
+                        )
+
+                        response_headers["WWW-Authenticate"] = www_authenticate_header(
+                            issuer
+                        )
+                    except ImportError:
+                        pass  # oauth subpackage unavailable; skip header
             return JSONResponse(
                 status_code=401,
                 content={
@@ -127,6 +143,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                     "message": "Authentication required",
                     "path": request.url.path,
                 },
+                headers=response_headers or None,
             )
 
         # Normalize user to have roles and permissions
@@ -339,16 +356,56 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
             token = auth_header.split(" ", 1)[1].strip()
 
-            # Validate token using authentication service
+            # Validate token using authentication service (session-JWT path).
             user = await auth_service.validate_token(token)
             if user:
                 return user
+
+            # Resource-server fallback (opt-in via accept_oauth_bearer): the
+            # bearer may be an OAuth RS256 access token issued by the local AS.
+            # Only attempted when the session-JWT validation above failed, so
+            # the session path is 100% unchanged.
+            if getattr(self.auth_config, "accept_oauth_bearer", False):
+                oauth_user = await self._authenticate_oauth_bearer(token)
+                if oauth_user:
+                    return oauth_user
 
             return None
 
         except Exception as e:
             self._logger.error(f"JWT authentication error: {e}")
             return None
+
+    async def _authenticate_oauth_bearer(self, token: str) -> Optional[Any]:
+        """Verify an OAuth RS256 access token and build a session-shaped principal.
+
+        Returns a :class:`UserResponse` (the same shape session-JWT auth yields,
+        so the downstream RBAC role/permission gate reads it identically) on a
+        valid, audience-bound token, or ``None`` to fall through to the existing
+        unauthenticated handling. The OAuth ``scope`` claim maps to RBAC
+        ``permissions``; roles are empty (scopes are the permission grant).
+        """
+        from datetime import datetime, timezone
+
+        from jvspatial.api.auth.models import UserResponse
+        from jvspatial.api.auth.oauth.resource import verify_oauth_access_token
+
+        issuer = getattr(self.auth_config, "oauth_issuer_url", "") or ""
+        if not issuer:
+            return None
+        # AS and RS are the same process; the resource (audience) is the issuer.
+        claims = await verify_oauth_access_token(token, issuer=issuer, resource=issuer)
+        if not claims:
+            return None
+        return UserResponse(
+            id=claims["sub"],
+            email=claims.get("email", ""),
+            name="",
+            created_at=datetime.now(timezone.utc),
+            is_active=True,
+            roles=[],
+            permissions=(claims.get("scope") or "").split(),
+        )
 
     async def _authenticate_api_key(self, request: Request) -> Optional[Any]:
         """Authenticate using API key.

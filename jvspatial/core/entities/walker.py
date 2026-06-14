@@ -315,6 +315,52 @@ class Walker(AttributeMixin, BaseModel):
 
         return Edge
 
+    @classmethod
+    async def restore(
+        cls,
+        walker_id: str,
+        *,
+        store: "Any",
+        **kwargs: Any,
+    ) -> "Walker":
+        """Rehydrate a walker from a persisted trail store (cold-start path).
+
+        Constructs a fresh instance of ``cls`` with the same ``id`` as
+        the prior incarnation, attaches the supplied ``store`` so future
+        steps continue to mirror through it, and replays the persisted
+        trail into the in-memory deque so ``get_trail()`` /
+        ``has_visited()`` reflect history.
+
+        Distinct from :meth:`resume` (an instance method that unpauses
+        and continues an existing in-memory walker) — ``restore`` builds
+        a brand-new walker bound to the prior id. The two compose:
+        ``await (await Walker.restore(id, store=s)).resume()``.
+
+        This is the cold-start path for long-running agentive walkers:
+        the previous process recorded N steps to the store; this process
+        rebuilds state and continues from step N+1.
+
+        Args:
+            walker_id: Stable id assigned to the original walker
+                (typically ``walker.id``).
+            store: A :class:`TrailStore` instance. The walker's trail
+                will mirror through this store from now on.
+            **kwargs: Forwarded to the walker constructor (excluding ``id``
+                and ``trail_store``, which are managed by this method).
+
+        Returns:
+            A walker instance with the same ``id`` and the persisted trail
+            rehydrated.
+
+        Closes ROADMAP §2.5.
+        """
+        # Strip id/trail_store from kwargs — we set them ourselves.
+        kwargs.pop("id", None)
+        kwargs.pop("trail_store", None)
+        walker = cls(id=walker_id, trail_store=store, **kwargs)
+        await walker._trail_tracker.hydrate_from_store()
+        return walker
+
     def __init__(self: "Walker", **kwargs: Any) -> None:
         """Initialize a walker with auto-generated ID if not provided."""
         entity_name = self.__class__._entity_name()
@@ -358,6 +404,10 @@ class Walker(AttributeMixin, BaseModel):
             "max_trail_length",
             int(env("JVSPATIAL_WALKER_MAX_TRAIL_LENGTH", default="0")),
         )
+        # Optional pluggable trail store. When provided, steps mirror to
+        # the store so a fresh process can call ``Walker.resume()`` and
+        # pick up where this one left off. ROADMAP §2.5.
+        trail_store = kwargs.pop("trail_store", None)
         paused = kwargs.pop("paused", False)
 
         super().__init__(**kwargs)
@@ -378,8 +428,15 @@ class Walker(AttributeMixin, BaseModel):
         self._queue: deque[Any] = deque()  # Create new deque for queue manager
         self.queue = WalkerQueue(backing_deque=self._queue, max_size=max_queue_size)
         # Replace default unbounded trail with a (possibly bounded) one so
-        # ``max_trail_length`` from kwargs/env is honored (SPEC §6.4).
-        self._trail_tracker = WalkerTrail(max_length=max_trail_length)
+        # ``max_trail_length`` from kwargs/env is honored (SPEC §6.4). When
+        # ``trail_store`` is provided, mirror every recorded step to the
+        # store keyed by the walker's id so a fresh process can resume.
+        self._trail_store = trail_store
+        self._trail_tracker = WalkerTrail(
+            max_length=max_trail_length,
+            store=trail_store,
+            walker_id=self.id if trail_store is not None else None,
+        )
         self._protection = TraversalProtection(
             max_steps=max_steps,
             max_visits_per_node=max_visits_per_node,

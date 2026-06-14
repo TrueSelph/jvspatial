@@ -4,13 +4,46 @@ This module provides a streamlined database interface that removes
 unnecessary complexity while maintaining core functionality.
 """
 
+import base64
+import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 from jvspatial.db.query import QueryEngine
+
+# ---- cursor encoding -------------------------------------------------------
+
+# Opaque bytes that callers pass back to ``find_iter(cursor=...)`` to
+# resume a paged iteration. We encode as base64-of-json-of-the-last-row's
+# (sort_keys, id) tuple — opaque to the caller, debuggable on demand.
+
+
+def encode_cursor(payload: Dict[str, Any]) -> bytes:
+    """Encode a cursor payload to opaque bytes.
+
+    Format: base64(json(payload)). Stable across backends; callers
+    should treat the bytes as fully opaque.
+    """
+    raw = json.dumps(payload, default=str, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw)
+
+
+def decode_cursor(cursor: Optional[bytes]) -> Optional[Dict[str, Any]]:
+    """Decode an opaque cursor produced by :func:`encode_cursor`.
+
+    ``None`` and empty bytes both decode to ``None`` so callers can
+    start a fresh iteration without special-casing.
+    """
+    if not cursor:
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(cursor)
+        return json.loads(raw.decode("utf-8"))  # type: ignore[no-any-return]
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid cursor: {exc}") from exc
 
 
 @dataclass(frozen=True)
@@ -198,6 +231,98 @@ class Database(ABC):
             query = {}
         results = await self.find(collection, query)
         return len(results)
+
+    async def find_iter(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        batch_size: int = 100,
+        cursor: Optional[bytes] = None,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Page through ``query`` results in constant memory.
+
+        Yields one record at a time. Callers iterate with::
+
+            async for record in db.find_iter("user", {"context.active": True}):
+                ...
+
+        The default implementation provides keyset pagination over
+        the ``id`` field (always-unique, lexically sortable per
+        SPEC §1.1). Adapters with native cursors (Mongo motor cursor,
+        DynamoDB ``LastEvaluatedKey``, asyncpg ``server-side cursor``)
+        override this for fewer round trips.
+
+        Args:
+            collection: Collection name.
+            query: Mongo-style query (same operator surface as ``find``).
+            sort: Optional ``[(field, direction)]``. When provided, the
+                cursor is a composite ``(sort_value, id)`` for stable
+                pagination across concurrent writes. When omitted,
+                sort defaults to ``id`` ascending.
+            batch_size: Records per round trip. Default 100.
+            cursor: Opaque bytes from a prior call's last record. Pass
+                back to resume; pass ``None`` (default) to start fresh.
+
+        Yields:
+            One record dict per iteration. The caller's last-seen
+            record's ``id`` can be encoded into a fresh cursor via
+            :func:`encode_cursor` if you want to checkpoint progress;
+            otherwise ``find_iter`` manages cursor advancement internally.
+
+        Notes:
+            * Keyset pagination is consistent under concurrent inserts
+              — a new row appearing earlier in the sort order won't
+              be skipped, but a row updated to a later sort value
+              between batches may be visited twice. For exactly-once
+              semantics across long iterations, snapshot the query at
+              a transaction.
+            * The default implementation issues N/batch_size round
+              trips; expect linear behavior, not constant. Adapter
+              overrides amortize the cost.
+        """
+        last_id: Optional[str] = None
+        if cursor is not None:
+            decoded = decode_cursor(cursor)
+            if decoded is not None:
+                last_id = decoded.get("id")
+
+        while True:
+            page_query = dict(query)
+            if last_id is not None:
+                # Compose an id > last_id constraint into the user query.
+                existing_id_clause = page_query.pop("id", None)
+                # Merge: keep any user-provided id clause + add the
+                # keyset filter.
+                if existing_id_clause is None:
+                    page_query["id"] = {"$gt": last_id}
+                elif isinstance(existing_id_clause, dict):
+                    merged = dict(existing_id_clause)
+                    existing_gt = merged.get("$gt")
+                    if existing_gt is None or last_id > existing_gt:
+                        merged["$gt"] = last_id
+                    page_query["id"] = merged
+                else:
+                    # Caller pinned id to a literal — single-row query,
+                    # not pageable. Yield once if it hasn't been seen.
+                    if str(existing_id_clause) <= last_id:
+                        return
+                    page_query["id"] = existing_id_clause
+
+            results = await self.find(
+                collection,
+                page_query,
+                sort=sort or [("id", 1)],
+                limit=batch_size,
+            )
+            if not results:
+                return
+            for rec in results:
+                yield rec
+                last_id = rec.get("id") or last_id
+            if len(results) < batch_size:
+                return
 
     async def find_one(
         self, collection: str, query: Dict[str, Any]
@@ -445,6 +570,17 @@ class Database(ABC):
                         Example: ``{"node": ["conv_id_only", "context.session_id_1"]}``
         """
         return None
+
+
+__all__ = [
+    "Database",
+    "DatabaseError",
+    "VersionConflictError",
+    "BulkSaveResult",
+    "encode_cursor",
+    "decode_cursor",
+    "finalize_find_results",
+]
 
 
 class DatabaseError(Exception):

@@ -4,7 +4,7 @@ jvspatial supports Amazon DynamoDB as a database backend for scalable, serverles
 
 ## Prerequisites
 
-- **AWS SDK (DynamoDB)**: `pip install jvspatial[lambda]` (or `pip install -r requirements-lambda.txt` from source)
+- **AWS SDK (DynamoDB)**: `pip install jvspatial[lambda]` (or `pip install -e '.[lambda]'` from source)
 - AWS credentials (IAM role, environment variables, or ~/.aws/credentials)
 
 ## Quick Setup

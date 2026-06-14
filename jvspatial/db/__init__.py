@@ -44,6 +44,14 @@ except ImportError:  # pragma: no cover - dynamodb optional
     DynamoDB = None  # type: ignore[misc]
     _DYNAMODB_AVAILABLE = False
 
+try:  # Optional dependency (requires asyncpg)
+    from .postgres import PostgresDB  # noqa: F401
+
+    _POSTGRES_AVAILABLE = True
+except ImportError:  # pragma: no cover - postgres optional
+    PostgresDB = None  # type: ignore[misc]
+    _POSTGRES_AVAILABLE = False
+
 __all__ = [
     "Database",
     "DatabaseError",
@@ -71,3 +79,6 @@ if _MONGODB_AVAILABLE:
 
 if _DYNAMODB_AVAILABLE:
     __all__.append("DynamoDB")
+
+if _POSTGRES_AVAILABLE:
+    __all__.append("PostgresDB")

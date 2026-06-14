@@ -58,6 +58,37 @@ class TestRateLimitMiddleware:
         assert identifier is not None
         assert len(identifier) > 0
 
+    def test_client_identifier_ignores_user_agent(self, rate_limit_middleware):
+        """Same IP + different User-Agent -> SAME bucket (no UA-rotation evasion).
+
+        The User-Agent header is attacker-controlled; folding it into the key
+        would let an unauthenticated client mint a fresh bucket per request and
+        evade the per-IP cap. The identifier must depend on IP only.
+        """
+
+        def _req(user_agent: str) -> Request:
+            request = MagicMock(spec=Request)
+            request.client.host = "192.168.1.1"
+            request.headers = {"user-agent": user_agent}
+            request.state = MagicMock()
+            request.state.user = None
+            return request
+
+        id_a = rate_limit_middleware._get_client_identifier(_req("agent-one"))
+        id_b = rate_limit_middleware._get_client_identifier(_req("totally-different"))
+        id_c = rate_limit_middleware._get_client_identifier(_req(""))
+
+        # Identical IP, three different UAs -> one and the same bucket key.
+        assert id_a == id_b == id_c
+
+        # A different IP must still produce a different bucket.
+        other = MagicMock(spec=Request)
+        other.client.host = "10.0.0.9"
+        other.headers = {"user-agent": "agent-one"}
+        other.state = MagicMock()
+        other.state.user = None
+        assert rate_limit_middleware._get_client_identifier(other) != id_a
+
     def test_client_identifier_from_user(self, rate_limit_middleware):
         """Test client identifier generation from authenticated user."""
         request = MagicMock(spec=Request)
@@ -233,8 +264,14 @@ class TestRateLimitingIntegration:
         response = client.get("/api/default")
         assert response.status_code == 429
 
-    def test_rate_limit_per_client(self, server):
-        """Test that rate limits are enforced per client."""
+    def test_rate_limit_shared_per_ip_regardless_of_user_agent(self, server):
+        """Same IP shares one bucket even when the User-Agent rotates.
+
+        The unauthenticated bucket key is the source IP ONLY — a client cannot
+        rotate the User-Agent header to mint fresh buckets and evade the cap.
+        Both TestClients connect from the same loopback IP, so they draw down a
+        single shared counter.
+        """
         from jvspatial.api.context import set_current_server
 
         # Set server context so endpoints can be registered
@@ -251,23 +288,35 @@ class TestRateLimitingIntegration:
         client1 = TestClient(server.get_app())
         client2 = TestClient(server.get_app())
 
-        # Client 1 makes 2 requests (with unique user-agent to differentiate)
-        response1 = client1.get("/api/per-client", headers={"user-agent": "client1"})
-        assert response1.status_code == 200
-        response1 = client1.get("/api/per-client", headers={"user-agent": "client1"})
-        assert response1.status_code == 200
+        # Two requests under user-agent "client1" exhaust the cap of 2.
+        assert (
+            client1.get(
+                "/api/per-client", headers={"user-agent": "client1"}
+            ).status_code
+            == 200
+        )
+        assert (
+            client1.get(
+                "/api/per-client", headers={"user-agent": "client1"}
+            ).status_code
+            == 200
+        )
 
-        # Client 2 should still be able to make requests (different user-agent)
-        response2 = client2.get("/api/per-client", headers={"user-agent": "client2"})
-        assert response2.status_code == 200
-
-        # Client 1 should now be rate limited
-        response1 = client1.get("/api/per-client", headers={"user-agent": "client1"})
-        assert response1.status_code == 429
-
-        # Client 2 should still be able to make one more
-        response2 = client2.get("/api/per-client", headers={"user-agent": "client2"})
-        assert response2.status_code == 200
+        # A DIFFERENT user-agent from the same IP is NOT a fresh bucket: it is
+        # already over the cap and gets 429 (UA-rotation evasion is closed).
+        assert (
+            client2.get(
+                "/api/per-client", headers={"user-agent": "client2"}
+            ).status_code
+            == 429
+        )
+        # The original user-agent is likewise still limited.
+        assert (
+            client1.get(
+                "/api/per-client", headers={"user-agent": "client1"}
+            ).status_code
+            == 429
+        )
 
     def test_rate_limit_options_bypass(self, server):
         """Test that OPTIONS requests bypass rate limiting."""

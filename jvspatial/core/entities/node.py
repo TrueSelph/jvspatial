@@ -1,6 +1,5 @@
 """Node class for jvspatial graph entities."""
 
-import inspect
 import logging
 import re
 import weakref
@@ -15,8 +14,6 @@ from typing import (
     Type,
     Union,
 )
-
-from jvspatial.exceptions import ValidationError
 
 from ..annotations import attribute
 from .edge import Edge
@@ -87,64 +84,13 @@ class Node(Object):
         Forwards through ``super().__init_subclass__`` so
         ``AttributeMixin.__init_subclass__`` runs and registers
         ``protected`` / ``transient`` / ``private`` attribute metadata
-        for Node subclasses (audit §6.1).
+        for Node subclasses (audit §6.1). The visit-hook collection logic
+        itself is shared with ``Edge`` via ``_visit_hooks.register_visit_hooks``.
         """
         super().__init_subclass__(**kwargs)
-        cls._visit_hooks = {}
+        from ._visit_hooks import register_visit_hooks
 
-        for _name, method in inspect.getmembers(cls, inspect.isfunction):
-            if hasattr(method, "_is_visit_hook"):
-                targets = getattr(method, "_visit_targets", None)
-
-                if targets is None:
-                    # No targets specified - register for any Walker
-                    if None not in cls._visit_hooks:
-                        cls._visit_hooks[None] = []
-                    cls._visit_hooks[None].append(method)
-                else:
-                    # Register for each specified target type
-                    for target in targets:
-                        # Accept both classes and strings for forward references
-                        # Strings will be resolved at runtime when the walker visits
-                        if isinstance(target, str):
-                            # String target - store for later resolution
-                            if target not in cls._visit_hooks:
-                                cls._visit_hooks[target] = []
-                            cls._visit_hooks[target].append(method)
-                        elif inspect.isclass(target):
-                            # Class target - validate it's a Walker subclass
-                            if issubclass(target, Walker):  # type: ignore[arg-type]
-                                if target not in cls._visit_hooks:
-                                    cls._visit_hooks[target] = []
-                                cls._visit_hooks[target].append(method)
-                            else:
-                                target_name = (
-                                    target.__name__
-                                    if hasattr(target, "__name__")
-                                    else target
-                                )
-                                raise ValidationError(
-                                    f"Node @on_visit must target Walker types "
-                                    f"(or string names), got {target_name}",
-                                    details={
-                                        "target_type": str(target),
-                                        "expected_type": "Walker or string",
-                                    },
-                                )
-                        else:
-                            target_name = (
-                                target.__name__
-                                if hasattr(target, "__name__")
-                                else target
-                            )
-                            raise ValidationError(
-                                f"Node @on_visit must target Walker types "
-                                f"(or string names), got {target_name}",
-                                details={
-                                    "target_type": str(target),
-                                    "expected_type": "Walker or string",
-                                },
-                            )
+        cls._visit_hooks = register_visit_hooks(cls, label="Node")
 
     @property
     def visitor(self: "Node") -> Optional["Walker"]:

@@ -211,6 +211,95 @@ class TestRedisRateLimitBackend:
         mock_redis.delete.assert_called_once()
 
 
+def _stub_server(config):
+    """Minimal stub Server for exercising ServerConfigurator in isolation.
+
+    The configurator reads ``.config``, ``._logger`` and (via
+    ``_build_rate_limit_config``) the endpoint registries — which we stub to
+    empty so no real endpoints are required.
+    """
+    server = MagicMock()
+    server.config = config
+    server._endpoint_registry._function_registry.items.return_value = []
+    server._endpoint_registry._walker_registry.items.return_value = []
+    return server
+
+
+class TestRateLimitBackendConfigField:
+    """`rate_limit_backend` is a first-class ServerConfig field (item 3)."""
+
+    def test_field_declared_and_defaults_none(self):
+        """The field exists on ServerConfig and defaults to None (Memory fallback)."""
+        from jvspatial.api.config import ServerConfig
+
+        assert "rate_limit_backend" in ServerConfig.model_fields
+        assert ServerConfig().rate_limit_backend is None
+
+    def test_field_accepts_backend_instance(self):
+        """A RateLimitBackend instance is accepted and stored verbatim."""
+        from jvspatial.api.config import ServerConfig
+
+        backend = MemoryRateLimitBackend()
+        config = ServerConfig(rate_limit_backend=backend)
+        assert config.rate_limit_backend is backend
+        # Protocol type-check: the stored value satisfies RateLimitBackend.
+        assert isinstance(config.rate_limit_backend, RateLimitBackend)
+
+    def test_server_configurator_uses_supplied_backend(self):
+        """A backend set on config is picked up by the rate-limit middleware."""
+        from unittest.mock import MagicMock
+
+        from fastapi import FastAPI
+
+        from jvspatial.api.config import ServerConfig
+        from jvspatial.api.middleware.rate_limit import RateLimitMiddleware
+        from jvspatial.api.server_configurator import ServerConfigurator
+
+        backend = MemoryRateLimitBackend()
+        config = ServerConfig(rate_limit_backend=backend)
+        config.rate_limit.rate_limit_enabled = True
+
+        configurator = ServerConfigurator(_stub_server(config))
+
+        added = {}
+
+        app = MagicMock(spec=FastAPI)
+
+        def _capture(mw_class, **kwargs):
+            added["class"] = mw_class
+            added["kwargs"] = kwargs
+
+        app.add_middleware.side_effect = _capture
+
+        configurator._configure_rate_limit_middleware(app)
+
+        assert added["class"] is RateLimitMiddleware
+        assert added["kwargs"]["backend"] is backend
+
+    def test_server_configurator_falls_back_to_memory(self):
+        """When no backend is supplied, a MemoryRateLimitBackend is used."""
+        from unittest.mock import MagicMock
+
+        from fastapi import FastAPI
+
+        from jvspatial.api.config import ServerConfig
+        from jvspatial.api.server_configurator import ServerConfigurator
+
+        config = ServerConfig()
+        config.rate_limit.rate_limit_enabled = True
+        assert config.rate_limit_backend is None
+
+        configurator = ServerConfigurator(_stub_server(config))
+
+        added = {}
+        app = MagicMock(spec=FastAPI)
+        app.add_middleware.side_effect = lambda mw, **kw: added.update(kw)
+
+        configurator._configure_rate_limit_middleware(app)
+
+        assert isinstance(added["backend"], MemoryRateLimitBackend)
+
+
 class TestRateLimitBackendProtocol:
     """Test that backends implement the protocol correctly."""
 

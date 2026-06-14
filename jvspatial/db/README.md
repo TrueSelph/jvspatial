@@ -18,7 +18,7 @@ db/
 ├── factory.py             # create_database, register_database_type, switch_database
 ├── manager.py             # DatabaseManager + prime DB convention
 ├── query.py               # QueryEngine + Mongo-style operators
-├── transaction.py         # Transaction context + JsonDBTransaction
+├── transaction.py         # Transaction context + MongoDBTransaction
 ├── jsondb.py              # JSON file-per-record backend
 ├── sqlite.py              # aiosqlite backend + Mongo→SQL translator
 ├── mongodb.py             # motor backend

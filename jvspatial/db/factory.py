@@ -30,6 +30,14 @@ except ImportError:  # pragma: no cover - dependency missing
     DynamoDB = None  # type: ignore[misc,assignment]
     _DYNAMODB_AVAILABLE = False
 
+try:  # Optional dependency (requires asyncpg)
+    from .postgres import PostgresDB  # noqa: F401
+
+    _POSTGRES_AVAILABLE = True
+except ImportError:  # pragma: no cover - dependency missing
+    PostgresDB = None  # type: ignore[misc,assignment]
+    _POSTGRES_AVAILABLE = False
+
 # Registry for custom database implementations
 _DATABASE_REGISTRY: Dict[str, Callable[..., Database]] = {}
 
@@ -68,7 +76,7 @@ def register_database_type(db_type: str, factory: Callable[..., Database]) -> No
     Raises:
         ValueError: If db_type is already registered or conflicts with built-in types
     """
-    if db_type in ("json", "mongodb", "sqlite", "dynamodb"):
+    if db_type in ("json", "mongodb", "sqlite", "dynamodb", "postgres", "postgresql"):
         raise ValueError(f"Cannot register '{db_type}' - it's a built-in database type")
     if db_type in _DATABASE_REGISTRY:
         raise ValueError(
@@ -87,7 +95,7 @@ def unregister_database_type(db_type: str) -> None:
     Raises:
         ValueError: If db_type is not registered or is a built-in type
     """
-    if db_type in ("json", "mongodb", "sqlite", "dynamodb"):
+    if db_type in ("json", "mongodb", "sqlite", "dynamodb", "postgres", "postgresql"):
         raise ValueError(
             f"Cannot unregister '{db_type}' - it's a built-in database type"
         )
@@ -116,6 +124,14 @@ def list_database_types() -> Dict[str, str]:
         types["dynamodb"] = "DynamoDB database (built-in, for AWS Lambda)"
     else:
         types["dynamodb"] = "DynamoDB database (requires aioboto3)"
+
+    if _POSTGRES_AVAILABLE:
+        types["postgres"] = (
+            "PostgreSQL database (built-in, recommended high-performance backend)"
+        )
+        types["postgresql"] = "Alias for 'postgres'"
+    else:
+        types["postgres"] = "PostgreSQL database (requires asyncpg)"
     for db_type, factory in _DATABASE_REGISTRY.items():
         types[db_type] = f"Custom database: {factory.__name__}"
     return types
@@ -196,6 +212,37 @@ def _instantiate_builtin_database(
             dynamodb_kwargs["aws_secret_access_key"] = env("AWS_SECRET_ACCESS_KEY")
 
         return DynamoDB(**dynamodb_kwargs)
+
+    if db_type in ("postgres", "postgresql"):
+        if not _POSTGRES_AVAILABLE:
+            raise ImportError(
+                "asyncpg is required for PostgreSQL support. "
+                "Install it with: pip install jvspatial[postgres]"
+            )
+
+        from .postgres import PostgresDB
+
+        pg_kwargs = dict(kwargs)
+        if "dsn" not in pg_kwargs:
+            pg_kwargs["dsn"] = pg_kwargs.pop(
+                "connection_string", None
+            ) or pg_kwargs.pop("db_connection_string", None)
+        if "dsn" not in pg_kwargs or pg_kwargs.get("dsn") is None:
+            pg_kwargs["dsn"] = env(
+                "JVSPATIAL_POSTGRES_DSN",
+                default="postgresql://postgres:postgres@localhost:5432/jvdb",  # pragma: allowlist secret
+            )
+        if "min_size" not in pg_kwargs:
+            pg_kwargs["min_size"] = env("JVSPATIAL_POSTGRES_MIN_POOL_SIZE", parse=int)
+        if "max_size" not in pg_kwargs:
+            pg_kwargs["max_size"] = env("JVSPATIAL_POSTGRES_MAX_POOL_SIZE", parse=int)
+        if "pooler_mode" not in pg_kwargs:
+            pg_kwargs["pooler_mode"] = env(
+                "JVSPATIAL_POSTGRES_POOLER_MODE", default="session"
+            )
+        # Drop any None entries so PostgresDB defaults take effect.
+        pg_kwargs = {k: v for k, v in pg_kwargs.items() if v is not None}
+        return PostgresDB(**pg_kwargs)
 
     raise ValueError(f"Not a built-in database type: {db_type!r}")
 
@@ -282,7 +329,7 @@ def create_database(
         ValueError: If db_type is not supported or registration fails
     """
     db: Database
-    if db_type in ("json", "mongodb", "sqlite", "dynamodb"):
+    if db_type in ("json", "mongodb", "sqlite", "dynamodb", "postgres", "postgresql"):
         db = _instantiate_builtin_database(db_type, **kwargs)
     elif db_type in _DATABASE_REGISTRY:
         factory = _DATABASE_REGISTRY[db_type]

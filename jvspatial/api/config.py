@@ -6,7 +6,7 @@ database, CORS, file storage, and other server-related settings.
 
 from typing import Any, List, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .config_groups import (
     AuthConfig,
@@ -18,6 +18,7 @@ from .config_groups import (
     SecurityConfig,
     WebhookConfig,
 )
+from .middleware.rate_limit_backend import RateLimitBackend
 
 
 class ServerConfig(BaseModel):
@@ -40,9 +41,15 @@ class ServerConfig(BaseModel):
         webhook: Webhook configuration group
         proxy: Proxy configuration group
         log_level: Logging level
+        rate_limit_backend: Optional shared rate-limit storage backend
         startup_hooks: List of startup hook function names
         shutdown_hooks: List of shutdown hook function names
     """
+
+    # ``rate_limit_backend`` holds a runtime ``RateLimitBackend`` instance, which
+    # is a Protocol — pydantic cannot validate it as a model, so allow arbitrary
+    # types for this field.
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     # API Configuration
     title: str = "jvspatial API"
@@ -67,6 +74,27 @@ class ServerConfig(BaseModel):
     auth: AuthConfig = Field(default_factory=AuthConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
     file_storage: FileStorageConfig = Field(default_factory=FileStorageConfig)
+
+    # Pluggable rate-limit storage backend. ``None`` (default) means the
+    # middleware falls back to a process-local ``MemoryRateLimitBackend`` —
+    # behaviour unchanged from before this field existed.
+    #
+    # **Multi-worker limitation.** The in-memory backend's counter is
+    # per-process, so under ``N`` workers (gunicorn workers, concurrent Lambda
+    # invocations) the *effective* cap is ``N × configured`` — each worker
+    # tracks its own bucket. This applies to ALL caps, including the
+    # unauthenticated DCR ``/oauth/register`` limit wired by
+    # ``AuthConfigurator._wire_dcr_rate_limit``. For a hard global cap, supply a
+    # shared backend (e.g. ``RedisRateLimitBackend``) here so every worker
+    # increments the same counter.
+    rate_limit_backend: Optional[RateLimitBackend] = Field(
+        default=None,
+        description=(
+            "Shared rate-limit storage backend (RateLimitBackend). None falls "
+            "back to a process-local MemoryRateLimitBackend; supply a "
+            "RedisRateLimitBackend for a hard cap across multiple workers."
+        ),
+    )
     webhook: WebhookConfig = Field(default_factory=WebhookConfig)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
 

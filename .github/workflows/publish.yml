@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write  # Required to create and push git tags
+      id-token: write  # Required for PyPI Trusted Publishing (OIDC)
 
     steps:
       - name: Checkout repository
@@ -57,7 +58,7 @@ jobs:
           # Count source code changes (Python files in jvspatial/, excluding version.py)
           SOURCE_CHANGES=$(echo "$CHANGED_FILES" | grep -E '^jvspatial/.*\.py$' | grep -v '^jvspatial/version.py$' | wc -l | tr -d ' ')
           VERSION_CHANGED=$(echo "$CHANGED_FILES" | grep -q '^jvspatial/version.py$' && echo "true" || echo "false")
-          CONFIG_CHANGED=$(echo "$CHANGED_FILES" | grep -E '^(setup\.py|pyproject\.toml|requirements.*\.txt)$' | wc -l | tr -d ' ')
+          CONFIG_CHANGED=$(echo "$CHANGED_FILES" | grep -E '^pyproject\.toml$' | wc -l | tr -d ' ')
 
           echo "source_changes=$SOURCE_CHANGES" >> $GITHUB_OUTPUT
           echo "version_changed=$VERSION_CHANGED" >> $GITHUB_OUTPUT
@@ -151,16 +152,19 @@ jobs:
         run: |
           twine check dist/*
 
-      # Token-based publishing (alternative to trusted publishing)
-      # 1. Create an API token on PyPI: https://pypi.org/manage/account/token/
-      # 2. Add it as a GitHub secret named PYPI_API_TOKEN
-      # 3. Replace the placeholder values below with your actual token
+      # PyPI Trusted Publishing (OIDC) -- no long-lived API token needed.
+      # One-time setup on PyPI: Project -> Settings -> Publishing ->
+      # "Add a new pending publisher" with:
+      #   Owner:    TrueSelph
+      #   Repo:     jvspatial
+      #   Workflow: publish.yml
+      #   Env:      (leave blank)
+      # The action mints a short-lived OIDC token at publish time; the
+      # `id-token: write` permission above authorizes it.
       - name: Publish to PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          twine upload dist/*
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v6

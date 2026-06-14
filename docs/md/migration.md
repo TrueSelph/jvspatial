@@ -609,8 +609,10 @@ server = Server(
 
 ```python
 server = Server(
-    auth_enabled=True,  # Master switch - enables both JWT and API key auth
-    api_key_management_enabled=True,  # Controls /auth/api-keys endpoints
+    auth=dict(
+        auth_enabled=True,  # Master switch - enables both JWT and API key auth
+        api_key_management_enabled=True,  # Controls /auth/api-keys endpoints
+    ),
     db_type="json"
 )
 ```

@@ -88,8 +88,7 @@ per-API or globally.
 
 Currently experimental:
 
-- `JsonDBTransaction(best_effort=True)` — buffered transaction mode.
-  See the `JsonDBTransaction` docstring.
+- (None at the moment. Future opt-in surfaces will be listed here.)
 
 (Decorator usage and silencing examples are in
 [`docs/md/decorator-reference.md`](decorator-reference.md) — once the

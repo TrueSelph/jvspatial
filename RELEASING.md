@@ -16,7 +16,7 @@ runs on every push to `main` and:
    pushes it.
 4. Builds a wheel + sdist with `python -m build`.
 5. Validates with `twine check`.
-6. Uploads to PyPI using `secrets.PYPI_API_TOKEN`.
+6. Uploads to PyPI via Trusted Publishing (OIDC) — no API token secret required.
 
 This means **a release is just a PR that bumps `version.py` and
 edits `CHANGELOG.md`**. Once it merges, PyPI publication is

@@ -92,12 +92,10 @@ def _emit_once(name: str, message: str) -> None:
 def emit_experimental_once(name: str, message: str = "") -> None:
     """Public re-export of the once-per-process experimental warning hook.
 
-    Some opt-in surfaces — e.g. ``JsonDBTransaction(best_effort=True)`` —
-    need to emit the experimental warning without going through the
-    ``@experimental`` decorator (because the decision happens on a
-    constructor flag, not the symbol itself). Use this hook instead of
-    reaching into the underscore-prefixed implementation (audit §7.7 /
-    SPEC §18 stability-tier discipline).
+    Use this hook when a runtime branch needs to emit the experimental
+    warning without going through the ``@experimental`` decorator (because
+    the decision happens on a constructor flag or similar). Prefer this
+    over reaching into the underscore-prefixed implementation.
 
     Args:
         name: Stable identifier for the API (deduplicated per-process).

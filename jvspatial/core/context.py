@@ -356,6 +356,7 @@ class GraphContext:
         database: Optional[Database] = None,
         cache_backend=None,
         enable_performance_monitoring: bool = True,
+        auto_persist_migrations: bool = False,
     ):
         """Initialize GraphContext with integrated performance monitoring.
 
@@ -366,12 +367,21 @@ class GraphContext:
                           - CacheBackend instance
                           - None (auto-detect from environment)
             enable_performance_monitoring: Whether to enable built-in performance monitoring
+            auto_persist_migrations: When ``True``, records upgraded by the
+                schema-migration framework (see :mod:`jvspatial.core.migrations`)
+                are re-saved to the database on read so subsequent reads skip
+                the migration work. Default ``False`` — load-path migration
+                is in-memory only, preserving the legacy "read doesn't write"
+                contract. Set to ``True`` once you trust the migration chain
+                end-to-end (or run the ``jvspatial migrate`` CLI for a
+                controlled bulk apply).
         """
         self._database = database
         self._perf_monitoring_enabled = enable_performance_monitoring
         self._perf_monitor = (
             PerformanceMonitor() if enable_performance_monitoring else None
         )
+        self.auto_persist_migrations = auto_persist_migrations
 
         # Initialize cache backend
         if cache_backend is None:
@@ -1643,6 +1653,11 @@ class GraphContext:
         """
         try:
             # Import here to avoid circular imports
+            from .migrations import (
+                MigrationError,
+                apply_migrations,
+                needs_migration,
+            )
             from .utils import find_subclass_by_name
 
             # Use entity field for class identification
@@ -1664,6 +1679,38 @@ class GraphContext:
                 target_class = find_subclass_by_name(Node, stored_entity)
             if target_class is None:
                 target_class = entity_class
+
+            # Migration hook: upgrade the persisted record to the current
+            # schema version of ``target_class`` before hydration. Failures
+            # log + leave the record as-is so a missing migration step
+            # doesn't take down the read path (ROADMAP §2.1). When the
+            # context is configured with ``auto_persist_migrations=True``,
+            # re-save the upgraded record so downstream reads skip the
+            # work.
+            if needs_migration(data, target_class):
+                try:
+                    data, _migrated = apply_migrations(data, target_class)
+                    if _migrated and getattr(self, "auto_persist_migrations", False):
+                        # Best-effort write-back; failures here log but
+                        # don't fail the read.
+                        try:
+                            collection = self._get_collection_name(entity_type_code)
+                            await self.database.save(collection, data)
+                        except Exception as save_exc:  # pragma: no cover
+                            logger.warning(
+                                "auto_persist_migrations: failed to "
+                                "re-save %s %s: %s",
+                                target_class.__name__,
+                                data.get("id"),
+                                save_exc,
+                            )
+                except MigrationError as exc:
+                    logger.error(
+                        "Skipping migration for %s %s: %s",
+                        target_class.__name__,
+                        data.get("id"),
+                        exc,
+                    )
 
             # Create object with proper subclass
             # All entities use nested format with context field

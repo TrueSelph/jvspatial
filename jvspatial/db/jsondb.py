@@ -38,13 +38,29 @@ from jvspatial.runtime.serverless import is_serverless_mode
 
 logger = logging.getLogger(__name__)
 
-# Try to import aiofiles for async file operations, fallback to asyncio.to_thread
+# Optional orjson fast path for serialization. Falls back to stdlib ``json``
+# when not installed. orjson is ~10x faster than stdlib json on dump and
+# ~37x faster than ``json.dumps(indent=2)`` -- a meaningful dev-loop win for
+# the JsonDB backend, which is the only consumer.
 try:
-    import aiofiles  # type: ignore[import-untyped]
+    import orjson  # type: ignore[import-untyped]
 
-    HAS_AIOFILES = True
+    _HAS_ORJSON = True
+
+    def _dumps(data: Dict[str, Any]) -> bytes:
+        return orjson.dumps(data, option=orjson.OPT_INDENT_2)
+
+    def _loads(content: bytes) -> Dict[str, Any]:
+        return orjson.loads(content)  # type: ignore[no-any-return]
+
 except ImportError:
-    HAS_AIOFILES = False
+    _HAS_ORJSON = False
+
+    def _dumps(data: Dict[str, Any]) -> bytes:
+        return json.dumps(data, indent=2).encode("utf-8")
+
+    def _loads(content: bytes) -> Dict[str, Any]:
+        return json.loads(content)  # type: ignore[no-any-return]
 
 
 class JsonDB(Database):
@@ -170,13 +186,11 @@ class JsonDB(Database):
         Caller is responsible for serializing concurrent writes to the
         same path (use ``self._path_locks``).
         """
-        json_bytes = json.dumps(data, indent=2).encode("utf-8")
-        await asyncio.to_thread(atomic_write_bytes, path, json_bytes)
+        await asyncio.to_thread(atomic_write_bytes, path, _dumps(data))
 
     async def _async_read_json(self, path: Path) -> Optional[Dict[str, Any]]:
         """Read JSON data from file asynchronously.
 
-        Uses aiofiles if available, otherwise falls back to asyncio.to_thread.
         Returns None if file doesn't exist or is invalid.
         """
         # ``Path.exists`` performs a stat() syscall — blocking I/O inside
@@ -185,22 +199,18 @@ class JsonDB(Database):
         if not await asyncio.to_thread(path.exists):
             return None
 
-        try:
-            if HAS_AIOFILES:
-                async with aiofiles.open(path, "r") as f:
-                    content = await f.read()
-                    return json.loads(content)
-            else:
-                # Fallback to thread pool for async execution
-                def _sync_read(path: Path) -> Optional[Dict[str, Any]]:
-                    try:
-                        with open(path, "r") as f:
-                            return json.load(f)
-                    except (json.JSONDecodeError, OSError):
-                        return None
+        def _sync_read(path: Path) -> Optional[Dict[str, Any]]:
+            try:
+                with open(path, "rb") as f:
+                    return _loads(f.read())
+            except (ValueError, OSError):
+                # ``ValueError`` covers both json.JSONDecodeError and
+                # orjson.JSONDecodeError (orjson subclasses ValueError).
+                return None
 
-                return await asyncio.to_thread(_sync_read, path)
-        except (json.JSONDecodeError, OSError):
+        try:
+            return await asyncio.to_thread(_sync_read, path)
+        except (ValueError, OSError):
             return None
 
     async def _async_load_record(self, json_file: Path) -> Optional[Dict[str, Any]]:
@@ -221,7 +231,7 @@ class JsonDB(Database):
         path).
         """
         record_path = self._get_record_path(collection, data["id"])
-        payload = json.dumps(data, indent=2).encode("utf-8")
+        payload = _dumps(data)
         with self._path_locks.lock(str(record_path)):
             atomic_write_bytes(record_path, payload)
 

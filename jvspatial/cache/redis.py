@@ -10,7 +10,7 @@ import logging
 import pickle
 from typing import Any, Dict, List, Optional
 
-from jvspatial.env import env
+from jvspatial.env import env, parse_bool
 
 from .base import CacheBackend, CacheStats
 
@@ -48,8 +48,12 @@ class RedisCache(CacheBackend):
 
     Serialization:
     - Default ``JVSPATIAL_REDIS_SERIALIZATION=json`` uses JSON (safe for untrusted Redis).
-      Only JSON-serializable values are supported for new writes.
-    - Legacy pickle-only entries are still readable when mode is ``json``.
+      Only JSON-serializable values are supported for new writes. Non-JSON blobs are
+      treated as a cache miss -- the library never unpickles untrusted bytes in this mode.
+    - Legacy pickle-only entries are NOT readable in ``json`` mode unless legacy reads are
+      explicitly enabled via ``allow_legacy_pickle=True`` /
+      ``JVSPATIAL_REDIS_ALLOW_LEGACY_PICKLE=true`` (only do this when the Redis keyspace is
+      fully trusted -- ``pickle.loads`` on attacker-controlled bytes is remote code execution).
     - Set ``JVSPATIAL_REDIS_SERIALIZATION=pickle`` for prior behavior (not recommended if Redis
       may be written to by untrusted parties).
     """
@@ -60,6 +64,7 @@ class RedisCache(CacheBackend):
         ttl: Optional[int] = None,
         prefix: str = "jvspatial:",
         serialization: Optional[str] = None,
+        allow_legacy_pickle: Optional[bool] = None,
         **redis_kwargs,
     ):
         """Initialize Redis cache.
@@ -69,6 +74,10 @@ class RedisCache(CacheBackend):
             ttl: Default TTL in seconds (uses JVSPATIAL_REDIS_TTL env if not provided)
             prefix: Key prefix for namespacing (default: "jvspatial:")
             serialization: ``json`` or ``pickle``; overrides env when set
+            allow_legacy_pickle: when ``True``, unprefixed (legacy pickle) blobs are
+                unpickled in ``json`` mode. Defaults to env
+                ``JVSPATIAL_REDIS_ALLOW_LEGACY_PICKLE`` else ``False``. Only enable for a
+                fully trusted Redis -- ``pickle.loads`` on untrusted bytes is RCE.
             **redis_kwargs: Additional arguments passed to Redis client
         """
         try:
@@ -97,6 +106,16 @@ class RedisCache(CacheBackend):
             self._serialization = "pickle" if s == "pickle" else "json"
         else:
             self._serialization = _redis_serialization_mode()
+        if allow_legacy_pickle is not None:
+            self._allow_legacy_pickle = bool(allow_legacy_pickle)
+        else:
+            self._allow_legacy_pickle = bool(
+                env(
+                    "JVSPATIAL_REDIS_ALLOW_LEGACY_PICKLE",
+                    default=False,
+                    parse=parse_bool,
+                )
+            )
 
     async def _get_client(self):
         """Get or create Redis client."""
@@ -131,11 +150,27 @@ class RedisCache(CacheBackend):
         return _JSON_VALUE_PREFIX + payload
 
     def _deserialize(self, data: bytes) -> Any:
+        # Explicit pickle mode: caller opted into pickle for the whole keyspace.
         if self._serialization == "pickle":
-            return pickle.loads(data)
+            return pickle.loads(data)  # nosec B301 -- opt-in, trusted-keyspace mode
+        # JSON mode (default, safe-for-untrusted): only decode our own prefixed blobs.
         if data.startswith(_JSON_VALUE_PREFIX):
             return json.loads(data[len(_JSON_VALUE_PREFIX) :].decode("utf-8"))
-        return pickle.loads(data)
+        # Unprefixed blob in JSON mode == legacy pickle entry (or attacker-controlled
+        # bytes). Refuse to unpickle unless the operator explicitly opted into legacy
+        # reads on a trusted keyspace. The raise is caught by get() and recorded as a
+        # cache miss, so the value is simply recomputed.
+        if self._allow_legacy_pickle:
+            logger.warning(
+                "Unpickling a legacy (unprefixed) Redis blob; "
+                "JVSPATIAL_REDIS_ALLOW_LEGACY_PICKLE is enabled."
+            )
+            return pickle.loads(data)  # nosec B301 -- explicit legacy opt-in
+        raise ValueError(
+            "Refusing to unpickle a non-JSON Redis value in json serialization mode "
+            "(treated as a cache miss). Set allow_legacy_pickle=True / "
+            "JVSPATIAL_REDIS_ALLOW_LEGACY_PICKLE=true only for a fully trusted keyspace."
+        )
 
     async def invalidate_by_pattern(self, pattern: str) -> int:
         """Invalidate keys matching pattern.

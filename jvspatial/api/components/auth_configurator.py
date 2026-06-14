@@ -62,6 +62,8 @@ class AuthConfigurator:
         self._auth_router: Optional[APIRouter] = None
         self._auth_endpoints_registered = False
         self._auth_service: Optional[AuthenticationService] = None
+        self._oauth_router: Optional[APIRouter] = None
+        self._well_known_router: Optional[APIRouter] = None
 
     def configure(self) -> Optional[AuthConfig]:
         """Configure authentication middleware and register auth endpoints if enabled.
@@ -579,6 +581,157 @@ class AuthConfigurator:
         # Store auth router
         self._auth_router = auth_router
         self._auth_endpoints_registered = True
+
+        # OAuth 2.1 authorization server (opt-in). The /.well-known discovery
+        # documents are public by spec (RFC 8615), so they are exempted from the
+        # bearer middleware unconditionally — when the routes are not mounted
+        # (oauth disabled) the exemption simply lets FastAPI return its natural
+        # 404 instead of a spurious 401 from the deny-by-default resolver.
+        self._exempt_oauth_paths(
+            [
+                "/.well-known/oauth-authorization-server",
+                "/.well-known/jwks.json",
+                "/.well-known/oauth-protected-resource",
+            ]
+        )
+        if getattr(self._auth_config, "oauth_enabled", False):
+            self._configure_oauth_endpoints(get_current_user)
+
+    def _configure_oauth_endpoints(self, get_current_user: Any) -> None:
+        """Build the OAuth routers, exempt their paths, and register the key hook.
+
+        The token/register/revoke endpoints are client-authenticated (or public),
+        never bearer-gated, so their prefix-relative paths are added to the
+        auth-exempt set (the deny-by-default endpoint resolver would otherwise
+        401 these plain FastAPI routes). ``/authorize`` is likewise exempt from
+        the middleware, but its GET/POST handlers gate on the *session user* via
+        ``Depends(get_current_user)`` — the consent step needs the authenticated
+        resource owner so its permissions (never client/request input) can be
+        intersected with the requested scope. The signing key is generated at
+        startup via a lifecycle hook so the first JWKS / token request is warm.
+
+        Args:
+            get_current_user: The session-user dependency closure from
+                :meth:`_register_auth_endpoints`, threaded into the authorize
+                route so it can resolve the bearer-authenticated resource owner.
+        """
+        from jvspatial.api.auth.oauth.routes import build_oauth_routers
+
+        self._oauth_router, self._well_known_router = build_oauth_routers(
+            self._auth_config, get_current_user=get_current_user
+        )
+
+        prefix = getattr(self._auth_config, "oauth_prefix", "/oauth") or "/oauth"
+        prefix = "/" + prefix.strip("/")
+        self._exempt_oauth_paths(
+            [
+                f"{prefix}/{name}"
+                for name in ("token", "register", "revoke", "authorize")
+            ]
+        )
+
+        if self._server is not None:
+            self._server.lifecycle_manager.add_startup_hook(
+                self._ensure_oauth_signing_key
+            )
+            self._wire_dcr_rate_limit(prefix)
+
+    def _wire_dcr_rate_limit(self, oauth_prefix: str) -> None:
+        """Register a tight rate-limit override for the DCR endpoint (I-1).
+
+        Dynamic Client Registration is unauthenticated, so an uncapped endpoint
+        can be abused to fill the database with junk clients (resource-exhaustion
+        DoS). When ``oauth_enabled`` and ``oauth_dcr_rate_limit_per_minute > 0``,
+        we write a per-path override onto ``server.config.rate_limit`` BEFORE
+        ``get_app()`` calls ``_configure_rate_limit_middleware``, which reads the
+        override dict at build time.
+
+        We also enable ``rate_limit_enabled`` when it is still False, so that an
+        application that has not explicitly configured rate limiting still gets the
+        DCR protection. We never flip the flag back to False — if the caller already
+        set ``rate_limit_enabled=True`` we leave it alone.
+
+        Multi-worker note: this cap inherits whatever backend the rate-limit
+        middleware selects. The default in-memory backend counts per process, so
+        under ``N`` workers the DCR endpoint effectively allows ``N × cap``
+        registrations/min. For a hard global DCR cap, supply a shared backend via
+        ``ServerConfig.rate_limit_backend`` (e.g. ``RedisRateLimitBackend``).
+
+        Args:
+            oauth_prefix: The OAuth router prefix (e.g. ``/oauth``), already
+                normalised to a leading slash by the caller.
+        """
+        if self._server is None or self._auth_config is None:
+            return
+        cap = getattr(self._auth_config, "oauth_dcr_rate_limit_per_minute", 0)
+        if not cap:
+            return
+
+        from jvspatial.api.constants import APIRoutes
+
+        # Full path that the rate-limit middleware matches against request.url.path.
+        # oauth_prefix is already "/oauth"; the DCR handler is at "/register".
+        # The oauth_router is mounted with prefix=APIRoutes.PREFIX ("/api"), so the
+        # full path is "/api/oauth/register".  We store it with the full prefix so
+        # _build_rate_limit_config does not double-add it.
+        dcr_path = f"{APIRoutes.PREFIX}{oauth_prefix}/register"
+
+        rl = self._server.config.rate_limit
+        rl.rate_limit_overrides[dcr_path] = {"requests": cap, "window": 60}
+
+        # Enable rate limiting when it has not been explicitly turned on yet.
+        # This ensures open-DCR protection even when the server operator has not
+        # configured rate_limit_enabled=True globally.
+        if not rl.rate_limit_enabled:
+            rl.rate_limit_enabled = True
+            self._logger.debug(
+                "rate_limit_enabled implicitly set to True for DCR protection (I-1)"
+            )
+
+        self._logger.debug("DCR rate limit: %d req/min on %s (I-1)", cap, dcr_path)
+
+    def _exempt_oauth_paths(self, paths: List[str]) -> None:
+        """Add *paths* to the auth-config exempt list (idempotent).
+
+        The auth middleware constructs its :class:`PathMatcher` from
+        ``auth_config.exempt_paths`` when the app is built (after this configurator
+        runs), so mutating the list here is reflected at request time. PathMatcher
+        expands both prefixed (``/api/oauth/token``) and bare (``/oauth/token``)
+        variants, so prefix-relative entries suffice.
+        """
+        if self._auth_config is None:
+            return
+        existing = list(self._auth_config.exempt_paths or [])
+        for path in paths:
+            if path not in existing:
+                existing.append(path)
+        self._auth_config.exempt_paths = existing
+
+    async def _ensure_oauth_signing_key(self) -> None:
+        """Startup hook: ensure an active RS256 OAuth signing key exists."""
+        from jvspatial.api.auth.oauth import keys
+
+        await keys.ensure_signing_key()
+
+    @property
+    def oauth_router(self) -> Optional[APIRouter]:
+        """Get the OAuth router (token/register/revoke/authorize), or None.
+
+        Returns:
+            The API-prefixed OAuth :class:`APIRouter` when oauth is enabled,
+            otherwise ``None``.
+        """
+        return self._oauth_router
+
+    @property
+    def well_known_router(self) -> Optional[APIRouter]:
+        """Get the root-mounted OAuth discovery router, or None.
+
+        Returns:
+            The :class:`APIRouter` serving ``/.well-known`` metadata + JWKS when
+            oauth is enabled, otherwise ``None``.
+        """
+        return self._well_known_router
 
     @property
     def auth_config(self) -> Optional[AuthConfig]:

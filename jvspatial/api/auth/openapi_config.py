@@ -9,7 +9,8 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
-from fastapi.routing import APIRoute
+
+from jvspatial.api._route_utils import iter_api_routes
 
 
 def _normalize_path_template(path: str) -> str:
@@ -75,10 +76,8 @@ def configure_openapi_security(app: FastAPI) -> None:
                 # Check if this endpoint requires authentication
                 endpoint_func = None
                 method_upper = method.upper()
-                for route in app.routes:
-                    if not isinstance(route, APIRoute) or not hasattr(
-                        route, "endpoint"
-                    ):
+                for route in iter_api_routes(app.routes):
+                    if not hasattr(route, "endpoint"):
                         continue
                     if _normalize_path_template(route.path) != path:
                         continue
