@@ -81,7 +81,7 @@ jobs:
             --benchmark-warmup=on
 
       - name: Upload current results
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: bench-current
           path: .benchmarks/current/result.json
@@ -90,7 +90,7 @@ jobs:
       # On a push to main, this run becomes the new baseline.
       - name: Publish as baseline (main only)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: bench-baseline
           path: .benchmarks/current/result.json

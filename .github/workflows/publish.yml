@@ -167,7 +167,7 @@ jobs:
           packages-dir: dist/
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: dist
