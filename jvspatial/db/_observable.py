@@ -35,7 +35,17 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from jvspatial.db.database import Database
 from jvspatial.observability import db_op_counter
@@ -324,6 +334,104 @@ class ObservableDatabase(Database):
     async def drop_deprecated_indexes(self, deprecated: Dict[str, List[str]]) -> None:
         """Pass through deprecated-index cleanup to the wrapped backend."""
         await self.inner.drop_deprecated_indexes(deprecated)
+
+    async def find_connected_nodes(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        node_id: str,
+        *,
+        direction: str = "out",
+        edge_entity: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Instrumented single-hop neighbor join when the backend supports it."""
+        inner = getattr(self.inner, "find_connected_nodes", None)
+        if not callable(inner):
+            raise AttributeError("find_connected_nodes")
+        return await self._instrument(
+            "find_connected_nodes",
+            node_collection,
+            lambda: inner(
+                node_collection,
+                edge_collection,
+                node_id,
+                direction=direction,
+                edge_entity=edge_entity,
+                limit=limit,
+            ),
+            result_count_extractor=lambda r: len(r) if isinstance(r, list) else 0,
+        )
+
+    async def traverse(
+        self,
+        edge_collection: str,
+        start_id: str,
+        *,
+        direction: str = "out",
+        max_depth: int = 1,
+        edge_filter: Optional[Dict[str, Any]] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Instrumented multi-hop graph walk when the backend supports it."""
+        inner = getattr(self.inner, "traverse", None)
+        if not callable(inner):
+            raise AttributeError("traverse")
+        return await self._instrument(
+            "traverse",
+            edge_collection,
+            lambda: inner(
+                edge_collection,
+                start_id,
+                direction=direction,
+                max_depth=max_depth,
+                edge_filter=edge_filter,
+                limit=limit,
+            ),
+            result_count_extractor=lambda r: len(r) if isinstance(r, list) else 0,
+        )
+
+    async def find_iter(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        batch_size: int = 100,
+        cursor: Optional[bytes] = None,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Instrumented streaming find when the backend supports it."""
+        inner = getattr(self.inner, "find_iter", None)
+        if not callable(inner):
+            raise AttributeError("find_iter")
+
+        start = time.monotonic()
+        success = True
+        result_count = 0
+        try:
+            async for row in inner(
+                collection,
+                query,
+                sort=sort,
+                batch_size=batch_size,
+                cursor=cursor,
+            ):
+                result_count += 1
+                yield row
+        except BaseException:
+            success = False
+            raise
+        finally:
+            db_op_counter.set(db_op_counter.get() + 1)
+            duration_s = time.monotonic() - start
+            self._emit(
+                op="find_iter",
+                collection=collection,
+                duration_ms=duration_s * 1000.0,
+                duration_s=duration_s,
+                success=success,
+                result_count=result_count,
+            )
 
     def __getattr__(self, name: str) -> Any:
         """Forward unknown attribute access to the wrapped database."""

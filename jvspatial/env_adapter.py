@@ -298,6 +298,7 @@ ALLOWED_ENV_KEYS: frozenset[str] = frozenset(
         "JVSPATIAL_REDIS_URL",
         "JVSPATIAL_REDIS_TTL",
         "JVSPATIAL_REDIS_SERIALIZATION",
+        "JVSPATIAL_FAST_DESERIALIZE",
         # Scheduler / deferred / serverless
         "JVSPATIAL_SCHEDULER_ENABLED",
         "JVSPATIAL_SCHEDULER_INTERVAL",

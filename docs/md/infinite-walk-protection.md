@@ -124,6 +124,13 @@ walker = MyWalker(
 )
 ```
 
+**Performance extensions (opt-in, defaults off):** `frontier_batch_size`,
+`prefetch_neighbors`, `prefetch_depth`, `speculative_prefetch`. Enabling
+`prefetch_neighbors` may enqueue neighbors before visit hooks run — protection
+limits (`max_steps`, `max_queue_size`, visit counts) still apply. See
+[graph-traversal.md](graph-traversal.md) § Framework prefetch and
+[SPEC.md](../../SPEC.md) §6.6.
+
 ### Runtime Configuration
 
 Modify protection settings during walker execution:

@@ -95,8 +95,9 @@ class AuthConfigurator:
         self._default_role = self._auth_config.default_role
 
         # Create and cache the auth service singleton for consumer apps
+        prime_ctx = GraphContext(database=get_prime_database())
         self._auth_service = AuthenticationService(
-            GraphContext(database=get_prime_database()),
+            prime_ctx,
             jwt_secret=self._jwt_secret,
             jwt_algorithm=self._jwt_algorithm,
             jwt_expire_minutes=self._jwt_expire_minutes,
@@ -113,6 +114,10 @@ class AuthConfigurator:
             default_role=self._default_role,
             registration_open=self.config.auth.registration_open,
         )
+        from jvspatial.api.auth.api_key_service import APIKeyService
+
+        self._prime_graph_context = prime_ctx
+        self._api_key_service = APIKeyService(prime_ctx)
 
         # Register authentication endpoints
         self._register_auth_endpoints()

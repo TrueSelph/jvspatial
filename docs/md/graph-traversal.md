@@ -218,6 +218,32 @@ class BatchWalker(Walker):
         await self.db.bulk_operation(self.batch)
 ```
 
+### Framework prefetch (optional)
+
+```python
+class FastWalker(Walker):
+    def __init__(self):
+        super().__init__(
+            frontier_batch_size=32,
+            prefetch_neighbors=True,  # uses nodes_bulk per BFS layer
+            prefetch_depth=1,
+            speculative_prefetch=True,  # warm cache while hooks run
+        )
+```
+
+Defaults (`frontier_batch_size=1`, `prefetch_neighbors=False`) match legacy one-node-per-step behavior.
+
+`prefetch_depth > 1` uses `Node.neighborhood()` (backend `traverse` when
+available). `speculative_prefetch=True` warms `get_batch` for queued node ids
+while hooks execute on the current node.
+
+### Multi-hop subgraph load
+
+```python
+# Postgres: single CTE round trip when traverse is available
+neighbors = await start_node.neighborhood(depth=3, direction="out")
+```
+
 ## Safety and Protection
 
 ### Cycle Detection

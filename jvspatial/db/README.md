@@ -1,6 +1,6 @@
 # jvspatial/db
 
-Database abstraction and backends — JSON, SQLite, MongoDB, DynamoDB. Plus query engine, transactions, atomic IO, path locks, cache wrapper, and observability wrapper.
+Database abstraction and backends — JSON, SQLite, MongoDB, DynamoDB, Postgres. Plus query engine, transactions, atomic IO, path locks, cache wrapper, and observability wrapper.
 
 > **Read first**: [SPEC §4-5](../../SPEC.md), [docs/md/mongodb-query-interface.md](../../docs/md/mongodb-query-interface.md)
 
@@ -23,6 +23,7 @@ db/
 ├── sqlite.py              # aiosqlite backend + Mongo→SQL translator
 ├── mongodb.py             # motor backend
 ├── dynamodb.py            # aioboto3 backend
+├── postgres.py            # asyncpg + JSONB backend (traverse CTE, save_with_edge_merge)
 ├── _atomic.py             # internal: crash-safe write helper
 ├── _path_locks.py         # internal: bounded-LRU per-path locks
 ├── _cache.py              # internal: read-through cache wrapper
@@ -38,6 +39,7 @@ db/
 | SQLite | No (single-conn fsync) | `executemany` + `IN` | Mongo→SQL pushdown | Translator covers `$eq/$ne/$gt/$gte/$lt/$lte/$in/$nin/$exists`, AND, `$and/$or` |
 | MongoDB | **Yes** (replica set required) | `bulk_write`, `$in` | `count_documents` / `estimated_document_count` | Native compound ops; shared retry helper |
 | DynamoDB | No | `BatchGetItem`/`BatchWriteItem` (100/batch) | `Select="COUNT"` | Throttle retry with backoff |
+| Postgres | **Yes** | `COPY` bulk upsert, `find_many` | SQL `COUNT` pushdown | `traverse` (recursive CTE), `find_connected_nodes`, `save_with_edge_merge` |
 
 ## Public API (from `jvspatial.db`)
 
@@ -58,7 +60,8 @@ db/
 
 - **`Database.supports_transactions` is a capability flag.** Branch on it; do not sniff adapter class. (`database.py:84`)
 - **`find_many` and `bulk_save` are public and benefit from native overrides.** Defaults exist but are slow. (`database.py:176+`)
-- **`find_one_and_update` / `find_one_and_delete` are NOT atomic by default.** Only MongoDB overrides with native atomic versions.
+- **`find_one_and_update` / `find_one_and_delete` are NOT atomic by default.** MongoDB and Postgres override with native atomic versions (`FOR UPDATE` on Postgres).
+- **Postgres-only helpers** (via `getattr`, not on the ABC): `traverse`, `find_connected_nodes`, `save_with_edge_merge`.
 - **Atomic JSON writes use `temp + fsync + rename + fsync(dir)`.** No partial records survive a crash. (`_atomic.py`)
 - **Per-file locks serialize concurrent writes to the same record only.** Different files run in parallel. (`_path_locks.py`)
 - **`QueryEngine` LRU is bounded.** Default 1024; configurable. Unbounded query construction will not leak memory. (`query.py`)

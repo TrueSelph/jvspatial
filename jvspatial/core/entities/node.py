@@ -388,6 +388,94 @@ class Node(Object):
             limit=limit,
         )
 
+    async def neighborhood(
+        self,
+        depth: int = 1,
+        *,
+        direction: str = "out",
+        node: Optional[
+            Union[str, type, List[Union[str, type, Dict[str, Dict[str, Any]]]]]
+        ] = None,
+        edge: Optional[
+            Union[
+                str,
+                Type["Edge"],
+                List[Union[str, Type["Edge"], Dict[str, Dict[str, Any]]]],
+            ]
+        ] = None,
+        limit: Optional[int] = None,
+        **kwargs: Any,
+    ) -> List["Node"]:
+        """Return all nodes reachable within ``depth`` hops from this node.
+
+        Uses the backend ``traverse`` implementation when available (single
+        round trip on Postgres); otherwise falls back to a Python BFS using
+        :meth:`nodes` per hop.
+        """
+        from ..context import get_default_context
+        from .edge import Edge
+
+        if depth < 1:
+            return []
+
+        context = get_default_context()
+        db = context.database
+        traverse = getattr(db, "traverse", None)
+
+        use_traverse = (
+            callable(traverse)
+            and not kwargs
+            and node is None
+            and direction in ("out", "in", "both")
+            and not isinstance(edge, list)
+        )
+
+        if use_traverse:
+            edge_coll = context._get_collection_name(
+                context._get_entity_type_code(Edge)
+            )
+
+            try:
+                rows = await traverse(
+                    edge_coll,
+                    self.id,
+                    direction=direction,
+                    max_depth=depth,
+                    limit=limit,
+                )
+            except NotImplementedError:
+                use_traverse = False
+            else:
+                node_ids = [row["node_id"] for row in rows]
+                if not node_ids:
+                    return []
+                return await context.get_batch(Node, node_ids)
+
+        # Python BFS fallback (all backends).
+        seen: set = {self.id}
+        frontier: List["Node"] = [self]
+        collected: List["Node"] = []
+        for _ in range(depth):
+            next_frontier: List["Node"] = []
+            for current in frontier:
+                neighbors = await current.nodes(
+                    direction=direction,
+                    node=node,
+                    edge=edge,
+                    limit=limit,
+                    **kwargs,
+                )
+                for nb in neighbors:
+                    if nb.id in seen:
+                        continue
+                    seen.add(nb.id)
+                    collected.append(nb)
+                    next_frontier.append(nb)
+            frontier = next_frontier
+            if not frontier:
+                break
+        return collected
+
     async def count_neighbors(
         self,
         direction: str = "out",
@@ -553,6 +641,72 @@ class Node(Object):
         Returns:
             List of connected nodes matching the criteria
         """
+        from .node import Node as NodeClass
+
+        if (
+            not kwargs
+            and direction in ("out", "in")
+            and not isinstance(edge_filter, list)
+        ):
+            db = context.database
+            find_connected = getattr(db, "find_connected_nodes", None)
+            edge_entity: Optional[str]
+            if isinstance(edge_filter, type):
+                from .edge import Edge as EdgeClassForEntity
+
+                resolver = getattr(edge_filter, "_entity_name", None)
+                edge_entity = resolver() if callable(resolver) else edge_filter.__name__
+                edge_cls = edge_filter
+            elif isinstance(edge_filter, str):
+                edge_entity = edge_filter
+                from .edge import Edge as EdgeClassForEntity
+
+                edge_cls = EdgeClassForEntity
+            elif edge_filter is None:
+                from .edge import Edge as EdgeClassForEntity
+
+                edge_entity = None
+                edge_cls = EdgeClassForEntity
+            else:
+                edge_entity = "__skip_fast_path__"
+
+            if callable(find_connected) and edge_entity != "__skip_fast_path__":
+                node_coll = context._get_collection_name(
+                    context._get_entity_type_code(NodeClass)
+                )
+                edge_coll = context._get_collection_name(
+                    context._get_entity_type_code(edge_cls)
+                )
+                records = await find_connected(
+                    node_coll,
+                    edge_coll,
+                    self.id,
+                    direction=direction,
+                    edge_entity=edge_entity,
+                    limit=limit,
+                )
+                connected_nodes: List["Node"] = []
+                for data in records:
+                    try:
+                        node_obj = await context._deserialize_entity(NodeClass, data)
+                        if node_obj:
+                            connected_nodes.append(node_obj)
+                            await context._add_to_cache(node_obj.id, node_obj)
+                    except Exception as e:
+                        logger.debug(
+                            "Skipping invalid node during connected-node join: %s", e
+                        )
+                        continue
+                if node_filter is not None:
+                    connected_nodes = [
+                        n
+                        for n in connected_nodes
+                        if self._matches_node_filter(n, node_filter)
+                    ]
+                if limit is not None:
+                    connected_nodes = connected_nodes[:limit]
+                return connected_nodes
+
         # Find edges connected to this node
         from .edge import Edge as EdgeClass
 

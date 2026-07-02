@@ -42,7 +42,9 @@ def get_logging_config() -> Dict[str, Any]:
         "JVSPATIAL_DB_LOGGING_API_ENABLED", default=True, parse=parse_bool_basic
     )
 
-    db_type = env("JVSPATIAL_LOG_DB_TYPE") or env("JVSPATIAL_DB_TYPE", default="json")
+    db_type = env("JVSPATIAL_LOG_DB_TYPE") or env(
+        "JVSPATIAL_DB_TYPE", default="postgres"
+    )
 
     if db_type == "json":
         log_db_path_raw = env("JVSPATIAL_LOG_DB_PATH")
@@ -105,6 +107,17 @@ def get_logging_config() -> Dict[str, Any]:
             "endpoint_url": endpoint_url,
             "aws_access_key_id": aws_access_key_id,
             "aws_secret_access_key": aws_secret_access_key,
+        }
+    elif db_type in ("postgres", "postgresql"):
+        dsn = env("JVSPATIAL_LOG_POSTGRES_DSN") or env("JVSPATIAL_POSTGRES_DSN")
+        config = {
+            "enabled": enabled,
+            "log_levels": log_levels,
+            "log_level_names": log_level_names,
+            "database_name": database_name,
+            "enable_api_endpoints": enable_api_endpoints,
+            "db_type": db_type,
+            "dsn": dsn,
         }
     else:
         db_path = env("JVSPATIAL_LOG_DB_PATH") or "./jvspatial_logs"
@@ -192,6 +205,11 @@ def initialize_logging_database(
                 aws_access_key_id=config.get("aws_access_key_id"),
                 aws_secret_access_key=config.get("aws_secret_access_key"),
             )
+        elif db_type in ("postgres", "postgresql"):
+            pg_kwargs: Dict[str, Any] = {"db_type": db_type}
+            if config.get("dsn"):
+                pg_kwargs["dsn"] = config["dsn"]
+            log_db = create_database(**pg_kwargs)
         else:
             log_db = create_database(
                 db_type="json",

@@ -404,6 +404,10 @@ class Walker(AttributeMixin, BaseModel):
             "max_trail_length",
             int(env("JVSPATIAL_WALKER_MAX_TRAIL_LENGTH", default="0")),
         )
+        frontier_batch_size = kwargs.pop("frontier_batch_size", 1)
+        prefetch_neighbors = kwargs.pop("prefetch_neighbors", False)
+        prefetch_depth = kwargs.pop("prefetch_depth", 1)
+        speculative_prefetch = kwargs.pop("speculative_prefetch", False)
         # Optional pluggable trail store. When provided, steps mirror to
         # the store so a fresh process can call ``Walker.resume()`` and
         # pick up where this one left off. ROADMAP §2.5.
@@ -416,6 +420,11 @@ class Walker(AttributeMixin, BaseModel):
         self._max_execution_time = max_execution_time
         self._max_queue_size = max_queue_size
         self._paused = paused
+        self._frontier_batch_size = max(1, int(frontier_batch_size))
+        self._prefetch_neighbors = bool(prefetch_neighbors)
+        self._prefetch_depth = max(1, int(prefetch_depth))
+        self._speculative_prefetch = bool(speculative_prefetch)
+        self._speculative_prefetch_task: Optional[asyncio.Task[None]] = None
 
         # Initialize reporting system
         self._report = []
@@ -737,6 +746,76 @@ class Walker(AttributeMixin, BaseModel):
         result = await self.queue.insert_before(target_node, nodes)
         return [item for item in result if isinstance(item, (Node, Edge))]
 
+    def _drain_frontier_batch(self) -> List[Any]:
+        """Dequeue up to ``frontier_batch_size`` items from the walker queue."""
+        from .edge import Edge
+        from .node import Node
+
+        batch: List[Any] = []
+        while len(batch) < self._frontier_batch_size and self.queue:
+            item = self.queue.popleft()
+            if isinstance(item, (Node, Edge)):
+                batch.append(item)
+        return batch
+
+    async def _prefetch_neighbors_for_batch(self, batch: List[Any]) -> None:
+        """Bulk-fetch and enqueue neighbors for nodes in ``batch``."""
+        from .node import Node
+
+        node_batch = [item for item in batch if isinstance(item, Node)]
+        if not node_batch:
+            return
+
+        if self._prefetch_depth > 1:
+            for node in node_batch:
+                neighbors = await node.neighborhood(
+                    self._prefetch_depth, direction="out"
+                )
+                for neighbor in neighbors:
+                    if not self.has_visited(neighbor.id):
+                        await self.queue.append([neighbor])
+            return
+
+        node_ids = [n.id for n in node_batch]
+        bulk = await Node.nodes_bulk(node_ids, direction="out")
+        for neighbors in bulk.values():
+            for neighbor in neighbors:
+                if not self.has_visited(neighbor.id):
+                    await self.queue.append([neighbor])
+
+    async def _start_speculative_prefetch(self) -> None:
+        """Warm the entity cache for the next queued node ids while hooks run."""
+        import asyncio
+
+        from ..context import get_default_context
+        from .node import Node
+
+        pending_ids: List[str] = []
+        for item in self.queue.to_list():
+            if isinstance(item, Node) and item.id not in pending_ids:
+                pending_ids.append(item.id)
+            if len(pending_ids) >= self._frontier_batch_size:
+                break
+        if not pending_ids:
+            return
+
+        context = get_default_context()
+
+        async def _warm() -> None:
+            await context.get_batch(Node, pending_ids)
+
+        self._speculative_prefetch_task = asyncio.create_task(_warm())
+
+    async def _finish_speculative_prefetch(self) -> None:
+        """Await any in-flight speculative prefetch task."""
+        task = self._speculative_prefetch_task
+        self._speculative_prefetch_task = None
+        if task is not None:
+            from contextlib import suppress
+
+            with suppress(Exception):
+                await task
+
     async def run(self: "Walker") -> List[Any]:
         """Run the walker traversal.
 
@@ -755,6 +834,8 @@ class Walker(AttributeMixin, BaseModel):
             WalkerTimeoutError,
         )
 
+        from .edge import Edge
+        from .node import Node
         from .walker_components.protection import ProtectionViolation
 
         # Process queue until empty or paused
@@ -764,29 +845,34 @@ class Walker(AttributeMixin, BaseModel):
                 if not await self._protection.check_limits():
                     break
 
-                # Get next node from queue
-                from .edge import Edge
-                from .node import Node
-
-                current = self.queue.popleft()
-                if not isinstance(current, (Node, Edge)):
+                batch = self._drain_frontier_batch()
+                if not batch:
                     continue
-                self.current_node = current
 
-                # Record visit in protection
-                if hasattr(current, "id"):
-                    self._protection.record_visit(current.id)
+                if self._prefetch_neighbors:
+                    await self._prefetch_neighbors_for_batch(batch)
 
-                # Record step in trail
-                self._trail_tracker.record_step(
-                    current.id if hasattr(current, "id") else str(current)
-                )
+                for current in batch:
+                    if not isinstance(current, (Node, Edge)):
+                        continue
+                    self.current_node = current
 
-                # Increment step count
-                await self._protection.increment_step()
+                    if hasattr(current, "id"):
+                        self._protection.record_visit(current.id)
 
-                # Execute visit hooks
-                await self._execute_visit_hooks(current)
+                    self._trail_tracker.record_step(
+                        current.id if hasattr(current, "id") else str(current)
+                    )
+
+                    await self._protection.increment_step()
+
+                    if self._speculative_prefetch:
+                        await self._start_speculative_prefetch()
+
+                    await self._execute_visit_hooks(current)
+
+                    if self._speculative_prefetch:
+                        await self._finish_speculative_prefetch()
 
             except ProtectionViolation as pv:
                 # SPEC §6.3 / §17: surface protection violations as the

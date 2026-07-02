@@ -27,6 +27,26 @@ from jvspatial.db.database import Database
 from jvspatial.db.factory import create_database, get_current_database
 from jvspatial.db.manager import get_database_manager
 
+# Request-scoped identity map — shadows the process-wide entity cache for the
+# duration of one HTTP request / unit of work. Cleared at request end so
+# mutations within a request are visible without stale cross-request reads.
+_request_identity_map: contextvars.ContextVar[Optional[Dict[str, Any]]] = (
+    contextvars.ContextVar("jvspatial_request_identity_map", default=None)
+)
+
+
+def begin_request_identity_map() -> contextvars.Token[Optional[Dict[str, Any]]]:
+    """Start a request-scoped identity map; returns a reset token."""
+    return _request_identity_map.set({})
+
+
+def end_request_identity_map(
+    token: contextvars.Token[Optional[Dict[str, Any]]],
+) -> None:
+    """Clear the request-scoped identity map."""
+    _request_identity_map.reset(token)
+
+
 if TYPE_CHECKING:
     from .entities import Object
 
@@ -518,12 +538,54 @@ class GraphContext:
         try:
             from jvspatial.db.mongodb import MongoDB
 
-            return isinstance(db, MongoDB)
+            candidate: Any = db
+            for _ in range(6):
+                if isinstance(candidate, MongoDB):
+                    return True
+                candidate = getattr(candidate, "inner", None)
+                if candidate is None:
+                    break
+            return False
         except ImportError:
             return False
 
+    @staticmethod
+    def _is_postgres(db: Database) -> bool:
+        """Check if the database is a PostgresDB instance (unwraps decorators)."""
+        try:
+            from jvspatial.db.postgres import PostgresDB
+
+            candidate: Any = db
+            for _ in range(6):
+                if isinstance(candidate, PostgresDB):
+                    return True
+                candidate = getattr(candidate, "inner", None)
+                if candidate is None:
+                    break
+            return False
+        except ImportError:
+            return False
+
+    @staticmethod
+    def _fast_deserialize_enabled() -> bool:
+        from jvspatial.env import env, parse_bool_basic
+
+        return bool(
+            env(
+                "JVSPATIAL_FAST_DESERIALIZE",
+                default=False,
+                parse=parse_bool_basic,
+            )
+        )
+
     async def _get_from_cache(self, entity_id: str) -> Optional[Any]:
         """Get entity from cache if available."""
+        imap = _request_identity_map.get()
+        if imap is not None and entity_id in imap:
+            result = imap[entity_id]
+            if self._perf_monitoring_enabled and self._perf_monitor:
+                self._perf_monitor.record_cache_hit()
+            return result
         result = await self._cache.get(entity_id)
         # Track cache hit/miss
         if self._perf_monitoring_enabled and self._perf_monitor:
@@ -535,7 +597,17 @@ class GraphContext:
 
     async def _add_to_cache(self, entity_id: str, entity: Any) -> None:
         """Add entity to cache."""
+        imap = _request_identity_map.get()
+        if imap is not None:
+            imap[entity_id] = entity
         await self._cache.set(entity_id, entity)
+
+    async def _evict_from_cache(self, entity_id: str) -> None:
+        """Remove an entity from request and process caches."""
+        imap = _request_identity_map.get()
+        if imap is not None:
+            imap.pop(entity_id, None)
+        await self._cache.delete(entity_id)
 
     async def clear_cache(self) -> None:
         """Clear the entity cache."""
@@ -824,11 +896,22 @@ class GraphContext:
             # Merge node edge lists with the DB so full-document saves do not clobber
             # edge IDs added concurrently via atomic_add_edge_id (or another writer).
             if merge_node_edges and is_node:
-                fresh = await _unwrap_db_get_result(await db.get(collection, entity.id))
-                e_mem = set(_coerce_edge_id_list(record.get("edges")))
-                e_db = set(_coerce_edge_id_list((fresh or {}).get("edges")))
-                merged = sorted(e_mem | e_db)
-                record["edges"] = merged
+                merged = _coerce_edge_id_list(record.get("edges"))
+                save_merge = getattr(db, "save_with_edge_merge", None)
+                if callable(save_merge) and self._is_postgres(db):
+                    saved = await save_merge(collection, record)
+                    if saved is not None:
+                        merged = _coerce_edge_id_list(saved.get("edges"))
+                        record.update(saved)
+                else:
+                    fresh = await _unwrap_db_get_result(
+                        await db.get(collection, entity.id)
+                    )
+                    e_mem = set(_coerce_edge_id_list(record.get("edges")))
+                    e_db = set(_coerce_edge_id_list((fresh or {}).get("edges")))
+                    merged = sorted(e_mem | e_db)
+                    record["edges"] = merged
+                    await db.save(collection, record)
                 if hasattr(entity, "edge_ids"):
                     object.__setattr__(entity, "edge_ids", list(merged))
             elif is_node:
@@ -837,7 +920,9 @@ class GraphContext:
                 record["edges"] = merged
                 if hasattr(entity, "edge_ids"):
                     object.__setattr__(entity, "edge_ids", list(merged))
-            await db.save(collection, record)
+                await db.save(collection, record)
+            else:
+                await db.save(collection, record)
 
         if is_node and not _holding_node_edge_lock:
             async with self._node_edge_write_guard(entity.id):
@@ -1146,7 +1231,7 @@ class GraphContext:
         Returns True on success, False on failure.
         """
         db = self.database
-        if self._is_mongodb(db):
+        if self._is_mongodb(db) or self._is_postgres(db):
             try:
                 result = await db.find_one_and_update(
                     "node",
@@ -1189,7 +1274,7 @@ class GraphContext:
         Returns True on success, False on failure.
         """
         db = self.database
-        if self._is_mongodb(db):
+        if self._is_mongodb(db) or self._is_postgres(db):
             try:
                 result = await db.find_one_and_update(
                     "node",
@@ -1722,6 +1807,36 @@ class GraphContext:
 
             # entity_type_code already computed above
 
+            if self._fast_deserialize_enabled():
+                if entity_type_code == "n":
+                    edge_ids = data.get("edges", [])
+                    context_data.pop("edge_ids", None)
+                    context_data.pop("id", None)
+                    context_data.pop("type_code", None)
+                    entity = target_class.model_construct(
+                        id=data["id"], edge_ids=edge_ids, **context_data
+                    )
+                elif entity_type_code == "e":
+                    context_data.pop("source", None)
+                    context_data.pop("target", None)
+                    context_data.pop("bidirectional", None)
+                    context_data.pop("id", None)
+                    context_data.pop("type_code", None)
+                    entity = target_class.model_construct(
+                        id=data["id"],
+                        source=data["source"],
+                        target=data["target"],
+                        bidirectional=data.get("bidirectional", True),
+                        **context_data,
+                    )
+                else:
+                    context_data.pop("id", None)
+                    context_data.pop("type_code", None)
+                    entity = target_class.model_construct(id=data["id"], **context_data)
+                object.__setattr__(entity, "_initializing", False)
+                entity._graph_context = self
+                return entity
+
             if entity_type_code == "n":
                 # Handle Node-specific logic
                 # Extract edge_ids from data (stored as "edges" at top level)
@@ -1802,6 +1917,21 @@ class GraphContext:
 
         # Process each type group
         for collection, type_entities in entities_by_type.items():
+            is_node_collection = collection == "node"
+            if is_node_collection:
+                for entity in type_entities:
+                    try:
+                        saved = await self.save(entity)
+                        saved_entities.append(saved)
+                    except Exception as e:
+                        logger.error(
+                            "Failed to save entity %s: %s",
+                            getattr(entity, "id", "unknown"),
+                            e,
+                            exc_info=True,
+                        )
+                continue
+
             # Export all entities of this type
             records = []
             for entity in type_entities:
@@ -1883,25 +2013,41 @@ class GraphContext:
             else:
                 uncached_ids.append(entity_id)
 
+        chunk_size = 500
+
         # Fetch uncached entities from database
         if uncached_ids:
             type_code = self._get_entity_type_code(entity_class)
             collection = self._get_collection_name(type_code)
             db = self.database
 
-            # Use database batch query if available
-            query = {"id": {"$in": uncached_ids}}
-            results = await db.find(collection, query)
-
-            # Deserialize results
-            for data in results:
-                try:
-                    entity = await self._deserialize_entity(entity_class, data)
-                    if entity:
-                        await self._add_to_cache(entity.id, entity)
-                        cached_entities.append(entity)
-                except Exception:
-                    continue
+            find_many = getattr(db, "find_many", None)
+            for offset in range(0, len(uncached_ids), chunk_size):
+                chunk = uncached_ids[offset : offset + chunk_size]
+                if callable(find_many):
+                    results_map = await find_many(collection, chunk)
+                    for entity_id in chunk:
+                        data = results_map.get(entity_id)
+                        if not data:
+                            continue
+                        try:
+                            entity = await self._deserialize_entity(entity_class, data)
+                            if entity:
+                                await self._add_to_cache(entity.id, entity)
+                                cached_entities.append(entity)
+                        except Exception:
+                            continue
+                else:
+                    query = {"id": {"$in": chunk}}
+                    results = await db.find(collection, query)
+                    for data in results:
+                        try:
+                            entity = await self._deserialize_entity(entity_class, data)
+                            if entity:
+                                await self._add_to_cache(entity.id, entity)
+                                cached_entities.append(entity)
+                        except Exception:
+                            continue
 
         return cached_entities
 
