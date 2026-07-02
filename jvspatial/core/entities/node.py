@@ -677,18 +677,46 @@ class Node(Object):
                 edge_coll = context._get_collection_name(
                     context._get_entity_type_code(edge_cls)
                 )
+                # Only push ``limit`` into the DB scan when there is no node
+                # filter. With a node filter the type match happens in Python
+                # below, so a DB-side limit would truncate the candidate set
+                # BEFORE filtering (e.g. limit=1 fetches one neighbor that may
+                # not match the type, yielding an empty result even though
+                # matching neighbors exist). Fetch all, filter, then slice.
+                db_limit = limit if node_filter is None else None
                 records = await find_connected(
                     node_coll,
                     edge_coll,
                     self.id,
                     direction=direction,
                     edge_entity=edge_entity,
-                    limit=limit,
+                    limit=db_limit,
                 )
+                # Deserialize with the caller's requested concrete type as the
+                # hint (not the base ``Node``) when the node filter names one.
+                # ``_deserialize_entity`` resolves the stored ``entity`` name
+                # against this class's subtree first, so when two Node
+                # subclasses across embedded graphs share an entity name
+                # (e.g. an app ``User`` and an embedded-agent ``User``), the
+                # row hydrates as the class the caller asked for instead of the
+                # first global name match — otherwise ``_matches_node_filter``'s
+                # ``isinstance`` check silently drops a valid neighbor.
+                deser_class: type = NodeClass
+                if isinstance(node_filter, type):
+                    deser_class = node_filter
+                elif (
+                    isinstance(node_filter, list)
+                    and len(node_filter) == 1
+                    and isinstance(node_filter[0], type)
+                ):
+                    deser_class = node_filter[0]
+
                 connected_nodes: List["Node"] = []
                 for data in records:
                     try:
-                        node_obj = await context._deserialize_entity(NodeClass, data)
+                        node_obj: Optional["Node"] = await context._deserialize_entity(
+                            deser_class, data
+                        )
                         if node_obj:
                             connected_nodes.append(node_obj)
                             await context._add_to_cache(node_obj.id, node_obj)
