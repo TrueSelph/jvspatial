@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11] - 2026-07-02
+
+### Fixed
+
+- **Single-hop `find_connected_nodes` fast path dropped valid neighbors** (`jvspatial/core/entities/node.py`). Two regressions introduced with the 0.0.10 fast path, both invisible to the existing suite because `JsonDB` exposes no `find_connected_nodes` (so tests fell back to the slow edge scan):
+  - *Limit-before-filter:* `limit` was pushed into the DB scan **before** the Python node-type filter, so `node(node=T)` / `nodes(node=T, limit=n)` could return nothing when a non-matching neighbor sorted first, even though matching neighbors existed. `limit` is now applied to the DB scan only when there is no node filter; otherwise it is applied after filtering.
+  - *Subtype resolution under an entity-name collision:* rows were deserialized with the base `Node` class, so when two `Node` subclasses persisted in one database shared an entity name (e.g. an app `User` and an embedded-agent `User`), `find_subclass_by_name` returned the first global match and `isinstance`-based filtering silently dropped the valid neighbor. The fast path now hydrates using the caller's requested concrete type as the resolution hint.
+- Regression coverage: `tests/core/test_connected_nodes_fast_path.py` installs a `find_connected_nodes` shim so the fast path is exercised (the stock `JsonDB` never did).
+
 ## [0.0.10] - 2026-07-02
 
 ### Added
