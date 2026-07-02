@@ -97,7 +97,7 @@ The documents below answer *how* to use each subsystem. Every link resolves; ent
 | [Module Responsibility Matrix](module-responsibility-matrix.md) | Which package owns which concern. |
 | [Import Patterns](import-patterns.md) | Stable vs internal imports. |
 | [Stability](stability.md) | **NEW** Public / internal / experimental tiers + deprecation policy. |
-| [Optimization](optimization.md) | Performance tuning playbook. |
+| [Optimization](optimization.md) | Performance tuning: `neighborhood`, walker prefetch, Postgres paths, fast deserialize. |
 
 ## Configuration
 

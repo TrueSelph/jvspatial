@@ -65,8 +65,38 @@ for user_id in user_ids:
     user = await User.get(user_id)  # N queries
 
 # Good: Single bulk query
-users = await User.get_many(user_ids)  # 1 query
+users = await User.get_many(user_ids)  # 1 query (chunked at 500 ids internally)
 ```
+
+#### Multi-hop neighbors (`neighborhood`)
+
+For subgraph loads within *k* hops, prefer `neighborhood()` over repeated
+walker-driven `nodes()` calls:
+
+```python
+# Postgres: one CTE when Database.traverse is available
+within_3_hops = await start.neighborhood(depth=3, direction="out")
+
+# Other backends: correct Python BFS fallback (per-hop nodes())
+```
+
+See [graph-traversal.md](graph-traversal.md) and [node-operations.md](node-operations.md).
+
+#### Walker frontier prefetch (opt-in)
+
+```python
+class FastWalker(Walker):
+    def __init__(self):
+        super().__init__(
+            frontier_batch_size=32,
+            prefetch_neighbors=True,   # nodes_bulk per dequeue batch
+            prefetch_depth=1,          # >1 uses traverse when available
+            speculative_prefetch=True, # warm get_batch while hooks run
+        )
+```
+
+Defaults preserve legacy one-node-per-step behavior. See
+[graph-traversal.md](graph-traversal.md) § Framework prefetch.
 
 ### Batch Processing
 

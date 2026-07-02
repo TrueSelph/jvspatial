@@ -317,6 +317,23 @@ Protection is *advisory* for safety, not for security — untrusted user input s
 - `walker.skip()` — raises `TraversalSkipped`; advances to next queued node.
 - `walker.resume()` — re-enters traversal from saved state.
 
+### 6.6 Optional performance extensions (`walker.py`)
+
+Defaults preserve §6.1 one-node-per-step semantics:
+
+| Knob | Default | Behavior |
+|------|---------|----------|
+| `frontier_batch_size` | `1` | Max items dequeued per run-loop iteration |
+| `prefetch_neighbors` | `False` | Bulk-fetch neighbors via `nodes_bulk` / `neighborhood` before hooks |
+| `prefetch_depth` | `1` | Hops for prefetch (`>1` uses backend `traverse` when available) |
+| `speculative_prefetch` | `False` | Warm entity cache for queued nodes while hooks execute |
+
+Enabling prefetch may enqueue neighbors before hook-driven `visit()` calls; visit deduplication still follows protection / trail rules.
+
+### 6.7 `Node.neighborhood` (`node.py`)
+
+`await node.neighborhood(depth=k, direction=..., edge=..., node=..., limit=...)` returns hydrated `Node` instances within `k` hops. Postgres uses `Database.traverse` + `get_batch`; other backends use per-hop `nodes()` BFS.
+
 ---
 
 ## 7. GraphContext and Dependency Injection

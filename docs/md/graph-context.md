@@ -672,7 +672,19 @@ edge = await ctx.create_edge(Friendship, source=user1, target=user2)
 
 ### Batch Operations
 
-For bulk operations, consider batching:
+`GraphContext.save_batch()` routes **node** entities through `save()` so
+edge-merge semantics apply (concurrent `atomic_add_edge_id` updates are not
+clobbered). Non-node entities still use the adapter bulk path when available.
+
+`get_batch()` chunks id lists at 500 per round trip. `atomic_add_edge_id` /
+`atomic_remove_edge_id` use native `find_one_and_update` on MongoDB and
+Postgres; other backends fall back to read-modify-write.
+
+**Fast deserialize (opt-in):** set `JVSPATIAL_FAST_DESERIALIZE=true` to
+hydrate trusted DB rows via `model_construct` instead of full Pydantic
+validation. Migrations still run before the fast path. Default is off.
+
+For bulk creates, consider batching:
 
 ```python
 async def create_users_batch(ctx: GraphContext, user_data_list):
@@ -681,6 +693,9 @@ async def create_users_batch(ctx: GraphContext, user_data_list):
         user = await ctx.create_node(User, **user_data)
         users.append(user)
     return users
+
+# Or save many existing nodes with merge semantics:
+await ctx.save_batch(nodes)
 ```
 
 ### Caching

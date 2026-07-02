@@ -234,21 +234,25 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         if isinstance(user, dict):
             user_id = user.get("user_id") or user.get("id")
             if user_id and ("roles" not in user or "permissions" not in user):
-                # API key auth - fetch full user
-                from jvspatial.api.auth.service import AuthenticationService
-                from jvspatial.core.context import GraphContext
-                from jvspatial.db import get_prime_database
+                # API key auth - fetch full user (reuse cached auth service when set)
+                auth_service = getattr(self._server, "_auth_service", None)
+                if auth_service is None:
+                    from jvspatial.api.auth.service import AuthenticationService
+                    from jvspatial.core.context import GraphContext
+                    from jvspatial.db import get_prime_database
 
-                prime_ctx = GraphContext(database=get_prime_database())
-                auth_service = AuthenticationService(
-                    prime_ctx,
-                    jwt_secret=self.auth_config.jwt_secret,
-                    jwt_algorithm=self.auth_config.jwt_algorithm,
-                    jwt_expire_minutes=self.auth_config.jwt_expire_minutes,
-                    role_permission_mapping=getattr(
-                        self.auth_config, "role_permission_mapping", None
-                    ),
-                )
+                    prime_ctx = getattr(self._server, "_prime_graph_context", None)
+                    if prime_ctx is None:
+                        prime_ctx = GraphContext(database=get_prime_database())
+                    auth_service = AuthenticationService(
+                        prime_ctx,
+                        jwt_secret=self.auth_config.jwt_secret,
+                        jwt_algorithm=self.auth_config.jwt_algorithm,
+                        jwt_expire_minutes=self.auth_config.jwt_expire_minutes,
+                        role_permission_mapping=getattr(
+                            self.auth_config, "role_permission_mapping", None
+                        ),
+                    )
                 full_user = await auth_service.get_user_by_id(user_id)
                 if full_user:
                     # Apply API key permission restriction if non-empty
@@ -423,14 +427,17 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             if not api_key:
                 return None
 
-            # Use API key service for validation
+            # Use API key service for validation (reuse server singleton when available)
             from jvspatial.api.auth.api_key_service import APIKeyService
             from jvspatial.core.context import GraphContext
             from jvspatial.db import get_prime_database
 
-            # API key service should use prime database, not server's graph context
-            prime_ctx = GraphContext(database=get_prime_database())
-            service = APIKeyService(prime_ctx)
+            service = getattr(self._server, "_api_key_service", None)
+            if service is None:
+                prime_ctx = getattr(self._server, "_prime_graph_context", None)
+                if prime_ctx is None:
+                    prime_ctx = GraphContext(database=get_prime_database())
+                service = APIKeyService(prime_ctx)
 
             # Validate the API key
             api_key_entity = await service.validate_key(api_key)

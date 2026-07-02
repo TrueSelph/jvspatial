@@ -67,6 +67,8 @@ class Node(Object):
 
 - **`nodes()`**: Returns a list of connected nodes with filtering options
 - **`node()`**: Returns a single connected node (first match) or None - convenience method when you expect only one result
+- **`neighborhood(depth)`**: Multi-hop neighbor fetch (Postgres `traverse` fast path or BFS fallback)
+- **`nodes_bulk(node_ids)`**: Batch neighbor fetch for many source IDs in two queries
 - **`delete(cascade=True)`**: Deletes the node and cascades deletion of all connected edges and dependent nodes
 
 #### Class-Aware Retrieval and Ghost Node Fallback

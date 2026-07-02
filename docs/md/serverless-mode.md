@@ -16,6 +16,13 @@
 - JSON/SQLite and local file storage defaults prefer `/tmp` paths.
 - **Deferred saves** (`DeferredSaveMixin`) are forced off: every `save()` persists immediately regardless of `JVSPATIAL_ENABLE_DEFERRED_SAVES`. Use `deferred_saves_globally_allowed()` for the effective check. Call `await entity.flush()` or `flush_deferred_entities(...)` at the end of a request as usual; they remain no-ops for dirty state when deferral was inactive.
 
+## Caching in serverless
+
+jvspatial has **two cache layers** with different serverless behavior:
+
+1. **`CachingDatabase`** (`create_database(cache_get_size=N)`) — read-through DB wrapper. **Disabled at runtime** when `is_serverless_mode()` is true (`jvspatial/db/_cache.py`). Prefer `cache_get_size=0` in Lambda configs to avoid wrapping overhead.
+2. **`GraphContext` entity cache** (`jvspatial.cache`, including `LayeredCache` / Redis) — **not** auto-disabled in serverless. Process-local L1 is cold on every invocation; for cross-invocation warmth configure Redis via `JVSPATIAL_CACHE_TYPE=redis` and related env keys (see `docs/md/caching.md`).
+
 ## Migration Notes
 
 - `BACKGROUND_PROCESSING` has been removed.

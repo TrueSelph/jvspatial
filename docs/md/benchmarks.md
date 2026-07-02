@@ -53,6 +53,11 @@ The current benches guard the IO hot paths landed in Phases A1 and A2:
 * **DeferredSaveMixin** (`tests/benchmarks/test_deferred_save_benchmarks.py`)
   * `test_bench_deferred_save_batched_100` -- 100 dirty marks + 1 flush.
   * `test_bench_immediate_save_100` -- comparison case, 100 writes.
+* **Postgres** (`tests/benchmarks/test_postgres_benchmarks.py`) — skipped when
+  `asyncpg` is unavailable or `JVSPATIAL_POSTGRES_TEST_DSN` is unreachable.
+  * `test_bench_postgres_traverse_depth` -- recursive CTE traversal on a
+    seeded chain graph.
+  * `test_bench_postgres_find_many_bulk` -- bulk fetch by id list.
 
 The `_fallback_*` benches deliberately exercise the *slow* path so
 that future contributors who refactor the translator can see whether
@@ -61,7 +66,13 @@ the legacy in-Python filter path got faster or slower.
 ## How CI uses these
 
 `.github/workflows/benchmarks.yml` runs the suite on every PR that
-touches `jvspatial/`, `tests/benchmarks/`, or `pyproject.toml`. It:
+touches `jvspatial/`, `tests/benchmarks/`, or `pyproject.toml`. A
+**Postgres service container** (`pgvector/pgvector:pg16`) is started for
+the job so Postgres benches run in CI when `asyncpg` is installed.
+`JVSPATIAL_POSTGRES_TEST_DSN` defaults to
+`postgresql://jvspatial:jvspatial@localhost:5432/jvspatial`.
+
+The workflow:
 
 1. Captures the PR's benchmark results.
 2. Downloads the most recent `bench-baseline` artifact (produced by

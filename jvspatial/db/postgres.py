@@ -681,6 +681,54 @@ class PostgresDB(Database):
                 )
         return data
 
+    async def save_with_edge_merge(
+        self, collection: str, data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Upsert a record, unioning ``edges`` with any existing row in one statement."""
+        await self._bootstrap_collection(collection)
+        rec_id, entity, tenant, _ = self._split_payload(data)
+        col = _safe_collection(collection)
+        schema = _safe_collection(self.schema_name)
+        incoming_json = json.dumps(data)
+
+        async with self._acquire_conn() as conn:
+            row = await conn.fetchrow(
+                f"""
+                INSERT INTO {schema}.{col} (id, entity, tenant_id, data, updated_at)
+                VALUES ($1, $2, $3, $4::jsonb, NOW())
+                ON CONFLICT (id) DO UPDATE SET
+                    entity = EXCLUDED.entity,
+                    tenant_id = EXCLUDED.tenant_id,
+                    data = jsonb_set(
+                        EXCLUDED.data,
+                        '{{edges}}',
+                        (
+                            SELECT COALESCE(
+                                jsonb_agg(DISTINCT elem ORDER BY elem),
+                                '[]'::jsonb
+                            )
+                            FROM (
+                                SELECT jsonb_array_elements_text(
+                                    COALESCE({col}.data->'edges', '[]'::jsonb)
+                                ) AS elem
+                                UNION
+                                SELECT jsonb_array_elements_text(
+                                    COALESCE(EXCLUDED.data->'edges', '[]'::jsonb)
+                                ) AS elem
+                            ) merged
+                        )
+                    ),
+                    updated_at = NOW()
+                RETURNING data
+                """,
+                rec_id,
+                entity,
+                tenant,
+                incoming_json,
+            )
+        result = self._record_from_row(row) if row is not None else data
+        return result if result is not None else data
+
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Fetch a single record by id."""
         await self._bootstrap_collection(collection)
@@ -731,6 +779,13 @@ class PostgresDB(Database):
         translated = translate_query(filtered_query) if filtered_query else ("", [])
         if translated is None:
             # Translator refused; fall back to in-Python filtering.
+            logger.warning(
+                "PostgresDB.find: untranslatable query on %s.%s — "
+                "full-collection scan fallback (query=%r)",
+                schema,
+                col,
+                query,
+            )
             async with self._acquire_conn() as conn:
                 rows = await conn.fetch(f"SELECT data FROM {schema}.{col}")
             records = [self._record_from_row(r) for r in rows]
@@ -826,6 +881,55 @@ class PostgresDB(Database):
         for row in rows:
             out[row["id"]] = self._record_from_row(row)
         return out
+
+    async def find_connected_nodes(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        start_id: str,
+        *,
+        direction: str = "out",
+        edge_entity: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Single-hop neighbor fetch via edge+node join (one round trip)."""
+        if direction not in ("out", "in"):
+            raise ValueError(
+                "direction must be 'out' or 'in' for find_connected_nodes, "
+                f"got {direction!r}"
+            )
+        await self._bootstrap_collection(edge_collection)
+        await self._bootstrap_collection(node_collection)
+        edge_col = _safe_collection(edge_collection)
+        node_col = _safe_collection(node_collection)
+        schema = _safe_collection(self.schema_name)
+
+        if direction == "out":
+            join_on = "(e.data #>> '{target}') = n.id"
+            where_endpoint = "(e.data #>> '{source}') = $1"
+        else:
+            join_on = "(e.data #>> '{source}') = n.id"
+            where_endpoint = "(e.data #>> '{target}') = $1"
+
+        clauses = [where_endpoint]
+        params: List[Any] = [start_id]
+        if edge_entity is not None:
+            clauses.append(f"e.entity = ${len(params) + 1}")
+            params.append(edge_entity)
+
+        limit_sql = ""
+        if limit is not None:
+            limit_sql = f" LIMIT ${len(params) + 1}"
+            params.append(int(limit))
+
+        sql = (
+            f"SELECT n.data FROM {schema}.{edge_col} e "
+            f"JOIN {schema}.{node_col} n ON {join_on} "
+            f"WHERE {' AND '.join(clauses)}{limit_sql}"
+        )
+        async with self._acquire_conn() as conn:
+            rows = await conn.fetch(sql, *params)
+        return [self._record_from_row(r) for r in rows]
 
     async def bulk_save_detailed(
         self, collection: str, records: List[Dict[str, Any]]

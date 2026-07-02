@@ -93,3 +93,17 @@ async def test_concurrent_save_and_atomic_add_preserves_atomic_edges(graph_conte
     edges = set(raw.get("edges") or [])
     for i in range(n_atomic):
         assert f"e.atomic.{i}" in edges, f"missing e.atomic.{i} after concurrent ops"
+
+
+@pytest.mark.asyncio
+async def test_save_batch_merges_node_edges(graph_context):
+    ctx, db = graph_context
+    w = await Widget.create(name="batch")
+    await ctx.atomic_add_edge_id(w.id, "e.atomic")
+
+    w.name = "batch-updated"
+    await ctx.save_batch([w])
+
+    raw = await db.get("node", w.id)
+    assert raw is not None
+    assert "e.atomic" in (raw.get("edges") or [])

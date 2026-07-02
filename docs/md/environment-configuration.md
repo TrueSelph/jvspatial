@@ -65,6 +65,7 @@ Mongo connection string and database name are **`ServerConfig.database`** fields
 | `JVSPATIAL_REDIS_URL` | string | — | Redis URL for `redis` / `layered`. If backend is `memory` **and** this is set, `create_default_cache()` upgrades to **layered** (L1 memory + L2 Redis). |
 | `JVSPATIAL_REDIS_TTL` | integer | `3600` | Default TTL (seconds) for Redis entries. |
 | `JVSPATIAL_REDIS_SERIALIZATION` | string | `json` | `json` (default) writes JSON-safe cache values and avoids pickle RCE if Redis is ever writable by an attacker. `pickle` restores the legacy format. In `json` mode, existing pickle blobs are still read. Only JSON-serializable values can be stored when using `json`. |
+| `JVSPATIAL_FAST_DESERIALIZE` | boolean | `false` | When `true`, `GraphContext` hydrates DB rows via `model_construct` (skips Pydantic validation on load). Migrations still run first. Default off — enable only when persisted shape is trusted. |
 
 See the [Caching Documentation](caching.md) for detailed information about cache backends and configuration.
 

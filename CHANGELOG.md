@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-07-02
+
+### Added
+
+- **`Node.neighborhood(depth)`** — multi-hop neighbor fetch; uses backend `traverse` (Postgres CTE) when available, Python BFS fallback otherwise (`jvspatial/core/entities/node.py`).
+- **Walker performance knobs** (opt-in, defaults preserve prior behavior): `frontier_batch_size`, `prefetch_neighbors`, `prefetch_depth`, `speculative_prefetch` (`jvspatial/core/entities/walker.py`).
+- **Postgres `save_with_edge_merge`** — single-statement edge-list union on node save (`jvspatial/db/postgres.py`).
+- **Postgres benchmarks** — `tests/benchmarks/test_postgres_benchmarks.py` (skipped when DSN unreachable); CI Postgres service in `.github/workflows/benchmarks.yml`.
+- **`JVSPATIAL_FAST_DESERIALIZE`** — opt-in `model_construct` hydration path in `GraphContext._deserialize_entity`.
+
+### Documentation
+
+- Performance features documented in `docs/md/{benchmarks,node-operations,optimization,graph-traversal,graph-context,observability,caching,environment-configuration,infinite-walk-protection}.md`, `jvspatial/db/README.md`, and `SPEC.md` §6.6–6.7.
+
+### Fixed
+
+- **`save_batch` on nodes** now routes through `GraphContext.save()` so edge-merge semantics apply (`jvspatial/core/context.py`).
+- **Postgres `atomic_add_edge_id` / `atomic_remove_edge_id`** use native `find_one_and_update` fast path (alongside existing Mongo path).
+
+### Changed
+
+- **`ObservableDatabase`** instruments `traverse`, `find_connected_nodes`, and `find_iter` for `db_op_counter` (`jvspatial/db/_observable.py`).
+- **`GraphContext.get_batch`** chunks large id lists (500 per round trip).
+
 ## [0.0.9] - 2026-06-14
 
 ### Security
