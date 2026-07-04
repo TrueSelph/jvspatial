@@ -326,6 +326,10 @@ ALLOWED_ENV_KEYS: frozenset[str] = frozenset(
         "JVSPATIAL_WALKER_MAX_QUEUE_SIZE",
         "JVSPATIAL_WALKER_MAX_TRAIL_LENGTH",
         "JVSPATIAL_WALKER_PROTECTION_ENABLED",
+        # Observability (ObservableDatabase wrapper — db/_observable.py,
+        # read directly via os.environ in api/components/database_configurator.py)
+        "JVSPATIAL_OBSERVABILITY_ENABLED",
+        "JVSPATIAL_SLOW_QUERY_MS",
         # Logging
         "JVSPATIAL_DB_LOGGING_ENABLED",
         "JVSPATIAL_DB_LOGGING_API_ENABLED",
