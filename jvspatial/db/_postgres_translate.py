@@ -74,6 +74,14 @@ _COMPARATORS = {
     "$lte": "<=",
 }
 
+# Real top-level Postgres columns (see postgres.py's ``_bootstrap_collection``
+# DDL + ``_pg_field_extract``) rather than paths inside the ``data`` JSONB
+# blob. Every ``<NodeClass>.find(...)`` auto-injects an ``entity`` filter
+# (Object._build_database_query) — extracting it via ``(data #>> '{entity}')``
+# instead of the bare column blinds the query to ``{col}_entity_idx`` and
+# forces a full scan on every single typed find() in the app.
+_TOP_LEVEL_TEXT_COLUMNS = {"entity", "id", "tenant_id"}
+
 
 # ---- helpers ----------------------------------------------------------------
 
@@ -132,9 +140,15 @@ def _translate_field_clause(
     if not _safe_field_path(field):
         return None
 
-    path = _path_literal(field)
-    extract_text = f"(data #>> '{path}')"  # text
-    extract_jsonb = f"(data #> '{path}')"  # jsonb
+    if field in _TOP_LEVEL_TEXT_COLUMNS:
+        # Bare column reference — lets $eq/comparators hit the real btree
+        # index (e.g. ``{col}_entity_idx``) instead of a JSONB scan.
+        extract_text = field
+        extract_jsonb = f"to_jsonb({field})"
+    else:
+        path = _path_literal(field)
+        extract_text = f"(data #>> '{path}')"  # text
+        extract_jsonb = f"(data #> '{path}')"  # jsonb
 
     # Plain equality with a scalar value.
     if not isinstance(condition, dict):
