@@ -71,8 +71,25 @@ logger = logging.getLogger(__name__)
 
 
 def _find_sort_key(record: Dict[str, Any], field: str) -> Tuple[bool, Any]:
-    """Sort key: non-``None`` values first, then by value (with ``None`` last)."""
-    value = record.get(field)
+    """Sort key: non-``None`` values first, then by value (with ``None`` last).
+
+    Supports dotted paths (``context.started_at``) so callers can sort attribute
+    fields the same way they query them. The SQLite/Postgres sort pushdowns
+    (``_sqlite_translate.translate_sort`` / ``_postgres_translate.translate_sort``)
+    and Mongo's native sort already resolve dotted paths; without this the same
+    sort spec silently degraded to "every key is ``None``" whenever a backend
+    fell back to the in-memory path.
+    """
+    value: Any
+    if "." not in field:
+        value = record.get(field)
+    else:
+        value = record
+        for part in field.split("."):
+            if not isinstance(value, dict):
+                value = None
+                break
+            value = value.get(part)
     return (value is None, value)
 
 

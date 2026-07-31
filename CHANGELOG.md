@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **In-memory `find` sort ignored dotted field paths** (`jvspatial/db/database.py`).
+  `_find_sort_key` resolved `sort` fields with a flat `record.get(field)`, so a
+  spec like `sort=[("context.started_at", -1)]` produced `None` for every row and
+  left the result in arbitrary order. The SQLite and Postgres pushdowns
+  (`translate_sort`) and Mongo's native sort already resolved dotted paths, so
+  the same query ordered correctly on those backends and silently did not on
+  JsonDB/DynamoDB — and on SQLite/Postgres whenever the query fell back to the
+  in-memory path. Dotted paths now resolve in memory too; a non-dict segment
+  along the path yields `None` rather than raising.
+
 ## [0.0.11] - 2026-07-02
 
 ### Fixed
