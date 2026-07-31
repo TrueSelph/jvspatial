@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`SQLiteDB.find` treated `sort=[]` as an untranslatable sort**
+  (`jvspatial/db/sqlite.py`). An empty list failed the `sort is None` guard, so
+  it took the fallback branch: the whole collection was loaded and `limit`
+  applied in memory instead of being pushed into SQL. Results were correct, the
+  work was not. A falsy `sort` is now normalized to `None`.
 - **`ObjectPager` re-sorted each page with a key that disagreed with the
   database slice** (`jvspatial/core/pager.py`; `paginate_by_field` inherited
   it). The in-Python safety-net sort used

@@ -470,6 +470,12 @@ class SQLiteDB(Database):
             serialized.
         """
         connection = await self._get_connection()
+        # An empty sort spec is "no ordering requested", same as None. Without
+        # this the ``sort is None`` guard below fails and an empty list takes
+        # the untranslatable-sort branch: full-collection load, LIMIT applied
+        # only in memory.
+        if not sort:
+            sort = None
         translated = translate_query(query) if query else ("", [])
 
         if translated is not None:
