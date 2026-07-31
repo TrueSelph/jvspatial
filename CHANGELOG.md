@@ -14,26 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cursor logic resolve a sort field the same way. Added to the module's
   `__all__`.
 
-### Documentation
-
-- **`find` sort contract moved to SPEC §4.1** (beside the `Database` method
-  table it governs, rather than under §4.2 capability flags) and extended: the
-  `limit`-must-not-outlive-the-sort-pushdown rule, plus a **Known divergences**
-  table covering MongoDB's ascending sorts (native `cursor.sort()` places
-  missing values first — documented, not normalized), array-index path segments,
-  and heterogeneous value types.
-- **Corrected stale NULL-ordering docstrings** in
-  `jvspatial/db/_sqlite_translate.py` (module docstring and `translate_sort`)
-  and `jvspatial/db/_postgres_translate.py` (`translate_sort`). All three still
-  claimed "NULLs sort last for ascending, first for descending, mirroring
-  `finalize_find_results`" — the opposite of what the code emits and of the
-  contract.
-- **`Database.find`** now documents the ordering contract adapter authors must
-  satisfy; **`Database.find_iter`** no longer claims a composite
-  `(sort_value, id)` cursor — the default implementation tracks `id` only, so a
-  non-`id` sort drops records that sort late but carry a lower `id`.
+- **Deferred-task exception hierarchy** (`jvspatial/exceptions.py`) —
+  `DeferredTaskError` → `TaskDispatchError` → `TaskSchedulerNotConfiguredError`,
+  replacing the bare `RuntimeError`s raised by strict dispatch. A strict caller
+  can now tell "retrying may succeed" (`TaskDispatchError`) from "this
+  deployment will never dispatch" (`TaskSchedulerNotConfiguredError`).
+  `DeferredTaskError` also derives from `RuntimeError`, so handlers written
+  against the previous behavior keep working.
 
 ### Fixed
+
 
 - **`SQLiteDB.find` treated `sort=[]` as an untranslatable sort**
   (`jvspatial/db/sqlite.py`). An empty list failed the `sort is None` guard, so
@@ -92,6 +82,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in-memory path. Missing values now sort last in both directions everywhere.
   The comment in `_sqlite_translate.translate_sort` asserting the in-memory path
   already matched has been corrected.
+
+
+- **Strict deferred scheduling only caught the no-op-scheduler case**
+  (`jvspatial/serverless/`). `dispatch_deferred_task(..., strict=True)` raised
+  when serverless mode resolved a logging no-op, but every *provider* failure
+  still logged and returned a synthetic reference — so a caller with its own
+  failure handling (retry, error signalled upstream, dedup claim released) was
+  told the task was queued when it had been dropped. `strict` now raises on:
+  an unset `AWS_LAMBDA_FUNCTION_NAME`; a Lambda `invoke` that raises **or**
+  answers a non-2xx `StatusCode` / carries a `FunctionError` (an async invoke
+  returns 202 on acceptance, so boto3 not raising was never proof of
+  dispatch); an unconfigured SQS client or queue; a failed SQS `send_message`;
+  a `NoopOrSyncScheduler` with no executor — the scheduler every
+  *non*-serverless caller gets, which silently dropped strict tasks; and an
+  EventBridge scheduling failure for a task deferred beyond Lambda's 900s
+  timeout, where the fallback immediate invoke cannot honor `run_at`.
+- **Non-strict dispatch failed differently per transport**
+  (`jvspatial/serverless/tasks/aws_sqs.py`). SQS `send_message` errors
+  propagated while the Lambda transport swallowed them, so identical
+  application code had opposite failure semantics depending on
+  `JVSPATIAL_AWS_DEFERRED_TRANSPORT`. `strict` is now the single switch on
+  every transport: `False` is fire-and-forget, `True` raises.
+- **The one-time no-op diagnostic never fired for strict callers**
+  (`jvspatial/serverless/factory.py`). The strict raise preceded
+  `_note_noop_in_serverless`, so a deployment whose callers are all strict
+  never got the startup error explaining *why* nothing dispatches. The
+  diagnostic is now emitted first.
+
+### Changed
+
+
+- **`TaskScheduler.schedule` takes a `strict` argument**
+  (`jvspatial/serverless/tasks/base.py`). `TaskScheduler` is a public/stable
+  extension point and `config.task_scheduler` is duck-typed, so
+  `dispatch_deferred_task` introspects `schedule()` and omits `strict` for
+  third-party implementations that predate it — those keep serving non-strict
+  dispatches unchanged. A `strict=True` dispatch through such a scheduler
+  raises `TaskSchedulerNotConfiguredError` (it cannot honor the guarantee)
+  rather than `TypeError`.
+
+### Documentation
+
+
+- **`find` sort contract moved to SPEC §4.1** (beside the `Database` method
+  table it governs, rather than under §4.2 capability flags) and extended: the
+  `limit`-must-not-outlive-the-sort-pushdown rule, plus a **Known divergences**
+  table covering MongoDB's ascending sorts (native `cursor.sort()` places
+  missing values first — documented, not normalized), array-index path segments,
+  and heterogeneous value types.
+- **Corrected stale NULL-ordering docstrings** in
+  `jvspatial/db/_sqlite_translate.py` (module docstring and `translate_sort`)
+  and `jvspatial/db/_postgres_translate.py` (`translate_sort`). All three still
+  claimed "NULLs sort last for ascending, first for descending, mirroring
+  `finalize_find_results`" — the opposite of what the code emits and of the
+  contract.
+- **`Database.find`** now documents the ordering contract adapter authors must
+  satisfy; **`Database.find_iter`** no longer claims a composite
+  `(sort_value, id)` cursor — the default implementation tracks `id` only, so a
+  non-`id` sort drops records that sort late but carry a lower `id`.
+
 
 ## [0.0.11] - 2026-07-02
 

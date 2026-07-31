@@ -548,6 +548,13 @@ Detection results are memoized via `lru_cache`; tests call `reset_serverless_mod
 
 Register handlers with `@deferred_invoke_handler("task.name")`. Handlers **must be idempotent**; the framework provides no exactly-once guarantee.
 
+**Dispatch failure contract** (`strict`, default `False`):
+
+- **`strict=False`** — fire-and-forget on every transport. A dispatch that cannot be handed to the provider is logged and a synthetic reference returned.
+- **`strict=True`** — every such path raises instead. `TaskSchedulerNotConfiguredError` when the deployment can never dispatch (no-op scheduler in serverless mode, `AWS_LAMBDA_FUNCTION_NAME` unset, SQS unconfigured, `NoopOrSyncScheduler` without an executor, or a scheduler predating the `strict` parameter); `TaskDispatchError` when the provider was reached and failed (a raised or non-2xx / `FunctionError` Lambda `invoke`, a raised SQS `send_message`, or an EventBridge failure for a task deferred beyond Lambda's 900s timeout). Both derive from `DeferredTaskError` → `RuntimeError`.
+
+`TaskScheduler` is a public/stable extension point and `config.task_scheduler` is duck-typed, so `dispatch_deferred_task` introspects `schedule()` and omits `strict` for implementations that predate it. Such a scheduler still serves non-strict dispatches; a `strict=True` dispatch through it raises `TaskSchedulerNotConfiguredError` rather than a `TypeError`.
+
 ### 11.4 Lambda Web Adapter
 
 When LWA is detected, `Server` applies best-effort defaults for `AWS_LWA_PASS_THROUGH_PATH` and `AWS_LWA_INVOKE_MODE`. The LWA extension reads these *before* Python starts, so IaC should still set them explicitly for reliability.
