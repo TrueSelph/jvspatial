@@ -24,6 +24,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Partial-index repair log is INFO, not WARNING** (`jvspatial/db/sqlite.py`).
+  Dropping a non-partial index so it can be recreated with `WHERE` is expected
+  one-shot migration noise; log at info. Also satisfy ruff SIM110 in
+  `_index_needs_partial_repair` and mypy narrowing for `$eq` string literals in
+  `_sqlite_translate.py`.
+
+- **SQLite connect-time repair of global ``session_id`` unique indexes**
+  (`jvspatial/db/sqlite.py`). Opening a SQLite DB now drops UNIQUE indexes on
+  ``json_extract(data, '$.context.session_id')`` that lack a ``WHERE`` clause,
+  so a process that never re-ran ``ensure_indexes(Conversation)`` after the
+  partial-filter fix still stops wiping Interaction rows. Partial unique
+  ``create_index`` failures now raise instead of logging a warning.
+  Coverage: `tests/db/test_sqlite_partial_index.py`.
+
+- **SQLite partial unique indexes** (`jvspatial/db/sqlite.py`, `_sqlite_translate.py`).
+  `SQLiteDB.create_index` ignored Mongo-style `partialFilterExpression` /
+  `partial_filter_expression` kwargs and created **global** unique indexes on
+  shared `node` collections. That made `INSERT OR REPLACE` wipe `Interaction`
+  rows when they shared `context.session_id` with a `Conversation` (orchestrator
+  history empty on SQLite, fine on JsonDB). SQLite now translates the same
+  small dialect as Postgres into a `WHERE` clause, raises if a unique partial
+  filter cannot be translated, and drops/recreates a pre-existing non-partial
+  index of the same name so a restart self-heals. Coverage in
+  `tests/db/test_sqlite_partial_index.py` and translator unit tests.
 
 - **`SQLiteDB.find` treated `sort=[]` as an untranslatable sort**
   (`jvspatial/db/sqlite.py`). An empty list failed the `sort is None` guard, so
@@ -142,14 +166,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `(sort_value, id)` cursor — the default implementation tracks `id` only, so a
   non-`id` sort drops records that sort late but carry a lower `id`.
 
-
 ## [0.0.11] - 2026-07-02
 
 ### Fixed
 
 - **Single-hop `find_connected_nodes` fast path dropped valid neighbors** (`jvspatial/core/entities/node.py`). Two regressions introduced with the 0.0.10 fast path, both invisible to the existing suite because `JsonDB` exposes no `find_connected_nodes` (so tests fell back to the slow edge scan):
-  - *Limit-before-filter:* `limit` was pushed into the DB scan **before** the Python node-type filter, so `node(node=T)` / `nodes(node=T, limit=n)` could return nothing when a non-matching neighbor sorted first, even though matching neighbors existed. `limit` is now applied to the DB scan only when there is no node filter; otherwise it is applied after filtering.
-  - *Subtype resolution under an entity-name collision:* rows were deserialized with the base `Node` class, so when two `Node` subclasses persisted in one database shared an entity name (e.g. an app `User` and an embedded-agent `User`), `find_subclass_by_name` returned the first global match and `isinstance`-based filtering silently dropped the valid neighbor. The fast path now hydrates using the caller's requested concrete type as the resolution hint.
+  - _Limit-before-filter:_ `limit` was pushed into the DB scan **before** the Python node-type filter, so `node(node=T)` / `nodes(node=T, limit=n)` could return nothing when a non-matching neighbor sorted first, even though matching neighbors existed. `limit` is now applied to the DB scan only when there is no node filter; otherwise it is applied after filtering.
+  - _Subtype resolution under an entity-name collision:_ rows were deserialized with the base `Node` class, so when two `Node` subclasses persisted in one database shared an entity name (e.g. an app `User` and an embedded-agent `User`), `find_subclass_by_name` returned the first global match and `isinstance`-based filtering silently dropped the valid neighbor. The fast path now hydrates using the caller's requested concrete type as the resolution hint.
 - Regression coverage: `tests/core/test_connected_nodes_fast_path.py` installs a `find_connected_nodes` shim so the fast path is exercised (the stock `JsonDB` never did).
 
 ## [0.0.10] - 2026-07-02
@@ -290,7 +313,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `jvspatial.utils.stability.emit_experimental_once(name, message)` — public hook for opt-in surfaces that need to emit the experimental warning without going through the `@experimental` decorator (replaces private `_emit_once` calls). (Audit §7.7.)
 - `tests/db/test_sqlite_cross_loop_audit.py`, `tests/utils/test_wave4_polish_audit.py` — 10 new regression cases pinning Wave 4 audit fixes.
 - `jvspatial.core.entities.TraversalSkipped` and `TraversalPaused` exception classes. `Walker.skip()` now raises `TraversalSkipped` (caught via `except TraversalSkipped`); previously relied on substring-matching `"Node skipped"` in the message. (Audit §2.9 / SPEC §6.5.)
-- `PathSanitizer` rejects Windows-reserved filenames (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`) regardless of host OS. ``CON.txt`` is rejected; ``CONFIG.json`` passes. (Audit §4.18 / SPEC §15.1.)
+- `PathSanitizer` rejects Windows-reserved filenames (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`) regardless of host OS. `CON.txt` is rejected; `CONFIG.json` passes. (Audit §4.18 / SPEC §15.1.)
 - `tests/storage/test_windows_reserved_audit.py`, `tests/core/test_wave5_walker_audit.py`, `tests/api/test_deferred_invoke_fail_closed_audit.py`, `tests/db/test_sqlite_id_coercion_audit.py` — 23 new regression cases pinning Wave 5 audit fixes.
 
 ### Fixed

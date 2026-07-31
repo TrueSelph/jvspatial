@@ -438,8 +438,11 @@ class LocalFileInterface(FileStorageInterface):
                     "Skipping MIME allowlist for internal marker: %s", file_path
                 )
             else:
+                hint_mime = (
+                    (metadata or {}).get("mime") if isinstance(metadata, dict) else None
+                )
                 validation = self.validator.validate_file(
-                    content=content, filename=filename
+                    content=content, filename=filename, hint_mime=hint_mime
                 )
                 logger.debug(f"File validation passed: {validation}")
 
