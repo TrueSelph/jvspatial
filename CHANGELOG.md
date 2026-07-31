@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Postgres applied `LIMIT` in SQL even when the sort could not be pushed
+  down** (`jvspatial/db/postgres.py`, both `PostgresDB.find` and
+  `PostgresTransaction.find`). `translate_sort` returns `None` for a field path
+  it cannot safely interpolate (e.g. `context.my-field`), leaving the ordering
+  to `finalize_find_results` — but the `LIMIT` was still pushed, so the database
+  returned an arbitrary N rows and the in-memory sort ordered that arbitrary
+  subset. `find(sort=..., limit=10)` returned "the top 10 of an arbitrary 10"
+  instead of the true top 10. The `LIMIT` is now withheld whenever the sort
+  falls back to memory, matching `SQLiteDB.find` and `DynamoDB.find`. Vector
+  (`$near`) queries additionally no longer have their distance ordering
+  overwritten by an in-memory re-sort on the user's `sort`.
+
 - **In-memory `find` sort ignored dotted field paths** (`jvspatial/db/database.py`).
   `_find_sort_key` resolved `sort` fields with a flat `record.get(field)`, so a
   spec like `sort=[("context.started_at", -1)]` produced `None` for every row and

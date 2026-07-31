@@ -243,6 +243,41 @@ class TestPostgresOperators:
         out = await pg_db.find("node", {}, sort=[("context.score", 1)])
         assert [r["id"] for r in out] == ["n.1", "n.2", "n.5", "n.7", "n.8"]
 
+    async def test_untranslatable_sort_with_limit_returns_true_top_n(
+        self, pg_db: "PostgresDB"
+    ) -> None:
+        """LIMIT must not be pushed when the sort falls back to memory.
+
+        ``my-score`` has a hyphen, so ``translate_sort`` refuses it and the
+        ordering happens in Python. Pushing the LIMIT would order an
+        arbitrary N rows instead of the true top N.
+        """
+        for score in (5, 2, 8, 1, 7):
+            await pg_db.save(
+                "node",
+                {
+                    "id": f"n.{score}",
+                    "entity": "n",
+                    "context": {"my-score": score},
+                },
+            )
+        out = await pg_db.find("node", {}, sort=[("context.my-score", -1)], limit=2)
+        assert [r["id"] for r in out] == ["n.8", "n.7"]
+
+    async def test_sort_places_missing_values_last(self, pg_db: "PostgresDB") -> None:
+        """NULLS LAST in both directions — SPEC §4.1 find sort contract."""
+        for score in (5, 2):
+            await pg_db.save(
+                "node",
+                {"id": f"n.{score}", "entity": "n", "context": {"score": score}},
+            )
+        await pg_db.save("node", {"id": "n.hole", "entity": "n", "context": {}})
+
+        asc = await pg_db.find("node", {}, sort=[("context.score", 1)])
+        desc = await pg_db.find("node", {}, sort=[("context.score", -1)])
+        assert asc[-1]["id"] == "n.hole"
+        assert desc[-1]["id"] == "n.hole"
+
 
 # ---- Atomic find_one_and_update --------------------------------------------
 
