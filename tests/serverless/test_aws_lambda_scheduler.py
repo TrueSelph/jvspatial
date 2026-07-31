@@ -92,3 +92,51 @@ def test_delay_seconds_becomes_process_at_in_payload():
             sched.schedule("t", {"x": 1}, delay_seconds=30)
     body = json.loads(mock_client.invoke.call_args.kwargs["Payload"])
     assert body["process_at"] == 1030.0
+
+
+# ── strict semantics ────────────────────────────────────────────────────────
+#
+# strict=True is the caller saying "I have my own failure handling — a 5xx to
+# the webhook origin, a dedup claim to release — so an undispatched task must
+# RAISE, not hand me a synthetic reference". The WhatsApp deferred-interact
+# path relied on that contract while schedule() swallowed every failure: real
+# dispatch errors returned 200 upstream with the wamid claimed, so Meta's
+# retry was dedup-blocked and the message silently lost.
+
+
+def test_strict_raises_when_function_name_unset(monkeypatch):
+    monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME", raising=False)
+    sched = AwsLambdaDeferredTaskScheduler(function_name="")
+    with pytest.raises(RuntimeError, match="AWS_LAMBDA_FUNCTION_NAME"):
+        sched.schedule("t.task", {"k": "v"}, strict=True)
+
+
+def test_non_strict_keeps_fire_and_forget_when_function_name_unset(monkeypatch):
+    monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME", raising=False)
+    sched = AwsLambdaDeferredTaskScheduler(function_name="")
+    ref = sched.schedule("t.task", {"k": "v"})
+    assert ref.startswith("aws-lambda-")
+
+
+def test_strict_reraises_invoke_failure():
+    client = MagicMock()
+    client.invoke.side_effect = ConnectionError("lambda unreachable")
+    sched = AwsLambdaDeferredTaskScheduler(function_name="fn", lambda_client=client)
+    with pytest.raises(ConnectionError):
+        sched.schedule("t.task", {"k": "v"}, strict=True)
+
+
+def test_non_strict_swallows_invoke_failure_unchanged():
+    client = MagicMock()
+    client.invoke.side_effect = ConnectionError("lambda unreachable")
+    sched = AwsLambdaDeferredTaskScheduler(function_name="fn", lambda_client=client)
+    ref = sched.schedule("t.task", {"k": "v"})
+    assert ref.startswith("aws-lambda-")
+
+
+def test_strict_success_returns_reference():
+    client = MagicMock()
+    sched = AwsLambdaDeferredTaskScheduler(function_name="fn", lambda_client=client)
+    ref = sched.schedule("t.task", {"k": "v"}, strict=True)
+    assert ref.startswith("aws-lambda-")
+    client.invoke.assert_called_once()

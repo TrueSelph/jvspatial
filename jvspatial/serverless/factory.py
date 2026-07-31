@@ -140,9 +140,13 @@ def dispatch_deferred_task(
     """Schedule a JSON-serializable deferred task; thin wrapper over :func:`get_task_scheduler`.
 
     Args:
-        strict: If True and serverless mode is on but the resolved scheduler is
-            :class:`LoggingNoopTaskScheduler`, raise ``RuntimeError`` instead of
-            returning a synthetic reference.
+        strict: If True, scheduling failures raise instead of returning a
+            synthetic reference: the noop-scheduler-in-serverless case (as
+            before), AND provider dispatch failures — a missing
+            ``AWS_LAMBDA_FUNCTION_NAME``, a failed Lambda ``invoke``, an
+            unconfigured SQS client. Callers passing ``strict=True`` have their
+            own failure handling; a synthetic reference for an undispatched
+            task turns that handling into silent data loss.
     """
     sched = get_task_scheduler(config, override=override)
     if (
@@ -161,4 +165,5 @@ def dispatch_deferred_task(
         delay_seconds=delay_seconds,
         retry_config=retry_config,
         run_at=run_at,
+        strict=strict,
     )

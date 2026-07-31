@@ -19,6 +19,7 @@ class NoopOrSyncScheduler(TaskScheduler):
         delay_seconds: int = 0,
         retry_config: Optional[RetryConfig] = None,
         run_at: Optional[float] = None,
+        strict: bool = False,
     ) -> str:
         """Run the configured executor immediately; see base class."""
         reference = f"sync-{uuid.uuid4()}"

@@ -151,13 +151,29 @@ class AwsLambdaDeferredTaskScheduler(TaskScheduler):
         delay_seconds: int = 0,
         retry_config: Optional[RetryConfig] = None,
         run_at: Optional[float] = None,
+        strict: bool = False,
     ) -> str:
-        """Dispatch via Lambda async invoke or EventBridge Scheduler; see base class."""
+        """Dispatch via Lambda async invoke or EventBridge Scheduler; see base class.
+
+        Under ``strict=True`` every path that fails to hand the task to AWS
+        raises instead of returning a synthetic reference. Callers that opted
+        into strict have their own failure handling (a 5xx to the webhook
+        origin, a released dedup claim); handing them a reference for a task
+        that was never dispatched converts their retry into silent data loss —
+        which is precisely how deferred WhatsApp messages were being dropped:
+        the webhook returned 200, the wamid stayed claimed, and Meta's retry
+        was dedup-blocked.
+        """
         reference = f"aws-lambda-{uuid.uuid4()}"
         if retry_config is not None:
             pass  # reserved for future retry metadata on envelope
 
         if not self._function_name:
+            if strict:
+                raise RuntimeError(
+                    "AWS_LAMBDA_FUNCTION_NAME is not set; cannot dispatch "
+                    f"deferred task {task_type!r} (strict scheduling requested)"
+                )
             logger.warning(
                 "AWS_LAMBDA_FUNCTION_NAME not set; deferred task %s not dispatched",
                 task_type,
@@ -168,6 +184,8 @@ class AwsLambdaDeferredTaskScheduler(TaskScheduler):
         if effective_run_at is None and delay_seconds > 0:
             effective_run_at = time.time() + delay_seconds
 
+        # An EventBridge failure is NOT a dispatch failure: it falls back to
+        # the direct Lambda invoke below, which is the path strict guards.
         if effective_run_at is not None and _create_eventbridge_schedule(
             task_type, payload, effective_run_at, reference
         ):
@@ -188,4 +206,6 @@ class AwsLambdaDeferredTaskScheduler(TaskScheduler):
                 e,
                 exc_info=True,
             )
+            if strict:
+                raise
         return reference

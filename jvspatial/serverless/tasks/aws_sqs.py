@@ -28,10 +28,20 @@ class AwsSqsTaskScheduler(TaskScheduler):
         delay_seconds: int = 0,
         retry_config: Optional[RetryConfig] = None,
         run_at: Optional[float] = None,
+        strict: bool = False,
     ) -> str:
-        """Enqueue a message on SQS with optional delay; see base class."""
+        """Enqueue a message on SQS with optional delay; see base class.
+
+        ``send_message`` failures always propagate (unchanged); ``strict`` also
+        turns the unconfigured-client silent no-op into an error.
+        """
         reference = f"aws-sqs-{uuid.uuid4()}"
         if not self._sqs_client or not self._queue_url:
+            if strict:
+                raise RuntimeError(
+                    "SQS client/queue not configured; cannot dispatch deferred "
+                    f"task {task_type!r} (strict scheduling requested)"
+                )
             return reference
 
         delay = max(0, int(delay_seconds))

@@ -27,6 +27,7 @@ class TaskScheduler(ABC):
         delay_seconds: int = 0,
         retry_config: Optional[RetryConfig] = None,
         run_at: Optional[float] = None,
+        strict: bool = False,
     ) -> str:
         """Schedule a task and return provider reference id.
 
@@ -37,4 +38,10 @@ class TaskScheduler(ABC):
             retry_config: Optional retry metadata for queue-based backends.
             run_at: Optional Unix epoch seconds for absolute execution time; backends
                 map this to native scheduling (e.g. EventBridge) or embed in the message.
+            strict: When True, a dispatch that cannot be handed to the provider MUST
+                raise instead of logging and returning a synthetic reference. A
+                caller passing ``strict=True`` is stating that it has fallback
+                behaviour of its own (retry, 5xx to the webhook origin, releasing a
+                dedup claim) and that a silently-dropped task is data loss. The
+                default preserves fire-and-forget semantics.
         """

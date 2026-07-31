@@ -22,6 +22,7 @@ class LoggingNoopTaskScheduler(TaskScheduler):
         delay_seconds: int = 0,
         retry_config: Optional[RetryConfig] = None,
         run_at: Optional[float] = None,
+        strict: bool = False,
     ) -> str:
         """Log and return a synthetic reference; see base class.
 
@@ -31,5 +32,10 @@ class LoggingNoopTaskScheduler(TaskScheduler):
         ``serverless.factory._note_noop_in_serverless`` is sufficient
         (audit §7.14 / SPEC §11.2).
         """
+        if strict:
+            raise RuntimeError(
+                f"{self._message} (task_type={task_type!r}); strict scheduling "
+                "requested but this scheduler is a no-op"
+            )
         logger.debug("%s (task_type=%s)", self._message, task_type)
         return f"noop-{uuid.uuid4()}"
