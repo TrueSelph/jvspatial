@@ -81,7 +81,7 @@ See the [Caching Documentation](caching.md) for detailed information about cache
 |----------|------|---------|-------------|
 | `SERVERLESS_MODE` | boolean | auto | Force serverless-safe runtime behavior. When unset, auto-detects AWS Lambda (`AWS_LAMBDA_RUNTIME_API` / `AWS_LAMBDA_FUNCTION_NAME`) and other common serverless runtimes. |
 | `JVSPATIAL_DEFERRED_INVOKE_DISABLED` | boolean | `false` | When true, `register_deferred_invoke_route` does not mount `POST …/_internal/deferred`. |
-| `JVSPATIAL_DEFERRED_INVOKE_SECRET` | string | _(empty)_ | When set, deferred-invoke HTTP requests must send this value via `X-JVSPATIAL-Deferred-Authorize` or `Authorization: Bearer …`. |
+| `JVSPATIAL_DEFERRED_INVOKE_SECRET` | string | _(empty)_ | Required for non-loopback callers of `POST …/_internal/deferred` (`X-JVSPATIAL-Deferred-Authorize` or `Authorization: Bearer …`). Loopback (LWA self-invoke) is always allowed without this secret. |
 | `JVSPATIAL_WORK_CLAIM_STALE_SECONDS` | float | `600` | Default TTL for work-claim leases (`claim_record`). After this many seconds another worker can re-claim the document. |
 
 Use `is_serverless_mode()` from `jvspatial` or `jvspatial.runtime.serverless` to check at runtime. With no argument, `is_serverless_mode()` uses `get_current_server().config` when the server context is set (see serverless-mode docs):
