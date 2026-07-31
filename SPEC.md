@@ -207,7 +207,7 @@ When `DeferredSaveMixin` is mixed into an entity *and* `deferred_saves_globally_
 | `save(collection, data)` | Yes | Insert-or-replace by ID; returns saved record |
 | `get(collection, id)` | Yes | Fetch by ID or `None` |
 | `delete(collection, id)` | Yes | Idempotent delete by ID |
-| `find(collection, query, *, limit, sort)` | Yes | Mongo-style query; returns list |
+| `find(collection, query, *, limit, sort)` | Yes | Mongo-style query; returns list. Ordering contract below |
 | `count(collection, query=None)` | Default impl | Default counts the result of `find`; adapters should override for efficiency |
 | `find_one(collection, query)` | Default impl | First match or `None` |
 | `find_many(collection, ids)` | Default impl | Bulk-fetch by ID; default is N sequential `get`s — adapters override for round-trip efficiency |
@@ -215,6 +215,36 @@ When `DeferredSaveMixin` is mixed into an entity *and* `deferred_saves_globally_
 | `find_one_and_delete` | Default impl | Read-then-delete; **not atomic** except where overridden (MongoDB) |
 | `bulk_save` | Default impl | Multi-record save; partial-success semantics vary by adapter |
 | `begin_transaction` | Optional | Returns a transaction context manager if `supports_transactions=True` |
+
+#### `find` sort contract
+
+`sort` is a list of `(field, direction)` with `1` ascending and `-1` descending.
+An adapter may push the sort into the backend or fall back to
+`finalize_find_results` (`jvspatial/db/database.py`); either way it must produce
+the same ordering:
+
+- **Dotted paths** (`context.started_at`) resolve into nested documents. A
+  non-dict segment along the path resolves to "missing", not an error. Use
+  `resolve_sort_value` rather than a flat `record.get(field)` anywhere a sort
+  field is read — including cursor payloads.
+- **Missing values sort last in both directions** — matching the `NULLS LAST`
+  emitted by `_sqlite_translate.translate_sort` and
+  `_postgres_translate.translate_sort`. A `sort` + `limit` "newest N" fetch
+  therefore never fills its window with records lacking the sort field.
+- Sorting is **stable**; compound sorts apply from the last key to the first.
+- **`limit` must not be pushed down when the sort is not.** An adapter that
+  cannot express the ordering in the backend has to fetch the full match set
+  and apply `sort` and `limit` together in memory — otherwise it orders an
+  arbitrary N rows instead of returning the true top N.
+
+**Known divergences** — the contract holds for homogeneous scalar leaves; these
+cases are documented rather than normalized:
+
+| Case | Behavior |
+|---|---|
+| MongoDB, ascending | `MongoDB.find` uses native `cursor.sort()`. BSON orders null/missing lowest, so **missing values come first** on ascending sorts. Descending matches the contract. Normalizing would require an aggregation pipeline on every `find`. |
+| Array-index segments (`items.0`) | Resolve to "missing" in memory and on SQLite; rejected by the Postgres pushdown (leading digit fails `_safe_field_path`, so it falls back and agrees); resolved natively by MongoDB. |
+| Heterogeneous values on one key | The in-memory path raises `TypeError` (Python cannot order `str` against `int`); SQL pushdowns order by storage class instead. Object/array leaves likewise raise in memory and sort as JSON text on SQLite. |
 
 ### 4.2 Capability flags
 

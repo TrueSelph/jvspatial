@@ -810,11 +810,19 @@ class PostgresDB(Database):
         else:
             order_clause = ""
 
+        # The sort pushdown may have failed (``translate_sort`` returns None
+        # for an unsafe field path). The ordering then has to happen in
+        # memory — which means the LIMIT must NOT be pushed down: the
+        # database would return an arbitrary N rows and we would order that
+        # arbitrary subset instead of the true top N. SQLite
+        # (``sqlite.py``) and DynamoDB withhold it for the same reason.
+        sort_in_memory = bool(sort) and sort_sql is None and vec_field is None
+
         effective_limit = limit
         if vec_limit is not None and (limit is None or vec_limit < limit):
             effective_limit = vec_limit
         limit_clause = ""
-        if effective_limit is not None:
+        if effective_limit is not None and not sort_in_memory:
             params = list(params) + [int(effective_limit)]
             limit_clause = f" LIMIT ${len(params)}"
 
@@ -825,10 +833,11 @@ class PostgresDB(Database):
             rows = await conn.fetch(sql, *params)
         records = [self._record_from_row(r) for r in rows]
 
-        # Sort pushdown may have failed (translate_sort returned None);
-        # honor it in-memory in that case so the contract still holds.
-        if sort and sort_sql is None:
-            records = finalize_find_results(records, sort=sort, limit=None)
+        # Vector queries keep their distance ordering: re-sorting by the
+        # user's ``sort`` here would discard the ORDER BY the comment above
+        # says wins.
+        if sort_in_memory:
+            records = finalize_find_results(records, sort=sort, limit=limit)
         return records
 
     async def count(
@@ -1795,8 +1804,12 @@ class PostgresTransaction:
         clauses = [where_sql] if where_sql else []
         where_clause = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         order_clause = f" ORDER BY {sort_sql}" if sort_sql else ""
+        # Withhold the LIMIT when the sort has to happen in memory, so we
+        # order the full match set rather than an arbitrary N rows. Mirrors
+        # ``PostgresDB.find``.
+        sort_in_memory = bool(sort) and sort_sql is None
         limit_clause = ""
-        if limit is not None:
+        if limit is not None and not sort_in_memory:
             params = list(params) + [int(limit)]
             limit_clause = f" LIMIT ${len(params)}"
         rows = await self._connection.fetch(
@@ -1804,8 +1817,8 @@ class PostgresTransaction:
             *params,
         )
         records = [self._db._record_from_row(r) for r in rows]
-        if sort and sort_sql is None:
-            records = finalize_find_results(records, sort=sort, limit=None)
+        if sort_in_memory:
+            records = finalize_find_results(records, sort=sort, limit=limit)
         return records
 
     async def commit(self) -> None:

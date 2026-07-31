@@ -589,10 +589,10 @@ def translate_sort(
     or invalid direction). The fragment does NOT include the leading
     ``ORDER BY`` keyword.
 
-    NULLs sort last for ascending, first for descending — mirrors
-    :func:`jvspatial.db.database.finalize_find_results` semantics. (Postgres'
-    default puts NULLs first for ASC, which is the opposite of what
-    callers expect, so we set NULLS LAST / NULLS FIRST explicitly.)
+    NULLs sort last in both directions — mirrors
+    :func:`jvspatial.db.database.finalize_find_results` semantics (SPEC §4.1,
+    find sort contract). Postgres' own default puts NULLs first for ASC and
+    last for DESC, so ``NULLS LAST`` is set explicitly on every key.
     """
     if not sort:
         return None

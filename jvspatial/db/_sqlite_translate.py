@@ -28,9 +28,9 @@ What falls back to Python
 ORDER BY pushdown
 -----------------
 :func:`translate_sort` handles single-/multi-key sorts on simple
-identifiers (no operators in the key). NULLs sort last for ascending and
-first for descending, mirroring the in-memory ``finalize_find_results``
-behavior.
+identifiers (no operators in the key). NULLs sort last in *both*
+directions, mirroring the in-memory ``finalize_find_results`` behavior
+(SPEC §4.1, find sort contract).
 
 Security
 --------
@@ -271,8 +271,8 @@ def translate_sort(sort: Optional[List[Tuple[str, int]]]) -> Optional[str]:
     invalid direction). The fragment does NOT include the leading
     ``ORDER BY`` keyword.
 
-    NULLs sort last for ascending, first for descending -- this matches
-    ``finalize_find_results`` semantics.
+    NULLs sort last in both directions -- this matches
+    ``finalize_find_results`` semantics (SPEC §4.1, find sort contract).
     """
     if not sort:
         return None
@@ -287,10 +287,10 @@ def translate_sort(sort: Optional[List[Tuple[str, int]]]) -> Optional[str]:
             # ascending: NULLs last
             parts.append(f"({column} IS NULL), {column} ASC")
         else:
-            # descending: NULLs last too (matches in-memory behavior:
-            # the in-memory sort uses (value is None, value), reverse=True,
-            # which puts None last because it sorts (True, ...) after
-            # (False, ...).)
+            # descending: NULLs last too. The leading ``IS NULL`` term is
+            # itself sorted ASC, so non-NULL rows (0) precede NULL rows (1)
+            # regardless of direction. ``_find_sort_key`` inverts its None
+            # flag for descending sorts to reach the same ordering.
             parts.append(f"({column} IS NULL), {column} DESC")
     return ", ".join(parts)
 

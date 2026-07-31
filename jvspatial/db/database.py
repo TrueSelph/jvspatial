@@ -70,10 +70,52 @@ class BulkSaveResult:
 logger = logging.getLogger(__name__)
 
 
-def _find_sort_key(record: Dict[str, Any], field: str) -> Tuple[bool, Any]:
-    """Sort key: non-``None`` values first, then by value (with ``None`` last)."""
-    value = record.get(field)
-    return (value is None, value)
+def resolve_sort_value(record: Dict[str, Any], field: str) -> Any:
+    """Read ``field`` out of ``record``, following dotted paths.
+
+    ``field`` may be a plain key (``id``) or a dotted path into nested
+    documents (``context.started_at``), matching what the SQLite/Postgres
+    sort pushdowns and Mongo's native sort accept. A missing key — or a
+    non-dict encountered part-way along the path — resolves to ``None``
+    rather than raising, so a malformed record sorts as "missing" instead
+    of breaking the whole page.
+
+    Anything that mints or interprets a sort value should go through this
+    rather than a flat ``record.get(field)``: cursor payloads in
+    :meth:`GraphContext.find_page` and adapter-side sorting must agree on
+    what a sort field resolves to.
+    """
+    if "." not in field:
+        return record.get(field)
+    value: Any = record
+    for part in field.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
+def _find_sort_key(
+    record: Dict[str, Any], field: str, *, descending: bool = False
+) -> Tuple[bool, Any]:
+    """Sort key placing missing values last, ascending or descending.
+
+    Supports dotted paths (``context.started_at``) so callers can sort attribute
+    fields the same way they query them. The SQLite/Postgres sort pushdowns
+    (``_sqlite_translate.translate_sort`` / ``_postgres_translate.translate_sort``)
+    and Mongo's native sort already resolve dotted paths; without this the same
+    sort spec silently degraded to "every key is ``None``" whenever a backend
+    fell back to the in-memory path.
+
+    ``finalize_find_results`` sorts descending via ``reverse=True``, which flips
+    the whole key — including the ``None`` flag. Inverting the flag for
+    descending sorts keeps missing values last in both directions, matching the
+    ``NULLS LAST`` both SQL translators emit. All missing values share a flag,
+    so ``None`` is never compared against a real value.
+    """
+    value = resolve_sort_value(record, field)
+    missing = value is None
+    return (not missing if descending else missing, value)
 
 
 def _normalize_id_query(query: Dict[str, Any]) -> Dict[str, Any]:
@@ -104,15 +146,18 @@ def finalize_find_results(
 
     ``sort`` is a list of ``(field, direction)`` with ``direction`` ``1`` for
     ascending and ``-1`` for descending. Sorting is stable; compound sorts are
-    applied from the last key to the first.
+    applied from the last key to the first. Records missing the sort field sort
+    last in both directions, matching the ``NULLS LAST`` the SQLite and Postgres
+    pushdowns emit.
     """
     out = records
     if sort:
         out = list(records)
         for sort_field, direction in reversed(sort):
+            descending = direction == -1
             out.sort(
-                key=partial(_find_sort_key, field=sort_field),
-                reverse=(direction == -1),
+                key=partial(_find_sort_key, field=sort_field, descending=descending),
+                reverse=descending,
             )
     if limit is not None:
         out = out[:limit]
@@ -212,6 +257,25 @@ class Database(ABC):
 
         Returns:
             List of matching records
+
+        Ordering contract (SPEC §4.1) — implementations must satisfy all of
+        it whether they push the sort into the backend or fall back to
+        :func:`finalize_find_results`:
+
+        * ``field`` may be a dotted path into nested documents
+          (``context.started_at``); resolve it with
+          :func:`resolve_sort_value`, never a flat ``record.get(field)``.
+        * Records with no value for the sort field come **last in both
+          directions**, matching the ``NULLS LAST`` the SQL translators emit.
+        * The sort is stable; compound sorts apply from the last key first.
+        * If the ordering cannot be expressed in the backend, ``limit`` must
+          not be pushed down either — fetch the full match set and apply
+          ``sort`` and ``limit`` together in memory, or the result is the top
+          N of an arbitrary N.
+
+        Known divergences are listed in SPEC §4.1 (MongoDB places missing
+        values first on ascending sorts; heterogeneous value types raise in
+        memory but order by storage class in SQL).
         """
         pass
 
@@ -257,10 +321,16 @@ class Database(ABC):
         Args:
             collection: Collection name.
             query: Mongo-style query (same operator surface as ``find``).
-            sort: Optional ``[(field, direction)]``. When provided, the
-                cursor is a composite ``(sort_value, id)`` for stable
-                pagination across concurrent writes. When omitted,
-                sort defaults to ``id`` ascending.
+            sort: Optional ``[(field, direction)]``, defaulting to ``id``
+                ascending. **The default implementation's cursor tracks
+                ``id`` only**, so a non-``id`` sort is not safely pageable
+                here: each batch asks for ``id > last_id``, which drops
+                records that sort after the batch but carry a lower ``id``.
+                Use ``sort=None`` (or an ``id`` sort) with this default, or
+                an adapter override with a native cursor. A composite
+                ``(sort_value, id)`` cursor is not yet implemented — for a
+                custom sort key with correct paging use
+                :meth:`jvspatial.core.context.GraphContext.find_page`.
             batch_size: Records per round trip. Default 100.
             cursor: Opaque bytes from a prior call's last record. Pass
                 back to resume; pass ``None`` (default) to start fresh.
@@ -580,6 +650,7 @@ __all__ = [
     "encode_cursor",
     "decode_cursor",
     "finalize_find_results",
+    "resolve_sort_value",
 ]
 
 

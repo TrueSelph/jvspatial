@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`resolve_sort_value(record, field)`** (`jvspatial/db/database.py`) — the
+  dotted-path resolution `finalize_find_results` uses, exported so adapters and
+  cursor logic resolve a sort field the same way. Added to the module's
+  `__all__`.
+
 - **Deferred-task exception hierarchy** (`jvspatial/exceptions.py`) —
   `DeferredTaskError` → `TaskDispatchError` → `TaskSchedulerNotConfiguredError`,
   replacing the bare `RuntimeError`s raised by strict dispatch. A strict caller
@@ -18,6 +23,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against the previous behavior keep working.
 
 ### Fixed
+
+
+- **`SQLiteDB.find` treated `sort=[]` as an untranslatable sort**
+  (`jvspatial/db/sqlite.py`). An empty list failed the `sort is None` guard, so
+  it took the fallback branch: the whole collection was loaded and `limit`
+  applied in memory instead of being pushed into SQL. Results were correct, the
+  work was not. A falsy `sort` is now normalized to `None`.
+- **`ObjectPager` re-sorted each page with a key that disagreed with the
+  database slice** (`jvspatial/core/pager.py`; `paginate_by_field` inherited
+  it). The in-Python safety-net sort used
+  `item.get("context", {}).get(order_by, 0)`, so a record missing `order_by`
+  was ordered as `0` — among the real values — while the DB-side
+  `sort` + `limit` that produced the slice had placed it in the trailing
+  missing-value run. Records could therefore appear on two pages or on none.
+  A blanket `contextlib.suppress(KeyError, TypeError)` also left a page
+  silently unsorted on mixed-type keys. The re-sort now routes through
+  `finalize_find_results`, making it a genuine no-op whenever the backend
+  honored the sort.
+- **`GraphContext.find_page` broke on dotted sort fields and could not reach
+  records missing the sort value** (`jvspatial/core/context.py`). Two defects:
+  the cursor payload was minted with a flat `last.get(primary_field)`, so a
+  `sort=[("context.started_at", -1)]` page always encoded `sort: None` and the
+  next page's keyset filter compared against `None` — raising
+  `TypeError: '>' not supported between instances of 'int' and 'NoneType'` from
+  `QueryEngine` on JsonDB. And with records missing the sort field now sorting
+  last, the keyset filter `{field: {"$lt": value}}` could never match them, so
+  iteration silently stopped at the last record that had a value. The cursor now
+  uses `resolve_sort_value`, the filter carries a `{field: None}` branch to reach
+  the trailing run, and a cursor minted inside that run walks it by `id`.
+- **Postgres applied `LIMIT` in SQL even when the sort could not be pushed
+  down** (`jvspatial/db/postgres.py`, both `PostgresDB.find` and
+  `PostgresTransaction.find`). `translate_sort` returns `None` for a field path
+  it cannot safely interpolate (e.g. `context.my-field`), leaving the ordering
+  to `finalize_find_results` — but the `LIMIT` was still pushed, so the database
+  returned an arbitrary N rows and the in-memory sort ordered that arbitrary
+  subset. `find(sort=..., limit=10)` returned "the top 10 of an arbitrary 10"
+  instead of the true top 10. The `LIMIT` is now withheld whenever the sort
+  falls back to memory, matching `SQLiteDB.find` and `DynamoDB.find`. Vector
+  (`$near`) queries additionally no longer have their distance ordering
+  overwritten by an in-memory re-sort on the user's `sort`.
+
+- **In-memory `find` sort ignored dotted field paths** (`jvspatial/db/database.py`).
+  `_find_sort_key` resolved `sort` fields with a flat `record.get(field)`, so a
+  spec like `sort=[("context.started_at", -1)]` produced `None` for every row and
+  left the result in arbitrary order. The SQLite and Postgres pushdowns
+  (`translate_sort`) and Mongo's native sort already resolved dotted paths, so
+  the same query ordered correctly on those backends and silently did not on
+  JsonDB/DynamoDB — and on SQLite/Postgres whenever the query fell back to the
+  in-memory path. Dotted paths now resolve in memory too; a non-dict segment
+  along the path yields `None` rather than raising.
+- **Descending in-memory sorts placed records missing the sort field first**
+  (`jvspatial/db/database.py`). `finalize_find_results` sorts with
+  `reverse=True`, which flipped `_find_sort_key`'s `None` flag along with the
+  values. Both SQL translators emit `NULLS LAST` for descending and Mongo sorts
+  missing values last, so a "newest N" `sort` + `limit` fetch returned real rows
+  on SQLite/Postgres/Mongo and a window of records missing the field on the
+  in-memory path. Missing values now sort last in both directions everywhere.
+  The comment in `_sqlite_translate.translate_sort` asserting the in-memory path
+  already matched has been corrected.
+
 
 - **Strict deferred scheduling only caught the no-op-scheduler case**
   (`jvspatial/serverless/`). `dispatch_deferred_task(..., strict=True)` raised
@@ -47,6 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+
 - **`TaskScheduler.schedule` takes a `strict` argument**
   (`jvspatial/serverless/tasks/base.py`). `TaskScheduler` is a public/stable
   extension point and `config.task_scheduler` is duck-typed, so
@@ -55,6 +121,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dispatches unchanged. A `strict=True` dispatch through such a scheduler
   raises `TaskSchedulerNotConfiguredError` (it cannot honor the guarantee)
   rather than `TypeError`.
+
+### Documentation
+
+
+- **`find` sort contract moved to SPEC §4.1** (beside the `Database` method
+  table it governs, rather than under §4.2 capability flags) and extended: the
+  `limit`-must-not-outlive-the-sort-pushdown rule, plus a **Known divergences**
+  table covering MongoDB's ascending sorts (native `cursor.sort()` places
+  missing values first — documented, not normalized), array-index path segments,
+  and heterogeneous value types.
+- **Corrected stale NULL-ordering docstrings** in
+  `jvspatial/db/_sqlite_translate.py` (module docstring and `translate_sort`)
+  and `jvspatial/db/_postgres_translate.py` (`translate_sort`). All three still
+  claimed "NULLs sort last for ascending, first for descending, mirroring
+  `finalize_find_results`" — the opposite of what the code emits and of the
+  contract.
+- **`Database.find`** now documents the ordering contract adapter authors must
+  satisfy; **`Database.find_iter`** no longer claims a composite
+  `(sort_value, id)` cursor — the default implementation tracks `id` only, so a
+  non-`id` sort drops records that sort late but carry a lower `id`.
+
 
 ## [0.0.11] - 2026-07-02
 
