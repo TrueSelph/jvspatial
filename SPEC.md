@@ -224,6 +224,21 @@ Adapters declare capabilities as class attributes:
 
 Callers branching on capabilities should test the flag, not the adapter class.
 
+#### `find` sort contract
+
+`sort` is a list of `(field, direction)` with `1` ascending and `-1` descending.
+Every adapter must produce the same ordering regardless of whether it pushes the
+sort into the backend or falls back to
+`finalize_find_results` (`jvspatial/db/database.py:109`):
+
+- **Dotted paths** (`context.started_at`) resolve into nested documents. A
+  non-dict segment along the path resolves to "missing", not an error.
+- **Missing values sort last in both directions** — matching the `NULLS LAST`
+  emitted by `_sqlite_translate.translate_sort` and
+  `_postgres_translate.translate_sort`. A `sort` + `limit` "newest N" fetch
+  therefore never fills its window with records lacking the sort field.
+- Sorting is **stable**; compound sorts apply from the last key to the first.
+
 ### 4.3 Built-in adapters
 
 | Adapter | File | Transactions | Notes |
