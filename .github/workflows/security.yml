@@ -32,13 +32,25 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
       - name: Install project + audit tooling
         run: |
-          python -m pip install --upgrade pip
+          # setuptools is upgraded explicitly, not just pip. The runner
+          # image ships whatever setuptools its Python bundled, that
+          # version lands in the freeze list below, and the audit then
+          # reports a CVE in a build tool jvspatial neither declares as a
+          # runtime dependency nor vendors into its wheel (PYSEC-2026-3447
+          # in setuptools 79.0.1, fixed in 83.0.0).
+          #
+          # Deliberately NOT floored in pyproject's [build-system]
+          # requires: setuptools 83 needs Python >=3.10 while jvspatial
+          # supports >=3.9, so pinning it there makes a source build
+          # unresolvable on 3.9. This job pins 3.11, so upgrading here is
+          # safe and keeps the audit signal about *our* dependencies.
+          python -m pip install --upgrade pip setuptools
           pip install pip-audit
           # Resolve the project's full dependency set so the audit
           # sees the same packages adopters would install.
