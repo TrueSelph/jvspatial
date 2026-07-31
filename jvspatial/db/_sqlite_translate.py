@@ -295,4 +295,80 @@ def translate_sort(sort: Optional[List[Tuple[str, int]]]) -> Optional[str]:
     return ", ".join(parts)
 
 
-__all__ = ["translate_query", "translate_sort"]
+def _sql_string_literal(value: str) -> str:
+    """Quote a Python string as a SQLite string literal (single-quote escape)."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def translate_partial_filter_expression(
+    pfe: Dict[str, Any],
+) -> Optional[str]:
+    """Translate a Mongo-style ``partialFilterExpression`` to a SQLite WHERE.
+
+    Used by ``SQLiteDB.create_index`` so partial unique indexes are not
+    silently demoted to global unique indexes (which collides when other
+    Node subclasses share indexed field values — e.g. Conversation and
+    Interaction both writing ``context.session_id``).
+
+    Same deliberately small dialect as Postgres:
+
+    - ``{field: scalar}`` → ``json_extract(...) = <literal>``
+    - ``{field: {"$eq": scalar}}`` → same
+    - ``{field: {"$gt": scalar}}`` → ``json_extract(...) > <literal>``
+    - ``{field: {"$exists": True/False}}`` → ``IS NOT NULL`` / ``IS NULL``
+
+    Top-level keys are AND-ed. Values are inlined (CREATE INDEX WHERE
+    cannot use bound parameters). Returns ``None`` for unsupported shapes.
+    """
+    if not isinstance(pfe, dict) or not pfe:
+        return None
+    clauses: List[str] = []
+    for field, spec in pfe.items():
+        if not _safe_field_path(field):
+            return None
+        extract = _json_extract(field)
+        if isinstance(spec, dict):
+            if len(spec) != 1:
+                return None
+            op, val = next(iter(spec.items()))
+            if op == "$eq":
+                if not isinstance(val, (str, int, float, bool)):
+                    return None
+                if isinstance(val, bool):
+                    clauses.append(f"{extract} = {1 if val else 0}")
+                elif isinstance(val, (int, float)) and not isinstance(val, bool):
+                    clauses.append(f"{extract} = {val}")
+                elif isinstance(val, str):
+                    clauses.append(f"{extract} = {_sql_string_literal(val)}")
+                else:
+                    return None
+            elif op == "$gt":
+                if not isinstance(val, (str, int, float)) or isinstance(val, bool):
+                    return None
+                if isinstance(val, (int, float)):
+                    clauses.append(f"{extract} > {val}")
+                else:
+                    clauses.append(f"{extract} > {_sql_string_literal(val)}")
+            elif op == "$exists":
+                if val:
+                    clauses.append(f"{extract} IS NOT NULL")
+                else:
+                    clauses.append(f"{extract} IS NULL")
+            else:
+                return None
+        elif isinstance(spec, bool):
+            clauses.append(f"{extract} = {1 if spec else 0}")
+        elif isinstance(spec, (int, float)):
+            clauses.append(f"{extract} = {spec}")
+        elif isinstance(spec, str):
+            clauses.append(f"{extract} = {_sql_string_literal(spec)}")
+        else:
+            return None
+    return " AND ".join(clauses)
+
+
+__all__ = [
+    "translate_query",
+    "translate_sort",
+    "translate_partial_filter_expression",
+]

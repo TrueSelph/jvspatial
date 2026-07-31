@@ -943,3 +943,76 @@ class TestDocumentationExamples:
 
         assert safe_path == upload_path
         assert result["valid"] is True
+
+
+class TestHintMime:
+    """Tests for the hint_mime parameter in detect_mime_type and validate_file."""
+
+    def test_detect_mime_type_hint_used_when_extension_missing(self):
+        """hint_mime is used when neither magic nor extension can detect the type."""
+        validator = FileValidator()
+        content = b"\x00\x01\x02\x03unknown_binary"
+        mime = validator.detect_mime_type(
+            content, filename="0_upload", hint_mime="image/jpeg"
+        )
+        assert mime == "image/jpeg"
+
+    def test_detect_mime_type_hint_ignored_when_extension_works(self):
+        """hint_mime is not used when extension-based detection succeeds."""
+        validator = FileValidator()
+        content = b"plain text"
+        mime = validator.detect_mime_type(
+            content, filename="photo.jpg", hint_mime="image/png"
+        )
+        assert mime == "image/jpeg"
+
+    def test_detect_mime_type_octet_stream_hint_not_used(self):
+        """hint_mime of application/octet-stream is ignored (not useful)."""
+        validator = FileValidator()
+        content = b"\x00\x01binary"
+        mime = validator.detect_mime_type(
+            content, filename="upload", hint_mime="application/octet-stream"
+        )
+        assert mime == "application/octet-stream"
+
+    def test_detect_mime_type_none_hint(self):
+        """hint_mime=None is same as not providing it."""
+        validator = FileValidator()
+        content = b"\x00\x01binary"
+        mime = validator.detect_mime_type(content, filename="upload", hint_mime=None)
+        assert mime == "application/octet-stream"
+
+    def test_validate_file_with_hint_mime(self):
+        """validate_file accepts hint_mime and uses it when detection fails."""
+        validator = FileValidator()
+        content = b"\x00\x01\x02\x03jpeg_binary"
+        result = validator.validate_file(
+            content, filename="0_upload", hint_mime="image/jpeg"
+        )
+        assert result["valid"] is True
+        assert result["mime_type"] == "image/jpeg"
+
+    def test_validate_file_without_hint_mime_extensionless_fails(self):
+        """validate_file rejects extensionless files when no hint is provided."""
+        validator = FileValidator()
+        content = b"\x00\x01\x02\x03unknown"
+        with pytest.raises(InvalidMimeTypeError):
+            validator.validate_file(content, filename="0_upload")
+
+    def test_validate_file_hint_mime_blocked_type_still_rejected(self):
+        """hint_mime doesn't bypass blocked MIME types."""
+        validator = FileValidator()
+        content = b"#!/bin/bash\necho test"
+        with pytest.raises(InvalidMimeTypeError):
+            validator.validate_file(
+                content, filename="upload", hint_mime="application/x-executable"
+            )
+
+    def test_validate_file_hint_mime_not_in_allowlist_rejected(self):
+        """hint_mime pointing to a type not in the allowlist is still rejected."""
+        validator = FileValidator()
+        content = b"\x00\x01binary"
+        with pytest.raises(InvalidMimeTypeError):
+            validator.validate_file(
+                content, filename="upload", hint_mime="application/x-custom-unknown"
+            )

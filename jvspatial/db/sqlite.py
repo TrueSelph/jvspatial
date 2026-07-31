@@ -16,7 +16,11 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
 
-from ._sqlite_translate import translate_query, translate_sort
+from ._sqlite_translate import (
+    translate_partial_filter_expression,
+    translate_query,
+    translate_sort,
+)
 from .database import Database, finalize_find_results
 from .query import QueryEngine
 
@@ -196,6 +200,10 @@ class SQLiteDB(Database):
                 """
             )
             await self._connection.commit()
+            # Drop legacy global unique indexes on session_id before any
+            # writes — CREATE INDEX IF NOT EXISTS would leave them in place
+            # and Interaction rows sharing a Conversation session_id get wiped.
+            await self._repair_non_partial_unique_indexes(self._connection)
             self._initialized = True
 
         return self._connection
@@ -212,6 +220,116 @@ class SQLiteDB(Database):
         # Convert "context.user_id" to "$.context.user_id" for JSON extraction
         return f"$.{field_path}"
 
+    @staticmethod
+    def _is_non_partial_session_id_unique_index(sql: Optional[str]) -> bool:
+        """True for UNIQUE indexes on context.session_id with no WHERE clause."""
+        if not sql:
+            return False
+        lower = sql.lower()
+        if "unique" not in lower:
+            return False
+        if "where" in lower:
+            return False
+        return "json_extract(data, '$.context.session_id')" in lower
+
+    async def _repair_non_partial_unique_indexes(
+        self, connection: "Connection"
+    ) -> None:
+        """Drop global unique indexes on ``context.session_id`` that lack WHERE.
+
+        Pre-partial-filter SQLite builds created a blanket UNIQUE on
+        ``session_id`` for the whole ``node`` collection. Conversation and
+        Interaction share that field; ``INSERT OR REPLACE`` then deleted
+        Interaction rows whenever Conversation was saved. Dropping here
+        lets the next ``ensure_indexes(Conversation)`` recreate a partial
+        unique index.
+        """
+        cursor = await connection.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"
+        )
+        rows = await cursor.fetchall()
+        dropped = 0
+        for row in rows:
+            name = row[0]
+            sql = row[1]
+            if not self._is_non_partial_session_id_unique_index(sql):
+                continue
+            # Only drop indexes we (or prior jvspatial) named — avoid
+            # touching unrelated user indexes with similar SQL text.
+            if not str(name).startswith("idx_"):
+                continue
+            logger.warning(
+                "Dropping non-partial unique index '%s' on connect "
+                "(session_id uniqueness must be partial so Interaction "
+                "rows are not wiped). It will be recreated with WHERE on "
+                "the next Conversation ensure_indexes.",
+                name,
+            )
+            await connection.execute(f'DROP INDEX IF EXISTS "{name}"')
+            dropped += 1
+            for names in self._created_indexes.values():
+                names.discard(name)
+        if dropped:
+            await connection.commit()
+
+    @staticmethod
+    def _resolve_index_where(**kwargs: Any) -> Optional[str]:
+        """Resolve a CREATE INDEX WHERE clause from kwargs.
+
+        Honors an explicit ``where=`` string, otherwise translates a
+        Mongo-style partial filter under any of the names
+        ``get_indexes()`` / annotations may emit. Returns ``None`` when
+        no partial filter was requested. Raises ``ValueError`` when a
+        partial filter is present but cannot be translated — never
+        silently demote a partial unique index to a global unique.
+        """
+        explicit = kwargs.get("where")
+        if isinstance(explicit, str) and explicit.strip():
+            return explicit.strip()
+
+        pfe = (
+            kwargs.get("index_partial_filter_expression")
+            or kwargs.get("partial_filter_expression")
+            or kwargs.get("partialFilterExpression")
+        )
+        if not pfe:
+            return None
+        translated = translate_partial_filter_expression(pfe)
+        if translated is None:
+            raise ValueError(
+                "SQLiteDB.create_index: cannot translate "
+                f"index_partial_filter_expression {pfe!r} to a "
+                "SQLite WHERE clause. Pass an explicit ``where=`` "
+                "argument or use a supported filter shape "
+                "(equality / $gt / $exists on safe field paths "
+                "with scalar values)."
+            )
+        return translated
+
+    @staticmethod
+    def _index_needs_partial_repair(
+        existing_sql: Optional[str], where_sql: Optional[str]
+    ) -> bool:
+        """Return True when an on-disk index must be dropped and rebuilt.
+
+        A global unique index created before partial-filter support will
+        lack a WHERE clause; ``CREATE INDEX IF NOT EXISTS`` would leave
+        it in place and keep wiping colliding rows (Conversation vs
+        Interaction ``session_id``).
+        """
+        if not where_sql:
+            return False
+        if not existing_sql:
+            return False
+        lower = existing_sql.lower()
+        if "where" not in lower:
+            return True
+        # Require each AND-ed predicate from the desired WHERE to appear
+        # (SQLite stores CREATE INDEX SQL as we wrote it).
+        return any(
+            part.strip() not in existing_sql for part in where_sql.split(" AND ")
+        )
+
     async def create_index(
         self,
         collection: str,
@@ -225,11 +343,16 @@ class SQLiteDB(Database):
             collection: Collection name
             field_or_fields: Single field name (str) or list of (field_name, direction) tuples for compound indexes
             unique: Whether the index should enforce uniqueness
-            **kwargs: Additional options (ignored for SQLite)
+            **kwargs: Partial-filter options (``partialFilterExpression``,
+                ``partial_filter_expression``,
+                ``index_partial_filter_expression``, or explicit ``where=``).
+                Same Mongo dialect as PostgresDB.create_index.
 
         Note:
             SQLite indexes on nested JSON fields use json_extract() function.
             Direction parameter is ignored for SQLite (always ascending).
+            When a partial filter is required and an older non-partial
+            index of the same name exists, it is dropped and recreated.
         """
         connection = await self._get_connection()
 
@@ -248,9 +371,37 @@ class SQLiteDB(Database):
             field_names = "_".join(field.replace(".", "_") for field, _ in fields)
             index_name = f"idx_{collection}_{field_names}"
 
-        # Check if index already exists
+        where_sql = self._resolve_index_where(**kwargs)
+
+        # Inspect on-disk definition so a prior global unique index can
+        # be repaired after upgrading to partial-filter support.
+        cursor = await connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
+            (index_name,),
+        )
+        row = await cursor.fetchone()
+        existing_sql = row[0] if row else None
+
+        if self._index_needs_partial_repair(existing_sql, where_sql):
+            logger.info(
+                "Dropping non-partial index '%s' so it can be recreated "
+                "with WHERE %s",
+                index_name,
+                where_sql,
+            )
+            await connection.execute(f"DROP INDEX IF EXISTS {index_name}")
+            await connection.commit()
+            self._created_indexes[collection].discard(index_name)
+            existing_sql = None
+
+        # Check if index already exists (in-process or on disk, correct form)
         if index_name in self._created_indexes[collection]:
-            return  # Index already created
+            return
+        if existing_sql is not None and not self._index_needs_partial_repair(
+            existing_sql, where_sql
+        ):
+            self._created_indexes[collection].add(index_name)
+            return
 
         # Build SQLite index creation statement
         # For nested fields, use json_extract() to extract values from JSON
@@ -261,15 +412,15 @@ class SQLiteDB(Database):
 
         index_columns = ", ".join(index_expressions)
         unique_clause = "UNIQUE" if unique else ""
+        where_clause = f" WHERE {where_sql}" if where_sql else ""
 
         try:
-            # Create index on the records table
-            # Include collection in the index to support efficient filtering
-            # SQLite doesn't support parameterized WHERE clauses in CREATE INDEX,
-            # so we include collection as the first column
+            # Include collection in the index to support efficient filtering.
+            # Partial filters become a SQLite partial index WHERE clause so
+            # uniqueness is scoped the same way as Mongo/Postgres.
             sql = f"""
             CREATE {unique_clause} INDEX IF NOT EXISTS {index_name}
-            ON records (collection, {index_columns})
+            ON records (collection, {index_columns}){where_clause}
             """
 
             await connection.execute(sql)
@@ -280,10 +431,18 @@ class SQLiteDB(Database):
 
             logger.debug(
                 f"Created index '{index_name}' on collection '{collection}' "
-                f"(unique={unique}, fields={[f[0] for f in fields]})"
+                f"(unique={unique}, fields={[f[0] for f in fields]}"
+                f"{', partial' if where_sql else ''})"
             )
 
         except Exception as e:
+            # Partial unique indexes protect Conversation/Interaction
+            # coexistence — never swallow create failures for those.
+            if unique and where_sql:
+                raise RuntimeError(
+                    f"Failed to create partial unique index '{index_name}' "
+                    f"on collection '{collection}': {e}"
+                ) from e
             logger.warning(
                 f"Failed to create index '{index_name}' on collection '{collection}': {e}"
             )
