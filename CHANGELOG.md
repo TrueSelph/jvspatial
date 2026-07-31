@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Deferred-invoke LWA self-invoke 401** (`jvspatial/api/deferred_invoke_route.py`).
+  Fail-closed when `JVSPATIAL_DEFERRED_INVOKE_SECRET` is unset rejected
+  Lambda Web Adapter pass-through from `127.0.0.1`, so serverless WhatsApp
+  (and other deferred tasks) never ran after scheduling. Loopback peers are
+  now always authorized; non-loopback callers still require the secret (or
+  get 401 when it is unset). Coverage in
+  `tests/api/test_deferred_invoke_fail_closed_audit.py`.
+
 - **Partial-index repair log is INFO, not WARNING** (`jvspatial/db/sqlite.py`).
   Dropping a non-partial index so it can be recreated with `WHERE` is expected
   one-shot migration noise; log at info. Also satisfy ruff SIM110 in
