@@ -222,12 +222,24 @@ class TestObjectPagerBasicFunctionality:
 
     @pytest.mark.asyncio
     async def test_get_page_with_ordering(self, mock_context, sample_data):
-        """Test page retrieval with ordering."""
+        """Test page retrieval with ordering.
+
+        Uses ``mock_find_respecting_limit`` so the fake backend actually
+        honors ``sort``/``limit``. With a mock that ignores them, this test
+        passes on the pager's in-Python re-sort alone and would not notice
+        the DB-side ordering being wrong (or absent).
+        """
         with patch(
             "jvspatial.core.context.get_default_context", return_value=mock_context
         ):
             mock_context.database.count.return_value = len(sample_data)
-            mock_context.database.find.return_value = sample_data
+
+            async def find(collection, query, *, limit=None, sort=None):
+                return await mock_find_respecting_limit(
+                    sample_data, collection, query, limit=limit, sort=sort
+                )
+
+            mock_context.database.find.side_effect = find
 
             async def mock_deserialize(cls, data):
                 return PaginationTestObject(id=data["id"], **data["context"])
@@ -251,6 +263,55 @@ class TestObjectPagerBasicFunctionality:
 
             values = [obj.value for obj in results]
             assert values == sorted(values, reverse=True)  # Should be sorted descending
+
+    @pytest.mark.asyncio
+    async def test_ordering_with_missing_values_agrees_across_page_boundary(
+        self, mock_context
+    ):
+        """The in-page re-sort must not disagree with the DB-side slice.
+
+        Records missing ``order_by`` sort last (SPEC §4.1). The pager used to
+        re-sort each page with ``.get(order_by, 0)``, placing them among the
+        real values — so a record could appear on two pages, or on none.
+        """
+        records = [
+            {"id": "1", "context": {"value": 30}},
+            {"id": "2", "context": {}},  # missing -> sorts last
+            {"id": "3", "context": {"value": 10}},
+            {"id": "4", "context": {"value": 20}},
+        ]
+
+        with patch(
+            "jvspatial.core.context.get_default_context", return_value=mock_context
+        ):
+            mock_context.database.count.return_value = len(records)
+
+            async def find(collection, query, *, limit=None, sort=None):
+                return await mock_find_respecting_limit(
+                    records, collection, query, limit=limit, sort=sort
+                )
+
+            mock_context.database.find.side_effect = find
+
+            async def mock_deserialize(cls, data):
+                return PaginationTestObject(
+                    id=data["id"], value=data["context"].get("value", -1)
+                )
+
+            mock_context._deserialize_entity.side_effect = mock_deserialize
+
+            seen = []
+            for page in (1, 2):
+                pager = ObjectPager(
+                    PaginationTestObject,
+                    page_size=2,
+                    order_by="value",
+                    order_direction="asc",
+                )
+                seen.extend(obj.id for obj in await pager.get_page(page))
+
+            assert seen == ["3", "4", "1", "2"]
+            assert len(seen) == len(set(seen))
 
 
 class TestObjectPagerNavigation:

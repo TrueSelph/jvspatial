@@ -5,9 +5,10 @@ Provides efficient, database-level pagination for objects (including nodes) with
 Designed to integrate seamlessly with UI frameworks requiring paginated data.
 """
 
-import contextlib
 from math import ceil
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, TypeVar
+
+from jvspatial.db.database import finalize_find_results
 
 if TYPE_CHECKING:
     from .entities import Object
@@ -195,14 +196,15 @@ class ObjectPager:
             )
             page_items_raw = all_items_raw[offset : offset + self.page_size]
 
-        # Apply in-Python ordering when a non-id order_by is set.
+        # Safety net for a backend that ignored the requested sort. Route it
+        # through the same helper the adapters use so it is a no-op when the
+        # sort was honored: an ad-hoc key here would disagree with the DB-side
+        # ordering that produced the slice above. In particular, defaulting a
+        # missing value to ``0`` ordered it among the real values while the
+        # slice had already placed it in the trailing missing-value run, which
+        # duplicates or drops rows across page boundaries.
         if self.order_by and page_sort != [("id", 1)]:
-            reverse = self.order_direction.lower() == "desc"
-            with contextlib.suppress(KeyError, TypeError):
-                page_items_raw.sort(
-                    key=lambda item: item.get("context", {}).get(self.order_by, 0),
-                    reverse=reverse,
-                )
+            page_items_raw = finalize_find_results(page_items_raw, sort=page_sort)
 
         page_objects: List[T] = []
         for item_data in page_items_raw:

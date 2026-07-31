@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ObjectPager` re-sorted each page with a key that disagreed with the
+  database slice** (`jvspatial/core/pager.py`; `paginate_by_field` inherited
+  it). The in-Python safety-net sort used
+  `item.get("context", {}).get(order_by, 0)`, so a record missing `order_by`
+  was ordered as `0` — among the real values — while the DB-side
+  `sort` + `limit` that produced the slice had placed it in the trailing
+  missing-value run. Records could therefore appear on two pages or on none.
+  A blanket `contextlib.suppress(KeyError, TypeError)` also left a page
+  silently unsorted on mixed-type keys. The re-sort now routes through
+  `finalize_find_results`, making it a genuine no-op whenever the backend
+  honored the sort.
 - **`GraphContext.find_page` broke on dotted sort fields and could not reach
   records missing the sort value** (`jvspatial/core/context.py`). Two defects:
   the cursor payload was minted with a flat `last.get(primary_field)`, so a
