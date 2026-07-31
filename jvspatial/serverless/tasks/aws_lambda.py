@@ -8,14 +8,43 @@ import uuid
 from typing import Any, Dict, Optional
 
 from jvspatial.env import env, parse_bool, resolve_aws_region
+from jvspatial.exceptions import TaskDispatchError, TaskSchedulerNotConfiguredError
 from jvspatial.runtime.eventbridge_readiness import resolve_eventbridge_lambda_arn
 
 from .base import RetryConfig, TaskScheduler
 
 logger = logging.getLogger(__name__)
 
+# Hard ceiling on a single Lambda execution. A task deferred further out than
+# this cannot be honored by invoking now and waiting inside the handler.
+_LAMBDA_MAX_TIMEOUT_SECONDS = 900
+
 _lambda_client_cache: list[Optional[Any]] = [None]
 _scheduler_client_cache: list[Optional[Any]] = [None]
+
+
+def _invoke_rejection(response: Any) -> Optional[str]:
+    """Describe why an async ``invoke`` response is a failure, else ``None``.
+
+    ``InvocationType="Event"`` returns ``202`` when Lambda has accepted the
+    invocation. Anything else — or a ``FunctionError`` — means the task was
+    not queued, even though boto3 did not raise.
+    """
+    if not isinstance(response, dict):
+        return None
+    function_error = response.get("FunctionError")
+    if function_error:
+        return f"Lambda returned FunctionError={function_error!r}"
+    status = response.get("StatusCode")
+    if status is None:
+        return None
+    try:
+        status_int = int(status)
+    except (TypeError, ValueError):
+        return f"Lambda returned a non-numeric StatusCode={status!r}"
+    if 200 <= status_int < 300:
+        return None
+    return f"Lambda returned StatusCode={status_int}"
 
 
 def _get_lambda_client() -> Any:
@@ -91,9 +120,9 @@ def _create_eventbridge_schedule(
         bridge_input: Dict[str, Any] = {**payload, "task_type": task_type}
     else:
         bridge_input = {"task_type": task_type, "payload": payload}
-    # Match Lambda async-invoke body: handlers (e.g. WhatsApp media_batch) use
-    # process_at to avoid sleeping media_batch_window again after EventBridge
-    # already fired at run_at.
+    # Match the Lambda async-invoke body: a handler reads process_at to avoid
+    # re-waiting its own batching window after EventBridge already fired at
+    # run_at.
     bridge_input["process_at"] = run_at
 
     try:
@@ -156,13 +185,11 @@ class AwsLambdaDeferredTaskScheduler(TaskScheduler):
         """Dispatch via Lambda async invoke or EventBridge Scheduler; see base class.
 
         Under ``strict=True`` every path that fails to hand the task to AWS
-        raises instead of returning a synthetic reference. Callers that opted
-        into strict have their own failure handling (a 5xx to the webhook
-        origin, a released dedup claim); handing them a reference for a task
-        that was never dispatched converts their retry into silent data loss —
-        which is precisely how deferred WhatsApp messages were being dropped:
-        the webhook returned 200, the wamid stayed claimed, and Meta's retry
-        was dedup-blocked.
+        raises instead of returning a synthetic reference. A caller that opted
+        into strict has failure handling of its own — signalling an error back
+        to an upstream sender, releasing a dedup claim so a retry is accepted
+        — and a reference for a task that was never dispatched converts that
+        handling into silent data loss.
         """
         reference = f"aws-lambda-{uuid.uuid4()}"
         if retry_config is not None:
@@ -170,9 +197,8 @@ class AwsLambdaDeferredTaskScheduler(TaskScheduler):
 
         if not self._function_name:
             if strict:
-                raise RuntimeError(
-                    "AWS_LAMBDA_FUNCTION_NAME is not set; cannot dispatch "
-                    f"deferred task {task_type!r} (strict scheduling requested)"
+                raise TaskSchedulerNotConfiguredError(
+                    task_type, "AWS_LAMBDA_FUNCTION_NAME is not set"
                 )
             logger.warning(
                 "AWS_LAMBDA_FUNCTION_NAME not set; deferred task %s not dispatched",
@@ -184,21 +210,32 @@ class AwsLambdaDeferredTaskScheduler(TaskScheduler):
         if effective_run_at is None and delay_seconds > 0:
             effective_run_at = time.time() + delay_seconds
 
-        # An EventBridge failure is NOT a dispatch failure: it falls back to
-        # the direct Lambda invoke below, which is the path strict guards.
-        if effective_run_at is not None and _create_eventbridge_schedule(
-            task_type, payload, effective_run_at, reference
-        ):
-            return reference
+        if effective_run_at is not None:
+            if _create_eventbridge_schedule(
+                task_type, payload, effective_run_at, reference
+            ):
+                return reference
+            # EventBridge failed, so we fall back to invoking now with
+            # ``process_at`` in the body and let the handler wait. That only
+            # works inside a single Lambda execution: past the maximum
+            # timeout the handler cannot survive until ``run_at``, so the
+            # task is doomed and a strict caller must hear about it. Shorter
+            # delays fall through to the invoke below, which strict guards.
+            if strict and effective_run_at - time.time() > _LAMBDA_MAX_TIMEOUT_SECONDS:
+                raise TaskDispatchError(
+                    task_type,
+                    "EventBridge scheduling failed and the requested delay "
+                    f"exceeds the {_LAMBDA_MAX_TIMEOUT_SECONDS}s Lambda "
+                    "timeout, so an immediate invoke cannot honor run_at",
+                )
 
         body = _build_invoke_body(task_type, payload, effective_run_at)
         try:
-            self._client().invoke(
+            response = self._client().invoke(
                 FunctionName=self._function_name,
                 InvocationType="Event",
                 Payload=json.dumps(body),
             )
-            logger.info("Invoked deferred task %s (ref=%s)", task_type, reference)
         except Exception as e:
             logger.error(
                 "Failed Lambda invoke for deferred task %s: %s",
@@ -207,5 +244,20 @@ class AwsLambdaDeferredTaskScheduler(TaskScheduler):
                 exc_info=True,
             )
             if strict:
-                raise
+                raise TaskDispatchError(
+                    task_type, f"Lambda invoke raised {type(e).__name__}: {e}"
+                ) from e
+            return reference
+
+        # A raised exception is not the only failure mode: an async invoke
+        # answers 202 on acceptance, and a rejected or errored invocation
+        # comes back as a non-2xx StatusCode or a FunctionError field.
+        rejection = _invoke_rejection(response)
+        if rejection is not None:
+            logger.error("Lambda rejected deferred task %s: %s", task_type, rejection)
+            if strict:
+                raise TaskDispatchError(task_type, rejection)
+            return reference
+
+        logger.info("Invoked deferred task %s (ref=%s)", task_type, reference)
         return reference

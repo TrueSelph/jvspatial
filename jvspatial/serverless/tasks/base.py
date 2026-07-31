@@ -32,16 +32,27 @@ class TaskScheduler(ABC):
         """Schedule a task and return provider reference id.
 
         Args:
-            task_type: Stable namespaced task id (e.g. ``app.whatsapp.media_batch``).
+            task_type: Stable namespaced task id (e.g. ``app.media.batch``).
             payload: JSON-serializable task input.
             delay_seconds: Minimum delay before execution (relative), when ``run_at`` unset.
             retry_config: Optional retry metadata for queue-based backends.
             run_at: Optional Unix epoch seconds for absolute execution time; backends
                 map this to native scheduling (e.g. EventBridge) or embed in the message.
-            strict: When True, a dispatch that cannot be handed to the provider MUST
-                raise instead of logging and returning a synthetic reference. A
-                caller passing ``strict=True`` is stating that it has fallback
-                behaviour of its own (retry, 5xx to the webhook origin, releasing a
-                dedup claim) and that a silently-dropped task is data loss. The
-                default preserves fire-and-forget semantics.
+            strict: When True, a dispatch that cannot be handed to the provider
+                MUST raise instead of logging and returning a synthetic
+                reference. A caller passing ``strict=True`` is stating that it
+                has fallback behaviour of its own — retrying, signalling an
+                error upstream, releasing a dedup claim — and that a
+                silently-dropped task is data loss. The default preserves
+                fire-and-forget semantics.
+
+                Raise :class:`~jvspatial.exceptions.TaskSchedulerNotConfiguredError`
+                when the deployment can never dispatch (no retry will help) and
+                :class:`~jvspatial.exceptions.TaskDispatchError` when the
+                provider was reached and rejected or failed the call.
+
+        Implementations added after this parameter existed should keep
+        ``strict`` in the signature. ``dispatch_deferred_task`` introspects the
+        signature and omits the argument for schedulers that predate it, so
+        third-party implementations keep working for non-strict dispatches.
         """
