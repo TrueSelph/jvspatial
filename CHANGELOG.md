@@ -7,8 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`resolve_sort_value(record, field)`** (`jvspatial/db/database.py`) — the
+  dotted-path resolution `finalize_find_results` uses, exported so adapters and
+  cursor logic resolve a sort field the same way. Added to the module's
+  `__all__`.
+
 ### Fixed
 
+- **`GraphContext.find_page` broke on dotted sort fields and could not reach
+  records missing the sort value** (`jvspatial/core/context.py`). Two defects:
+  the cursor payload was minted with a flat `last.get(primary_field)`, so a
+  `sort=[("context.started_at", -1)]` page always encoded `sort: None` and the
+  next page's keyset filter compared against `None` — raising
+  `TypeError: '>' not supported between instances of 'int' and 'NoneType'` from
+  `QueryEngine` on JsonDB. And with records missing the sort field now sorting
+  last, the keyset filter `{field: {"$lt": value}}` could never match them, so
+  iteration silently stopped at the last record that had a value. The cursor now
+  uses `resolve_sort_value`, the filter carries a `{field: None}` branch to reach
+  the trailing run, and a cursor minted inside that run walks it by `id`.
 - **Postgres applied `LIMIT` in SQL even when the sort could not be pushed
   down** (`jvspatial/db/postgres.py`, both `PostgresDB.find` and
   `PostgresTransaction.find`). `translate_sort` returns `None` for a field path

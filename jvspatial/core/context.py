@@ -23,7 +23,7 @@ from typing import (
     cast,
 )
 
-from jvspatial.db.database import Database
+from jvspatial.db.database import Database, resolve_sort_value
 from jvspatial.db.factory import create_database, get_current_database
 from jvspatial.db.manager import get_database_manager
 
@@ -1435,17 +1435,43 @@ class GraphContext:
         if cursor_payload and "id" in cursor_payload and "sort" in cursor_payload:
             sort_op = "$lt" if primary_dir < 0 else "$gt"
             id_op = "$lt" if id_dir < 0 else "$gt"
-            keyset_filter = {
-                "$or": [
-                    {primary_field: {sort_op: cursor_payload["sort"]}},
+            cursor_sort = cursor_payload["sort"]
+            keyset_branches: List[Dict[str, Any]]
+            if cursor_sort is None:
+                # The cursor sits in the trailing run of records that have
+                # no value for the sort field. Records missing the sort
+                # field sort last in both directions (see
+                # ``finalize_find_results``), so everything still ahead of
+                # us is also missing it — walk that run by id alone.
+                keyset_branches = [
                     {
                         "$and": [
-                            {primary_field: cursor_payload["sort"]},
+                            {primary_field: None},
+                            {"id": {id_op: cursor_payload["id"]}},
+                        ]
+                    }
+                ]
+            else:
+                keyset_branches = [
+                    {primary_field: {sort_op: cursor_sort}},
+                    # ``{field: None}`` matches both an explicit null and a
+                    # missing key. Without this branch the nulls-last tail
+                    # is unreachable: ``{field: {"$lt": v}}`` never matches
+                    # a record that has no value at all, so iteration would
+                    # stop at the last record that does.
+                    {primary_field: None},
+                    {
+                        "$and": [
+                            {primary_field: cursor_sort},
                             {"id": {id_op: cursor_payload["id"]}},
                         ]
                     },
                 ]
-            }
+            keyset_filter: Dict[str, Any] = (
+                keyset_branches[0]
+                if len(keyset_branches) == 1
+                else {"$or": keyset_branches}
+            )
             final_query = (
                 {"$and": [final_query, keyset_filter]} if final_query else keyset_filter
             )
@@ -1459,7 +1485,13 @@ class GraphContext:
         next_cursor: Optional[str] = None
         if has_more and page_rows:
             last = page_rows[-1]
-            payload = {"id": last.get("id"), "sort": last.get(primary_field)}
+            # Dotted sort fields (``context.started_at``) need the same
+            # path walk the adapters use; a flat ``.get`` would mint a
+            # ``None`` sort value for every cursor and stall pagination.
+            payload = {
+                "id": last.get("id"),
+                "sort": resolve_sort_value(last, primary_field),
+            }
             next_cursor = base64.urlsafe_b64encode(
                 json.dumps(payload, separators=(",", ":")).encode()
             ).decode()

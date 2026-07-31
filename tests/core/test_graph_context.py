@@ -904,3 +904,68 @@ class TestGraphContextFindPage:
             limit=2,
         )
         assert len(page2) >= 1
+
+    # ---- dotted sort fields + the nulls-last tail --------------------------
+
+    @staticmethod
+    async def _walk_all(context, sort, limit=2):
+        """Page through everything, returning ids in visit order."""
+        seen: list = []
+        cursor = None
+        for _ in range(20):  # guard against a non-terminating cursor loop
+            rows, cursor = await context.find_page(
+                "node", {}, sort=sort, after=cursor, limit=limit
+            )
+            seen.extend(row["id"] for row in rows)
+            if not cursor:
+                return seen
+        raise AssertionError(f"pagination did not terminate; saw {seen}")
+
+    @pytest.mark.asyncio
+    async def test_find_page_pages_through_dotted_sort_field(self, temp_context):
+        """A dotted sort field used to mint a None cursor on every page."""
+        for n, ts in (("a", 5), ("b", 4), ("c", 3), ("d", 2), ("e", 1)):
+            await temp_context.database.save(
+                "node", {"id": n, "context": {"started_at": ts}}
+            )
+
+        seen = await self._walk_all(temp_context, [("context.started_at", -1)])
+        assert seen == ["a", "b", "c", "d", "e"]
+
+    @pytest.mark.asyncio
+    async def test_find_page_walks_the_missing_value_tail(self, temp_context):
+        """Records with no sort value sort last and must still be reachable."""
+        for n, ts in (("a", 3), ("b", 2), ("c", 1)):
+            await temp_context.database.save(
+                "node", {"id": n, "context": {"started_at": ts}}
+            )
+        for n in ("x", "y"):
+            await temp_context.database.save("node", {"id": n, "context": {}})
+
+        seen = await self._walk_all(temp_context, [("context.started_at", -1)])
+        assert seen[:3] == ["a", "b", "c"]
+        assert sorted(seen[3:]) == ["x", "y"]
+        assert len(seen) == len(set(seen))
+
+    @pytest.mark.asyncio
+    async def test_find_page_ascending_also_walks_the_tail(self, temp_context):
+        for n, ts in (("a", 1), ("b", 2), ("c", 3)):
+            await temp_context.database.save(
+                "node", {"id": n, "context": {"started_at": ts}}
+            )
+        for n in ("x", "y"):
+            await temp_context.database.save("node", {"id": n, "context": {}})
+
+        seen = await self._walk_all(temp_context, [("context.started_at", 1)])
+        assert seen[:3] == ["a", "b", "c"]
+        assert sorted(seen[3:]) == ["x", "y"]
+        assert len(seen) == len(set(seen))
+
+    @pytest.mark.asyncio
+    async def test_find_page_flat_field_still_paginates(self, temp_context):
+        """Regression guard for the pre-existing flat-field path."""
+        for n, ts in (("a", 3), ("b", 2), ("c", 1)):
+            await temp_context.database.save("node", {"id": n, "ts": ts})
+
+        seen = await self._walk_all(temp_context, [("ts", -1)])
+        assert seen == ["a", "b", "c"]

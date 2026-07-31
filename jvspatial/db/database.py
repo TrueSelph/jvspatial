@@ -70,6 +70,31 @@ class BulkSaveResult:
 logger = logging.getLogger(__name__)
 
 
+def resolve_sort_value(record: Dict[str, Any], field: str) -> Any:
+    """Read ``field`` out of ``record``, following dotted paths.
+
+    ``field`` may be a plain key (``id``) or a dotted path into nested
+    documents (``context.started_at``), matching what the SQLite/Postgres
+    sort pushdowns and Mongo's native sort accept. A missing key — or a
+    non-dict encountered part-way along the path — resolves to ``None``
+    rather than raising, so a malformed record sorts as "missing" instead
+    of breaking the whole page.
+
+    Anything that mints or interprets a sort value should go through this
+    rather than a flat ``record.get(field)``: cursor payloads in
+    :meth:`GraphContext.find_page` and adapter-side sorting must agree on
+    what a sort field resolves to.
+    """
+    if "." not in field:
+        return record.get(field)
+    value: Any = record
+    for part in field.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
 def _find_sort_key(
     record: Dict[str, Any], field: str, *, descending: bool = False
 ) -> Tuple[bool, Any]:
@@ -88,16 +113,7 @@ def _find_sort_key(
     ``NULLS LAST`` both SQL translators emit. All missing values share a flag,
     so ``None`` is never compared against a real value.
     """
-    value: Any
-    if "." not in field:
-        value = record.get(field)
-    else:
-        value = record
-        for part in field.split("."):
-            if not isinstance(value, dict):
-                value = None
-                break
-            value = value.get(part)
+    value = resolve_sort_value(record, field)
     missing = value is None
     return (not missing if descending else missing, value)
 
@@ -609,6 +625,7 @@ __all__ = [
     "encode_cursor",
     "decode_cursor",
     "finalize_find_results",
+    "resolve_sort_value",
 ]
 
 
