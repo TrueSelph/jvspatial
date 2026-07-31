@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Deferred-task exception hierarchy** (`jvspatial/exceptions.py`) —
+  `DeferredTaskError` → `TaskDispatchError` → `TaskSchedulerNotConfiguredError`,
+  replacing the bare `RuntimeError`s raised by strict dispatch. A strict caller
+  can now tell "retrying may succeed" (`TaskDispatchError`) from "this
+  deployment will never dispatch" (`TaskSchedulerNotConfiguredError`).
+  `DeferredTaskError` also derives from `RuntimeError`, so handlers written
+  against the previous behavior keep working.
+
+### Fixed
+
+- **Strict deferred scheduling only caught the no-op-scheduler case**
+  (`jvspatial/serverless/`). `dispatch_deferred_task(..., strict=True)` raised
+  when serverless mode resolved a logging no-op, but every *provider* failure
+  still logged and returned a synthetic reference — so a caller with its own
+  failure handling (retry, error signalled upstream, dedup claim released) was
+  told the task was queued when it had been dropped. `strict` now raises on:
+  an unset `AWS_LAMBDA_FUNCTION_NAME`; a Lambda `invoke` that raises **or**
+  answers a non-2xx `StatusCode` / carries a `FunctionError` (an async invoke
+  returns 202 on acceptance, so boto3 not raising was never proof of
+  dispatch); an unconfigured SQS client or queue; a failed SQS `send_message`;
+  a `NoopOrSyncScheduler` with no executor — the scheduler every
+  *non*-serverless caller gets, which silently dropped strict tasks; and an
+  EventBridge scheduling failure for a task deferred beyond Lambda's 900s
+  timeout, where the fallback immediate invoke cannot honor `run_at`.
+- **Non-strict dispatch failed differently per transport**
+  (`jvspatial/serverless/tasks/aws_sqs.py`). SQS `send_message` errors
+  propagated while the Lambda transport swallowed them, so identical
+  application code had opposite failure semantics depending on
+  `JVSPATIAL_AWS_DEFERRED_TRANSPORT`. `strict` is now the single switch on
+  every transport: `False` is fire-and-forget, `True` raises.
+- **The one-time no-op diagnostic never fired for strict callers**
+  (`jvspatial/serverless/factory.py`). The strict raise preceded
+  `_note_noop_in_serverless`, so a deployment whose callers are all strict
+  never got the startup error explaining *why* nothing dispatches. The
+  diagnostic is now emitted first.
+
+### Changed
+
+- **`TaskScheduler.schedule` takes a `strict` argument**
+  (`jvspatial/serverless/tasks/base.py`). `TaskScheduler` is a public/stable
+  extension point and `config.task_scheduler` is duck-typed, so
+  `dispatch_deferred_task` introspects `schedule()` and omits `strict` for
+  third-party implementations that predate it — those keep serving non-strict
+  dispatches unchanged. A `strict=True` dispatch through such a scheduler
+  raises `TaskSchedulerNotConfiguredError` (it cannot honor the guarantee)
+  rather than `TypeError`.
+
 ## [0.0.11] - 2026-07-02
 
 ### Fixed

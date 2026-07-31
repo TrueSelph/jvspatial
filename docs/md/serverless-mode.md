@@ -74,7 +74,14 @@ Serverless runtimes cannot rely on `asyncio.create_task` for work that must cont
 - **Not serverless**: the default scheduler is a no-op unless you pass a sync executor to `NoopOrSyncScheduler` or use `override=`.
 - **AWS**: By default, if `AWS_LAMBDA_FUNCTION_NAME` is set, tasks are sent with **Lambda async invoke** (`InvocationType=Event`). **EventBridge Scheduler** one-shot schedules apply when `run_at` is set, EventBridge is enabled, and role/ARN requirements are satisfied (see below).
 - **SQS**: Set `JVSPATIAL_AWS_DEFERRED_TRANSPORT=sqs` and `JVSPATIAL_AWS_SQS_QUEUE_URL`; you must run a worker that consumes messages. Messages use a nested `payload` object. Before calling `dispatch_deferred_invoke`, flatten with **`normalize_deferred_envelope`** (exported from `jvspatial`) so the body matches the Lambda/LWA shape.
-- **Strict dispatch**: `create_task("…", {}, strict=True)` (or `dispatch_deferred_task(..., strict=True)`) raises `RuntimeError` if serverless mode is on but the resolved scheduler is a logging no-op. Otherwise the first no-op schedule in serverless mode emits a one-time **error** log.
+- **Strict dispatch**: `create_task("…", {}, strict=True)` (or `dispatch_deferred_task(..., strict=True)`) raises whenever the task could not be handed to the provider, instead of returning a synthetic reference. Pass it when you have your own failure handling — retrying, signalling an error upstream, releasing a dedup claim — and a dropped task would be data loss. Without it, dispatch stays fire-and-forget on every transport and the first no-op schedule in serverless mode emits a one-time **error** log.
+
+  | Exception | When |
+  |---|---|
+  | `TaskSchedulerNotConfiguredError` | The deployment can never dispatch: a logging no-op resolved in serverless mode, `AWS_LAMBDA_FUNCTION_NAME` unset, SQS client/queue unconfigured, a `NoopOrSyncScheduler` with no executor, or a scheduler whose `schedule()` predates the `strict` parameter. Retrying will not help. |
+  | `TaskDispatchError` | The provider was reached and the call failed: a Lambda `invoke` that raised or answered non-2xx / `FunctionError`, an SQS `send_message` that raised, or an EventBridge schedule that failed for a task deferred past Lambda's 900s timeout (an immediate invoke cannot honor `run_at`). |
+
+  Both derive from `DeferredTaskError`, which derives from `RuntimeError` — handlers written against the earlier bare-`RuntimeError` behavior keep working. Third-party `TaskScheduler` implementations written before `strict` existed are detected by signature and called without it, so non-strict dispatch is unaffected.
 - **Provider override**: `JVSPATIAL_DEFERRED_TASK_PROVIDER` (`aws`, `azure`, `gcp`, `vercel`, `auto`) or `Config.deferred_task_provider` / `ServerConfig.deferred_task_provider`.
 - **Detection**: `detect_serverless_provider()` complements `is_serverless_mode()` for choosing a backend.
 
