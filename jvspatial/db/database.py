@@ -70,8 +70,10 @@ class BulkSaveResult:
 logger = logging.getLogger(__name__)
 
 
-def _find_sort_key(record: Dict[str, Any], field: str) -> Tuple[bool, Any]:
-    """Sort key: non-``None`` values first, then by value (with ``None`` last).
+def _find_sort_key(
+    record: Dict[str, Any], field: str, *, descending: bool = False
+) -> Tuple[bool, Any]:
+    """Sort key placing missing values last, ascending or descending.
 
     Supports dotted paths (``context.started_at``) so callers can sort attribute
     fields the same way they query them. The SQLite/Postgres sort pushdowns
@@ -79,6 +81,12 @@ def _find_sort_key(record: Dict[str, Any], field: str) -> Tuple[bool, Any]:
     and Mongo's native sort already resolve dotted paths; without this the same
     sort spec silently degraded to "every key is ``None``" whenever a backend
     fell back to the in-memory path.
+
+    ``finalize_find_results`` sorts descending via ``reverse=True``, which flips
+    the whole key — including the ``None`` flag. Inverting the flag for
+    descending sorts keeps missing values last in both directions, matching the
+    ``NULLS LAST`` both SQL translators emit. All missing values share a flag,
+    so ``None`` is never compared against a real value.
     """
     value: Any
     if "." not in field:
@@ -90,7 +98,8 @@ def _find_sort_key(record: Dict[str, Any], field: str) -> Tuple[bool, Any]:
                 value = None
                 break
             value = value.get(part)
-    return (value is None, value)
+    missing = value is None
+    return (not missing if descending else missing, value)
 
 
 def _normalize_id_query(query: Dict[str, Any]) -> Dict[str, Any]:
@@ -121,15 +130,18 @@ def finalize_find_results(
 
     ``sort`` is a list of ``(field, direction)`` with ``direction`` ``1`` for
     ascending and ``-1`` for descending. Sorting is stable; compound sorts are
-    applied from the last key to the first.
+    applied from the last key to the first. Records missing the sort field sort
+    last in both directions, matching the ``NULLS LAST`` the SQLite and Postgres
+    pushdowns emit.
     """
     out = records
     if sort:
         out = list(records)
         for sort_field, direction in reversed(sort):
+            descending = direction == -1
             out.sort(
-                key=partial(_find_sort_key, field=sort_field),
-                reverse=(direction == -1),
+                key=partial(_find_sort_key, field=sort_field, descending=descending),
+                reverse=descending,
             )
     if limit is not None:
         out = out[:limit]

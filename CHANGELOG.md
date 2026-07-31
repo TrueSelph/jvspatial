@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JsonDB/DynamoDB — and on SQLite/Postgres whenever the query fell back to the
   in-memory path. Dotted paths now resolve in memory too; a non-dict segment
   along the path yields `None` rather than raising.
+- **Descending in-memory sorts placed records missing the sort field first**
+  (`jvspatial/db/database.py`). `finalize_find_results` sorts with
+  `reverse=True`, which flipped `_find_sort_key`'s `None` flag along with the
+  values. Both SQL translators emit `NULLS LAST` for descending and Mongo sorts
+  missing values last, so a "newest N" `sort` + `limit` fetch returned real rows
+  on SQLite/Postgres/Mongo and a window of records missing the field on the
+  in-memory path. Missing values now sort last in both directions everywhere.
+  The comment in `_sqlite_translate.translate_sort` asserting the in-memory path
+  already matched has been corrected.
 
 ## [0.0.11] - 2026-07-02
 

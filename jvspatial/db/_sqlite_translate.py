@@ -287,10 +287,10 @@ def translate_sort(sort: Optional[List[Tuple[str, int]]]) -> Optional[str]:
             # ascending: NULLs last
             parts.append(f"({column} IS NULL), {column} ASC")
         else:
-            # descending: NULLs last too (matches in-memory behavior:
-            # the in-memory sort uses (value is None, value), reverse=True,
-            # which puts None last because it sorts (True, ...) after
-            # (False, ...).)
+            # descending: NULLs last too. The leading ``IS NULL`` term is
+            # itself sorted ASC, so non-NULL rows (0) precede NULL rows (1)
+            # regardless of direction. ``_find_sort_key`` inverts its None
+            # flag for descending sorts to reach the same ordering.
             parts.append(f"({column} IS NULL), {column} DESC")
     return ", ".join(parts)
 
