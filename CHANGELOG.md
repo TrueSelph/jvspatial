@@ -14,6 +14,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cursor logic resolve a sort field the same way. Added to the module's
   `__all__`.
 
+### Documentation
+
+- **`find` sort contract moved to SPEC §4.1** (beside the `Database` method
+  table it governs, rather than under §4.2 capability flags) and extended: the
+  `limit`-must-not-outlive-the-sort-pushdown rule, plus a **Known divergences**
+  table covering MongoDB's ascending sorts (native `cursor.sort()` places
+  missing values first — documented, not normalized), array-index path segments,
+  and heterogeneous value types.
+- **Corrected stale NULL-ordering docstrings** in
+  `jvspatial/db/_sqlite_translate.py` (module docstring and `translate_sort`)
+  and `jvspatial/db/_postgres_translate.py` (`translate_sort`). All three still
+  claimed "NULLs sort last for ascending, first for descending, mirroring
+  `finalize_find_results`" — the opposite of what the code emits and of the
+  contract.
+- **`Database.find`** now documents the ordering contract adapter authors must
+  satisfy; **`Database.find_iter`** no longer claims a composite
+  `(sort_value, id)` cursor — the default implementation tracks `id` only, so a
+  non-`id` sort drops records that sort late but carry a lower `id`.
+
 ### Fixed
 
 - **`ObjectPager` re-sorted each page with a key that disagreed with the

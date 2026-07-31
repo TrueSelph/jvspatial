@@ -257,6 +257,25 @@ class Database(ABC):
 
         Returns:
             List of matching records
+
+        Ordering contract (SPEC §4.1) — implementations must satisfy all of
+        it whether they push the sort into the backend or fall back to
+        :func:`finalize_find_results`:
+
+        * ``field`` may be a dotted path into nested documents
+          (``context.started_at``); resolve it with
+          :func:`resolve_sort_value`, never a flat ``record.get(field)``.
+        * Records with no value for the sort field come **last in both
+          directions**, matching the ``NULLS LAST`` the SQL translators emit.
+        * The sort is stable; compound sorts apply from the last key first.
+        * If the ordering cannot be expressed in the backend, ``limit`` must
+          not be pushed down either — fetch the full match set and apply
+          ``sort`` and ``limit`` together in memory, or the result is the top
+          N of an arbitrary N.
+
+        Known divergences are listed in SPEC §4.1 (MongoDB places missing
+        values first on ascending sorts; heterogeneous value types raise in
+        memory but order by storage class in SQL).
         """
         pass
 
@@ -302,10 +321,16 @@ class Database(ABC):
         Args:
             collection: Collection name.
             query: Mongo-style query (same operator surface as ``find``).
-            sort: Optional ``[(field, direction)]``. When provided, the
-                cursor is a composite ``(sort_value, id)`` for stable
-                pagination across concurrent writes. When omitted,
-                sort defaults to ``id`` ascending.
+            sort: Optional ``[(field, direction)]``, defaulting to ``id``
+                ascending. **The default implementation's cursor tracks
+                ``id`` only**, so a non-``id`` sort is not safely pageable
+                here: each batch asks for ``id > last_id``, which drops
+                records that sort after the batch but carry a lower ``id``.
+                Use ``sort=None`` (or an ``id`` sort) with this default, or
+                an adapter override with a native cursor. A composite
+                ``(sort_value, id)`` cursor is not yet implemented — for a
+                custom sort key with correct paging use
+                :meth:`jvspatial.core.context.GraphContext.find_page`.
             batch_size: Records per round trip. Default 100.
             cursor: Opaque bytes from a prior call's last record. Pass
                 back to resume; pass ``None`` (default) to start fresh.
