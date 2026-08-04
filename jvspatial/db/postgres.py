@@ -337,6 +337,10 @@ class PostgresDB(Database):
 
         self._pool: Optional["Pool"] = None
         self._pool_lock = asyncio.Lock()
+        # The loop ``_pool`` (and ``_pool_lock``) belong to. asyncpg pools
+        # and asyncio primitives bind to the loop they were created on, so
+        # a pool carried into a second loop is unusable.
+        self._pool_loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Collections we've already created the table + base indexes for.
         # Avoids running CREATE TABLE IF NOT EXISTS on the hot path.
@@ -350,8 +354,39 @@ class PostgresDB(Database):
 
     # ---- pool lifecycle ----------------------------------------------------
 
+    def _discard_pool_from_dead_loop(self) -> None:
+        """Drop a pool that belongs to a different event loop.
+
+        Hosts that bootstrap inside one ``asyncio.run()`` and then serve
+        from a second loop (the CLI-then-ASGI-server pattern) would
+        otherwise reuse a pool bound to the first, now-closed loop, and
+        every query fails with ``cannot perform operation: another
+        operation is in progress``. The stale pool's connections are
+        abandoned rather than closed — ``close()`` would have to await on
+        the dead loop — and Postgres reaps them when the sockets drop.
+        """
+        if self._pool is None:
+            return
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover - callers are async
+            return
+        if self._pool_loop is running:
+            return
+
+        logger.debug(
+            "PostgresDB: event loop changed; rebuilding pool (was %r, now %r)",
+            self._pool_loop,
+            running,
+        )
+        self._pool = None
+        # ``asyncio.Lock`` binds to its loop too, so it has to go as well.
+        self._pool_lock = asyncio.Lock()
+        self._collections_bootstrapped.clear()
+
     async def _ensure_pool(self) -> "Pool":
         """Lazily create the asyncpg pool. Idempotent + concurrency-safe."""
+        self._discard_pool_from_dead_loop()
         if self._pool is not None:
             return self._pool
         async with self._pool_lock:
@@ -377,6 +412,7 @@ class PostgresDB(Database):
                 self.pooler_mode,
             )
             self._pool = await asyncpg.create_pool(**create_kwargs)
+            self._pool_loop = asyncio.get_running_loop()
             return self._pool
 
     async def close(self) -> None:
@@ -384,6 +420,7 @@ class PostgresDB(Database):
         if self._pool is not None:
             await self._pool.close()
             self._pool = None
+            self._pool_loop = None
             self._collections_bootstrapped.clear()
 
     # ---- tenant scope (C6) -------------------------------------------------
