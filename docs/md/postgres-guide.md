@@ -77,6 +77,37 @@ alice = await User.create(name="Alice", email="alice@example.com")
 loaded = await User.get(alice.id)
 ```
 
+### Using Postgres with `Server`
+
+`Server` selects the prime database from `db_type`, so Postgres is available
+to the API layer the same way JSON or MongoDB is:
+
+```python
+from jvspatial.api.server import Server
+
+server = Server(
+    db_type="postgres",
+    postgres_dsn="postgresql://user:pw@localhost:5432/mydb",
+)
+```
+
+`postgresql` is accepted as an alias for `postgres`. Every connection setting
+also resolves from the environment through `ServerConfig`:
+
+```bash
+JVSPATIAL_DB_TYPE=postgres
+JVSPATIAL_POSTGRES_DSN=postgresql://user:pw@localhost:5432/mydb
+```
+
+Settings you leave unset fall through to `PostgresDB`'s own defaults, so the
+DSN is the only value most deployments need. `JVSPATIAL_DB_PATH` does not
+apply — it is a file-backend setting.
+
+Note that the logging database is a separate store and has no Postgres
+backend; if `JVSPATIAL_LOG_DB_TYPE` is unset it inherits `JVSPATIAL_DB_TYPE`
+and falls back to a JSON file log. Set it explicitly when the graph runs on
+Postgres.
+
 ## Schema
 
 Each collection becomes one table. The shape:
@@ -151,6 +182,15 @@ Or via env (see [environment-keys-reference.md](environment-keys-reference.md)):
 JVSPATIAL_POSTGRES_MIN_POOL_SIZE=5
 JVSPATIAL_POSTGRES_MAX_POOL_SIZE=25
 ```
+
+### Event loops
+
+The pool belongs to the event loop that created it. If a host bootstraps
+inside one `asyncio.run()` and then serves from a second loop — the common
+CLI-then-ASGI-server startup — `PostgresDB` notices the loop change and
+rebuilds the pool on first use in the new loop. The abandoned pool's
+connections are dropped rather than closed, since closing them would mean
+awaiting on a loop that no longer runs.
 
 ### Pooler compatibility (PgBouncer / RDS Proxy)
 

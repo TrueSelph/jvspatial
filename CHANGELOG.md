@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Postgres is selectable from `Server`** (`jvspatial/api/components/database_configurator.py`).
+  `initialize_graph_context()` now builds a `PostgresDB` prime database for
+  `db_type="postgres"` (alias `"postgresql"`) instead of raising
+  `ValueError: Unsupported database type: postgres`. The backend and
+  `create_database("postgres", ...)` already worked; only the `Server` path
+  was missing, so every API-layer deployment — and anything built on it — was
+  locked out of a documented backend.
+
+- **`ServerConfig.database` carries Postgres settings** (`jvspatial/api/config_groups.py`,
+  `jvspatial/env_adapter.py`) — `postgres_dsn`, `postgres_min_pool_size`,
+  `postgres_max_pool_size`, `postgres_pooler_mode`, populated from the
+  already-allowlisted `JVSPATIAL_POSTGRES_*` env keys. Connection settings now
+  flow through the config object like every other backend's rather than being
+  readable only by the driver. Unset values still defer to `PostgresDB`'s own
+  defaults. Coverage: `tests/test_env_adapter_postgres.py`,
+  `tests/api/components/test_database_configurator.py`.
+
 - **`resolve_sort_value(record, field)`** (`jvspatial/db/database.py`) — the
   dotted-path resolution `finalize_find_results` uses, exported so adapters and
   cursor logic resolve a sort field the same way. Added to the module's
@@ -23,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against the previous behavior keep working.
 
 ### Fixed
+
+- **`PostgresDB` pool is event-loop aware** (`jvspatial/db/postgres.py`). The
+  `asyncpg` pool and its lock bind to the loop that created them, but
+  `_ensure_pool()` memoized both for the lifetime of the instance. A host that
+  bootstrapped in one `asyncio.run()` and then served from a second loop hit
+  `cannot perform operation: another operation is in progress` /
+  `ConnectionDoesNotExistError` on its first query. The pool and lock are now
+  rebuilt when the running loop changes. Coverage:
+  `tests/db/test_postgres_unit.py::TestPoolLoopAffinity`.
 
 - **Partial-index repair log is INFO, not WARNING** (`jvspatial/db/sqlite.py`).
   Dropping a non-partial index so it can be recreated with `WHERE` is expected

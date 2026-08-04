@@ -45,6 +45,23 @@ class DatabaseConfig(BaseModel):
         default=None, validation_alias="AWS_SECRET_ACCESS_KEY"
     )
 
+    # PostgreSQL Configuration (only used if db_type is "postgres"/"postgresql").
+    # Unset values fall through to PostgresDB's own env defaults.
+    postgres_dsn: Optional[str] = Field(
+        default=None, validation_alias="JVSPATIAL_POSTGRES_DSN"
+    )
+    postgres_min_pool_size: Optional[int] = Field(
+        default=None, validation_alias="JVSPATIAL_POSTGRES_MIN_POOL_SIZE"
+    )
+    postgres_max_pool_size: Optional[int] = Field(
+        default=None, validation_alias="JVSPATIAL_POSTGRES_MAX_POOL_SIZE"
+    )
+    postgres_pooler_mode: Optional[str] = Field(
+        default=None,
+        validation_alias="JVSPATIAL_POSTGRES_POOLER_MODE",
+        description="'session' (default) or 'transaction' for PgBouncer / RDS Proxy.",
+    )
+
 
 class SecurityConfig(BaseModel):
     """Security configuration group."""
