@@ -124,9 +124,17 @@ def server_config_overrides_from_env() -> Dict[str, Any]:
         ("JVSPATIAL_DYNAMODB_TABLE_NAME", "dynamodb_table_name"),
         ("JVSPATIAL_DYNAMODB_REGION", "dynamodb_region"),
         ("JVSPATIAL_DYNAMODB_ENDPOINT_URL", "dynamodb_endpoint_url"),
+        ("JVSPATIAL_POSTGRES_DSN", "postgres_dsn"),
+        ("JVSPATIAL_POSTGRES_POOLER_MODE", "postgres_pooler_mode"),
     ):
         if (t := _opt_str(ek)) is not None:
             db[dk] = t
+    for ek, dk in (
+        ("JVSPATIAL_POSTGRES_MIN_POOL_SIZE", "postgres_min_pool_size"),
+        ("JVSPATIAL_POSTGRES_MAX_POOL_SIZE", "postgres_max_pool_size"),
+    ):
+        if (n := _opt_int(ek)) is not None:
+            db[dk] = n
     if db:
         o["database"] = db
 
