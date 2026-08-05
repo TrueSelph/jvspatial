@@ -17,6 +17,11 @@ _DEFAULT_ROLE_MAPPING: Dict[str, List[str]] = {"admin": ["*"], "user": []}
 class DatabaseConfig(BaseModel):
     """Database configuration group."""
 
+    # Aliased fields below are settable only by their alias unless the model
+    # opts in here, so callers passing them by field name -- including
+    # ``server_config_overrides_from_env`` -- were silently ignored.
+    model_config = ConfigDict(populate_by_name=True)
+
     db_type: Optional[str] = None
     db_path: Optional[str] = None
     db_path_resolve: Optional[str] = Field(

@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.0.16] - 2026-08-04
+### Fixed
+
+- **`DatabaseConfig` ignored values passed by field name** (`jvspatial/api/config_groups.py`).
+  Its aliased fields (`dynamodb_*`, `postgres_*`) carry a `validation_alias`, and a
+  pydantic v2 model accepts an aliased field *only* by its alias unless it opts into
+  `populate_by_name` — which `AuthConfig` does and `DatabaseConfig` did not. So every
+  such value passed by field name was silently discarded: both
+  `server_config_overrides_from_env()`, which keys its database group by field name,
+  and embedding hosts constructing a `DatabaseConfig` directly. Nothing raised,
+  because the adapters then read the same settings from env themselves — the
+  configuration object was simply never the source of truth it appeared to be.
+  DynamoDB was affected the whole time; Postgres inherited it in 0.0.16. Coverage:
+  `tests/api/test_database_config_population.py`.
 
 ### Added
 
