@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.17] - 2026-08-05
+
 ### Fixed
 
 - **`DatabaseConfig` ignored values passed by field name** (`jvspatial/api/config_groups.py`).
@@ -20,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configuration object was simply never the source of truth it appeared to be.
   DynamoDB was affected the whole time; Postgres inherited it in 0.0.16. Coverage:
   `tests/api/test_database_config_population.py`.
+
+## [0.0.16] - 2026-08-04
 
 ### Added
 
