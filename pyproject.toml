@@ -35,7 +35,12 @@ dependencies = [
     # lifespan), not the Router(on_startup/on_shutdown) API that 1.0 removed, and
     # route introspection is version-agnostic via _route_utils.iter_api_routes.
     "starlette>=0.46.0",
-    "uvicorn>=0.23.0",
+    # Capped below 1.0: uvicorn is the ASGI server jvspatial actually drives
+    # (api/server_run.py calls uvicorn.run directly with a config dict), so a
+    # major release is free to rename or drop the kwargs we pass. The floor-only
+    # spec let a resolver walk 0.44 -> 0.52 unnoticed between two installs of
+    # the same commit; a cap keeps that inside a range we have tested.
+    "uvicorn>=0.23.0,<1.0.0",
     "python-multipart>=0.0.6",
     "motor>=3.0.0",
     "pymongo>=4.0.0",
