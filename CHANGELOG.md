@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`uvicorn` is capped below 1.0** (`pyproject.toml`). It was floor-only
+  (`>=0.23.0`), and jvspatial is the package that actually drives it —
+  `api/server_run.py` calls `uvicorn.run` with a config dict, so a major
+  release is free to rename or drop the kwargs passed there. In practice the
+  open spec let a resolver move an existing environment from 0.44 to 0.52
+  between two installs of the same commit, silently. The cap keeps resolution
+  inside a range that has been tested without pinning consumers to an exact
+  version.
+
 ## [0.0.17] - 2026-08-05
 
 ### Fixed
