@@ -125,6 +125,7 @@ For full examples and default values, see:
 - `JVSPATIAL_WEBHOOK_MAX_PAYLOAD_SIZE` - Max payload bytes.
 - `JVSPATIAL_WEBHOOK_IDEMPOTENCY_TTL` - Idempotency TTL.
 - `JVSPATIAL_WEBHOOK_HTTPS_REQUIRED` - HTTPS-only webhook policy.
+- `JVSPATIAL_WEBHOOK_API_KEY_REQUIRE_HTTPS` - Require HTTPS when the webhook API key is supplied via query parameter (default `true`). Set `false` for local plain-HTTP tunnels (e.g. ngrok → `http://127.0.0.1`).
 
 ### Walker safety and deferred execution
 - `JVSPATIAL_WALKER_PROTECTION_ENABLED` - Enables walker safety guards.

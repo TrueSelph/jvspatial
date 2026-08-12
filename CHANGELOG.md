@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`JVSPATIAL_WEBHOOK_API_KEY_REQUIRE_HTTPS` was allowlist-rejected**
+  (`jvspatial/env_adapter.py`). The key was never in `ALLOWED_ENV_KEYS`, so
+  startup warned that it was ignored and
+  `server_config_overrides_from_env()` never mapped it onto
+  `WebhookConfig.webhook_api_key_require_https`. Local HTTP callback tunnels
+  (ngrok → plain `http://127.0.0.1`) could not disable the query-param HTTPS
+  gate via env alone. Also maps `JVSPATIAL_WEBHOOK_HTTPS_REQUIRED` into
+  `WebhookConfig.webhook_https_required` for the same ServerConfig path.
+
 ### Changed
 
 - **`uvicorn` is capped below 1.0** (`pyproject.toml`). It was floor-only

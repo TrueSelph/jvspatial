@@ -217,6 +217,18 @@ def server_config_overrides_from_env() -> Dict[str, Any]:
     if proxy:
         o["proxy"] = proxy
 
+    webhook: Dict[str, Any] = {}
+    if "JVSPATIAL_WEBHOOK_API_KEY_REQUIRE_HTTPS" in os.environ:
+        webhook["webhook_api_key_require_https"] = _parse_bool(
+            os.environ["JVSPATIAL_WEBHOOK_API_KEY_REQUIRE_HTTPS"]
+        )
+    if "JVSPATIAL_WEBHOOK_HTTPS_REQUIRED" in os.environ:
+        webhook["webhook_https_required"] = _parse_bool(
+            os.environ["JVSPATIAL_WEBHOOK_HTTPS_REQUIRED"]
+        )
+    if webhook:
+        o["webhook"] = webhook
+
     return o
 
 
@@ -322,6 +334,7 @@ ALLOWED_ENV_KEYS: frozenset[str] = frozenset(
         "JVSPATIAL_EVENTBRIDGE_SCHEDULER_GROUP",
         "JVSPATIAL_LWA_ENV_DEFAULTS",
         # Webhooks
+        "JVSPATIAL_WEBHOOK_API_KEY_REQUIRE_HTTPS",
         "JVSPATIAL_WEBHOOK_HMAC_ALGORITHM",
         "JVSPATIAL_WEBHOOK_HMAC_SECRET",
         "JVSPATIAL_WEBHOOK_HTTPS_REQUIRED",

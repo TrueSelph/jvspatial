@@ -69,5 +69,7 @@ def test_allowlist_contains_canonical_keys():
         "JVSPATIAL_DOCS_DISABLED",
         "JVSPATIAL_WALKER_MAX_STEPS",
         "JVSPATIAL_CORS_ORIGINS",
+        "JVSPATIAL_WEBHOOK_API_KEY_REQUIRE_HTTPS",
+        "JVSPATIAL_WEBHOOK_HTTPS_REQUIRED",
     }
     assert expected.issubset(ALLOWED_ENV_KEYS)
