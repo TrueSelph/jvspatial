@@ -113,7 +113,7 @@ jobs:
       - name: Download baseline (best-effort)
         id: baseline
         continue-on-error: true
-        uses: dawidd6/action-download-artifact@v21
+        uses: dawidd6/action-download-artifact@v24
         with:
           workflow: benchmarks.yml
           branch: main
