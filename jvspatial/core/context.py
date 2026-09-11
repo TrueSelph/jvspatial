@@ -1,10 +1,8 @@
 """GraphContext for managing database dependencies."""
 
 import asyncio
-import base64
 import contextvars
 import inspect
-import json
 import logging
 import time
 from contextlib import asynccontextmanager, contextmanager, suppress
@@ -23,11 +21,7 @@ from typing import (
     cast,
 )
 
-from jvspatial.db.database import (
-    Database,
-    resolve_edge_ids_mode,
-    resolve_sort_value,
-)
+from jvspatial.db.database import Database, resolve_edge_ids_mode
 from jvspatial.db.factory import create_database, get_current_database
 from jvspatial.db.manager import get_database_manager
 
@@ -1450,69 +1444,20 @@ class GraphContext:
         ``sort`` is expected to include at least one field; ``id`` is appended as
         a deterministic tiebreaker when missing.
         """
+        from .pager import (
+            decode_keyset_cursor,
+            encode_keyset_cursor,
+            keyset_filter,
+            keyset_sort_fields,
+        )
+
         page_limit = max(1, int(limit))
-        if not sort:
-            sort = [("id", 1)]
-        sort_fields: List[Tuple[str, int]] = list(sort)
-        if not any(field == "id" for field, _ in sort_fields):
-            sort_fields.append(("id", sort_fields[0][1]))
-
+        sort_fields = keyset_sort_fields(sort)
         final_query: Dict[str, Any] = dict(query or {})
-        cursor_payload: Optional[Dict[str, Any]] = None
-        if isinstance(after, str) and after:
-            try:
-                cursor_payload = json.loads(
-                    base64.urlsafe_b64decode(after.encode()).decode()
-                )
-            except Exception:
-                cursor_payload = None
-        elif isinstance(after, dict):
-            cursor_payload = after
-
-        primary_field, primary_dir = sort_fields[0]
-        id_dir = sort_fields[-1][1]
-        if cursor_payload and "id" in cursor_payload and "sort" in cursor_payload:
-            sort_op = "$lt" if primary_dir < 0 else "$gt"
-            id_op = "$lt" if id_dir < 0 else "$gt"
-            cursor_sort = cursor_payload["sort"]
-            keyset_branches: List[Dict[str, Any]]
-            if cursor_sort is None:
-                # The cursor sits in the trailing run of records that have
-                # no value for the sort field. Records missing the sort
-                # field sort last in both directions (see
-                # ``finalize_find_results``), so everything still ahead of
-                # us is also missing it — walk that run by id alone.
-                keyset_branches = [
-                    {
-                        "$and": [
-                            {primary_field: None},
-                            {"id": {id_op: cursor_payload["id"]}},
-                        ]
-                    }
-                ]
-            else:
-                keyset_branches = [
-                    {primary_field: {sort_op: cursor_sort}},
-                    # ``{field: None}`` matches both an explicit null and a
-                    # missing key. Without this branch the nulls-last tail
-                    # is unreachable: ``{field: {"$lt": v}}`` never matches
-                    # a record that has no value at all, so iteration would
-                    # stop at the last record that does.
-                    {primary_field: None},
-                    {
-                        "$and": [
-                            {primary_field: cursor_sort},
-                            {"id": {id_op: cursor_payload["id"]}},
-                        ]
-                    },
-                ]
-            keyset_filter: Dict[str, Any] = (
-                keyset_branches[0]
-                if len(keyset_branches) == 1
-                else {"$or": keyset_branches}
-            )
+        after_cursor = keyset_filter(sort_fields, decode_keyset_cursor(after))
+        if after_cursor is not None:
             final_query = (
-                {"$and": [final_query, keyset_filter]} if final_query else keyset_filter
+                {"$and": [final_query, after_cursor]} if final_query else after_cursor
             )
 
         rows = await self.database.find(
@@ -1520,21 +1465,11 @@ class GraphContext:
         )
         has_more = len(rows) > page_limit
         page_rows = rows[:page_limit]
-
-        next_cursor: Optional[str] = None
-        if has_more and page_rows:
-            last = page_rows[-1]
-            # Dotted sort fields (``context.started_at``) need the same
-            # path walk the adapters use; a flat ``.get`` would mint a
-            # ``None`` sort value for every cursor and stall pagination.
-            payload = {
-                "id": last.get("id"),
-                "sort": resolve_sort_value(last, primary_field),
-            }
-            next_cursor = base64.urlsafe_b64encode(
-                json.dumps(payload, separators=(",", ":")).encode()
-            ).decode()
-
+        next_cursor = (
+            encode_keyset_cursor(page_rows[-1], sort_fields)
+            if has_more and page_rows
+            else None
+        )
         return page_rows, next_cursor
 
     async def nodes_bulk(
@@ -1547,8 +1482,15 @@ class GraphContext:
         edge_filter: Optional[Dict[str, Any]] = None,
         node_filter: Optional[Dict[str, Any]] = None,
         limit: Optional[int] = None,
+        limit_per_source: Optional[int] = None,
     ) -> Dict[str, List[Any]]:
-        """Batch traversal for many source IDs in one edge-query pass."""
+        """Batch traversal for many source IDs in one edge-query pass.
+
+        ``limit_per_source`` caps the neighbours returned per source id. On
+        backends with ``find_connected_nodes_bulk`` (Postgres) an ``out`` /
+        ``in`` traversal without the legacy global ``limit`` is one round trip
+        (``ROW_NUMBER() OVER (PARTITION BY source)``).
+        """
         from .entities.edge import Edge
         from .entities.node import Node
 
@@ -1570,6 +1512,36 @@ class GraphContext:
 
         if direction not in ("out", "in", "both"):
             direction = "out"
+
+        bulk = getattr(self.database, "find_connected_nodes_bulk", None)
+        if callable(bulk) and limit is None and direction in ("out", "in"):
+            try:
+                rows_by_source = await bulk(
+                    self._get_collection_name("n"),
+                    self._get_collection_name("e"),
+                    unique_ids,
+                    direction=direction,
+                    edge_entities=edge_entities or None,
+                    node_entities=node_entities or None,
+                    edge_query={
+                        f"context.{k}": v for k, v in (edge_filter or {}).items()
+                    }
+                    or None,
+                    node_query={
+                        f"context.{k}": v for k, v in (node_filter or {}).items()
+                    }
+                    or None,
+                    limit_per_source=limit_per_source,
+                )
+            except NotImplementedError:
+                rows_by_source = None
+            if rows_by_source is not None:
+                for src_id, rows in rows_by_source.items():
+                    for row in rows:
+                        obj = await self._deserialize_entity(Node, row)
+                        if obj is not None:
+                            out.setdefault(src_id, []).append(obj)
+                return out
 
         edge_query: Dict[str, Any] = {}
         if direction == "out":
@@ -1637,6 +1609,8 @@ class GraphContext:
             if obj is not None:
                 node_by_id[doc["id"]] = obj
 
+        caps = [c for c in (limit, limit_per_source) if c is not None]
+        cap = max(1, min(caps)) if caps else None
         for src_id, target_ids in links.items():
             matched: List[Any] = []
             for tid in target_ids:
@@ -1644,7 +1618,7 @@ class GraphContext:
                 if obj is None:
                     continue
                 matched.append(obj)
-                if limit is not None and len(matched) >= max(1, limit):
+                if cap is not None and len(matched) >= cap:
                     break
             out[src_id] = matched
         return out

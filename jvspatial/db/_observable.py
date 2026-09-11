@@ -335,60 +335,53 @@ class ObservableDatabase(Database):
         """Pass through deprecated-index cleanup to the wrapped backend."""
         await self.inner.drop_deprecated_indexes(deprecated)
 
-    async def find_connected_nodes(
-        self,
-        node_collection: str,
-        edge_collection: str,
-        node_id: str,
-        *,
-        direction: str = "out",
-        edge_entity: Optional[str] = None,
-        limit: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
-        """Instrumented single-hop neighbor join when the backend supports it."""
-        inner = getattr(self.inner, "find_connected_nodes", None)
+    # Optional graph ops exist on the wrapper only when the wrapped backend
+    # implements them: the properties raise ``AttributeError`` otherwise, so
+    # ``getattr(db, "find_connected_nodes", None)`` stays ``None`` for
+    # adapters without a pushdown and callers take their fallback path.
+
+    def _optional_op(
+        self, name: str, result_count: Callable[[Any], int]
+    ) -> Callable[..., Awaitable[Any]]:
+        inner = getattr(self.inner, name, None)
         if not callable(inner):
-            raise AttributeError("find_connected_nodes")
-        return await self._instrument(
-            "find_connected_nodes",
-            node_collection,
-            lambda: inner(
-                node_collection,
-                edge_collection,
-                node_id,
-                direction=direction,
-                edge_entity=edge_entity,
-                limit=limit,
-            ),
-            result_count_extractor=lambda r: len(r) if isinstance(r, list) else 0,
+            raise AttributeError(name)
+
+        async def _call(collection: str, *args: Any, **kwargs: Any) -> Any:
+            return await self._instrument(
+                name,
+                collection,
+                lambda: inner(collection, *args, **kwargs),
+                result_count_extractor=result_count,
+            )
+
+        return _call
+
+    @property
+    def find_connected_nodes(self) -> Callable[..., Awaitable[Any]]:
+        """Instrumented single-hop neighbour query (backend permitting)."""
+        return self._optional_op(
+            "find_connected_nodes", lambda r: len(r) if isinstance(r, list) else 0
         )
 
-    async def traverse(
-        self,
-        edge_collection: str,
-        start_id: str,
-        *,
-        direction: str = "out",
-        max_depth: int = 1,
-        edge_filter: Optional[Dict[str, Any]] = None,
-        limit: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
-        """Instrumented multi-hop graph walk when the backend supports it."""
-        inner = getattr(self.inner, "traverse", None)
-        if not callable(inner):
-            raise AttributeError("traverse")
-        return await self._instrument(
-            "traverse",
-            edge_collection,
-            lambda: inner(
-                edge_collection,
-                start_id,
-                direction=direction,
-                max_depth=max_depth,
-                edge_filter=edge_filter,
-                limit=limit,
-            ),
-            result_count_extractor=lambda r: len(r) if isinstance(r, list) else 0,
+    @property
+    def count_connected_nodes(self) -> Callable[..., Awaitable[Any]]:
+        """Instrumented single-hop neighbour count (backend permitting)."""
+        return self._optional_op("count_connected_nodes", lambda r: int(r or 0))
+
+    @property
+    def find_connected_nodes_bulk(self) -> Callable[..., Awaitable[Any]]:
+        """Instrumented multi-source neighbour query (backend permitting)."""
+        return self._optional_op(
+            "find_connected_nodes_bulk",
+            lambda r: sum(len(v) for v in r.values()) if isinstance(r, dict) else 0,
+        )
+
+    @property
+    def traverse(self) -> Callable[..., Awaitable[Any]]:
+        """Instrumented multi-hop graph walk (backend permitting)."""
+        return self._optional_op(
+            "traverse", lambda r: len(r) if isinstance(r, list) else 0
         )
 
     async def find_iter(

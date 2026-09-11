@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Node.edges(limit=...)`, `strip_node_edges()` on `PostgresDB` / `MongoDB`,
   and the `jvspatial migrate strip-node-edges` CLI (dry run by default,
   `--apply` to write).
+- **Neighbour counts and pages in the database** (`jvspatial/core/entities/node.py`):
+  `Node.count_nodes(...)` (one `COUNT` round trip — use it instead of
+  `len(await n.nodes(...))`), `Node.nodes_page(sort=..., cursor=..., limit=...)`
+  (keyset-paginated neighbours, cursor encoding shared with
+  `GraphContext.find_page` via `jvspatial.core.pager`), and
+  `nodes_bulk(limit_per_source=...)` (one windowed query on Postgres).
+  `count_neighbors` now delegates to `count_nodes`.
 - **`expand_node` keyset paging** (`jvspatial/core/graph_expansion.py`):
   `after=` / `pagination.next_after` (and the `after` query parameter on the
   graph expand endpoint) page incident edges by edge id in O(page). The
@@ -41,6 +48,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   online) to reclaim the space at once. JsonDB and DynamoDB keep `"persist"`.
   Opt out with `JVSPATIAL_NODE_EDGE_IDS=persist` or
   `db.edge_ids_mode = "persist"`.
+- **`Node.nodes()` pushes every filter shape to the database.** The list
+  form (`edge=[E], node=["Leaf"]`), strings, subclass-inclusive node classes,
+  `{Name: criteria}` dicts and property kwargs all become one
+  `find_connected_nodes` round trip on Postgres, MongoDB and SQLite, with
+  `limit` pushed down; `direction="both"` included. Previously only the class
+  form took the join and everything else loaded every incident edge and
+  hydrated every neighbour before slicing in Python. Backends without the
+  pushdown keep the Python path, now filtering in the database `find`.
 - **`expand_node` / `subgraph_bfs` source incident edges from the edge
   collection** in every mode (one query per node instead of one `get` per
   edge id); `total_edge_count` is a count of incident edges, and neighbours
@@ -48,6 +63,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **List-form edge filters were dropped by `Node.nodes()`**
+  (`jvspatial/core/entities/node.py`). `nodes(edge=[E])`, `edge=["E"]` and
+  `edge=[{"E": {...}}]` returned neighbours reached through *any* edge type,
+  and `direction="both"` capped at 10 000 edges. Edge types and criteria are
+  now always applied.
+- **`ObservableDatabase` advertised graph pushdowns its backend lacks**
+  (`jvspatial/db/_observable.py`). `find_connected_nodes` / `traverse` were
+  plain methods, so `getattr(db, "find_connected_nodes", None)` looked
+  callable over JsonDB and the call then raised. They now exist on the
+  wrapper only when the wrapped adapter implements them.
 - **`$pull` was ignored by `QueryEngine.apply_update`** (`jvspatial/db/query.py`).
   Backends that apply updates in Python — Postgres `find_one_and_update`,
   and the JsonDB / SQLite / DynamoDB defaults — silently skipped it, so on

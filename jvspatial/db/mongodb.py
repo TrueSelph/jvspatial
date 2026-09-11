@@ -18,7 +18,18 @@ Index creation
 
 import contextlib
 import logging
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+)
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import (
@@ -343,6 +354,156 @@ class MongoDB(Database):
                 stripped += int(result.modified_count)
 
         return int(await self._run_with_reconnect("strip_node_edges", _strip_op))
+
+    @staticmethod
+    def _connected_pipeline(
+        node_collection: str,
+        start_id: str,
+        *,
+        direction: str,
+        edge_entities: Optional[Sequence[str]],
+        node_entities: Optional[Sequence[str]],
+        edge_query: Optional[Dict[str, Any]],
+        node_query: Optional[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Aggregation over the edge collection yielding neighbour node documents.
+
+        One edge type in one direction streams edge → ``$lookup`` → node (the
+        ``(source, target, entity)`` unique index makes it duplicate-free, so a
+        trailing ``$limit`` stops early). Otherwise neighbour ids are grouped
+        first so each neighbour appears once.
+        """
+        if direction not in ("out", "in", "both"):
+            raise ValueError(
+                f"direction must be 'out', 'in' or 'both', got {direction!r}"
+            )
+        endpoints: Dict[str, Dict[str, Any]] = {
+            "out": {"source": start_id},
+            "in": {"target": start_id},
+            "both": {"$or": [{"source": start_id}, {"target": start_id}]},
+        }
+        edge_match: List[Dict[str, Any]] = [endpoints[direction]]
+        if edge_entities is not None:
+            edge_match.append({"entity": {"$in": list(edge_entities)}})
+        if edge_query:
+            edge_match.append(edge_query)
+        far: Any = {
+            "out": "$target",
+            "in": "$source",
+            "both": {"$cond": [{"$eq": ["$source", start_id]}, "$target", "$source"]},
+        }[direction]
+        pipeline: List[Dict[str, Any]] = [
+            {"$match": {"$and": edge_match}},
+            {"$project": {"_far": far}},
+        ]
+        if direction == "both" or edge_entities is None or len(edge_entities) != 1:
+            pipeline.append({"$group": {"_id": "$_far"}})
+            local_field = "_id"
+        else:
+            local_field = "_far"
+        pipeline += [
+            {
+                "$lookup": {
+                    "from": node_collection,
+                    "localField": local_field,
+                    "foreignField": "_id",
+                    "as": "_n",
+                }
+            },
+            {"$unwind": "$_n"},
+            {"$replaceRoot": {"newRoot": "$_n"}},
+        ]
+        node_match: List[Dict[str, Any]] = []
+        if node_entities is not None:
+            node_match.append({"entity": {"$in": list(node_entities)}})
+        if node_query:
+            node_match.append(node_query)
+        if node_match:
+            pipeline.append({"$match": {"$and": node_match}})
+        return pipeline
+
+    async def find_connected_nodes(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        start_id: str,
+        *,
+        direction: str = "out",
+        edge_entity: Optional[str] = None,
+        edge_entities: Optional[Sequence[str]] = None,
+        node_entities: Optional[Sequence[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Single-hop neighbours of ``start_id`` in one aggregation round trip.
+
+        Same contract as ``PostgresDB.find_connected_nodes``: entity lists and
+        record-path queries filter the edge / node side, ``sort`` / ``limit``
+        apply to neighbours.
+        """
+        if edge_entities is None and edge_entity is not None:
+            edge_entities = [edge_entity]
+        pipeline = self._connected_pipeline(
+            node_collection,
+            start_id,
+            direction=direction,
+            edge_entities=edge_entities,
+            node_entities=node_entities,
+            edge_query=edge_query,
+            node_query=node_query,
+        )
+        if sort:
+            order: Dict[str, int] = {}
+            for field, direction_ in sort:
+                order[field] = direction_
+            order.setdefault("_id", 1)
+            pipeline.append({"$sort": order})
+        if limit is not None:
+            pipeline.append({"$limit": int(limit)})
+
+        async def _op() -> List[Dict[str, Any]]:
+            await self._ensure_connected()
+            if self._db is None:
+                raise DatabaseError("MongoDB database connection not established")
+            cursor = self._db[edge_collection].aggregate(pipeline)
+            return await cursor.to_list(length=None)
+
+        return await self._run_with_reconnect("find_connected_nodes", _op)
+
+    async def count_connected_nodes(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        start_id: str,
+        *,
+        direction: str = "out",
+        edge_entities: Optional[Sequence[str]] = None,
+        node_entities: Optional[Sequence[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Count of the neighbours :meth:`find_connected_nodes` would return."""
+        pipeline = self._connected_pipeline(
+            node_collection,
+            start_id,
+            direction=direction,
+            edge_entities=edge_entities,
+            node_entities=node_entities,
+            edge_query=edge_query,
+            node_query=node_query,
+        )
+        pipeline.append({"$count": "n"})
+
+        async def _op() -> int:
+            await self._ensure_connected()
+            if self._db is None:
+                raise DatabaseError("MongoDB database connection not established")
+            rows = await self._db[edge_collection].aggregate(pipeline).to_list(1)
+            return int(rows[0]["n"]) if rows else 0
+
+        return int(await self._run_with_reconnect("count_connected_nodes", _op))
 
     async def find(
         self,

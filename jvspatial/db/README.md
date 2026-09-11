@@ -62,7 +62,8 @@ db/
 - **`Database.edge_ids_mode` says where node adjacency lives.** `"derive"` (Postgres, MongoDB, SQLite): the edge collection only; node rows carry no `edges`. `"persist"` (JSON, DynamoDB): node rows also store `edges`. Read the effective value with `resolve_edge_ids_mode(db)` — instance attribute → `JVSPATIAL_NODE_EDGE_IDS` → class default. `strip_node_edges()` (Postgres, MongoDB) removes legacy arrays; CLI `jvspatial migrate strip-node-edges`.
 - **`find_many` and `bulk_save` are public and benefit from native overrides.** Defaults exist but are slow. (`database.py:176+`)
 - **`find_one_and_update` / `find_one_and_delete` are NOT atomic by default.** MongoDB and Postgres override with native atomic versions (`FOR UPDATE` on Postgres).
-- **Postgres-only helpers** (via `getattr`, not on the ABC): `traverse`, `find_connected_nodes`, `save_with_edge_merge` (persist mode only).
+- **Neighbour pushdown** (via `getattr`, not on the ABC): `find_connected_nodes` / `count_connected_nodes` on Postgres, MongoDB and SQLite take `edge_entities`, `node_entities`, `edge_query`, `node_query` (record paths), `sort` and `limit`, and raise `NotImplementedError` for anything they cannot translate so `Node.nodes()` falls back without dropping a filter. Postgres adds `find_connected_nodes_bulk(limit_per_source=...)`.
+- **Postgres-only helpers** (via `getattr`, not on the ABC): `traverse`, `find_connected_nodes_bulk`, `save_with_edge_merge` (persist mode only).
 - **Atomic JSON writes use `temp + fsync + rename + fsync(dir)`.** No partial records survive a crash. (`_atomic.py`)
 - **Per-file locks serialize concurrent writes to the same record only.** Different files run in parallel. (`_path_locks.py`)
 - **`QueryEngine` LRU is bounded.** Default 1024; configurable. Unbounded query construction will not leak memory. (`query.py`)

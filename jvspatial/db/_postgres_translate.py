@@ -130,9 +130,12 @@ class ParamBuilder:
 
 
 def _translate_field_clause(
-    field: str, condition: Any, pb: ParamBuilder
+    field: str, condition: Any, pb: ParamBuilder, table: str = ""
 ) -> Optional[str]:
     """Translate ``{field: condition}`` to a SQL fragment.
+
+    ``table`` is an optional table alias (``"n"``) prefixed to every column
+    reference — used when the fragment lands in a join.
 
     Returns ``None`` to signal fallback (the whole query should drop to
     in-Python evaluation).
@@ -140,15 +143,16 @@ def _translate_field_clause(
     if not _safe_field_path(field):
         return None
 
+    prefix = f"{table}." if table else ""
     if field in _TOP_LEVEL_TEXT_COLUMNS:
         # Bare column reference — lets $eq/comparators hit the real btree
         # index (e.g. ``{col}_entity_idx``) instead of a JSONB scan.
-        extract_text = field
-        extract_jsonb = f"to_jsonb({field})"
+        extract_text = f"{prefix}{field}"
+        extract_jsonb = f"to_jsonb({prefix}{field})"
     else:
         path = _path_literal(field)
-        extract_text = f"(data #>> '{path}')"  # text
-        extract_jsonb = f"(data #> '{path}')"  # jsonb
+        extract_text = f"({prefix}data #>> '{path}')"  # text
+        extract_jsonb = f"({prefix}data #> '{path}')"  # jsonb
 
     # Plain equality with a scalar value.
     if not isinstance(condition, dict):
@@ -252,7 +256,7 @@ def _translate_field_clause(
             # then negate the whole thing.
             if not isinstance(operand, dict):
                 return None
-            inner = _translate_field_clause(field, operand, pb)
+            inner = _translate_field_clause(field, operand, pb, table)
             if inner is None:
                 return None
             fragments.append(f"NOT ({inner})")
@@ -506,14 +510,16 @@ def _to_jsonb_literal(value: Any) -> str:
 # ---- logical translation ----------------------------------------------------
 
 
-def _translate_logical(op: str, conditions: Any, pb: ParamBuilder) -> Optional[str]:
+def _translate_logical(
+    op: str, conditions: Any, pb: ParamBuilder, table: str = ""
+) -> Optional[str]:
     if not isinstance(conditions, list) or not conditions:
         return None
     parts: List[str] = []
     for sub in conditions:
         if not isinstance(sub, dict):
             return None
-        translated = _translate_query_into(sub, pb)
+        translated = _translate_query_into(sub, pb, table)
         if translated is None:
             return None
         parts.append(f"({translated})")
@@ -526,7 +532,9 @@ def _translate_logical(op: str, conditions: Any, pb: ParamBuilder) -> Optional[s
     return None
 
 
-def _translate_query_into(query: Dict[str, Any], pb: ParamBuilder) -> Optional[str]:
+def _translate_query_into(
+    query: Dict[str, Any], pb: ParamBuilder, table: str = ""
+) -> Optional[str]:
     """Translate a query dict into a SQL fragment, accumulating into ``pb``."""
     if not query:
         return ""
@@ -536,7 +544,7 @@ def _translate_query_into(query: Dict[str, Any], pb: ParamBuilder) -> Optional[s
         if key in _IGNORED_TOP_LEVEL:
             continue
         if key in ("$and", "$or", "$nor"):
-            piece = _translate_logical(key, value, pb)
+            piece = _translate_logical(key, value, pb, table)
             if piece is None:
                 return None
             fragments.append(f"({piece})")
@@ -546,14 +554,14 @@ def _translate_query_into(query: Dict[str, Any], pb: ParamBuilder) -> Optional[s
             # dict.
             if not isinstance(value, dict):
                 return None
-            inner = _translate_query_into(value, pb)
+            inner = _translate_query_into(value, pb, table)
             if inner is None:
                 return None
             fragments.append(f"NOT ({inner})")
             continue
         if key.startswith("$"):
             return None
-        piece = _translate_field_clause(key, value, pb)
+        piece = _translate_field_clause(key, value, pb, table)
         if piece is None:
             return None
         fragments.append(piece)
@@ -561,8 +569,18 @@ def _translate_query_into(query: Dict[str, Any], pb: ParamBuilder) -> Optional[s
     return " AND ".join(fragments) if fragments else ""
 
 
+def _check_table_alias(table: Optional[str]) -> str:
+    if not table:
+        return ""
+    if not _SAFE_SEGMENT_RE.match(table):
+        raise ValueError(f"unsafe table alias: {table!r}")
+    return table
+
+
 def translate_query(
     query: Dict[str, Any],
+    *,
+    table: Optional[str] = None,
 ) -> Optional[Tuple[str, List[Any]]]:
     """Translate a Mongo-style query dict to ``(sql_where, params)``.
 
@@ -571,10 +589,11 @@ def translate_query(
 
     The returned SQL fragment is meant to be ANDed into a larger WHERE
     clause: ``WHERE (<returned_sql>)``. When the query is empty, returns
-    ``("", [])``.
+    ``("", [])``. ``table`` qualifies every column with a table alias
+    (``n.data``, ``n.entity``) so the fragment can target one side of a join.
     """
     pb = ParamBuilder()
-    out = _translate_query_into(query, pb)
+    out = _translate_query_into(query, pb, _check_table_alias(table))
     if out is None:
         return None
     return out, pb.values
@@ -582,6 +601,8 @@ def translate_query(
 
 def translate_sort(
     sort: Optional[List[Tuple[str, int]]],
+    *,
+    table: Optional[str] = None,
 ) -> Optional[str]:
     """Translate a Mongo-style sort spec into an ORDER BY fragment.
 
@@ -596,6 +617,8 @@ def translate_sort(
     """
     if not sort:
         return None
+    alias = _check_table_alias(table)
+    prefix = f"{alias}." if alias else ""
     parts: List[str] = []
     for field, direction in sort:
         if direction not in (1, -1):
@@ -603,7 +626,7 @@ def translate_sort(
         if not _safe_field_path(field):
             return None
         path = _path_literal(field)
-        col = f"(data #>> '{path}')"
+        col = f"({prefix}data #>> '{path}')"
         if direction == 1:
             parts.append(f"{col} ASC NULLS LAST")
         else:

@@ -71,8 +71,10 @@ rather than reading `edge_ids`. See [graph-context.md](graph-context.md).
 
 **Key Methods:**
 
-- **`nodes()`**: Returns a list of connected nodes with filtering options
+- **`nodes()`**: Returns a list of connected nodes with filtering options — one database round trip on Postgres, MongoDB and SQLite for every filter shape, `limit` included
 - **`node()`**: Returns a single connected node (first match) or None - convenience method when you expect only one result
+- **`count_nodes()`**: Counts connected nodes with the same filters as `nodes()` (one `COUNT`; prefer it to `len(await n.nodes())`)
+- **`nodes_page(sort=, cursor=, limit=)`**: Keyset-paginated neighbours, returns `(nodes, next_cursor)`
 - **`neighborhood(depth)`**: Multi-hop neighbor fetch (Postgres `traverse` fast path or BFS fallback)
 - **`nodes_bulk(node_ids)`**: Batch neighbor fetch for many source IDs in two queries
 - **`delete(cascade=True)`**: Deletes the node and cascades deletion of all connected edges and dependent nodes

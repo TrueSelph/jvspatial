@@ -78,6 +78,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Sequence,
     Set,
     Tuple,
     Union,
@@ -994,6 +995,125 @@ class PostgresDB(Database):
             out[row["id"]] = self._record_from_row(row)
         return out
 
+    def _connected_nodes_sql(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        start_id: str,
+        *,
+        direction: str = "out",
+        edge_entities: Optional[Sequence[str]] = None,
+        node_entities: Optional[Sequence[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        limit: Optional[int] = None,
+        count: bool = False,
+        with_edges: bool = False,
+    ) -> Tuple[str, List[Any]]:
+        """Build the single-hop neighbour query shared by find / count.
+
+        Two shapes, both one round trip:
+
+        * **join** — ``edge ⋈ node`` driven by the ``source`` / ``target``
+          index. Used for one edge type in one direction (duplicate-free under
+          the ``(source, target, entity)`` unique index, so ``LIMIT`` stops
+          after N rows whatever the node's degree) and whenever edge rows are
+          requested.
+        * **semi-join** — ``node WHERE id IN (<far endpoints>)``. Used for
+          several / no edge types or ``direction="both"``, where one neighbour
+          can be reached through several edges and must appear once.
+
+        Raises:
+            ValueError: ``direction`` not in ``{"out", "in", "both"}``.
+            NotImplementedError: ``edge_query`` / ``node_query`` / ``sort``
+                cannot be translated — callers fall back to the Python path
+                rather than drop the filter.
+        """
+        if direction not in ("out", "in", "both"):
+            raise ValueError(
+                f"direction must be 'out', 'in' or 'both', got {direction!r}"
+            )
+        edge_col = _safe_collection(edge_collection)
+        node_col = _safe_collection(node_collection)
+        schema = _safe_collection(self.schema_name)
+        params: List[Any] = [str(start_id)]
+
+        def bind(value: Any) -> str:
+            params.append(value)
+            return f"${len(params)}"
+
+        def fragment(query: Optional[Dict[str, Any]], table: str) -> str:
+            if not query:
+                return ""
+            translated = translate_query(query, table=table)
+            if translated is None:
+                raise NotImplementedError(
+                    f"find_connected_nodes: {table}-side filter does not "
+                    f"translate to SQL: {query!r}"
+                )
+            sql, sub_params = translated
+            if not sql:
+                return ""
+            shifted = _shift_placeholders(sql, shift=len(params))
+            params.extend(sub_params)
+            return f" AND ({shifted})"
+
+        edge_pred = ""
+        if edge_entities is not None:
+            edge_pred += f" AND e.entity = ANY({bind(list(edge_entities))}::text[])"
+        edge_pred += fragment(edge_query, "e")
+        node_pred = ""
+        if node_entities is not None:
+            node_pred += f" AND n.entity = ANY({bind(list(node_entities))}::text[])"
+        node_pred += fragment(node_query, "n")
+
+        # (near endpoint = start_id, far endpoint = neighbour) per branch.
+        ends = {
+            "out": [("source", "target")],
+            "in": [("target", "source")],
+            "both": [("source", "target"), ("target", "source")],
+        }[direction]
+        join_form = with_edges or (
+            direction != "both"
+            and edge_entities is not None
+            and len(edge_entities) == 1
+        )
+        if join_form:
+            edge_col_sql = ", e.data AS edge" if with_edges else ""
+            inner = " UNION ALL ".join(
+                f"SELECT n.id AS id, n.data AS data{edge_col_sql} "
+                f"FROM {schema}.{edge_col} e "
+                f"JOIN {schema}.{node_col} n ON n.id = (e.data #>> '{{{far}}}') "
+                f"WHERE (e.data #>> '{{{near}}}') = $1{edge_pred}{node_pred}"
+                for near, far in ends
+            )
+        else:
+            far_ids = " UNION ALL ".join(
+                f"SELECT (e.data #>> '{{{far}}}') FROM {schema}.{edge_col} e "
+                f"WHERE (e.data #>> '{{{near}}}') = $1{edge_pred}"
+                for near, far in ends
+            )
+            inner = (
+                f"SELECT n.id AS id, n.data AS data FROM {schema}.{node_col} n "
+                f"WHERE n.id IN ({far_ids}){node_pred}"
+            )
+
+        if count:
+            return f"SELECT COUNT(*) FROM ({inner}) sub", params
+
+        order_sql = ""
+        if sort:
+            sort_sql = translate_sort(sort, table="sub")
+            if sort_sql is None:
+                raise NotImplementedError(
+                    f"find_connected_nodes: sort does not translate: {sort!r}"
+                )
+            order_sql = f" ORDER BY {sort_sql}, sub.id ASC"
+        limit_sql = f" LIMIT {bind(int(limit))}" if limit is not None else ""
+        columns = "sub.data, sub.edge" if with_edges else "sub.data"
+        return f"SELECT {columns} FROM ({inner}) sub{order_sql}{limit_sql}", params
+
     async def find_connected_nodes(
         self,
         node_collection: str,
@@ -1002,46 +1122,159 @@ class PostgresDB(Database):
         *,
         direction: str = "out",
         edge_entity: Optional[str] = None,
+        edge_entities: Optional[Sequence[str]] = None,
+        node_entities: Optional[Sequence[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
         limit: Optional[int] = None,
+        with_edges: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Single-hop neighbor fetch via edge+node join (one round trip)."""
+        """Single-hop neighbours of ``start_id`` in one round trip.
+
+        Every filter is pushed into SQL: ``edge_entities`` / ``node_entities``
+        become ``entity = ANY(...)``, ``edge_query`` / ``node_query`` (record
+        paths, same dialect as :meth:`find`) are translated against the edge /
+        node side of the join, and ``sort`` / ``limit`` apply to neighbours.
+        ``edge_entity`` is the pre-0.0.18 single-type spelling.
+
+        Returns node records — or, with ``with_edges=True``, one
+        ``{"node": ..., "edge": ...}`` dict per connecting edge.
+
+        Raises:
+            NotImplementedError: a filter or the sort cannot be translated;
+                fall back to the Python traversal path.
+        """
+        if edge_entities is None and edge_entity is not None:
+            edge_entities = [edge_entity]
+        await self._bootstrap_collection(edge_collection)
+        await self._bootstrap_collection(node_collection)
+        sql, params = self._connected_nodes_sql(
+            node_collection,
+            edge_collection,
+            start_id,
+            direction=direction,
+            edge_entities=edge_entities,
+            node_entities=node_entities,
+            edge_query=edge_query,
+            node_query=node_query,
+            sort=sort,
+            limit=limit,
+            with_edges=with_edges,
+        )
+        async with self._acquire_conn() as conn:
+            rows = await conn.fetch(sql, *params)
+        if with_edges:
+            return [
+                {
+                    "node": self._record_from_row(r),
+                    "edge": self._record_from_row({"data": r["edge"]}),
+                }
+                for r in rows
+            ]
+        return [self._record_from_row(r) for r in rows]
+
+    async def count_connected_nodes(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        start_id: str,
+        *,
+        direction: str = "out",
+        edge_entities: Optional[Sequence[str]] = None,
+        node_entities: Optional[Sequence[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """``COUNT`` of the neighbours :meth:`find_connected_nodes` would return."""
+        await self._bootstrap_collection(edge_collection)
+        await self._bootstrap_collection(node_collection)
+        sql, params = self._connected_nodes_sql(
+            node_collection,
+            edge_collection,
+            start_id,
+            direction=direction,
+            edge_entities=edge_entities,
+            node_entities=node_entities,
+            edge_query=edge_query,
+            node_query=node_query,
+            count=True,
+        )
+        async with self._acquire_conn() as conn:
+            return int(await conn.fetchval(sql, *params))
+
+    async def find_connected_nodes_bulk(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        start_ids: Sequence[str],
+        *,
+        direction: str = "out",
+        edge_entities: Optional[Sequence[str]] = None,
+        node_entities: Optional[Sequence[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+        limit_per_source: Optional[int] = None,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Neighbours of many sources in one round trip, capped per source.
+
+        ``ROW_NUMBER() OVER (PARTITION BY source ORDER BY neighbour id)`` keeps
+        at most ``limit_per_source`` distinct neighbours per start id.
+        ``direction`` is ``"out"`` or ``"in"``.
+
+        Raises:
+            NotImplementedError: a filter cannot be translated.
+        """
         if direction not in ("out", "in"):
-            raise ValueError(
-                "direction must be 'out' or 'in' for find_connected_nodes, "
-                f"got {direction!r}"
-            )
+            raise ValueError(f"direction must be 'out' or 'in', got {direction!r}")
+        out: Dict[str, List[Dict[str, Any]]] = {str(s): [] for s in start_ids}
+        if not out:
+            return out
         await self._bootstrap_collection(edge_collection)
         await self._bootstrap_collection(node_collection)
         edge_col = _safe_collection(edge_collection)
         node_col = _safe_collection(node_collection)
         schema = _safe_collection(self.schema_name)
-
-        if direction == "out":
-            join_on = "(e.data #>> '{target}') = n.id"
-            where_endpoint = "(e.data #>> '{source}') = $1"
-        else:
-            join_on = "(e.data #>> '{source}') = n.id"
-            where_endpoint = "(e.data #>> '{target}') = $1"
-
-        clauses = [where_endpoint]
-        params: List[Any] = [start_id]
-        if edge_entity is not None:
-            clauses.append(f"e.entity = ${len(params) + 1}")
-            params.append(edge_entity)
-
-        limit_sql = ""
-        if limit is not None:
-            limit_sql = f" LIMIT ${len(params) + 1}"
-            params.append(int(limit))
-
+        near, far = ("source", "target") if direction == "out" else ("target", "source")
+        params: List[Any] = [list(out)]
+        preds = ""
+        for entities, table in ((edge_entities, "e"), (node_entities, "n")):
+            if entities is not None:
+                params.append(list(entities))
+                preds += f" AND {table}.entity = ANY(${len(params)}::text[])"
+        for query, table in ((edge_query, "e"), (node_query, "n")):
+            if not query:
+                continue
+            translated = translate_query(query, table=table)
+            if translated is None:
+                raise NotImplementedError(
+                    f"find_connected_nodes_bulk: filter does not translate: {query!r}"
+                )
+            sql, sub_params = translated
+            if sql:
+                preds += f" AND ({_shift_placeholders(sql, shift=len(params))})"
+                params.extend(sub_params)
+        cap = ""
+        if limit_per_source is not None:
+            params.append(int(limit_per_source))
+            cap = f" WHERE r.rn <= ${len(params)}"
         sql = (
-            f"SELECT n.data FROM {schema}.{edge_col} e "
-            f"JOIN {schema}.{node_col} n ON {join_on} "
-            f"WHERE {' AND '.join(clauses)}{limit_sql}"
+            f"WITH pairs AS ("
+            f"SELECT DISTINCT (e.data #>> '{{{near}}}') AS src, n.id AS nid "
+            f"FROM {schema}.{edge_col} e "
+            f"JOIN {schema}.{node_col} n ON n.id = (e.data #>> '{{{far}}}') "
+            f"WHERE (e.data #>> '{{{near}}}') = ANY($1::text[]){preds}"
+            f"), ranked AS ("
+            f"SELECT src, nid, ROW_NUMBER() OVER (PARTITION BY src ORDER BY nid) AS rn "
+            f"FROM pairs) "
+            f"SELECT r.src AS src, n.data AS data FROM ranked r "
+            f"JOIN {schema}.{node_col} n ON n.id = r.nid{cap} ORDER BY r.src, r.rn"
         )
         async with self._acquire_conn() as conn:
             rows = await conn.fetch(sql, *params)
-        return [self._record_from_row(r) for r in rows]
+        for row in rows:
+            out[row["src"]].append(self._record_from_row(row))
+        return out
 
     async def bulk_save_detailed(
         self, collection: str, records: List[Dict[str, Any]]

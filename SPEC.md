@@ -365,6 +365,16 @@ Enabling prefetch may enqueue neighbors before hook-driven `visit()` calls; visi
 
 `await node.neighborhood(depth=k, direction=..., edge=..., node=..., limit=...)` returns hydrated `Node` instances within `k` hops. Postgres uses `Database.traverse` + `get_batch`; other backends use per-hop `nodes()` BFS.
 
+### 6.8 Neighbour queries (`Node.nodes` / `count_nodes` / `nodes_page`)
+
+`nodes(direction, node=, edge=, limit=, **props)` normalises every filter shape to `(edge_entities, edge_query, node_entities, node_query)` (`_neighbor_filter_spec`, `node.py`):
+
+- a name or list of names → exact entity match; an **edge** class → its exact entity; a **node** class → the class and every loaded subclass (`isinstance` semantics; `Node` itself means any type);
+- `{Name: criteria}` items → an `$or` of `{"entity": Name, <criteria>}` branches; property kwargs AND onto the node side;
+- bare criteria keys map to `context.<key>` (the attribute `_matches_property_filter` reads); `id`, `entity` (and `source`, `target`, `bidirectional` on edges) are top-level record paths.
+
+When the backend exposes `find_connected_nodes` (Postgres, MongoDB, SQLite) the spec plus `limit` go down in **one** round trip, `direction="both"` included. Each neighbour appears once. Postgres picks a join for one edge type in one direction (duplicate-free under the `(source, target, entity)` unique index, so `LIMIT` streams) and an `id IN (...)` semi-join otherwise. A criterion that does not translate raises `NotImplementedError` in the adapter and `nodes()` takes the Python path — one edge `find` plus a node `find` that still applies every filter; no filter is ever dropped. `count_nodes(...)` is the matching `COUNT` (`count_connected_nodes`; `count_neighbors` is an alias). `nodes_page(sort=, cursor=, limit=)` pages neighbours by keyset with the cursor encoding of `GraphContext.find_page` (`core/pager.py`); the keyset is expressed as a node-side query, so it follows the same pushdown. `nodes_bulk(..., limit_per_source=N)` caps neighbours per source (`ROW_NUMBER() OVER (PARTITION BY source)` on Postgres).
+
 ---
 
 ## 7. GraphContext and Dependency Injection

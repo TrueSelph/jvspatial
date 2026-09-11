@@ -147,9 +147,46 @@ Code: `23af4c0` + the Phase 1 change set (worktree).
   133 ms → 10.2 s, and grew with degree.
 - List-form reads are unchanged, as expected. They are Phase 2's target.
 
-## After Phase 2
+## After Phase 2 — neighbour filters, limits and counts pushed into SQL
 
-_Pending._
+Code: `dc2a6cc` + the Phase 2 change set.
+
+| operation | 1k p50 / p95 ms (trips) | 10k p50 / p95 ms (trips) | 100k p50 / p95 ms (trips) |
+|---|---|---|---|
+| `ctx.get(Hub)` (hydrate hub) | 0.5 / 4.0 | 0.8 / 1.4 | 0.6 / 6.4 |
+| `hub.connect(leaf, edge=E)` | 1.8 / 2.3 (3) | 1.5 / 1.9 (3) | 1.6 / 2.8 (3) |
+| `hub.save()` after scalar change | 0.7 / 1.0 | 0.7 / 3.2 | 0.9 / 2.2 |
+| `hub.nodes(edge=[E], node=['Leaf'], limit=20)` | 2.1 / 9.7 (1) | 1.2 / 1.8 (1) | 1.2 / 3.1 (1) |
+| `hub.nodes(edge=E, limit=20)` | 1.1 / 2.4 (1) | 1.1 / 1.5 (1) | 1.2 / 6.1 (1) |
+| `sink.nodes(edge=[E], node=['Leaf'], direction='in', limit=20)` | 1.0 / 1.3 (1) | 1.0 / 1.3 (1) | 1.4 / 2.4 (1) |
+| `sink.nodes(edge=[E], node=['Leaf'], direction='in')` | 18.7 / 44.7 (1) | 230.9 / 256.1 (1) | 2128.5 / 2187.0 (1) |
+| `len(await hub.nodes(edge=[E]))` | 21.7 / 45.4 (1) | 226.0 / 246.9 (1) | 2112.8 / 2182.1 (1) |
+| `hub.count_nodes(edge=[E])` | 3.0 / 3.3 (1) | 33.3 / 37.0 (1) | 82.8 / 100.0 (1) |
+| 32× concurrent `connect()` (ms) | 16 wall / 15 max | 16 wall / 15 max | 16 wall / 16 max |
+
+| size (after seed → after 82 hub writes) | 1k | 10k | 100k |
+|---|---|---|---|
+| hub row `pg_column_size(data)` | 134 B → 136 B | 134 B → 136 B | 134 B → 136 B |
+| `node_data_gin` size | 104.0 KB → 112.0 KB | 808.0 KB → 816.0 KB | 13.0 MB → 13.0 MB |
+| `node` table total | 504.0 KB → 512.0 KB | 3.9 MB → 3.9 MB | 44.2 MB → 44.2 MB |
+| `edge` table total | 1.7 MB → 1.9 MB | 16.6 MB → 16.7 MB | 162.2 MB → 162.3 MB |
+
+**Gate: passed.**
+
+- The list form `nodes(edge=[E], node=["Leaf"], limit=20)` is 1 round trip in
+  both directions at every tier. Its p50 is 1.0–2.1 ms and flat across tiers.
+  - Before, it cost 201 round trips and ~5 s at 100k.
+  - The outlier is the 1k out-direction p95 of 9.7 ms. That tier's other
+    samples sit at 1–2 ms, so it looks like noise.
+- `count_nodes(edge=[E])` replaces `len(await nodes(...))` and is 1 round trip.
+  - It takes 83 ms at 100k, against 2.1 s for the `len()` pattern here and
+    4.8 s on 0.0.17.
+  - It still grows with degree. `COUNT` over the `edge ⋈ node` join has to
+    visit every matching row.
+- Unbounded listings are now 1 round trip too (2.1 s at 100k, down from ~5 s
+  and 201 trips). What remains is hydrating 100k `Node` objects in Python.
+  Page instead: `nodes_page(...)`.
+- The Phase 1 numbers (connect, save, concurrency, sizes) are unchanged.
 
 ## After Phase 3
 

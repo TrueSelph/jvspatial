@@ -14,7 +14,17 @@ import json
 import logging
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+)
 
 from ._sqlite_translate import (
     translate_partial_filter_expression,
@@ -733,6 +743,201 @@ class SQLiteDB(Database):
         # Untranslatable: legacy fallback.
         rows = await self.find(collection, q)
         return len(rows)
+
+    # ---- single-hop neighbour pushdown -------------------------------------
+
+    def _connected_nodes_sql(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        start_id: str,
+        *,
+        direction: str = "out",
+        edge_entities: Optional[Sequence[str]] = None,
+        node_entities: Optional[Sequence[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        limit: Optional[int] = None,
+        count: bool = False,
+    ) -> Tuple[str, List[Any]]:
+        """Single-hop neighbour SQL over ``records`` (see ``PostgresDB``).
+
+        Join for one edge type in one direction, ``id IN (...)`` semi-join
+        otherwise (one row per neighbour). Positional ``?`` parameters follow
+        the SQL text, so predicates repeated across ``UNION ALL`` branches
+        repeat their parameters.
+
+        Raises:
+            ValueError: ``direction`` not in ``{"out", "in", "both"}``.
+            NotImplementedError: a query or the sort does not translate.
+        """
+        if direction not in ("out", "in", "both"):
+            raise ValueError(
+                f"direction must be 'out', 'in' or 'both', got {direction!r}"
+            )
+
+        def entity_clause(
+            table: str, entities: Optional[Sequence[str]]
+        ) -> Tuple[str, List[Any]]:
+            if entities is None:
+                return "", []
+            if not entities:
+                return " AND 0", []
+            marks = ",".join("?" * len(entities))
+            return (
+                f" AND json_extract({table}.data, '$.entity') IN ({marks})",
+                list(entities),
+            )
+
+        def query_clause(
+            table: str, query: Optional[Dict[str, Any]]
+        ) -> Tuple[str, List[Any]]:
+            if not query:
+                return "", []
+            translated = translate_query(query, table=table)
+            if translated is None:
+                raise NotImplementedError(
+                    f"find_connected_nodes: {table}-side filter does not "
+                    f"translate to SQL: {query!r}"
+                )
+            sql, params = translated
+            return (f" AND ({sql})", list(params)) if sql else ("", [])
+
+        edge_type_sql, edge_type_params = entity_clause("e", edge_entities)
+        edge_q_sql, edge_q_params = query_clause("e", edge_query)
+        edge_pred, edge_params = (
+            edge_type_sql + edge_q_sql,
+            edge_type_params + edge_q_params,
+        )
+        node_type_sql, node_type_params = entity_clause("n", node_entities)
+        node_q_sql, node_q_params = query_clause("n", node_query)
+        node_pred, node_params = (
+            node_type_sql + node_q_sql,
+            node_type_params + node_q_params,
+        )
+
+        ends = {
+            "out": [("source", "target")],
+            "in": [("target", "source")],
+            "both": [("source", "target"), ("target", "source")],
+        }[direction]
+        params: List[Any] = []
+        if (
+            direction != "both"
+            and edge_entities is not None
+            and len(edge_entities) == 1
+        ):
+            near, far = ends[0]
+            inner = (
+                "SELECT n.id AS id, n.data AS data FROM records e "
+                f"JOIN records n ON n.collection = ? "
+                f"AND n.id = json_extract(e.data, '$.{far}') "
+                f"WHERE e.collection = ? AND json_extract(e.data, '$.{near}') = ?"
+                f"{edge_pred}{node_pred}"
+            )
+            params += [node_collection, edge_collection, start_id]
+            params += edge_params + node_params
+        else:
+            far_ids = " UNION ALL ".join(
+                f"SELECT json_extract(e.data, '$.{far}') FROM records e "
+                f"WHERE e.collection = ? AND json_extract(e.data, '$.{near}') = ?"
+                f"{edge_pred}"
+                for near, far in ends
+            )
+            inner = (
+                "SELECT n.id AS id, n.data AS data FROM records n "
+                f"WHERE n.collection = ? AND n.id IN ({far_ids}){node_pred}"
+            )
+            params.append(node_collection)
+            for _ in ends:
+                params += [edge_collection, start_id, *edge_params]
+            params += node_params
+
+        if count:
+            return f"SELECT COUNT(*) FROM ({inner}) sub", params
+        order_sql = ""
+        if sort:
+            sort_sql = translate_sort(sort, table="sub")
+            if sort_sql is None:
+                raise NotImplementedError(
+                    f"find_connected_nodes: sort does not translate: {sort!r}"
+                )
+            order_sql = f" ORDER BY {sort_sql}, sub.id ASC"
+        limit_sql = ""
+        if limit is not None:
+            limit_sql = " LIMIT ?"
+            params.append(int(limit))
+        return (
+            f"SELECT sub.data AS data FROM ({inner}) sub{order_sql}{limit_sql}",
+            params,
+        )
+
+    async def find_connected_nodes(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        start_id: str,
+        *,
+        direction: str = "out",
+        edge_entity: Optional[str] = None,
+        edge_entities: Optional[Sequence[str]] = None,
+        node_entities: Optional[Sequence[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Single-hop neighbours in one query (same contract as ``PostgresDB``)."""
+        if edge_entities is None and edge_entity is not None:
+            edge_entities = [edge_entity]
+        sql, params = self._connected_nodes_sql(
+            node_collection,
+            edge_collection,
+            start_id,
+            direction=direction,
+            edge_entities=edge_entities,
+            node_entities=node_entities,
+            edge_query=edge_query,
+            node_query=node_query,
+            sort=sort,
+            limit=limit,
+        )
+        connection = await self._get_connection()
+        cursor = await connection.execute(sql, tuple(params))
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return [json.loads(row["data"]) for row in rows]
+
+    async def count_connected_nodes(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        start_id: str,
+        *,
+        direction: str = "out",
+        edge_entities: Optional[Sequence[str]] = None,
+        node_entities: Optional[Sequence[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Count of the neighbours :meth:`find_connected_nodes` would return."""
+        sql, params = self._connected_nodes_sql(
+            node_collection,
+            edge_collection,
+            start_id,
+            direction=direction,
+            edge_entities=edge_entities,
+            node_entities=node_entities,
+            edge_query=edge_query,
+            node_query=node_query,
+            count=True,
+        )
+        connection = await self._get_connection()
+        cursor = await connection.execute(sql, tuple(params))
+        row = await cursor.fetchone()
+        await cursor.close()
+        return int(row[0]) if row else 0
 
     # Context manager helpers for convenience
     async def __aenter__(self) -> "SQLiteDB":
