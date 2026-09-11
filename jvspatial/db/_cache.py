@@ -38,7 +38,7 @@ import time
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from jvspatial.db.database import Database
+from jvspatial.db.database import BulkSaveResult, Database
 from jvspatial.runtime.serverless import is_serverless_mode
 
 logger = logging.getLogger(__name__)
@@ -250,6 +250,27 @@ class CachingDatabase(Database):
             for r in records:
                 rid = r.get("id", r.get("_id"))
                 if rid is not None:
+                    self._cache_put(collection, str(rid), dict(r))
+        return result
+
+    async def bulk_save_detailed(
+        self, collection: str, records: List[Dict[str, Any]]
+    ) -> BulkSaveResult:
+        """Backend bulk path, then refresh cached entries (failed ids dropped).
+
+        Defined explicitly: the ``Database`` default is a serial ``save``
+        loop that would otherwise shadow ``__getattr__`` forwarding.
+        """
+        result = await self.inner.bulk_save_detailed(collection, records)
+        if self._enabled():
+            failed = set(result.failed_ids)
+            for r in records:
+                rid = r.get("id", r.get("_id"))
+                if rid is None:
+                    continue
+                if str(rid) in failed:
+                    self._invalidate(collection, str(rid))
+                else:
                     self._cache_put(collection, str(rid), dict(r))
         return result
 

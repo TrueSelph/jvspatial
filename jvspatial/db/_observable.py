@@ -47,7 +47,7 @@ from typing import (
     Union,
 )
 
-from jvspatial.db.database import Database
+from jvspatial.db.database import BulkSaveResult, Database
 from jvspatial.observability import db_op_counter
 from jvspatial.observability.metrics import (
     MetricsRecorder,
@@ -287,6 +287,22 @@ class ObservableDatabase(Database):
             collection,
             lambda: self.inner.bulk_save(collection, records),
             result_count_extractor=lambda r: int(r) if r is not None else 0,
+        )
+
+    async def bulk_save_detailed(
+        self, collection: str, records: List[Dict[str, Any]]
+    ) -> BulkSaveResult:
+        """Instrumented ``bulk_save_detailed`` — the backend's native bulk path.
+
+        Must be defined here: the ``Database`` default is a serial ``save``
+        loop, which would otherwise shadow ``__getattr__`` forwarding and turn
+        one ``COPY`` into a round trip per record.
+        """
+        return await self._instrument(
+            "bulk_save_detailed",
+            collection,
+            lambda: self.inner.bulk_save_detailed(collection, records),
+            result_count_extractor=lambda r: int(getattr(r, "saved", 0) or 0),
         )
 
     async def find_one_and_delete(
