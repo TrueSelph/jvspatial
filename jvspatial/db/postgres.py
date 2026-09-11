@@ -305,7 +305,7 @@ class PostgresDB(Database):
         min_size: Optional[int] = None,
         max_size: Optional[int] = None,
         pooler_mode: str = "session",
-        command_timeout: float = 60.0,
+        command_timeout: Optional[float] = None,
         schema_name: str = "public",
         gin_index: Optional[str] = None,
     ) -> None:
@@ -324,7 +324,8 @@ class PostgresDB(Database):
                 direct or session-pooled connection) or ``"transaction"``
                 (compatible with PgBouncer / RDS Proxy in transaction-pool
                 mode — disables statement cache, uses simple-query protocol).
-            command_timeout: Per-statement timeout in seconds.
+            command_timeout: Per-statement timeout in seconds. Also read from
+                ``JVSPATIAL_POSTGRES_COMMAND_TIMEOUT``; default 60.
             schema_name: Postgres schema to host the collection tables in.
                 Defaults to ``public``. Must be an existing schema.
             gin_index: ``"full"`` (default) creates the whole-document
@@ -367,7 +368,11 @@ class PostgresDB(Database):
         self.max_size = max_size if max_size is not None else (env_max or default_max)
 
         self.pooler_mode = pooler_mode
-        self.command_timeout = command_timeout
+        self.command_timeout = (
+            command_timeout
+            if command_timeout is not None
+            else (env("JVSPATIAL_POSTGRES_COMMAND_TIMEOUT", parse=float) or 60.0)
+        )
         self.schema_name = schema_name
         self.gin_index = (
             (gin_index or env("JVSPATIAL_PG_GIN_INDEX", default="full")).strip().lower()
@@ -1363,10 +1368,10 @@ class PostgresDB(Database):
             self._split_payload(r) for r in records
         ]
 
-        pool = await self._ensure_pool()
         attempted = len(records)
         try:
-            async with pool.acquire() as conn:
+            # Tenant-scoped like every other write (RLS ``WITH CHECK``).
+            async with self._acquire_conn() as conn:
                 async with conn.transaction():
                     await conn.execute(
                         f"""
@@ -1632,8 +1637,7 @@ class PostgresDB(Database):
             f"WHERE ctid = (SELECT ctid FROM {schema}.{col}{clause} LIMIT 1) "
             f"RETURNING data"
         )
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
+        async with self._acquire_conn() as conn:
             row = await conn.fetchrow(sql, *params)
         return self._record_from_row(row) if row is not None else None
 
@@ -1671,9 +1675,10 @@ class PostgresDB(Database):
 
         where_sql, params = translated
         clause = f" WHERE {where_sql}" if where_sql else ""
-        pool = await self._ensure_pool()
 
-        async with pool.acquire() as conn:
+        # ``_acquire_conn`` applies the tenant scope; under it this
+        # transaction is a savepoint inside the tenant-scoped one.
+        async with self._acquire_conn() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
                     f"SELECT ctid, data FROM {schema}.{col}{clause} "
@@ -2093,8 +2098,7 @@ class PostgresDB(Database):
         ORDER BY node_id, depth ASC{limit_clause}
         """
 
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
+        async with self._acquire_conn() as conn:
             rows = await conn.fetch(sql, *params)
         return [
             {

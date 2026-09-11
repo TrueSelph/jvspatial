@@ -260,7 +260,22 @@ Or via env (see [environment-keys-reference.md](environment-keys-reference.md)):
 ```bash
 JVSPATIAL_POSTGRES_MIN_POOL_SIZE=5
 JVSPATIAL_POSTGRES_MAX_POOL_SIZE=25
+JVSPATIAL_POSTGRES_COMMAND_TIMEOUT=30   # per-statement timeout, seconds (default 60)
 ```
+
+**Sizing rule of thumb.** Postgres does useful work on roughly two active
+connections per database CPU core, and every open connection costs server
+memory. Size the pools so their sum stays near that budget:
+
+```text
+max_size ≈ (2 × DB host cores) ÷ number of app processes
+```
+
+Four app workers against an 8-core database: `max_size ≈ 16 ÷ 4 = 4`. A
+bigger pool mostly moves the queue from the pool into Postgres. Keep
+`max_size × processes` well below `max_connections`. For many short-lived
+processes (Lambda, autoscaled containers) put PgBouncer / RDS Proxy in front
+and size the pooler, not each process — see below.
 
 ### Event loops
 
@@ -285,6 +300,12 @@ This disables asyncpg's statement cache (`statement_cache_size=0`) and binds
 parameters with the simple-query path, at the cost of some per-query overhead.
 Use it only when you're behind a transaction-pooling layer; direct or
 session-pooled connections should keep the default `pooler_mode="session"`.
+Set it by environment with `JVSPATIAL_POSTGRES_POOLER_MODE=transaction`.
+
+Tenant scoping (`db.tenant(...)`) is transaction-pooler safe: every scoped
+operation runs inside one transaction that begins with
+`SELECT set_config('app.tenant_id', $1, true)` (a `SET LOCAL`), so the GUC
+never leaks to the next client of a pooled server connection.
 
 ## Transactions
 
@@ -335,6 +356,7 @@ precedence):
 | `JVSPATIAL_POSTGRES_MIN_POOL_SIZE`      | Pool min size override                             |
 | `JVSPATIAL_POSTGRES_MAX_POOL_SIZE`      | Pool max size override                             |
 | `JVSPATIAL_POSTGRES_POOLER_MODE`        | `"session"` (default) or `"transaction"`           |
+| `JVSPATIAL_POSTGRES_COMMAND_TIMEOUT`    | Per-statement timeout in seconds (default 60)      |
 | `JVSPATIAL_NODE_EDGE_IDS`               | `"derive"` (Postgres default) or `"persist"`       |
 | `JVSPATIAL_PG_GIN_INDEX`                | `"full"` (default) or `"off"` — whole-document GIN |
 

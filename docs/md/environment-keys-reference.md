@@ -51,6 +51,7 @@ For full examples and default values, see:
 - `JVSPATIAL_DYNAMODB_ENDPOINT_URL` - DynamoDB endpoint (e.g. LocalStack).
 - `JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX` - Wait-for-index toggle.
 - `JVSPATIAL_NODE_EDGE_IDS` - Node adjacency mode: `derive` (edge collection only; Postgres / MongoDB / SQLite default) or `persist` (node rows also store `edges`; JSON / DynamoDB default). An `edge_ids_mode` set on the adapter instance wins.
+- `JVSPATIAL_POSTGRES_COMMAND_TIMEOUT` - Postgres per-statement timeout in seconds (default 60).
 - `JVSPATIAL_PG_GIN_INDEX` - Postgres whole-document `GIN (data jsonb_path_ops)` index on new collections: `full` (default) or `off`.
 
 ### Auth and rate limit

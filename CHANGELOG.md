@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`jvspatial.db.escape_regex()`** for building literal `$regex` patterns
   from user input (`$regex` is never index-backed).
 - **`find_edges_between(limit=...)`** pushes the limit to the database.
+- **`JVSPATIAL_POSTGRES_COMMAND_TIMEOUT`** sets `PostgresDB`'s per-statement
+  timeout (default 60 s); the postgres guide gains a pool-sizing rule of thumb
+  and transaction-pooler notes for tenant scoping.
 - **`gin_index="off"` / `JVSPATIAL_PG_GIN_INDEX=off`** skips the
   whole-document `GIN (data jsonb_path_ops)` on new Postgres collections.
 - **`expand_node` keyset paging** (`jvspatial/core/graph_expansion.py`):
@@ -91,6 +94,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `edge=[{"E": {...}}]` returned neighbours reached through *any* edge type,
   and `direction="both"` capped at 10 000 edges. Edge types and criteria are
   now always applied.
+- **Several Postgres paths ignored `PostgresDB.tenant(...)`**
+  (`jvspatial/db/postgres.py`). `traverse`, `find_one_and_update`,
+  `find_one_and_delete` and `bulk_save_detailed` took a raw pool connection
+  without the `app.tenant_id` GUC, so under `enable_rls` they saw nothing
+  (atomic ops returned `None`, `traverse` returned no hops) and the COPY path
+  failed the policy's `WITH CHECK` before falling back to per-record saves.
+  They now run on the tenant-scoped connection like every other operation.
 - **`observe=True` / caching wrappers turned `bulk_save_detailed` into one
   round trip per record** (`jvspatial/db/_observable.py`,
   `jvspatial/db/_cache.py`). Both wrappers subclass `Database`, whose default
