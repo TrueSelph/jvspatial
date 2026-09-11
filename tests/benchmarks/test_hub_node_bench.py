@@ -43,6 +43,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 import jvspatial
 from jvspatial.core import context as context_module
+from jvspatial.core.annotations import compound_index
 from jvspatial.core.context import GraphContext, set_default_context
 from jvspatial.core.entities import Edge, Node
 from jvspatial.core.utils import generate_id
@@ -79,6 +80,14 @@ class BenchLeaf(Node):
 
 class BenchContains(Edge):
     """Typed containment edge (hub -> leaf, leaf -> sink)."""
+
+
+@compound_index([("track_id", 1), ("created_at", -1)], name="bench_track_recent")
+class BenchEntry(Node):
+    """Record-style node for the typed-find gate (sorted, limited per track)."""
+
+    track_id: str = ""
+    created_at: str = ""
 
 
 # ---- helpers ----------------------------------------------------------------
@@ -436,6 +445,118 @@ async def test_hub_node_scale(degree: int, request: pytest.FixtureRequest) -> No
         **results,
     }
     print(f"\n[hub-bench] degree={degree}\n" + json.dumps(record, indent=2))
+    if _RESULTS_PATH:
+        with open(_RESULTS_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+
+
+@pytest.mark.bench_slow
+async def test_typed_find_is_index_bound(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sorted, limited typed ``find`` on a shared ``node`` table of N rows.
+
+    ``N`` defaults to 1M (``JVSPATIAL_BENCH_TYPED_ROWS``) spread over ten
+    entities; ``BenchEntry`` holds a tenth, 1000 tracks of ~100 rows each.
+    Measures ``find({"entity": "BenchEntry", "context.track_id": t},
+    sort=created_at desc, limit=20)`` with the whole-document GIN off and
+    records whether the plan walks an index without a Sort node.
+    """
+    if "bench_slow" not in (request.config.getoption("markexpr") or ""):
+        pytest.skip("typed-find gate is opt-in: -m 'bench or bench_slow'")
+    if not await _dsn_reachable():
+        pytest.skip(f"Postgres unreachable at {_DSN}; set JVSPATIAL_POSTGRES_TEST_DSN")
+    monkeypatch.setenv("JVSPATIAL_PG_GIN_INDEX", "off")
+    rows = int(os.getenv("JVSPATIAL_BENCH_TYPED_ROWS", "1000000"))
+    entities = ["BenchEntry"] + [f"BenchOther{i}" for i in range(9)]
+
+    async with _bench_graph() as (ctx, db, schema):
+        admin = await asyncpg.connect(dsn=_DSN)
+        try:
+            await ctx.ensure_indexes(BenchEntry)
+            # Seed through the adapter itself: before 0.0.18 the observable
+            # wrapper degraded bulk_save_detailed to per-record saves.
+            seed_db = getattr(db, "inner", db)
+            t0 = time.perf_counter()
+            batch: List[Dict[str, Any]] = []
+            for i in range(rows):
+                entity = entities[i % len(entities)]
+                batch.append(
+                    {
+                        "id": generate_id("n", entity),
+                        "entity": entity,
+                        "context": {
+                            "track_id": f"t{(i // len(entities)) % 1000}",
+                            "created_at": f"2026-09-{i:08d}",
+                        },
+                    }
+                )
+                if len(batch) == _SEED_CHUNK:
+                    await seed_db.bulk_save_detailed("node", batch)
+                    batch = []
+            if batch:
+                await seed_db.bulk_save_detailed("node", batch)
+            seed_s = time.perf_counter() - t0
+            await admin.execute(f"ANALYZE {schema}.node")
+
+            per_track = min(20, rows // len(entities) // 1000)
+            samples: List[float] = []
+            for k in range(50):
+                query = {
+                    "entity": "BenchEntry",
+                    "context.track_id": f"t{(k * 37) % 1000}",
+                }
+                ms, _, out = await _timed(
+                    functools.partial(
+                        db.find,
+                        "node",
+                        query,
+                        sort=[("context.created_at", -1)],
+                        limit=20,
+                    )
+                )
+                samples.append(ms)
+                assert len(out) == per_track
+
+            from jvspatial.db._postgres_translate import translate_query, translate_sort
+
+            where, params = translate_query(
+                {"entity": "BenchEntry", "context.track_id": "t7"}
+            )
+            order = translate_sort([("context.created_at", -1)])
+            raw = await admin.fetchval(
+                f"EXPLAIN (FORMAT JSON) SELECT data FROM {schema}.node "
+                f"WHERE {where} ORDER BY {order} LIMIT 20",
+                *params,
+            )
+            plan = json.loads(raw) if isinstance(raw, str) else raw
+
+            def _walk(node: Dict[str, Any]) -> List[Dict[str, Any]]:
+                return [node] + [n for c in node.get("Plans", []) for n in _walk(c)]
+
+            steps = _walk(plan[0]["Plan"])
+            index_names = sorted({s["Index Name"] for s in steps if "Index Name" in s})
+            has_sort = any(s["Node Type"] == "Sort" for s in steps)
+            gin = await admin.fetchval(
+                "SELECT count(*) FROM pg_indexes WHERE schemaname = $1 "
+                "AND indexname = 'node_data_gin'",
+                schema,
+            )
+        finally:
+            await admin.close()
+
+    record = {
+        "kind": "typed_find",
+        "rows": rows,
+        "jvspatial": jvspatial.__version__,
+        "git_sha": _git_sha(),
+        "seed_seconds": round(seed_s, 2),
+        "node_data_gin": bool(gin),
+        "typed_find_sorted_limit20": _summary(samples),
+        "plan_indexes": index_names,
+        "plan_sorts": has_sort,
+    }
+    print("\n[typed-find]\n" + json.dumps(record, indent=2))
     if _RESULTS_PATH:
         with open(_RESULTS_PATH, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")

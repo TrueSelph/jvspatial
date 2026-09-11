@@ -188,6 +188,49 @@ Code: `dc2a6cc` + the Phase 2 change set.
   Page instead: `nodes_page(...)`.
 - The Phase 1 numbers (connect, save, concurrency, sizes) are unchanged.
 
-## After Phase 3
+## After Phase 3 — entity-leading indexes, optional GIN, `$text`
 
-_Pending._
+Code: `905d122` + the Phase 3 change set.
+
+**Typed-find gate.** `test_typed_find_is_index_bound` runs
+`find({"entity": "BenchEntry", "context.track_id": t}, sort=[("context.created_at", -1)], limit=20)`
+50 times on a shared `node` table of 1M rows. The rows are spread over ten
+entities, and `BenchEntry` holds 100k of them: 1000 tracks × 100. The class
+declares `@compound_index([("track_id", 1), ("created_at", -1)])`.
+
+| typed find (sorted, limit 20) | rows | p50 / p95 ms | index walked | sort node | node_data_gin |
+|---|---|---|---|---|---|
+| 0.0.17 `8fc5138` | 1,000,000 | 4.44 / 9.24 | node_context_track_id_context_created_at_idx, node_entity_idx | yes | present |
+| Phase 3 `905d122` | 1,000,000 | 0.72 / 2.96 | node_entity_context_track_id_context_created_at_idx | no | off |
+
+**Gate: passed.** p95 is 2.96 ms, well under the 10 ms bar, and the plan is
+index-bound with the whole-document GIN off. One scan of
+`(entity, track_id, created_at DESC NULLS LAST)` returns the first 20 rows
+with no Sort node. On 0.0.17 the same class index skipped `entity` and
+ordered descending keys `NULLS FIRST`. Postgres therefore had to AND it with
+the entity index and sort every matching row. At this track size that still
+stays under 10 ms locally, but the cost grows with the rows per track.
+
+Hub-node numbers on the same code:
+
+| operation | 1k p50 / p95 ms (trips) | 10k p50 / p95 ms (trips) | 100k p50 / p95 ms (trips) |
+|---|---|---|---|
+| `ctx.get(Hub)` (hydrate hub) | 0.6 / 2.1 | 0.8 / 2.3 | 0.8 / 2.9 |
+| `hub.connect(leaf, edge=E)` | 1.7 / 3.0 (3) | 2.0 / 4.0 (3) | 2.7 / 4.2 (3) |
+| `hub.save()` after scalar change | 0.8 / 2.1 | 0.7 / 1.3 | 1.2 / 2.4 |
+| `hub.nodes(edge=[E], node=['Leaf'], limit=20)` | 1.1 / 2.4 (1) | 1.2 / 2.7 (1) | 1.5 / 3.8 (1) |
+| `hub.nodes(edge=E, limit=20)` | 1.0 / 2.4 (1) | 1.3 / 2.5 (1) | 3.6 / 6.0 (1) |
+| `sink.nodes(edge=[E], node=['Leaf'], direction='in', limit=20)` | 1.1 / 1.4 (1) | 1.3 / 3.7 (1) | 2.1 / 6.8 (1) |
+| `sink.nodes(edge=[E], node=['Leaf'], direction='in')` | 19.2 / 47.8 (1) | 237.7 / 248.8 (1) | 2118.2 / 2203.4 (1) |
+| `len(await hub.nodes(edge=[E]))` | 20.5 / 48.5 (1) | 239.0 / 254.5 (1) | 2086.3 / 2092.6 (1) |
+| `hub.count_nodes(edge=[E])` | 3.5 / 4.4 (1) | 35.7 / 37.8 (1) | 89.2 / 141.5 (1) |
+| 32× concurrent `connect()` (ms) | 16 wall / 16 max | 16 wall / 15 max | 15 wall / 14 max |
+
+The Phase 1 and 2 results hold. The Edge `(source, target, entity)` unique
+index is now built on the real `entity` column. Its definition changed, but
+traversal latencies stay within run-to-run noise.
+
+Seeding note: the Phase 3 hub tier seeds through `create_database(observe=True)`,
+which now forwards `bulk_save_detailed` to COPY (fixed in `905d122`). Earlier
+tiers seeded per record; that only affected setup time, not the measured
+operations.

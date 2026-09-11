@@ -52,8 +52,33 @@ def _label(degree: int) -> str:
     return f"{degree // 1000}k" if degree % 1000 == 0 else str(degree)
 
 
-def render(records: List[Dict[str, Any]]) -> str:
-    records = sorted(records, key=lambda r: r["degree"])
+def render(all_records: List[Dict[str, Any]]) -> str:
+    typed = [r for r in all_records if r.get("kind") == "typed_find"]
+    records = sorted(
+        (r for r in all_records if "degree" in r), key=lambda r: r["degree"]
+    )
+    if not records:
+        return _render_typed(typed)
+    return _render_hub(records) + ("\n\n" + _render_typed(typed) if typed else "")
+
+
+def _render_typed(typed: List[Dict[str, Any]]) -> str:
+    out = [
+        "| typed find (sorted, limit 20) | rows | p50 / p95 ms | "
+        "index walked | sort node | node_data_gin |",
+        "|---|---|---|---|---|---|",
+    ]
+    for r in typed:
+        m = r["typed_find_sorted_limit20"]
+        out.append(
+            f"| `{r['git_sha']}` | {r['rows']:,} | {m['p50_ms']:.2f} / {m['p95_ms']:.2f} | "
+            f"{', '.join(r['plan_indexes']) or '—'} | {'yes' if r['plan_sorts'] else 'no'} | "
+            f"{'present' if r['node_data_gin'] else 'off'} |"
+        )
+    return "\n".join(out)
+
+
+def _render_hub(records: List[Dict[str, Any]]) -> str:
     heads = [_label(r["degree"]) for r in records]
     out: List[str] = []
     meta = records[0]

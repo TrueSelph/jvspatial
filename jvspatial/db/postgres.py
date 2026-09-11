@@ -84,7 +84,7 @@ from typing import (
     Union,
 )
 
-from ._postgres_translate import translate_query, translate_sort
+from ._postgres_translate import translate_query, translate_sort, tsvector_expression
 from .database import (
     BulkSaveResult,
     Database,
@@ -164,6 +164,27 @@ def _safe_collection(name: str) -> str:
 def _pg_string_literal(value: str) -> str:
     """Quote a Python string as a PG string literal (single-quote escape)."""
     return "'" + value.replace("'", "''") + "'"
+
+
+# An index definition written before 0.0.18: top-level columns indexed as JSONB
+# paths (``data #>> '{entity}'``, which the translator never compares against)
+# or a descending key without ``NULLS LAST`` (which ``find(sort=...)`` cannot
+# walk). ``create_index`` rebuilds such an index in place.
+_STALE_INDEX_DEF_RE = re.compile(
+    r"'\{(?:entity|id|tenant_id)\}'|\bDESC\b(?! NULLS LAST)"
+)
+
+
+def _uses_containment_ops(query: Any) -> bool:
+    """Whether a Mongo-style query uses operators the whole-document GIN serves."""
+    if isinstance(query, dict):
+        return any(
+            key in ("$all", "$elemMatch") or _uses_containment_ops(value)
+            for key, value in query.items()
+        )
+    if isinstance(query, list):
+        return any(_uses_containment_ops(item) for item in query)
+    return False
 
 
 def _pg_field_extract(field_path: str) -> Optional[str]:
@@ -286,6 +307,7 @@ class PostgresDB(Database):
         pooler_mode: str = "session",
         command_timeout: float = 60.0,
         schema_name: str = "public",
+        gin_index: Optional[str] = None,
     ) -> None:
         """Initialize the Postgres adapter.
 
@@ -305,10 +327,17 @@ class PostgresDB(Database):
             command_timeout: Per-statement timeout in seconds.
             schema_name: Postgres schema to host the collection tables in.
                 Defaults to ``public``. Must be an existing schema.
+            gin_index: ``"full"`` (default) creates the whole-document
+                ``GIN (data jsonb_path_ops)`` index on each new collection;
+                ``"off"`` skips it. Also read from ``JVSPATIAL_PG_GIN_INDEX``.
+                The GIN only serves containment-shaped predicates (``$all``);
+                typed ``find()`` equality / range / sort use functional
+                B-trees, so large deployments should turn it off.
 
         Raises:
             ImportError: ``asyncpg`` is not installed.
-            ValueError: ``pooler_mode`` is not ``"session"`` or ``"transaction"``.
+            ValueError: ``pooler_mode`` is not ``"session"`` or ``"transaction"``,
+                or ``gin_index`` is not ``"full"`` or ``"off"``.
         """
         if asyncpg is None:  # pragma: no cover
             raise ImportError(
@@ -340,6 +369,14 @@ class PostgresDB(Database):
         self.pooler_mode = pooler_mode
         self.command_timeout = command_timeout
         self.schema_name = schema_name
+        self.gin_index = (
+            (gin_index or env("JVSPATIAL_PG_GIN_INDEX", default="full")).strip().lower()
+        )
+        if self.gin_index not in ("full", "off"):
+            raise ValueError(
+                f"gin_index must be 'full' or 'off', got {self.gin_index!r}"
+            )
+        self._gin_off_warned = False
 
         self._pool: Optional["Pool"] = None
         self._pool_lock = asyncio.Lock()
@@ -576,6 +613,12 @@ class PostgresDB(Database):
             return
         col = _safe_collection(collection)
         schema = _safe_collection(self.schema_name)
+        gin_sql = (
+            f"CREATE INDEX IF NOT EXISTS {col}_data_gin "
+            f"ON {schema}.{col} USING GIN (data jsonb_path_ops);"
+            if self.gin_index == "full"
+            else ""
+        )
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
             # Single round trip — CREATE IF NOT EXISTS is cheap when the
@@ -591,8 +634,7 @@ class PostgresDB(Database):
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
-                CREATE INDEX IF NOT EXISTS {col}_data_gin
-                    ON {schema}.{col} USING GIN (data jsonb_path_ops);
+                {gin_sql}
                 CREATE INDEX IF NOT EXISTS {col}_entity_idx
                     ON {schema}.{col} (entity);
                 CREATE INDEX IF NOT EXISTS {col}_tenant_idx
@@ -898,6 +940,19 @@ class PostgresDB(Database):
 
         where_sql, params = translated
         sort_sql = translate_sort(sort) if vec_field is None else None
+        if (
+            self.gin_index == "off"
+            and not self._gin_off_warned
+            and _uses_containment_ops(query)
+        ):
+            self._gin_off_warned = True
+            logger.warning(
+                "PostgresDB: $all / $elemMatch query on %s.%s with gin_index='off' "
+                "— no whole-document GIN serves it; add a targeted index if it is "
+                "hot (logged once per adapter)",
+                schema,
+                col,
+            )
 
         clauses: List[str] = []
         if where_sql:
@@ -1373,13 +1428,38 @@ class PostgresDB(Database):
         unique: bool = False,
         **kwargs: Any,
     ) -> None:
-        """Create a functional B-tree index on a JSONB field path.
+        """Create a functional index on JSONB field paths or top-level columns.
 
-        Field paths use dot notation (``"context.user.id"``) and translate
-        to ``json_extract`` style ``(data #>> '{context,user,id}')``. Compound
-        index inputs (``[(field, dir)]``) are honored; ``unique=True`` adds
-        ``CREATE UNIQUE INDEX``. Postgres-specific kwargs (``where``,
-        ``method``) are accepted via ``**kwargs``.
+        Field paths use dot notation (``"context.user.id"``) and index
+        ``(data #>> '{context,user,id}')``; ``entity`` / ``id`` /
+        ``tenant_id`` index the real columns the query translator compares
+        against. A descending key is ``DESC NULLS LAST`` — the order
+        ``find(sort=...)`` emits — so sort + limit can walk the index.
+        ``unique=True`` adds ``CREATE UNIQUE INDEX``.
+
+        Keyword options:
+
+        * ``entity`` — the entity a per-class index serves (passed by
+          ``GraphContext.ensure_indexes``). The real ``entity`` column then
+          leads the key (``entity_leading=True``, default): every typed
+          ``find()`` filters on it, in a table shared by every class. Such an
+          index is named ``<col>_entity_<fields>_idx`` so sibling classes
+          declaring the same fields share it. ``partial_by_entity=True``
+          instead restricts it to ``WHERE entity = '<entity>'``
+          (``<col>_<entity>_<fields>_idx``; smaller, one per class).
+          ``drop_legacy=True`` also drops the unscoped pre-0.0.18
+          ``<col>_<fields>_idx`` / ``_uniq`` index it replaces.
+        * ``fulltext=True`` — a GIN index over ``to_tsvector('simple', ...)``
+          of the fields in order (``<col>_<entity>_<fields>_fts``, scoped to
+          ``entity`` when given), matching
+          ``{"$text": {"$search": ..., "$fields": [<same fields>]}}``.
+        * ``where`` / ``index_partial_filter_expression`` — partial index
+          predicate (raw SQL, or the Mongo-style dialect).
+        * ``method`` — ``btree`` (default), ``hash``, ``gin``, ``gist``, ``brin``.
+
+        An existing index of the same name defined by the pre-0.0.18 rules
+        (JSONB paths for top-level columns, ``DESC`` without ``NULLS LAST``)
+        is rebuilt under a temporary name and swapped in.
         """
         await self._bootstrap_collection(collection)
         col = _safe_collection(collection)
@@ -1390,34 +1470,41 @@ class PostgresDB(Database):
             fields: List[Tuple[str, int]] = [(field_or_fields, 1)]
         else:
             fields = list(field_or_fields)
-
-        # Build the column expression list.
-        col_exprs: List[str] = []
-        name_parts: List[str] = []
-        for field_path, direction in fields:
+        for field_path, _direction in fields:
             for seg in field_path.split("."):
                 if not _SAFE_IDENT_RE.match(seg):
                     raise ValueError(
                         f"PostgresDB.create_index rejects field path {field_path!r}: "
                         f"segment {seg!r} must be a safe identifier"
                     )
-            path_literal = "{" + ",".join(field_path.split(".")) + "}"
-            direction_sql = "ASC" if direction == 1 else "DESC"
-            col_exprs.append(f"(data #>> '{path_literal}') {direction_sql}")
-            name_parts.append(field_path.replace(".", "_"))
+        field_names = "_".join(f.replace(".", "_") for f, _ in fields)
 
-        unique_sql = "UNIQUE " if unique else ""
-        index_name = f"{col}_{'_'.join(name_parts)}_idx"
-        if unique:
-            index_name = f"{col}_{'_'.join(name_parts)}_uniq"
+        entity = kwargs.get("entity")
+        if entity is not None and not _SAFE_IDENT_RE.match(str(entity)):
+            logger.warning(
+                "PostgresDB.create_index: entity %r is not a safe identifier; "
+                "index left unscoped",
+                entity,
+            )
+            entity = None
+        fulltext = bool(kwargs.get("fulltext"))
+        partial_by_entity = bool(entity) and (
+            fulltext or bool(kwargs.get("partial_by_entity"))
+        )
+        entity_leading = (
+            bool(entity)
+            and not partial_by_entity
+            and bool(kwargs.get("entity_leading", True))
+            and all(f != "entity" for f, _ in fields)
+        )
 
-        where_clause = ""
+        where_parts: List[str] = []
         partial = kwargs.get("where")
         if partial:
             # We don't try to parse the partial expression — caller is
             # responsible for getting it right. We do require it to be a
             # simple Postgres predicate string.
-            where_clause = f" WHERE {partial}"
+            where_parts.append(str(partial))
         else:
             # Translate Mongo-style ``index_partial_filter_expression``
             # (the cross-backend kwarg used by ``attribute(index_unique=...,
@@ -1451,19 +1538,64 @@ class PostgresDB(Database):
                         "(equality / $gt / $exists on safe field paths "
                         "with scalar values)."
                     )
-                where_clause = f" WHERE {translated}"
+                where_parts.append(translated)
+        if partial_by_entity:
+            where_parts.append(f"entity = {_pg_string_literal(str(entity))}")
+        where_clause = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
-        method = kwargs.get("method", "btree")
+        if fulltext:
+            expr = tsvector_expression([f for f, _ in fields])
+            if expr is None:  # pragma: no cover - paths validated above
+                raise ValueError(f"unsafe full-text fields: {fields!r}")
+            keys = [expr]
+            method = "gin"
+            suffix = "fts"
+        else:
+            keys = ["entity"] if entity_leading else []
+            for field_path, direction in fields:
+                extract = _pg_field_extract(field_path)
+                keys.append(
+                    f"{extract} {'ASC' if direction == 1 else 'DESC NULLS LAST'}"
+                )
+            method = kwargs.get("method", "btree")
+            suffix = "uniq" if unique else "idx"
         if method not in ("btree", "hash", "gin", "gist", "brin"):
             raise ValueError(f"Unsupported index method: {method!r}")
 
+        if partial_by_entity:
+            scope = f"{str(entity).lower()}_"
+        elif entity_leading:
+            scope = "entity_"
+        else:
+            scope = ""
+        index_name = f"{col}_{scope}{field_names}_{suffix}"
+        unique_sql = "UNIQUE " if unique and not fulltext else ""
+        body = f"ON {schema}.{col} USING {method} ({', '.join(keys)}){where_clause}"
+
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            await conn.execute(
-                f"CREATE {unique_sql}INDEX IF NOT EXISTS {index_name} "
-                f"ON {schema}.{col} USING {method} ({', '.join(col_exprs)})"
-                f"{where_clause}"
+            existing = await conn.fetchval(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = $1 AND indexname = $2",
+                schema,
+                index_name,
             )
+            if existing is not None and _STALE_INDEX_DEF_RE.search(existing):
+                # Build the corrected index first so a unique constraint is
+                # never absent, then swap it in under the canonical name.
+                temp = f"{index_name[:52]}_rebuild"
+                await conn.execute(f"DROP INDEX IF EXISTS {schema}.{temp}")
+                await conn.execute(f"CREATE {unique_sql}INDEX {temp} {body}")
+                await conn.execute(f"DROP INDEX {schema}.{index_name}")
+                await conn.execute(
+                    f"ALTER INDEX {schema}.{temp} RENAME TO {index_name}"
+                )
+            else:
+                await conn.execute(
+                    f"CREATE {unique_sql}INDEX IF NOT EXISTS {index_name} {body}"
+                )
+            if kwargs.get("drop_legacy") and scope:
+                legacy = f"{col}_{field_names}_{'uniq' if unique else 'idx'}"
+                await conn.execute(f"DROP INDEX IF EXISTS {schema}.{legacy}")
 
     # ---- atomic compound ops (C4) ------------------------------------------
 

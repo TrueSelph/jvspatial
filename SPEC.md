@@ -291,11 +291,13 @@ No built-in migration framework. Adapters do not enforce schemas. Adding optiona
 | `$in`, `$nin` | Membership |
 | `$exists` | Field presence |
 | `$and`, `$or` | Logical combinators |
-| `$regex` | Regex match (string fields) |
+| `$regex` | Regex match (string fields). Never index-backed; build patterns from user input with `jvspatial.db.escape_regex` |
+| `$text` | Top-level `{"$text": {"$search": "words", "$fields": ["context.a", ...]}}`: every search word (case-insensitive, `\w+` tokens, no stemming) occurs in the concatenated fields; without `$fields` every string value is searched |
 
 ### 5.2 Pushdown vs in-memory
 
-- **MongoDB**: native pushdown; queries run server-side.
+- **Postgres**: `translate_query` pushes the whole operator surface into JSONB SQL; `$text` becomes `to_tsvector('simple', …) @@ plainto_tsquery('simple', …)` (requires `$fields`; the GIN from `@fulltext_index` / `attribute(fulltext=True)` serves it when the fields match in order). Per-class indexes are `(entity, <fields>)` (or `WHERE entity = …` with `partial_by_entity`), descending keys `DESC NULLS LAST`, so typed `find(sort=…, limit=…)` walks an index; the whole-document GIN is optional (`JVSPATIAL_PG_GIN_INDEX`). Untranslatable queries fall back to a full scan + `QueryEngine.match`.
+- **MongoDB**: native pushdown; queries run server-side (`$text` uses the collection's text index; `$fields` is stripped).
 - **SQLite**: translated to SQL via `SQLiteTranslator` (subset; complex `$or` chains may fall back).
 - **DynamoDB**: limited pushdown via `Select=COUNT` and key conditions; remainder filtered client-side.
 - **JSON**: full in-memory evaluation after loading matching collection.

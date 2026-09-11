@@ -8,7 +8,7 @@ Includes built-in query optimization for improved performance.
 import re
 import time
 from collections import OrderedDict
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
 from jvspatial.exceptions import QueryError
 
@@ -42,6 +42,34 @@ _TYPE_NAME_MAP = {
 
 
 # Unified evaluation and builder in a single module
+
+
+# Word splitter for in-memory ``$text`` (approximates Postgres' 'simple' parser).
+_TEXT_WORD_RE = re.compile(r"\w+")
+
+
+def _iter_strings(value: Any) -> Iterator[str]:
+    """Every string leaf of a nested dict / list document."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _iter_strings(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _iter_strings(item)
+
+
+def escape_regex(value: str) -> str:
+    """Escape ``value`` so it matches literally inside a ``$regex`` pattern.
+
+    ``$regex`` is never index-backed (Postgres ``~``, SQLite and JsonDB
+    in-memory evaluation all scan), so prefer ``$text`` or an equality on an
+    indexed field. When a pattern must be built from user input, pass the
+    input through this helper: an unescaped ``.`` or ``(`` silently changes
+    the match, and a crafted pattern can make every scan pathologically slow.
+    """
+    return re.escape(value)
 
 
 class QueryEngine:
@@ -375,6 +403,9 @@ class QueryEngine:
             elif key == "$not":
                 if QueryEngine.match(document, condition):
                     return False
+            elif key == "$text":
+                if not QueryEngine._match_text(document, condition):
+                    return False
             elif key in QueryEngine._IGNORED_TOP_LEVEL_MARKERS:
                 # Optimizer hints — irrelevant to in-memory matching.
                 continue
@@ -386,7 +417,7 @@ class QueryEngine:
                     query=str(query),
                     reason=(
                         f"unsupported top-level query operator: {key!r}. "
-                        "Supported: $and, $or, $nor, $not. Field-level "
+                        "Supported: $and, $or, $nor, $not, $text. Field-level "
                         "operators (e.g. $regex, $mod, $type, $size) live "
                         "inside a field condition dict."
                     ),
@@ -396,6 +427,35 @@ class QueryEngine:
                 if not QueryEngine._match_value(value, condition):
                     return False
         return True
+
+    @staticmethod
+    def _match_text(document: Dict[str, Any], spec: Any) -> bool:
+        """Evaluate ``{"$text": {"$search": ..., "$fields": [...]}}`` in memory.
+
+        Mirrors the Postgres pushdown (``to_tsvector('simple', …) @@
+        plainto_tsquery('simple', …)``): every word of ``$search`` must occur,
+        case-insensitively, as a word of the concatenated ``$fields`` values.
+        Without ``$fields`` every string value in the document is searched.
+        No stemming; a search with no words matches nothing.
+        """
+        if not isinstance(spec, dict) or not isinstance(spec.get("$search"), str):
+            raise QueryError(
+                query=str(spec),
+                reason='$text needs {"$search": "<words>", "$fields": [<paths>]}',
+            )
+        wanted = set(_TEXT_WORD_RE.findall(spec["$search"].lower()))
+        if not wanted:
+            return False
+        fields = spec.get("$fields")
+        if fields:
+            values = [QueryEngine.get_field_value(document, f) for f in fields]
+        else:
+            values = list(_iter_strings(document))
+        words: set = set()
+        for value in values:
+            if isinstance(value, str):
+                words.update(_TEXT_WORD_RE.findall(value.lower()))
+        return wanted <= words
 
     @staticmethod
     def _match_value(value: Any, condition: Any) -> bool:

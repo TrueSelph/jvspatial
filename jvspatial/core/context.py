@@ -1675,29 +1675,53 @@ class GraphContext:
             _ensured_indexes.add(collection_key)
             return  # Database doesn't support indexing
 
+        # Per-class (annotation-declared) indexes are scoped to the class's
+        # entity on Postgres: entity-leading or entity-partial, replacing the
+        # unscoped pre-0.0.18 index of the same fields. The scoping keys are
+        # Postgres-only; other adapters receive the plain definition, and
+        # full-text definitions are skipped where ``$text`` runs in memory.
+        is_postgres = self._is_postgres(self.database)
+        scope_keys = ("per_class", "entity_leading", "partial_by_entity", "fulltext")
+
+        def _scoped(index_def: Dict[str, Any], extra: Dict[str, Any]) -> Dict[str, Any]:
+            if is_postgres and index_def.get("per_class"):
+                extra.update(
+                    entity=entity_class._entity_name(),
+                    drop_legacy=True,
+                    entity_leading=index_def.get("entity_leading", True),
+                    partial_by_entity=index_def.get("partial_by_entity", False),
+                    fulltext=index_def.get("fulltext", False),
+                )
+            return extra
+
         # Create each index
         for index_def in indexes:
+            if index_def.get("fulltext") and not is_postgres:
+                continue
             try:
                 if "field" in index_def:
                     # Single-field index; pass through name and extra kwargs
                     extra = {
                         k: v
                         for k, v in index_def.items()
-                        if k not in ("field", "unique", "direction")
+                        if k not in ("field", "unique", "direction", *scope_keys)
                     }
                     await self.database.create_index(
                         collection,
                         index_def["field"],
                         unique=index_def.get("unique", False),
-                        **extra,
+                        **_scoped(index_def, extra),
                     )
                 elif "fields" in index_def:
                     # Compound index; pass through name and other create_index kwargs
-                    extra = {
-                        k: v
-                        for k, v in index_def.items()
-                        if k not in ("fields", "unique")
-                    }
+                    extra = _scoped(
+                        index_def,
+                        {
+                            k: v
+                            for k, v in index_def.items()
+                            if k not in ("fields", "unique", *scope_keys)
+                        },
+                    )
                     await self.database.create_index(
                         collection,
                         index_def["fields"],
@@ -1715,7 +1739,12 @@ class GraphContext:
         _ensured_indexes.add(collection_key)
 
     async def find_edges_between(
-        self, source_id: str, target_id: Optional[str] = None, edge_class=None, **kwargs
+        self,
+        source_id: str,
+        target_id: Optional[str] = None,
+        edge_class=None,
+        limit: Optional[int] = None,
+        **kwargs,
     ) -> List:
         """Find edges between nodes using database queries.
 
@@ -1723,6 +1752,7 @@ class GraphContext:
             source_id: Source node ID
             target_id: Target node ID (optional)
             edge_class: Edge class to filter by
+            limit: Maximum number of edges to return (pushed to the database)
             **kwargs: Additional edge properties to match
 
         Returns:
@@ -1756,7 +1786,7 @@ class GraphContext:
 
         collection = self._get_collection_name(self._get_entity_type_code(edge_cls))
         db = self.database
-        results = await db.find(collection, query)
+        results = await db.find(collection, query, limit=limit)
 
         edges = []
         for data in results:

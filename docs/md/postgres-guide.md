@@ -131,8 +131,60 @@ CREATE INDEX <collection>_tenant_idx
 ```
 
 The full record lives in the `data` JSONB blob. `id`, `entity`, and `tenant_id`
-are denormalized for indexing. The default GIN index on `data` accelerates
-arbitrary JSONB containment / path queries.
+are denormalized for indexing. The whole-document GIN index on `data` only
+accelerates containment-shaped predicates (`$all`); see
+[Index policy](#index-policy) for when to turn it off.
+
+### Index policy
+
+- **Per-class indexes lead with `entity`.** Every typed `find()` filters on
+  the `entity` column of a table shared by every class, so an index declared
+  with `attribute(indexed=True)` or `@compound_index(...)` is created as
+  `(entity, <fields>)` and named `<col>_entity_<fields>_idx`. Sibling classes
+  that declare the same fields share it. Pass `index_partial_by_entity=True`
+  (or `@compound_index(..., partial_by_entity=True)`) for a smaller
+  `WHERE entity = '<Class>'` index per class instead, or
+  `entity_leading=False` to keep the key unscoped. The pre-0.0.18 unscoped
+  index of the same fields is dropped when its replacement is created.
+- **Descending keys are `DESC NULLS LAST`**, the order `find(sort=...)`
+  emits, so `sort=[("context.created_at", -1)], limit=20` walks the index
+  with no sort step. Indexes created by 0.0.17 and earlier (descending keys
+  without `NULLS LAST`, or `entity` / `id` indexed as JSONB paths — e.g. the
+  edge `(source, target, entity)` unique index) are rebuilt in place the next
+  time `ensure_indexes` runs.
+- **The whole-document GIN is optional.** `JVSPATIAL_PG_GIN_INDEX=off` (or
+  `create_database("postgres", ..., gin_index="off")`) stops new
+  collections from creating `<col>_data_gin`. Every node rewrite re-indexes
+  the whole document into that GIN, while equality / range / sort use the
+  functional B-trees above. Large deployments should turn it off, then drop
+  an existing one with `DROP INDEX CONCURRENTLY node_data_gin;` —
+  `find()` logs a one-time warning if an `$all` / `$elemMatch` query then
+  runs without it.
+
+### Full-text search
+
+```python
+from jvspatial.core.annotations import attribute, fulltext_index
+
+@fulltext_index(["title", "body"])          # one GIN over both fields
+class Article(Node):
+    title: str = ""
+    body: str = ""
+    summary: str = attribute(fulltext=True, default="")  # or per-attribute
+
+await Article.find({"$text": {"$search": "graph database",
+                              "$fields": ["context.title", "context.body"]}})
+```
+
+`$text` becomes `to_tsvector('simple', …) @@ plainto_tsquery('simple', …)`:
+every search word must appear (case-insensitive, no stemming — "database"
+does not match "databases"). The index is used when `$fields` lists the same
+fields in the same order as the declaration. Other backends evaluate the same
+semantics in memory; MongoDB searches its own text index.
+
+`$regex` is never index-backed. When a pattern has to include user input, pass
+the input through `jvspatial.db.escape_regex` so metacharacters match
+literally (and a crafted pattern cannot make every scan slow).
 
 ### Custom indexes
 
@@ -284,6 +336,7 @@ precedence):
 | `JVSPATIAL_POSTGRES_MAX_POOL_SIZE`      | Pool max size override                             |
 | `JVSPATIAL_POSTGRES_POOLER_MODE`        | `"session"` (default) or `"transaction"`           |
 | `JVSPATIAL_NODE_EDGE_IDS`               | `"derive"` (Postgres default) or `"persist"`       |
+| `JVSPATIAL_PG_GIN_INDEX`                | `"full"` (default) or `"off"` — whole-document GIN |
 
 ## Operational tips
 

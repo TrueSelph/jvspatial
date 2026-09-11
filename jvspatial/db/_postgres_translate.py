@@ -507,6 +507,43 @@ def _to_jsonb_literal(value: Any) -> str:
     return json.dumps(value)
 
 
+# ---- full-text search -------------------------------------------------------
+
+
+def tsvector_expression(fields: List[str], table: str = "") -> Optional[str]:
+    """``to_tsvector('simple', …)`` over the concatenated text of ``fields``.
+
+    Shared by the ``$text`` translation and ``PostgresDB.create_index(...,
+    fulltext=True)`` so a query and its GIN index use the identical
+    expression (fields in the same order). ``'simple'`` lowercases and splits
+    words without stemming or stop words. Returns ``None`` for unsafe paths.
+    """
+    if not fields or not all(_safe_field_path(f) for f in fields):
+        return None
+    prefix = f"{table}." if table else ""
+    parts = " || ' ' || ".join(
+        f"coalesce({prefix}data #>> '{_path_literal(f)}', '')" for f in fields
+    )
+    return f"to_tsvector('simple'::regconfig, {parts})"
+
+
+def _text_clause(spec: Any, pb: ParamBuilder, table: str) -> Optional[str]:
+    """``{"$search": str, "$fields": [paths]}`` → ``tsvector @@ plainto_tsquery``.
+
+    ``$fields`` is required: without it there is no indexable expression
+    (the query falls back to in-memory evaluation).
+    """
+    if not isinstance(spec, dict) or set(spec) - {"$search", "$fields"}:
+        return None
+    search, fields = spec.get("$search"), spec.get("$fields")
+    if not isinstance(search, str) or not isinstance(fields, (list, tuple)):
+        return None
+    expr = tsvector_expression(list(fields), table)
+    if expr is None:
+        return None
+    return f"{expr} @@ plainto_tsquery('simple'::regconfig, {pb.add(search)})"
+
+
 # ---- logical translation ----------------------------------------------------
 
 
@@ -558,6 +595,12 @@ def _translate_query_into(
             if inner is None:
                 return None
             fragments.append(f"NOT ({inner})")
+            continue
+        if key == "$text":
+            piece = _text_clause(value, pb, table)
+            if piece is None:
+                return None
+            fragments.append(piece)
             continue
         if key.startswith("$"):
             return None
@@ -634,4 +677,4 @@ def translate_sort(
     return ", ".join(parts)
 
 
-__all__ = ["ParamBuilder", "translate_query", "translate_sort"]
+__all__ = ["ParamBuilder", "translate_query", "translate_sort", "tsvector_expression"]

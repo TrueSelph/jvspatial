@@ -69,6 +69,19 @@ def _is_retryable_mongo_error(exc: BaseException) -> bool:
     return False
 
 
+def _native_query(query: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop the jvspatial-only ``$fields`` from ``$text``.
+
+    MongoDB's ``$text`` searches the collection's text index and rejects
+    unknown keys; ``$fields`` names the searched fields for the other
+    backends (Postgres tsvector expression, in-memory evaluation).
+    """
+    text = query.get("$text") if isinstance(query, dict) else None
+    if isinstance(text, dict) and "$fields" in text:
+        return {**query, "$text": {k: v for k, v in text.items() if k != "$fields"}}
+    return query
+
+
 class MongoDB(Database):
     """Simplified MongoDB-based database implementation."""
 
@@ -520,7 +533,7 @@ class MongoDB(Database):
             if self._db is None:
                 raise DatabaseError("MongoDB database connection not established")
             collection_obj = self._db[collection]
-            cursor = collection_obj.find(query)
+            cursor = collection_obj.find(_native_query(query))
             if sort:
                 cursor = cursor.sort(sort)
             if limit is not None:
@@ -686,7 +699,7 @@ class MongoDB(Database):
             if not q:
                 # estimated_document_count is the fastest path for full counts.
                 return await collection_obj.estimated_document_count()
-            return await collection_obj.count_documents(q)
+            return await collection_obj.count_documents(_native_query(q))
         except PyMongoError as e:
             if _is_connection_error(e):
                 logger.debug(
@@ -703,7 +716,7 @@ class MongoDB(Database):
                 collection_obj = self._db[collection]
                 if not q:
                     return await collection_obj.estimated_document_count()
-                return await collection_obj.count_documents(q)
+                return await collection_obj.count_documents(_native_query(q))
             raise DatabaseError(f"MongoDB count error: {e}") from e
 
     async def find_one_and_update(

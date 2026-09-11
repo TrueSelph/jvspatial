@@ -29,6 +29,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GraphContext.find_page` via `jvspatial.core.pager`), and
   `nodes_bulk(limit_per_source=...)` (one windowed query on Postgres).
   `count_neighbors` now delegates to `count_nodes`.
+- **`$text` full-text search** (`jvspatial/db/_postgres_translate.py`,
+  `jvspatial/db/query.py`): `{"$text": {"$search": "...", "$fields": [...]}}`
+  becomes `to_tsvector('simple', …) @@ plainto_tsquery('simple', …)` on
+  Postgres, backed by a GIN index declared with `@fulltext_index([...])` or
+  `attribute(fulltext=True)`; other backends evaluate the same semantics in
+  memory. Previously `$text` fell back to a full scan and raised in memory.
+- **`jvspatial.db.escape_regex()`** for building literal `$regex` patterns
+  from user input (`$regex` is never index-backed).
+- **`find_edges_between(limit=...)`** pushes the limit to the database.
+- **`gin_index="off"` / `JVSPATIAL_PG_GIN_INDEX=off`** skips the
+  whole-document `GIN (data jsonb_path_ops)` on new Postgres collections.
 - **`expand_node` keyset paging** (`jvspatial/core/graph_expansion.py`):
   `after=` / `pagination.next_after` (and the `after` query parameter on the
   graph expand endpoint) page incident edges by edge id in O(page). The
@@ -56,6 +67,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   form took the join and everything else loaded every incident edge and
   hydrated every neighbour before slicing in Python. Backends without the
   pushdown keep the Python path, now filtering in the database `find`.
+- **Postgres per-class indexes are `entity`-leading** (`PostgresDB.create_index`,
+  `GraphContext.ensure_indexes`). Indexes declared with
+  `attribute(indexed=True)` / `@compound_index` become `(entity, <fields>)`
+  (`<col>_entity_<fields>_idx`, shared by classes declaring the same fields),
+  or `WHERE entity = '<Class>'` with `index_partial_by_entity=True` /
+  `partial_by_entity=True`; the unscoped pre-0.0.18 index of the same fields
+  is dropped once its replacement exists. Descending keys are now
+  `DESC NULLS LAST` so sorted + limited finds walk the index, and `entity` /
+  `id` / `tenant_id` are indexed as the real columns the translator compares
+  (the edge `(source, target, entity)` unique index previously indexed
+  `data->entity`, which no query used). Indexes built by the old rules are
+  rebuilt in place on the next `ensure_indexes`.
 - **`expand_node` / `subgraph_bfs` source incident edges from the edge
   collection** in every mode (one query per node instead of one `get` per
   edge id); `total_edge_count` is a count of incident edges, and neighbours
@@ -68,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `edge=[{"E": {...}}]` returned neighbours reached through *any* edge type,
   and `direction="both"` capped at 10 000 edges. Edge types and criteria are
   now always applied.
+- **`observe=True` / caching wrappers turned `bulk_save_detailed` into one
+  round trip per record** (`jvspatial/db/_observable.py`,
+  `jvspatial/db/_cache.py`). Both wrappers subclass `Database`, whose default
+  `bulk_save_detailed` is a serial `save` loop; it shadowed `__getattr__`
+  forwarding, so a wrapped Postgres `COPY` (or Mongo `bulk_write`) never ran.
+  Both now forward to the backend (the cache also refreshes saved ids).
 - **`ObservableDatabase` advertised graph pushdowns its backend lacks**
   (`jvspatial/db/_observable.py`). `find_connected_nodes` / `traverse` were
   plain methods, so `getattr(db, "find_connected_nodes", None)` looked
