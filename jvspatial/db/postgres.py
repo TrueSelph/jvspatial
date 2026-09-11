@@ -271,6 +271,11 @@ class PostgresDB(Database):
     # at the operation level (atomic single-row update).
     supports_transactions: bool = True
 
+    # Node adjacency is derived from the indexed edge table; node rows do not
+    # carry an ``edges`` array, so connect()/save() never rewrite (or row-lock)
+    # a hub. See :func:`jvspatial.db.database.resolve_edge_ids_mode`.
+    edge_ids_mode: str = "derive"
+
     def __init__(
         self,
         dsn: Optional[str] = None,
@@ -721,7 +726,12 @@ class PostgresDB(Database):
     async def save_with_edge_merge(
         self, collection: str, data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Upsert a record, unioning ``edges`` with any existing row in one statement."""
+        """Upsert a record, unioning ``edges`` with any existing row in one statement.
+
+        Only used in ``edge_ids_mode="persist"``. In the default ``"derive"``
+        mode node rows carry no ``edges`` array and ``GraphContext.save``
+        writes them with a plain :meth:`save`.
+        """
         await self._bootstrap_collection(collection)
         rec_id, entity, tenant, _ = self._split_payload(data)
         col = _safe_collection(collection)
@@ -765,6 +775,62 @@ class PostgresDB(Database):
             )
         result = self._record_from_row(row) if row is not None else data
         return result if result is not None else data
+
+    async def strip_node_edges(
+        self,
+        collection: str = "node",
+        *,
+        batch_size: int = 5000,
+        dry_run: bool = False,
+    ) -> int:
+        """Remove the legacy ``edges`` array from node rows (derive-mode migration).
+
+        One keyset pass over the primary key, stripping ``edges`` from each
+        batch with ``UPDATE … SET data = data - 'edges'`` — idempotent and safe
+        to run while the application serves traffic in derive mode (which
+        never writes the array back). Tables with ``FORCE ROW LEVEL SECURITY``
+        must be migrated by a role that bypasses RLS.
+
+        Afterwards run ``VACUUM (ANALYZE) <collection>`` and
+        ``REINDEX INDEX CONCURRENTLY <collection>_data_gin`` to reclaim the
+        space; neither is run automatically.
+
+        Returns:
+            Rows stripped, or — with ``dry_run`` — rows that still carry
+            the array.
+        """
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+        await self._bootstrap_collection(collection)
+        col = _safe_collection(collection)
+        schema = _safe_collection(self.schema_name)
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            if dry_run:
+                return int(
+                    await conn.fetchval(
+                        f"SELECT COUNT(*) FROM {schema}.{col} WHERE data ? 'edges'"
+                    )
+                )
+            stripped = 0
+            last_id = ""
+            while True:
+                rows = await conn.fetch(
+                    f"SELECT id FROM {schema}.{col} WHERE id > $1 ORDER BY id LIMIT $2",
+                    last_id,
+                    batch_size,
+                )
+                if not rows:
+                    return stripped
+                ids = [r["id"] for r in rows]
+                last_id = ids[-1]
+                status = await conn.execute(
+                    f"UPDATE {schema}.{col} SET data = data - 'edges', "
+                    f"updated_at = NOW() "
+                    f"WHERE id = ANY($1::text[]) AND data ? 'edges'",
+                    ids,
+                )
+                stripped += int(status.rsplit(" ", 1)[1])
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Fetch a single record by id."""

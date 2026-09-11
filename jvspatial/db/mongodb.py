@@ -70,6 +70,11 @@ class MongoDB(Database):
     # (audit §5.9 / SPEC §4.2).
     supports_transactions: bool = True
 
+    # Node adjacency is derived from the edge collection (indexed on
+    # source/target by ``Edge.get_indexes``); node documents carry no
+    # ``edges`` array. See ``jvspatial.db.database.resolve_edge_ids_mode``.
+    edge_ids_mode: str = "derive"
+
     def __init__(
         self,
         uri: str = "mongodb://localhost:27017",
@@ -294,6 +299,50 @@ class MongoDB(Database):
             await collection_obj.delete_one({"_id": id})
 
         await self._run_with_reconnect("delete", _delete_op)
+
+    async def strip_node_edges(
+        self,
+        collection: str = "node",
+        *,
+        batch_size: int = 5000,
+        dry_run: bool = False,
+    ) -> int:
+        """Remove the legacy ``edges`` array from node documents (derive-mode migration).
+
+        Batched ``$unset`` — idempotent and safe to run while the application
+        serves traffic in derive mode (which never writes the array back).
+
+        Returns:
+            Documents stripped, or — with ``dry_run`` — documents that still
+            carry the array.
+        """
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+        legacy = {"edges": {"$exists": True}}
+
+        async def _strip_op() -> int:
+            await self._ensure_connected()
+            if self._db is None:
+                raise DatabaseError("MongoDB database connection not established")
+            collection_obj = self._db[collection]
+            if dry_run:
+                return int(await collection_obj.count_documents(legacy))
+            stripped = 0
+            while True:
+                ids = [
+                    doc["_id"]
+                    async for doc in collection_obj.find(legacy, {"_id": 1}).limit(
+                        batch_size
+                    )
+                ]
+                if not ids:
+                    return stripped
+                result = await collection_obj.update_many(
+                    {"_id": {"$in": ids}}, {"$unset": {"edges": ""}}
+                )
+                stripped += int(result.modified_count)
+
+        return int(await self._run_with_reconnect("strip_node_edges", _strip_op))
 
     async def find(
         self,

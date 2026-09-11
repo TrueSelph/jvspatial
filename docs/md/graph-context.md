@@ -673,12 +673,20 @@ edge = await ctx.create_edge(Friendship, source=user1, target=user2)
 ### Batch Operations
 
 `GraphContext.save_batch()` routes **node** entities through `save()` so
-edge-merge semantics apply (concurrent `atomic_add_edge_id` updates are not
-clobbered). Non-node entities still use the adapter bulk path when available.
+edge-merge semantics apply in persist mode (concurrent `atomic_add_edge_id`
+updates are not clobbered). Non-node entities still use the adapter bulk path
+when available.
 
-`get_batch()` chunks id lists at 500 per round trip. `atomic_add_edge_id` /
-`atomic_remove_edge_id` use native `find_one_and_update` on MongoDB and
-Postgres; other backends fall back to read-modify-write.
+`get_batch()` chunks id lists at 500 per round trip.
+
+**Node adjacency mode.** `ctx.persists_edge_ids()` reports whether node rows
+carry an `edges` array. Postgres, MongoDB and SQLite default to *derive*:
+adjacency is read from the indexed edge collection, node saves never merge or
+lock an edge list, and `atomic_add_edge_id` / `atomic_remove_edge_id` are
+no-ops. JsonDB and DynamoDB default to *persist*, where those helpers use
+native `find_one_and_update` (MongoDB, Postgres) or read-modify-write. Override
+per adapter (`db.edge_ids_mode = "persist"`) or process-wide
+(`JVSPATIAL_NODE_EDGE_IDS=persist|derive`).
 
 **Fast deserialize (opt-in):** set `JVSPATIAL_FAST_DESERIALIZE=true` to
 hydrate trusted DB rows via `model_construct` instead of full Pydantic

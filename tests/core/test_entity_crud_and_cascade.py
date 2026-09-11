@@ -422,6 +422,10 @@ class TestNodeCascadeDeletion:
             unique_path = f"{tmpdir}/test_{uuid.uuid4().hex}"
             config = {"db_type": "json", "db_config": {"base_path": unique_path}}
             database = create_database(config["db_type"], **config["db_config"])
+            # Assertions read ``edge_ids``; pin persist so a
+            # JVSPATIAL_NODE_EDGE_IDS=derive run does not switch it off
+            # (derive-mode cascade is covered in test_edge_ids_derive.py).
+            database.edge_ids_mode = "persist"
             context = GraphContext(database=database)
             # Set as default context so entity methods use it
             set_default_context(context)

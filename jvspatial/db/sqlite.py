@@ -67,6 +67,11 @@ class SQLiteDB(Database):
         service; SQLite does not.)
     """
 
+    # Node adjacency is derived from the edge collection, which
+    # ``Edge.get_indexes`` covers with ``json_extract`` indexes on
+    # source/target. See ``jvspatial.db.database.resolve_edge_ids_mode``.
+    edge_ids_mode: str = "derive"
+
     def __init__(
         self,
         db_path: Optional[Union[str, Path]] = None,

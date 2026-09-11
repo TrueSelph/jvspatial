@@ -196,8 +196,14 @@ class Node(Object):
                 matching_edge = existing_edge
                 break
 
+        # Derive mode: the edge row is the adjacency — node rows and the
+        # in-memory ``edge_ids`` lists are left untouched (no hub rewrite).
+        persist = context.persists_edge_ids()
+
         # If an existing edge is found, return it instead of creating a duplicate
         if matching_edge:
+            if not persist:
+                return matching_edge
             # Ensure edge IDs are in both nodes' edge_ids lists (in case they're missing)
             if matching_edge.id not in self.edge_ids:
                 await context.atomic_add_edge_id(self.id, matching_edge.id)
@@ -226,6 +232,9 @@ class Node(Object):
                     return retry_edges[0]
             raise
 
+        if not persist:
+            return connection
+
         # Atomically update both nodes' edge_ids
         await context.atomic_add_edge_id(self.id, connection.id)
         if connection.id not in self.edge_ids:
@@ -237,21 +246,49 @@ class Node(Object):
 
         return connection
 
-    async def edges(self: "Node", direction: str = "") -> List["Edge"]:
+    async def edges(
+        self: "Node", direction: str = "", limit: Optional[int] = None
+    ) -> List["Edge"]:
         """Get edges connected to this node.
+
+        In derive mode (Postgres / MongoDB / SQLite default) the edge
+        collection is queried by ``source`` / ``target`` — index-backed, one
+        round trip. In persist mode the node's ``edge_ids`` are fetched.
 
         Args:
             direction: Filter edges by direction ('in', 'out', 'both')
+            limit: Maximum number of edges to return (default: all)
 
         Returns:
             List of edge instances
         """
+        context = await self.get_context()
+
+        if not context.persists_edge_ids():
+            query: Dict[str, Any]
+            if direction == "out":
+                query = {"source": self.id}
+            elif direction == "in":
+                query = {"target": self.id}
+            else:
+                query = {"$or": [{"source": self.id}, {"target": self.id}]}
+            rows = await context.database.find("edge", query, limit=limit)
+            if limit is None and len(rows) > 10_000:
+                logger.debug(
+                    "Node.edges(%s) loaded %d edges; pass limit= or use "
+                    "connection_count() for hub nodes",
+                    self.id,
+                    len(rows),
+                )
+            derived: List["Edge"] = []
+            for row in rows:
+                edge_obj = await context._deserialize_entity(Edge, row)
+                if edge_obj:
+                    derived.append(edge_obj)
+            return derived
+
         if not self.edge_ids:
             return []
-
-        from ..context import get_default_context
-
-        context = get_default_context()
 
         # Use batch query for efficiency (N+1 -> 1 query)
         edge_results = await context.database.find(
@@ -271,11 +308,24 @@ class Node(Object):
 
         # Filter by direction if specified
         if direction == "out":
-            return [e for e in edges if e.source == self.id]
+            edges = [e for e in edges if e.source == self.id]
         elif direction == "in":
-            return [e for e in edges if e.target == self.id]
-        else:
-            return edges
+            edges = [e for e in edges if e.target == self.id]
+        return edges if limit is None else edges[:limit]
+
+    async def _incident_edges(self: "Node", context: "GraphContext") -> List["Edge"]:
+        """Every edge touching this node, either endpoint (used by cascade delete)."""
+        if context.persists_edge_ids():
+            found: List["Edge"] = []
+            for edge_id in self.edge_ids:
+                try:
+                    edge = await Edge.get(edge_id)
+                    if edge:
+                        found.append(edge)
+                except Exception:
+                    continue
+            return found
+        return await self.edges()
 
     async def nodes(
         self,
@@ -1132,16 +1182,18 @@ class Node(Object):
         try:
             context = await self.get_context()
             edges = await context.find_edges_between(self.id, other.id, edge_type)
+            persist = context.persists_edge_ids()
 
             for found_edge in edges:
-                # Atomically remove edge_id from both nodes, then delete the edge
-                await context.atomic_remove_edge_id(self.id, found_edge.id)
-                if found_edge.id in self.edge_ids:
-                    self.edge_ids.remove(found_edge.id)
+                if persist:
+                    # Atomically remove edge_id from both nodes, then delete the edge
+                    await context.atomic_remove_edge_id(self.id, found_edge.id)
+                    if found_edge.id in self.edge_ids:
+                        self.edge_ids.remove(found_edge.id)
 
-                await context.atomic_remove_edge_id(other.id, found_edge.id)
-                if found_edge.id in other.edge_ids:
-                    other.edge_ids.remove(found_edge.id)
+                    await context.atomic_remove_edge_id(other.id, found_edge.id)
+                    if found_edge.id in other.edge_ids:
+                        other.edge_ids.remove(found_edge.id)
 
                 # Delete the edge document (context.delete already handles
                 # edge_ids cleanup, but we already did it atomically above,
@@ -1182,10 +1234,18 @@ class Node(Object):
     async def connection_count(self) -> int:
         """Get the number of connections (edges) for this node.
 
+        In derive mode this is one ``COUNT`` over the edge collection's
+        ``source`` / ``target`` indexes — the canonical degree query.
+
         Returns:
             Number of connected edges
         """
-        return len(self.edge_ids)
+        context = await self.get_context()
+        if context.persists_edge_ids():
+            return len(self.edge_ids)
+        return await context.database.count(
+            "edge", {"$or": [{"source": self.id}, {"target": self.id}]}
+        )
 
     async def delete(self: "Node", cascade: bool = True) -> None:
         """Delete this node and cascade deletion of all related edges and dependent nodes.
@@ -1237,8 +1297,9 @@ class Node(Object):
             except Exception:
                 continue
 
-        # Also check edges from edge_ids where this node is the target
-        for edge_id in self.edge_ids:
+        # Persist mode: also check edges from edge_ids where this node is the
+        # target (the edge query above already covers derive mode).
+        for edge_id in self.edge_ids if context.persists_edge_ids() else []:
             try:
                 edge = await Edge.get(edge_id)
                 # Only include edges where this node is the target (incoming)
@@ -1307,14 +1368,10 @@ class Node(Object):
                         if not node:
                             continue
                         # Only follow outgoing edges (where this node is the source)
-                        for edge_id in node.edge_ids:  # type: ignore[attr-defined]
-                            try:
-                                edge = await Edge.get(edge_id)
-                                if edge and edge.source == node_id:
-                                    # Only add nodes reachable via outgoing edges
-                                    nodes_to_check.add(edge.target)
-                            except Exception:
-                                continue
+                        for edge in await node._incident_edges(context):  # type: ignore[attr-defined]
+                            if edge.source == node_id:
+                                # Only add nodes reachable via outgoing edges
+                                nodes_to_check.add(edge.target)
                     except Exception:
                         continue
 
@@ -1329,14 +1386,9 @@ class Node(Object):
                             continue
 
                         # Get all edges of the candidate node
-                        candidate_edges = []
-                        for edge_id in candidate_node.edge_ids:  # type: ignore[attr-defined]
-                            try:
-                                edge = await Edge.get(edge_id)
-                                if edge:
-                                    candidate_edges.append(edge)
-                            except Exception:
-                                continue
+                        candidate_edges = await candidate_node._incident_edges(  # type: ignore[attr-defined]
+                            context
+                        )
 
                         # If the node has no edges, it's orphaned and should be deleted
                         if not candidate_edges:
@@ -1375,14 +1427,9 @@ class Node(Object):
                                 if not node:
                                     return True
 
-                                node_edges = []
-                                for edge_id in node.edge_ids:  # type: ignore[attr-defined]
-                                    try:
-                                        edge = await Edge.get(edge_id)
-                                        if edge:
-                                            node_edges.append(edge)
-                                    except Exception:
-                                        continue
+                                node_edges = await node._incident_edges(  # type: ignore[attr-defined]
+                                    context
+                                )
 
                                 # If no edges, it's orphaned and should be deleted
                                 if not node_edges:
@@ -1488,12 +1535,14 @@ class Node(Object):
                     # Continue even if dependent node deletion fails
                     continue
 
-        # Clear edge_ids before final deletion to avoid recursion in context.delete()
         # All edges have already been deleted from the database
         self.edge_ids = []
 
-        # Finally, delete this node itself (no cascade needed, we've already handled it)
-        await context.delete(self, cascade=False)
+        # Finally, delete this node itself. Direct delete rather than
+        # ``context.delete`` — its "no edges left?" check would cost a COUNT in
+        # derive mode, and the edges are already gone.
+        await context.database.delete(context._get_collection_name("n"), self.id)
+        await context._remove_from_cache(self.id)
 
     @classmethod
     async def create_and_connect(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
@@ -25,6 +26,30 @@ def _coerce_edge_id_list(value: Any) -> List[str]:
     if isinstance(value, (list, tuple)):
         return [str(x) for x in value]
     return []
+
+
+def _incident_query(node_id: str) -> Dict[str, Any]:
+    """Edge-collection query for every edge touching ``node_id``."""
+    return {"$or": [{"source": node_id}, {"target": node_id}]}
+
+
+async def _node_degrees(
+    context: GraphContext, records: Dict[str, Dict[str, Any]]
+) -> Dict[str, int]:
+    """Degree per node record.
+
+    Persist mode reads the stored ``edges`` array; derive mode counts the
+    edge collection (the array, if a legacy row still has one, is stale).
+    """
+    if context.persists_edge_ids():
+        return {
+            nid: len(_coerce_edge_id_list(rec.get("edges")))
+            for nid, rec in records.items()
+        }
+    ids = list(records)
+    db = context.database
+    counts = await asyncio.gather(*(db.count("edge", _incident_query(n)) for n in ids))
+    return dict(zip(ids, counts))
 
 
 def _edge_matches_direction(
@@ -83,19 +108,23 @@ async def expand_node(
     direction: str = "both",
     limit: int = 50,
     cursor: int = 0,
+    after: Optional[str] = None,
     detail_level: DetailLevel = "full",
 ) -> Dict[str, Any]:
     """Load the center node and a page of incident edges plus neighbor summaries.
 
-    Uses the node's persisted ``edges`` list and batch ``get`` calls — O(limit),
-    not O(|E|).
+    Pages come from the edge collection sorted by edge id (index-backed on
+    SQL backends), so a page costs O(limit) rows regardless of the node's
+    degree when paging by keyset.
 
     Args:
         context: Active graph context
         node_id: Node to expand around
         direction: ``both`` (default), ``out``, or ``in`` (for non-bidirectional edges)
         limit: Max edges in this page (capped at 500)
-        cursor: Offset into the sorted edge-id list
+        cursor: Offset into the id-sorted incident edges (costs O(cursor + limit))
+        after: Keyset cursor — an edge id from a previous page's
+            ``pagination.next_after``; takes precedence over ``cursor``
         detail_level: ``summary`` (no context) or ``full`` (trimmed context on all nodes/edges)
 
     Returns:
@@ -113,6 +142,7 @@ async def expand_node(
             "pagination": {
                 "cursor": cursor,
                 "next_cursor": None,
+                "next_after": None,
                 "has_more": False,
                 "total_edge_count": 0,
                 "returned_edges": 0,
@@ -120,28 +150,41 @@ async def expand_node(
             "found": False,
         }
 
-    all_edge_ids = sorted(_coerce_edge_id_list(center_raw.get("edges")))
-    total = len(all_edge_ids)
-    page_ids = all_edge_ids[cursor : cursor + limit]
+    incident = _incident_query(node_id)
+    total = await db.count("edge", incident)
+    page: List[Dict[str, Any]] = []
+    if limit:
+        if after:
+            rows = await db.find(
+                "edge",
+                {"$and": [incident, {"id": {"$gt": after}}]},
+                sort=[("id", 1)],
+                limit=limit + 1,
+            )
+            has_more = len(rows) > limit
+            page = rows[:limit]
+        else:
+            rows = await db.find(
+                "edge", incident, sort=[("id", 1)], limit=cursor + limit
+            )
+            page = rows[cursor:]
+            has_more = cursor + len(page) < total
+    else:
+        has_more = cursor < total
 
-    edge_docs: List[Dict[str, Any]] = []
-    for eid in page_ids:
-        doc = await db.get("edge", eid)
-        if doc and _edge_matches_direction(doc, node_id, direction):
-            edge_docs.append(doc)
+    edge_docs = [d for d in page if _edge_matches_direction(d, node_id, direction)]
 
-    neighbor_ids: List[str] = []
-    for doc in edge_docs:
-        other = _other_endpoint(doc, node_id)
-        if other and other != node_id:
-            neighbor_ids.append(other)
-
-    neighbor_ids_unique = sorted(set(neighbor_ids))
-    neighbor_records: Dict[str, Dict[str, Any]] = {}
-    for nid in neighbor_ids_unique:
-        nraw = await db.get("node", nid)
-        if nraw:
-            neighbor_records[nid] = nraw
+    neighbor_ids_unique = sorted(
+        {
+            other
+            for doc in edge_docs
+            if (other := _other_endpoint(doc, node_id)) and other != node_id
+        }
+    )
+    neighbor_records = (
+        await db.find_many("node", neighbor_ids_unique) if neighbor_ids_unique else {}
+    )
+    degrees = await _node_degrees(context, neighbor_records)
 
     nodes_out: List[Dict[str, Any]] = [
         node_record_to_payload(
@@ -152,13 +195,11 @@ async def expand_node(
     ]
     for nid in neighbor_ids_unique:
         if nid in neighbor_records:
-            nedges = neighbor_records[nid].get("edges") or []
-            deg = len(nedges) if isinstance(nedges, list) else 0
             nodes_out.append(
                 node_record_to_payload(
                     neighbor_records[nid],
                     detail_level=detail_level,
-                    degree=deg,
+                    degree=degrees.get(nid, 0),
                 )
             )
         else:
@@ -182,8 +223,8 @@ async def expand_node(
         )
         for doc in edge_docs
     ]
-    next_cursor = cursor + len(page_ids) if cursor + len(page_ids) < total else None
-    has_more = next_cursor is not None
+    next_cursor = cursor + len(page) if has_more and not after else None
+    next_after = str(page[-1].get("id")) if has_more and page else None
 
     return {
         "center_id": node_id,
@@ -192,6 +233,7 @@ async def expand_node(
         "pagination": {
             "cursor": cursor,
             "next_cursor": next_cursor,
+            "next_after": next_after,
             "has_more": has_more,
             "total_edge_count": total,
             "returned_edges": len(edges_out),
@@ -213,6 +255,7 @@ async def subgraph_bfs(
 
     Stops when ``max_depth`` or ``max_nodes`` would be exceeded. Each node
     follows at most ``max_edges_per_node`` incident edges (sorted by edge id).
+    Incident edges come from one edge-collection query per expanded node.
 
     Args:
         context: Active graph context
@@ -253,9 +296,9 @@ async def subgraph_bfs(
         if d >= max_depth:
             continue
 
-        all_eids = _coerce_edge_id_list((raw or {}).get("edges"))
         eid_docs: List[Tuple[str, Optional[Dict[str, Any]]]] = [
-            (eid, await db.get("edge", eid)) for eid in all_eids
+            (str(doc.get("id")), doc)
+            for doc in await db.find("edge", _incident_query(vid))
         ]
         eid_docs.sort(key=lambda t: _bfs_spine_edge_sort_key(t[0], t[1], vid))
         selected = eid_docs[:max_edges_per_node]
@@ -272,13 +315,15 @@ async def subgraph_bfs(
             if other not in seen:
                 q.append((other, d + 1))
 
+    degrees = await _node_degrees(context, nodes_by_id)
     node_payloads: List[Dict[str, Any]] = []
     for nid in sorted(seen):
         rec = nodes_by_id.get(nid)
         if rec:
-            ecount = len(_coerce_edge_id_list(rec.get("edges")))
             node_payloads.append(
-                node_record_to_payload(rec, detail_level=detail_level, degree=ecount)
+                node_record_to_payload(
+                    rec, detail_level=detail_level, degree=degrees.get(nid, 0)
+                )
             )
         else:
             ent = entity_type_from_node_id(nid)

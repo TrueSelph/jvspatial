@@ -579,6 +579,15 @@ class QueryEngine:
                     if item not in arr:
                         arr.append(item)
                     QueryEngine.set_field_value(document, field, arr)
+            elif op == "$pull":
+                # Scalar-value form only (``{"$pull": {"tags": "x"}}``) —
+                # removes every element equal to ``item``.
+                for field, item in payload.items():
+                    arr = QueryEngine.get_field_value(document, field)
+                    if isinstance(arr, list):
+                        QueryEngine.set_field_value(
+                            document, field, [v for v in arr if v != item]
+                        )
             else:
                 continue
         return document

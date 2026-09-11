@@ -697,6 +697,9 @@ class TestJsonDBEntityOperations:
         """Create GraphContext with JsonDB for testing."""
         from jvspatial.core.context import GraphContext, set_default_context
 
+        # Assertions read the persisted ``edges`` array; pin the mode so a
+        # JVSPATIAL_NODE_EDGE_IDS=derive run does not switch it off.
+        jsondb.edge_ids_mode = "persist"
         ctx = GraphContext(database=jsondb)
         set_default_context(ctx)
         return ctx
@@ -942,6 +945,9 @@ class TestJsonDBWalkerTraversal:
         """Create GraphContext with JsonDB for testing."""
         from jvspatial.core.context import GraphContext, set_default_context
 
+        # Assertions read the persisted ``edges`` array; pin the mode so a
+        # JVSPATIAL_NODE_EDGE_IDS=derive run does not switch it off.
+        jsondb.edge_ids_mode = "persist"
         ctx = GraphContext(database=jsondb)
         set_default_context(ctx)
         return ctx

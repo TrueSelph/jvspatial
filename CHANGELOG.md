@@ -16,8 +16,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pattern and 32-way concurrent `connect()`. Opt-in via `-m bench`
   (`bench_slow` for 100k). Baseline and per-change results:
   `docs/bench/2026-09-hub-node-baseline.md`.
+- **Node adjacency mode API** (`jvspatial/db/database.py`,
+  `jvspatial/core/context.py`): `Database.edge_ids_mode` capability flag,
+  `resolve_edge_ids_mode(db)`, `GraphContext.persists_edge_ids()`,
+  `Node.edges(limit=...)`, `strip_node_edges()` on `PostgresDB` / `MongoDB`,
+  and the `jvspatial migrate strip-node-edges` CLI (dry run by default,
+  `--apply` to write).
+- **`expand_node` keyset paging** (`jvspatial/core/graph_expansion.py`):
+  `after=` / `pagination.next_after` (and the `after` query parameter on the
+  graph expand endpoint) page incident edges by edge id in O(page). The
+  integer `cursor` offset keeps working.
+
+### Changed
+
+- **Postgres, MongoDB and SQLite no longer persist node adjacency on node
+  rows** (`edge_ids_mode="derive"`). The indexed edge collection is the only
+  source of truth: `connect()`, `disconnect()` and `save()` never rewrite or
+  row-lock a node, so their cost no longer grows with the node's degree and
+  concurrent connects to one hub no longer serialise. `Node.edges()`,
+  `connection_count()`, cascade delete, `expand_node` and `subgraph_bfs` read
+  the edge collection; `Node.edge_ids` stays an empty in-memory list. Legacy
+  `edges` arrays on existing rows are ignored on read and dropped on the next
+  save — run `jvspatial migrate strip-node-edges --dsn … --apply` (safe
+  online) to reclaim the space at once. JsonDB and DynamoDB keep `"persist"`.
+  Opt out with `JVSPATIAL_NODE_EDGE_IDS=persist` or
+  `db.edge_ids_mode = "persist"`.
+- **`expand_node` / `subgraph_bfs` source incident edges from the edge
+  collection** in every mode (one query per node instead of one `get` per
+  edge id); `total_edge_count` is a count of incident edges, and neighbours
+  are fetched with a single `find_many`.
 
 ### Fixed
+
+- **`$pull` was ignored by `QueryEngine.apply_update`** (`jvspatial/db/query.py`).
+  Backends that apply updates in Python — Postgres `find_one_and_update`,
+  and the JsonDB / SQLite / DynamoDB defaults — silently skipped it, so on
+  Postgres in persist mode `disconnect()`, edge deletion and cascade delete
+  left stale edge ids on node rows (and `connection_count()` over-reported).
 
 - **`JVSPATIAL_WEBHOOK_API_KEY_REQUIRE_HTTPS` was allowlist-rejected**
   (`jvspatial/env_adapter.py`). The key was never in `ALLOWED_ENV_KEYS`, so

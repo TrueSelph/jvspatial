@@ -23,7 +23,11 @@ from typing import (
     cast,
 )
 
-from jvspatial.db.database import Database, resolve_sort_value
+from jvspatial.db.database import (
+    Database,
+    resolve_edge_ids_mode,
+    resolve_sort_value,
+)
 from jvspatial.db.factory import create_database, get_current_database
 from jvspatial.db.manager import get_database_manager
 
@@ -425,6 +429,18 @@ class GraphContext:
                 self._node_edge_write_locks[node_id] = lock
         async with lock:
             yield
+
+    def persists_edge_ids(self) -> bool:
+        """Whether node documents persist their incident edge ids (``edges``).
+
+        ``False`` when the active backend derives adjacency from the edge
+        collection (``edge_ids_mode="derive"`` — the Postgres, MongoDB and
+        SQLite default): ``connect()`` / ``save()`` then never touch the node
+        rows and ``Node.edge_ids`` stays an unpopulated in-memory list. ``True``
+        for ``"persist"`` (JsonDB, DynamoDB). See
+        :func:`jvspatial.db.database.resolve_edge_ids_mode`.
+        """
+        return resolve_edge_ids_mode(self.database) == "persist"
 
     @property
     def database(self) -> Database:
@@ -892,6 +908,15 @@ class GraphContext:
             hasattr(entity, "type_code") and getattr(entity, "type_code", "") == "n"
         )
 
+        if is_node and not self.persists_edge_ids():
+            # Derive mode: adjacency lives in the edge collection. Never write
+            # an ``edges`` array (a legacy in-memory copy must not re-persist
+            # it), and there is no array merge to serialise per node.
+            record.pop("edges", None)
+            await db.save(collection, record)
+            await self._add_to_cache(entity.id, entity)
+            return entity
+
         async def _merge_edges_and_write() -> None:
             # Merge node edge lists with the DB so full-document saves do not clobber
             # edge IDs added concurrently via atomic_add_edge_id (or another writer).
@@ -952,8 +977,14 @@ class GraphContext:
 
         if isinstance(entity, Node):
             # Check if this is a recursive call from Node.delete() by checking
-            # if cascade=False and the node has no edges (cleaned up by Node.delete())
-            if not cascade and len(entity.edge_ids) == 0:
+            # if cascade=False and the node has no edges (cleaned up by Node.delete()).
+            # In derive mode ``edge_ids`` is never populated, so ask the edge
+            # collection instead.
+            if not cascade and (
+                len(entity.edge_ids) == 0
+                if self.persists_edge_ids()
+                else await entity.connection_count() == 0
+            ):
                 # Node.delete() has cleaned up edges, just delete the entity
                 collection = self._get_collection_name("n")
                 await self.database.delete(collection, entity.id)
@@ -1072,6 +1103,7 @@ class GraphContext:
         direction: str = "both",
         limit: int = 50,
         cursor: int = 0,
+        after: Optional[str] = None,
         detail_level: str = "full",
     ) -> Dict[str, Any]:
         """Return a page of incident edges and neighbor summaries for progressive UIs.
@@ -1088,6 +1120,7 @@ class GraphContext:
             direction=direction,
             limit=limit,
             cursor=cursor,
+            after=after,
             detail_level=detail_level,  # type: ignore[arg-type]
         )
 
@@ -1228,8 +1261,11 @@ class GraphContext:
         Falls back to read-modify-write when the database does not support
         atomic updates or when the document is not found.
 
-        Returns True on success, False on failure.
+        Returns True on success, False on failure. A no-op returning True in
+        derive mode (:meth:`persists_edge_ids` is ``False``).
         """
+        if not self.persists_edge_ids():
+            return True
         db = self.database
         if self._is_mongodb(db) or self._is_postgres(db):
             try:
@@ -1271,8 +1307,11 @@ class GraphContext:
         Falls back to read-modify-write when the database does not support
         atomic updates or when the document is not found.
 
-        Returns True on success, False on failure.
+        Returns True on success, False on failure. A no-op returning True in
+        derive mode (:meth:`persists_edge_ids` is ``False``).
         """
+        if not self.persists_edge_ids():
+            return True
         db = self.database
         if self._is_mongodb(db) or self._is_postgres(db):
             try:
@@ -1839,9 +1878,15 @@ class GraphContext:
 
             # entity_type_code already computed above
 
+            # Legacy rows may still carry an ``edges`` array; in derive mode it
+            # is stale (no longer maintained) and is ignored.
+            node_edge_ids: List[str] = []
+            if entity_type_code == "n" and self.persists_edge_ids():
+                node_edge_ids = data.get("edges", [])
+
             if self._fast_deserialize_enabled():
                 if entity_type_code == "n":
-                    edge_ids = data.get("edges", [])
+                    edge_ids = node_edge_ids
                     context_data.pop("edge_ids", None)
                     context_data.pop("id", None)
                     context_data.pop("type_code", None)
@@ -1873,7 +1918,7 @@ class GraphContext:
                 # Handle Node-specific logic
                 # Extract edge_ids from data (stored as "edges" at top level)
                 # Edges are included in database exports but excluded from default exports
-                edge_ids = data.get("edges", [])
+                edge_ids = node_edge_ids
 
                 # Remove edge_ids, id, and type_code from context_data as they're handled separately
                 context_data.pop("edge_ids", None)

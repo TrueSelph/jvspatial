@@ -111,7 +111,7 @@ AttributeMixin + pydantic.BaseModel
 ### 2.2 Node — graph node
 
 `jvspatial/core/entities/node.py:34+`. Adds:
-- `edge_ids: List[str]` — transient in memory, persisted at the top level as `edges` (`Node._get_top_level_fields` line 55-60)
+- `edge_ids: List[str]` — transient in-memory list. Persisted at the top level as `edges` (`Node._get_top_level_fields`) **only** when the backend's adjacency mode is `persist` (JsonDB, DynamoDB). In `derive` mode (Postgres, MongoDB, SQLite default) node rows carry no `edges`, `connect()` / `disconnect()` / `save()` never write or lock a node row, and adjacency is read from the indexed edge collection (`Node.edges`, `Node.connection_count`, cascade delete, `expand_node`); `edge_ids` stays empty and a legacy stored `edges` array is ignored on read and dropped on the next save (`GraphContext.persists_edge_ids`, `context.py`; §4.2)
 - `_visitor_ref: weakref` — currently visiting walker, transient
 - `_visit_hooks: ClassVar` — populated by `__init_subclass__` from `@on_visit`-decorated methods (line 62+)
 
@@ -251,6 +251,7 @@ cases are documented rather than normalized:
 Adapters declare capabilities as class attributes:
 
 - `supports_transactions: bool` — `True` for MongoDB (replica set); `False` for SQLite (best-effort), JSON, DynamoDB.
+- `edge_ids_mode: str` — where node adjacency lives. `"derive"` for Postgres, MongoDB, SQLite: the edge collection (indexed on `source` / `target` by `Edge.get_indexes`) is the only source of truth. `"persist"` for JSON, DynamoDB: node rows also carry an `edges` array. Resolve the effective value with `resolve_edge_ids_mode(db)` (`db/database.py`): an `edge_ids_mode` set on the adapter instance → `JVSPATIAL_NODE_EDGE_IDS` (`persist` | `derive`) → class default; observability / cache wrappers are unwrapped via `inner`. Rows written in persist mode are converted with `jvspatial migrate strip-node-edges` (`strip_node_edges()` on `PostgresDB` / `MongoDB`).
 
 Callers branching on capabilities should test the flag, not the adapter class.
 

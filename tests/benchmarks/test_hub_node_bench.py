@@ -145,7 +145,9 @@ async def _bench_graph() -> AsyncIterator[Tuple[GraphContext, Any, str]]:
         "postgres",
         dsn=_DSN,
         schema_name=schema,
-        min_size=1,
+        # Warm pool: open every connection up front so samples (and the
+        # 32-way burst) measure queries, not connection establishment.
+        min_size=_CONCURRENT_CONNECTS + 8,
         max_size=_CONCURRENT_CONNECTS + 8,
         observe=True,
         slow_query_ms=1e9,
@@ -346,6 +348,11 @@ async def test_hub_node_scale(degree: int, request: pytest.FixtureRequest) -> No
                     degree,
                 ),
             }
+            if hasattr(hub, "count_nodes"):  # 0.0.18+: the replacement for len()
+                read_cases["count_nodes"] = (
+                    lambda: hub.count_nodes(edge=[BenchContains]),
+                    degree,
+                )
             for name, (fn, expected) in read_cases.items():
                 samples = []
                 trips = 0
@@ -353,7 +360,8 @@ async def test_hub_node_scale(degree: int, request: pytest.FixtureRequest) -> No
                     await ctx.clear_cache()
                     ms, trips, out = await _timed(fn)
                     samples.append(ms)
-                    assert len(out) == expected, f"{name}: {len(out)} != {expected}"
+                    got = out if isinstance(out, int) else len(out)
+                    assert got == expected, f"{name}: {got} != {expected}"
                 results[name] = {**_summary(samples), "round_trips": trips}
 
             # -- save() after a scalar change --
@@ -392,6 +400,12 @@ async def test_hub_node_scale(degree: int, request: pytest.FixtureRequest) -> No
                 await hub.connect(leaf, edge=BenchContains)
                 return (time.perf_counter() - t) * 1000.0
 
+            # asyncpg closes connections idle > 300 s, which the long 100k
+            # read phase exceeds; re-open them so the burst measures locking,
+            # not reconnects.
+            await asyncio.gather(
+                *(db.get("node", seeded["hub_id"]) for _ in range(len(conc_leaves)))
+            )
             t0 = time.perf_counter()
             per_call = await asyncio.gather(*(_one(leaf) for leaf in conc_leaves))
             wall_ms = (time.perf_counter() - t0) * 1000.0

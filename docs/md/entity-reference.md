@@ -51,7 +51,8 @@ class Node(Object):
 
     async def connect(other: "Node", edge: Type["Edge"] = Edge,
                      direction: str = "out", **kwargs) -> "Edge"
-    async def edges(direction: str = "") -> List["Edge"]
+    async def edges(direction: str = "", limit: Optional[int] = None) -> List["Edge"]
+    async def connection_count() -> int  # degree; one COUNT in derive mode
     async def nodes(direction: str = "both", node: Optional[...] = None,
                    edge: Optional[...] = None, **kwargs) -> List["Node"]
     async def node(direction: str = "out", node: Optional[...] = None,
@@ -62,6 +63,11 @@ class Node(Object):
     @classmethod
     async def count(cls, query: Optional[dict] = None, **kwargs) -> int  # Inherited from Object
 ```
+
+**Adjacency:** on Postgres, MongoDB and SQLite (derive mode) the edge
+collection is the source of truth — `edge_ids` stays empty in memory and node
+rows carry no `edges` array. Use `edges()`, `connection_count()` and `nodes()`
+rather than reading `edge_ids`. See [graph-context.md](graph-context.md).
 
 **Key Methods:**
 
