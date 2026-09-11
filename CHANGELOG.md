@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Hub-node scale recorder** (`tests/benchmarks/test_hub_node_bench.py`,
+  `tests/benchmarks/hub_bench_report.py`). Seeds a Postgres hub with 1k / 10k /
+  100k edges and records p50/p95 latency, DB round trips and on-disk sizes
+  for `connect()`, `save()`, neighbour listings, the `len(nodes())` count
+  pattern and 32-way concurrent `connect()`. Opt-in via `-m bench`
+  (`bench_slow` for 100k). Baseline and per-change results:
+  `docs/bench/2026-09-hub-node-baseline.md`.
+
 ### Fixed
 
 - **`JVSPATIAL_WEBHOOK_API_KEY_REQUIRE_HTTPS` was allowlist-rejected**
