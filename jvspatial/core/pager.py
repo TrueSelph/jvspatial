@@ -5,10 +5,12 @@ Provides efficient, database-level pagination for objects (including nodes) with
 Designed to integrate seamlessly with UI frameworks requiring paginated data.
 """
 
+import base64
+import json
 from math import ceil
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, TypeVar
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
 
-from jvspatial.db.database import finalize_find_results
+from jvspatial.db.database import finalize_find_results, resolve_sort_value
 
 if TYPE_CHECKING:
     from .entities import Object
@@ -357,3 +359,94 @@ async def paginate_by_field(
     )
 
     return await pager.get_page(page)
+
+
+# ---- keyset cursors ---------------------------------------------------------
+# Shared by ``GraphContext.find_page`` and ``Node.nodes_page`` so both mint and
+# read the same opaque cursor: base64(json({"id": <last id>, "sort": <value>})).
+
+
+def keyset_sort_fields(
+    sort: Optional[List[Tuple[str, int]]],
+) -> List[Tuple[str, int]]:
+    """Normalise a keyset sort: default ``[("id", 1)]``, ``id`` appended as tiebreaker."""
+    fields: List[Tuple[str, int]] = list(sort) if sort else [("id", 1)]
+    if not any(field == "id" for field, _ in fields):
+        fields.append(("id", fields[0][1]))
+    return fields
+
+
+def encode_keyset_cursor(
+    record: Dict[str, Any], sort_fields: List[Tuple[str, int]]
+) -> str:
+    """Opaque cursor positioned after ``record`` for a sort led by ``sort_fields[0]``.
+
+    Dotted sort fields (``context.started_at``) resolve through the same path
+    walk the adapters use; a flat ``.get`` would mint a ``None`` sort value
+    for every cursor and stall pagination.
+    """
+    payload = {
+        "id": record.get("id"),
+        "sort": resolve_sort_value(record, sort_fields[0][0]),
+    }
+    return base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode()
+    ).decode()
+
+
+def decode_keyset_cursor(
+    cursor: Optional[Union[str, Dict[str, Any]]],
+) -> Optional[Dict[str, Any]]:
+    """Decode a cursor from :func:`encode_keyset_cursor`; ``None`` if absent or malformed."""
+    if isinstance(cursor, dict):
+        return cursor
+    if not isinstance(cursor, str) or not cursor:
+        return None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def keyset_filter(
+    sort_fields: List[Tuple[str, int]],
+    cursor_payload: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Mongo-style filter selecting records strictly after the cursor.
+
+    Honors the nulls-last contract of ``finalize_find_results``: records
+    with no value for the primary sort field come after every valued record
+    in both directions. ``None`` when there is no (usable) cursor.
+    """
+    if not cursor_payload or "id" not in cursor_payload or "sort" not in cursor_payload:
+        return None
+    primary_field, primary_dir = sort_fields[0]
+    id_dir = sort_fields[-1][1]
+    sort_op = "$lt" if primary_dir < 0 else "$gt"
+    id_op = "$lt" if id_dir < 0 else "$gt"
+    cursor_sort = cursor_payload["sort"]
+    if cursor_sort is None:
+        # The cursor sits in the trailing run of records that have no value
+        # for the sort field; everything still ahead is also missing it —
+        # walk that run by id alone.
+        return {
+            "$and": [
+                {primary_field: None},
+                {"id": {id_op: cursor_payload["id"]}},
+            ]
+        }
+    return {
+        "$or": [
+            {primary_field: {sort_op: cursor_sort}},
+            # ``{field: None}`` matches both an explicit null and a missing
+            # key. Without this branch the nulls-last tail is unreachable.
+            {primary_field: None},
+            {
+                "$and": [
+                    {primary_field: cursor_sort},
+                    {"id": {id_op: cursor_payload["id"]}},
+                ]
+            },
+        ]
+    }

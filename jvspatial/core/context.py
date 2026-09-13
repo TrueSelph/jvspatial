@@ -1,10 +1,8 @@
 """GraphContext for managing database dependencies."""
 
 import asyncio
-import base64
 import contextvars
 import inspect
-import json
 import logging
 import time
 from contextlib import asynccontextmanager, contextmanager, suppress
@@ -23,7 +21,7 @@ from typing import (
     cast,
 )
 
-from jvspatial.db.database import Database, resolve_sort_value
+from jvspatial.db.database import Database, resolve_edge_ids_mode
 from jvspatial.db.factory import create_database, get_current_database
 from jvspatial.db.manager import get_database_manager
 
@@ -425,6 +423,18 @@ class GraphContext:
                 self._node_edge_write_locks[node_id] = lock
         async with lock:
             yield
+
+    def persists_edge_ids(self) -> bool:
+        """Whether node documents persist their incident edge ids (``edges``).
+
+        ``False`` when the active backend derives adjacency from the edge
+        collection (``edge_ids_mode="derive"`` — the Postgres, MongoDB and
+        SQLite default): ``connect()`` / ``save()`` then never touch the node
+        rows and ``Node.edge_ids`` stays an unpopulated in-memory list. ``True``
+        for ``"persist"`` (JsonDB, DynamoDB). See
+        :func:`jvspatial.db.database.resolve_edge_ids_mode`.
+        """
+        return resolve_edge_ids_mode(self.database) == "persist"
 
     @property
     def database(self) -> Database:
@@ -892,6 +902,15 @@ class GraphContext:
             hasattr(entity, "type_code") and getattr(entity, "type_code", "") == "n"
         )
 
+        if is_node and not self.persists_edge_ids():
+            # Derive mode: adjacency lives in the edge collection. Never write
+            # an ``edges`` array (a legacy in-memory copy must not re-persist
+            # it), and there is no array merge to serialise per node.
+            record.pop("edges", None)
+            await db.save(collection, record)
+            await self._add_to_cache(entity.id, entity)
+            return entity
+
         async def _merge_edges_and_write() -> None:
             # Merge node edge lists with the DB so full-document saves do not clobber
             # edge IDs added concurrently via atomic_add_edge_id (or another writer).
@@ -952,8 +971,14 @@ class GraphContext:
 
         if isinstance(entity, Node):
             # Check if this is a recursive call from Node.delete() by checking
-            # if cascade=False and the node has no edges (cleaned up by Node.delete())
-            if not cascade and len(entity.edge_ids) == 0:
+            # if cascade=False and the node has no edges (cleaned up by Node.delete()).
+            # In derive mode ``edge_ids`` is never populated, so ask the edge
+            # collection instead.
+            if not cascade and (
+                len(entity.edge_ids) == 0
+                if self.persists_edge_ids()
+                else await entity.connection_count() == 0
+            ):
                 # Node.delete() has cleaned up edges, just delete the entity
                 collection = self._get_collection_name("n")
                 await self.database.delete(collection, entity.id)
@@ -1072,6 +1097,7 @@ class GraphContext:
         direction: str = "both",
         limit: int = 50,
         cursor: int = 0,
+        after: Optional[str] = None,
         detail_level: str = "full",
     ) -> Dict[str, Any]:
         """Return a page of incident edges and neighbor summaries for progressive UIs.
@@ -1088,6 +1114,7 @@ class GraphContext:
             direction=direction,
             limit=limit,
             cursor=cursor,
+            after=after,
             detail_level=detail_level,  # type: ignore[arg-type]
         )
 
@@ -1228,8 +1255,11 @@ class GraphContext:
         Falls back to read-modify-write when the database does not support
         atomic updates or when the document is not found.
 
-        Returns True on success, False on failure.
+        Returns True on success, False on failure. A no-op returning True in
+        derive mode (:meth:`persists_edge_ids` is ``False``).
         """
+        if not self.persists_edge_ids():
+            return True
         db = self.database
         if self._is_mongodb(db) or self._is_postgres(db):
             try:
@@ -1271,8 +1301,11 @@ class GraphContext:
         Falls back to read-modify-write when the database does not support
         atomic updates or when the document is not found.
 
-        Returns True on success, False on failure.
+        Returns True on success, False on failure. A no-op returning True in
+        derive mode (:meth:`persists_edge_ids` is ``False``).
         """
+        if not self.persists_edge_ids():
+            return True
         db = self.database
         if self._is_mongodb(db) or self._is_postgres(db):
             try:
@@ -1411,69 +1444,20 @@ class GraphContext:
         ``sort`` is expected to include at least one field; ``id`` is appended as
         a deterministic tiebreaker when missing.
         """
+        from .pager import (
+            decode_keyset_cursor,
+            encode_keyset_cursor,
+            keyset_filter,
+            keyset_sort_fields,
+        )
+
         page_limit = max(1, int(limit))
-        if not sort:
-            sort = [("id", 1)]
-        sort_fields: List[Tuple[str, int]] = list(sort)
-        if not any(field == "id" for field, _ in sort_fields):
-            sort_fields.append(("id", sort_fields[0][1]))
-
+        sort_fields = keyset_sort_fields(sort)
         final_query: Dict[str, Any] = dict(query or {})
-        cursor_payload: Optional[Dict[str, Any]] = None
-        if isinstance(after, str) and after:
-            try:
-                cursor_payload = json.loads(
-                    base64.urlsafe_b64decode(after.encode()).decode()
-                )
-            except Exception:
-                cursor_payload = None
-        elif isinstance(after, dict):
-            cursor_payload = after
-
-        primary_field, primary_dir = sort_fields[0]
-        id_dir = sort_fields[-1][1]
-        if cursor_payload and "id" in cursor_payload and "sort" in cursor_payload:
-            sort_op = "$lt" if primary_dir < 0 else "$gt"
-            id_op = "$lt" if id_dir < 0 else "$gt"
-            cursor_sort = cursor_payload["sort"]
-            keyset_branches: List[Dict[str, Any]]
-            if cursor_sort is None:
-                # The cursor sits in the trailing run of records that have
-                # no value for the sort field. Records missing the sort
-                # field sort last in both directions (see
-                # ``finalize_find_results``), so everything still ahead of
-                # us is also missing it — walk that run by id alone.
-                keyset_branches = [
-                    {
-                        "$and": [
-                            {primary_field: None},
-                            {"id": {id_op: cursor_payload["id"]}},
-                        ]
-                    }
-                ]
-            else:
-                keyset_branches = [
-                    {primary_field: {sort_op: cursor_sort}},
-                    # ``{field: None}`` matches both an explicit null and a
-                    # missing key. Without this branch the nulls-last tail
-                    # is unreachable: ``{field: {"$lt": v}}`` never matches
-                    # a record that has no value at all, so iteration would
-                    # stop at the last record that does.
-                    {primary_field: None},
-                    {
-                        "$and": [
-                            {primary_field: cursor_sort},
-                            {"id": {id_op: cursor_payload["id"]}},
-                        ]
-                    },
-                ]
-            keyset_filter: Dict[str, Any] = (
-                keyset_branches[0]
-                if len(keyset_branches) == 1
-                else {"$or": keyset_branches}
-            )
+        after_cursor = keyset_filter(sort_fields, decode_keyset_cursor(after))
+        if after_cursor is not None:
             final_query = (
-                {"$and": [final_query, keyset_filter]} if final_query else keyset_filter
+                {"$and": [final_query, after_cursor]} if final_query else after_cursor
             )
 
         rows = await self.database.find(
@@ -1481,21 +1465,11 @@ class GraphContext:
         )
         has_more = len(rows) > page_limit
         page_rows = rows[:page_limit]
-
-        next_cursor: Optional[str] = None
-        if has_more and page_rows:
-            last = page_rows[-1]
-            # Dotted sort fields (``context.started_at``) need the same
-            # path walk the adapters use; a flat ``.get`` would mint a
-            # ``None`` sort value for every cursor and stall pagination.
-            payload = {
-                "id": last.get("id"),
-                "sort": resolve_sort_value(last, primary_field),
-            }
-            next_cursor = base64.urlsafe_b64encode(
-                json.dumps(payload, separators=(",", ":")).encode()
-            ).decode()
-
+        next_cursor = (
+            encode_keyset_cursor(page_rows[-1], sort_fields)
+            if has_more and page_rows
+            else None
+        )
         return page_rows, next_cursor
 
     async def nodes_bulk(
@@ -1508,8 +1482,15 @@ class GraphContext:
         edge_filter: Optional[Dict[str, Any]] = None,
         node_filter: Optional[Dict[str, Any]] = None,
         limit: Optional[int] = None,
+        limit_per_source: Optional[int] = None,
     ) -> Dict[str, List[Any]]:
-        """Batch traversal for many source IDs in one edge-query pass."""
+        """Batch traversal for many source IDs in one edge-query pass.
+
+        ``limit_per_source`` caps the neighbours returned per source id. On
+        backends with ``find_connected_nodes_bulk`` (Postgres) an ``out`` /
+        ``in`` traversal without the legacy global ``limit`` is one round trip
+        (``ROW_NUMBER() OVER (PARTITION BY source)``).
+        """
         from .entities.edge import Edge
         from .entities.node import Node
 
@@ -1531,6 +1512,36 @@ class GraphContext:
 
         if direction not in ("out", "in", "both"):
             direction = "out"
+
+        bulk = getattr(self.database, "find_connected_nodes_bulk", None)
+        if callable(bulk) and limit is None and direction in ("out", "in"):
+            try:
+                rows_by_source = await bulk(
+                    self._get_collection_name("n"),
+                    self._get_collection_name("e"),
+                    unique_ids,
+                    direction=direction,
+                    edge_entities=edge_entities or None,
+                    node_entities=node_entities or None,
+                    edge_query={
+                        f"context.{k}": v for k, v in (edge_filter or {}).items()
+                    }
+                    or None,
+                    node_query={
+                        f"context.{k}": v for k, v in (node_filter or {}).items()
+                    }
+                    or None,
+                    limit_per_source=limit_per_source,
+                )
+            except NotImplementedError:
+                rows_by_source = None
+            if rows_by_source is not None:
+                for src_id, rows in rows_by_source.items():
+                    for row in rows:
+                        obj = await self._deserialize_entity(Node, row)
+                        if obj is not None:
+                            out.setdefault(src_id, []).append(obj)
+                return out
 
         edge_query: Dict[str, Any] = {}
         if direction == "out":
@@ -1598,6 +1609,8 @@ class GraphContext:
             if obj is not None:
                 node_by_id[doc["id"]] = obj
 
+        caps = [c for c in (limit, limit_per_source) if c is not None]
+        cap = max(1, min(caps)) if caps else None
         for src_id, target_ids in links.items():
             matched: List[Any] = []
             for tid in target_ids:
@@ -1605,7 +1618,7 @@ class GraphContext:
                 if obj is None:
                     continue
                 matched.append(obj)
-                if limit is not None and len(matched) >= max(1, limit):
+                if cap is not None and len(matched) >= cap:
                     break
             out[src_id] = matched
         return out
@@ -1662,29 +1675,53 @@ class GraphContext:
             _ensured_indexes.add(collection_key)
             return  # Database doesn't support indexing
 
+        # Per-class (annotation-declared) indexes are scoped to the class's
+        # entity on Postgres: entity-leading or entity-partial, replacing the
+        # unscoped pre-0.0.18 index of the same fields. The scoping keys are
+        # Postgres-only; other adapters receive the plain definition, and
+        # full-text definitions are skipped where ``$text`` runs in memory.
+        is_postgres = self._is_postgres(self.database)
+        scope_keys = ("per_class", "entity_leading", "partial_by_entity", "fulltext")
+
+        def _scoped(index_def: Dict[str, Any], extra: Dict[str, Any]) -> Dict[str, Any]:
+            if is_postgres and index_def.get("per_class"):
+                extra.update(
+                    entity=entity_class._entity_name(),
+                    drop_legacy=True,
+                    entity_leading=index_def.get("entity_leading", True),
+                    partial_by_entity=index_def.get("partial_by_entity", False),
+                    fulltext=index_def.get("fulltext", False),
+                )
+            return extra
+
         # Create each index
         for index_def in indexes:
+            if index_def.get("fulltext") and not is_postgres:
+                continue
             try:
                 if "field" in index_def:
                     # Single-field index; pass through name and extra kwargs
                     extra = {
                         k: v
                         for k, v in index_def.items()
-                        if k not in ("field", "unique", "direction")
+                        if k not in ("field", "unique", "direction", *scope_keys)
                     }
                     await self.database.create_index(
                         collection,
                         index_def["field"],
                         unique=index_def.get("unique", False),
-                        **extra,
+                        **_scoped(index_def, extra),
                     )
                 elif "fields" in index_def:
                     # Compound index; pass through name and other create_index kwargs
-                    extra = {
-                        k: v
-                        for k, v in index_def.items()
-                        if k not in ("fields", "unique")
-                    }
+                    extra = _scoped(
+                        index_def,
+                        {
+                            k: v
+                            for k, v in index_def.items()
+                            if k not in ("fields", "unique", *scope_keys)
+                        },
+                    )
                     await self.database.create_index(
                         collection,
                         index_def["fields"],
@@ -1702,7 +1739,12 @@ class GraphContext:
         _ensured_indexes.add(collection_key)
 
     async def find_edges_between(
-        self, source_id: str, target_id: Optional[str] = None, edge_class=None, **kwargs
+        self,
+        source_id: str,
+        target_id: Optional[str] = None,
+        edge_class=None,
+        limit: Optional[int] = None,
+        **kwargs,
     ) -> List:
         """Find edges between nodes using database queries.
 
@@ -1710,6 +1752,7 @@ class GraphContext:
             source_id: Source node ID
             target_id: Target node ID (optional)
             edge_class: Edge class to filter by
+            limit: Maximum number of edges to return (pushed to the database)
             **kwargs: Additional edge properties to match
 
         Returns:
@@ -1743,7 +1786,7 @@ class GraphContext:
 
         collection = self._get_collection_name(self._get_entity_type_code(edge_cls))
         db = self.database
-        results = await db.find(collection, query)
+        results = await db.find(collection, query, limit=limit)
 
         edges = []
         for data in results:
@@ -1839,9 +1882,15 @@ class GraphContext:
 
             # entity_type_code already computed above
 
+            # Legacy rows may still carry an ``edges`` array; in derive mode it
+            # is stale (no longer maintained) and is ignored.
+            node_edge_ids: List[str] = []
+            if entity_type_code == "n" and self.persists_edge_ids():
+                node_edge_ids = data.get("edges", [])
+
             if self._fast_deserialize_enabled():
                 if entity_type_code == "n":
-                    edge_ids = data.get("edges", [])
+                    edge_ids = node_edge_ids
                     context_data.pop("edge_ids", None)
                     context_data.pop("id", None)
                     context_data.pop("type_code", None)
@@ -1873,7 +1922,7 @@ class GraphContext:
                 # Handle Node-specific logic
                 # Extract edge_ids from data (stored as "edges" at top level)
                 # Edges are included in database exports but excluded from default exports
-                edge_ids = data.get("edges", [])
+                edge_ids = node_edge_ids
 
                 # Remove edge_ids, id, and type_code from context_data as they're handled separately
                 context_data.pop("edge_ids", None)

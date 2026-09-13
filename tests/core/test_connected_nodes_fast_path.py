@@ -33,7 +33,9 @@ class _FastJsonDB(JsonDB):
     """JsonDB plus a ``find_connected_nodes`` so the fast path is exercised.
 
     Mirrors the Postgres backend contract: strict source/target endpoints per
-    ``direction`` and DB-side ``limit`` applied to the raw (unfiltered) rows.
+    ``direction``, entity filters applied in the "query", and the DB-side
+    ``limit`` applied after them. Property queries / sort are declined with
+    ``NotImplementedError`` (the caller's Python path takes over).
     """
 
     async def find_connected_nodes(
@@ -44,8 +46,17 @@ class _FastJsonDB(JsonDB):
         *,
         direction: str = "out",
         edge_entity: Optional[str] = None,
+        edge_entities: Optional[List[str]] = None,
+        node_entities: Optional[List[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+        sort: Optional[List[Any]] = None,
         limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
+        if edge_query or node_query or sort or direction not in ("out", "in"):
+            raise NotImplementedError("shim supports type-only out/in queries")
+        if edge_entities is None and edge_entity is not None:
+            edge_entities = [edge_entity]
         edges = await self.find(edge_collection, {})
         rows: List[Dict[str, Any]] = []
         for e in edges:
@@ -56,11 +67,14 @@ class _FastJsonDB(JsonDB):
                 other = src
             else:
                 continue
-            if edge_entity is not None and e.get("entity") != edge_entity:
+            if edge_entities is not None and e.get("entity") not in edge_entities:
                 continue
             n = await self.get(node_collection, other)
-            if n is not None:
-                rows.append(n)
+            if n is None:
+                continue
+            if node_entities is not None and n.get("entity") not in node_entities:
+                continue
+            rows.append(n)
         # Deterministic order (Postgres has no implicit ORDER BY, so the bug
         # surfaces whenever a non-matching neighbor happens to sort first).
         rows.sort(key=lambda r: r["id"])

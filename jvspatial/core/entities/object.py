@@ -21,6 +21,8 @@ from ..annotations import (
     AttributeMixin,
     attribute,
     get_compound_indexes,
+    get_fulltext_fields,
+    get_fulltext_indexes,
     get_indexed_fields,
 )
 from ..utils import generate_id
@@ -784,8 +786,14 @@ class Object(AttributeMixin, BaseModel):
             List of index definitions, each containing:
             - For single-field: {"field": "context.field_name", "unique": bool, "direction": int}
             - For compound: {"fields": [("context.field_name", direction), ...], "unique": bool, "name": str}
+            - For full-text: {"fields": [...], "fulltext": True, "name": str}
+            Annotation-declared definitions carry ``"per_class": True`` (plus
+            any ``entity_leading`` / ``partial_by_entity`` option) so
+            ``GraphContext.ensure_indexes`` can scope them to the class's
+            entity on Postgres.
         """
         indexes: List[Dict[str, Any]] = []
+        scope_options = ("entity_leading", "partial_by_entity")
 
         # Get single-field indexes from field annotations
         indexed_fields = get_indexed_fields(cls)
@@ -796,11 +804,15 @@ class Object(AttributeMixin, BaseModel):
                 "field": db_field,
                 "unique": index_config.get("unique", False),
                 "direction": index_config.get("direction", 1),
+                "per_class": True,
             }
             if "partial_filter_expression" in index_config:
                 single_entry["partialFilterExpression"] = index_config[
                     "partial_filter_expression"
                 ]
+            for option in scope_options:
+                if option in index_config:
+                    single_entry[option] = index_config[option]
             indexes.append(single_entry)
 
         # Get compound indexes from class decorators
@@ -816,10 +828,33 @@ class Object(AttributeMixin, BaseModel):
                 "unique": comp_index.get("unique", False),
                 "sparse": comp_index.get("sparse", False),
                 "name": comp_index.get("name"),
+                "per_class": True,
             }
             if "partialFilterExpression" in comp_index:
                 entry["partialFilterExpression"] = comp_index["partialFilterExpression"]
+            for option in scope_options:
+                if option in comp_index:
+                    entry[option] = comp_index[option]
             indexes.append(entry)
+
+        # Full-text indexes: every ``attribute(fulltext=True)`` field in
+        # declaration order, plus each ``@fulltext_index([...])``.
+        fulltext_sets = []
+        fulltext_fields = get_fulltext_fields(cls)
+        if fulltext_fields:
+            fulltext_sets.append(
+                {"fields": fulltext_fields, "name": f"fts_{'_'.join(fulltext_fields)}"}
+            )
+        fulltext_sets.extend(get_fulltext_indexes(cls))
+        for ft in fulltext_sets:
+            indexes.append(
+                {
+                    "fields": [(f"context.{f}", 1) for f in ft["fields"]],
+                    "fulltext": True,
+                    "per_class": True,
+                    "name": ft["name"],
+                }
+            )
 
         return indexes
 

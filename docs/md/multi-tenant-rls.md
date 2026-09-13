@@ -48,6 +48,14 @@ async def handle_request(request, db):
         await Document.create(...)      # tenant_id is stamped automatically
 ```
 
+Every `PostgresDB` read and write runs on a tenant-scoped connection inside
+the block: `get` / `find` / `count`, `save` / `bulk_save_detailed` (the COPY
+path), `find_one_and_update` / `find_one_and_delete`, the graph pushdowns
+(`find_connected_nodes`, `count_connected_nodes`, `find_connected_nodes_bulk`)
+and `traverse`. RLS applies per table, so a neighbour join sees only the
+edges *and* the nodes the tenant may read: another tenant's edge that points
+at a shared node id stays invisible.
+
 The tenant scope uses `contextvars`, so:
 
 - Nested scopes shadow correctly:

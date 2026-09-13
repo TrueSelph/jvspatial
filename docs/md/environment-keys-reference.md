@@ -50,6 +50,9 @@ For full examples and default values, see:
 - `JVSPATIAL_DYNAMODB_REGION` - DynamoDB region.
 - `JVSPATIAL_DYNAMODB_ENDPOINT_URL` - DynamoDB endpoint (e.g. LocalStack).
 - `JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX` - Wait-for-index toggle.
+- `JVSPATIAL_NODE_EDGE_IDS` - Node adjacency mode: `derive` (edge collection only; Postgres / MongoDB / SQLite default) or `persist` (node rows also store `edges`; JSON / DynamoDB default). An `edge_ids_mode` set on the adapter instance wins.
+- `JVSPATIAL_POSTGRES_COMMAND_TIMEOUT` - Postgres per-statement timeout in seconds (default 60).
+- `JVSPATIAL_PG_GIN_INDEX` - Postgres whole-document `GIN (data jsonb_path_ops)` index on new collections: `full` (default) or `off`.
 
 ### Auth and rate limit
 - `JVSPATIAL_AUTH_ENABLED` - Enables auth.
@@ -125,6 +128,7 @@ For full examples and default values, see:
 - `JVSPATIAL_WEBHOOK_MAX_PAYLOAD_SIZE` - Max payload bytes.
 - `JVSPATIAL_WEBHOOK_IDEMPOTENCY_TTL` - Idempotency TTL.
 - `JVSPATIAL_WEBHOOK_HTTPS_REQUIRED` - HTTPS-only webhook policy.
+- `JVSPATIAL_WEBHOOK_API_KEY_REQUIRE_HTTPS` - Require HTTPS when the webhook API key is supplied via query parameter (default `true`). Set `false` for local plain-HTTP tunnels (e.g. ngrok → `http://127.0.0.1`).
 
 ### Walker safety and deferred execution
 - `JVSPATIAL_WALKER_PROTECTION_ENABLED` - Enables walker safety guards.

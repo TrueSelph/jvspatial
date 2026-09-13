@@ -24,6 +24,9 @@ class Widget(Node):
 async def graph_context():
     with tempfile.TemporaryDirectory() as tmpdir:
         db = JsonDB(base_path=tmpdir)
+        # These tests cover the persisted ``edges`` merge contract; pin the
+        # mode so a JVSPATIAL_NODE_EDGE_IDS=derive run does not switch it off.
+        db.edge_ids_mode = "persist"
         ctx = GraphContext(database=db)
         set_default_context(ctx)
         yield ctx, db

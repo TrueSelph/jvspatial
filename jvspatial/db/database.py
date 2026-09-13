@@ -197,10 +197,22 @@ class Database(ABC):
         with ACID semantics (e.g. MongoDB replica set). ``False`` for
         adapters where transactions are unavailable or only available in a
         weak buffered form. Default ``False``.
+
+    ``edge_ids_mode``
+        Where node adjacency lives. ``"persist"``: every node document
+        carries its incident edge ids in a top-level ``edges`` array that
+        ``connect()`` / ``disconnect()`` rewrite — needed when the edge
+        collection is not indexed on ``source`` / ``target``. ``"derive"``:
+        the edge collection is the only source of truth and adjacency is
+        queried from it, so ``connect()`` / ``save()`` cost O(1) in node
+        degree. Default ``"persist"``. Resolve the effective value with
+        :func:`resolve_edge_ids_mode` (honors instance overrides and the
+        ``JVSPATIAL_NODE_EDGE_IDS`` env var).
     """
 
     # Capability flags. Override in subclasses.
     supports_transactions: bool = False
+    edge_ids_mode: str = "persist"
 
     @abstractmethod
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -642,14 +654,52 @@ class Database(ABC):
         return None
 
 
+EDGE_IDS_MODES = ("persist", "derive")
+
+
+def resolve_edge_ids_mode(db: Any) -> str:
+    """Return the effective node-adjacency mode (``"persist"`` / ``"derive"``).
+
+    Precedence: an ``edge_ids_mode`` set on the adapter *instance* (explicit
+    config) → the ``JVSPATIAL_NODE_EDGE_IDS`` env var → the adapter class
+    default (:attr:`Database.edge_ids_mode`). Wrapping adapters
+    (observability, caching) are unwrapped through their ``inner`` attribute
+    so the innermost backend's capability decides.
+    """
+    candidate = db
+    for _ in range(6):
+        explicit = getattr(candidate, "__dict__", {}).get("edge_ids_mode")
+        if explicit in EDGE_IDS_MODES:
+            return str(explicit)
+        inner = getattr(candidate, "inner", None)
+        if inner is None:
+            break
+        candidate = inner
+
+    from jvspatial.env import env
+
+    override = (env("JVSPATIAL_NODE_EDGE_IDS") or "").strip().lower()
+    if override in EDGE_IDS_MODES:
+        return override
+    if override:
+        logger.warning(
+            "Ignoring JVSPATIAL_NODE_EDGE_IDS=%r (expected 'persist' or 'derive')",
+            override,
+        )
+    mode = getattr(type(candidate), "edge_ids_mode", "persist")
+    return mode if mode in EDGE_IDS_MODES else "persist"
+
+
 __all__ = [
     "Database",
     "DatabaseError",
     "VersionConflictError",
     "BulkSaveResult",
+    "EDGE_IDS_MODES",
     "encode_cursor",
     "decode_cursor",
     "finalize_find_results",
+    "resolve_edge_ids_mode",
     "resolve_sort_value",
 ]
 

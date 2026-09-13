@@ -142,6 +142,8 @@ markers = [
     "asyncio: mark test as an asyncio test",
     "s3: mark test as requiring boto3 for S3 storage",
     "benchmark: performance regression benchmark (run with --benchmark-only)",
+    "bench: hub-node scale recorder (run with pytest tests/benchmarks/test_hub_node_bench.py -m bench -s)",
+    "bench_slow: 100k-degree tier of the hub-node recorder (opt-in: -m 'bench or bench_slow')",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning:pydantic.*",

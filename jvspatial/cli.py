@@ -14,6 +14,10 @@ Usage::
     jvspatial migrate --collection node --entity User --dry-run
     jvspatial migrate --collection node          # all entities in collection
     jvspatial migrate --collection node --apply  # actually persist changes
+
+    # derive-mode adjacency: drop the legacy ``edges`` array from node rows
+    jvspatial migrate strip-node-edges --dsn postgresql://... --apply
+    jvspatial migrate strip-node-edges --dsn mongodb://... --db-name app --apply
 """
 
 from __future__ import annotations
@@ -220,6 +224,71 @@ async def _run_migrate(args: argparse.Namespace) -> int:
     return 0 if failed == 0 else 1
 
 
+# ---- migrate strip-node-edges ----------------------------------------------
+
+
+async def _run_strip_node_edges(args: argparse.Namespace) -> int:
+    """Strip the legacy ``edges`` array from node rows (derive-mode migration).
+
+    Returns process exit code (0 on success, >0 on failure).
+    """
+    from jvspatial.db.factory import create_database
+    from jvspatial.db.manager import get_database_manager
+
+    dsn = args.dsn or ""
+    is_postgres = dsn.startswith(("postgres://", "postgresql://"))
+    if is_postgres:
+        db = create_database("postgres", dsn=dsn, schema_name=args.schema)
+    elif dsn.startswith(("mongodb://", "mongodb+srv://")):
+        db = create_database("mongodb", uri=dsn, db_name=args.db_name)
+    elif dsn:
+        logger.error("Unsupported --dsn scheme: expected postgresql:// or mongodb://")
+        return 2
+    else:
+        try:
+            db = get_database_manager().get_prime_database()
+        except Exception:
+            logger.error("No database configured; pass --dsn.")
+            return 2
+
+    strip = getattr(db, "strip_node_edges", None)
+    if not callable(strip):
+        logger.error(
+            "%s keeps adjacency on node rows (edge_ids_mode=persist); "
+            "nothing to strip.",
+            type(db).__name__,
+        )
+        return 2
+
+    collection = args.collection or "node"
+    try:
+        count = await strip(collection, batch_size=args.batch, dry_run=args.dry_run)
+    finally:
+        close = getattr(db, "close", None)
+        if callable(close):
+            await close()
+
+    if args.dry_run:
+        logger.info(
+            "[dry-run] %d %s record(s) carry a legacy 'edges' array; "
+            "re-run with --apply to strip them.",
+            count,
+            collection,
+        )
+        return 0
+    logger.info("stripped 'edges' from %d %s record(s)", count, collection)
+    if is_postgres and count:
+        logger.info(
+            "Reclaim space when convenient: VACUUM (ANALYZE) %s.%s; "
+            "REINDEX INDEX CONCURRENTLY %s.%s_data_gin;",
+            args.schema,
+            collection,
+            args.schema,
+            collection,
+        )
+    return 0
+
+
 # ---- entry point -----------------------------------------------------------
 
 
@@ -238,9 +307,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="Apply schema migrations to existing records",
     )
     mig.add_argument(
+        "action",
+        nargs="?",
+        choices=["strip-node-edges"],
+        help=(
+            "Optional data migration. strip-node-edges: remove the legacy "
+            "'edges' array from node rows (Postgres / MongoDB derive mode)."
+        ),
+    )
+    mig.add_argument(
         "--collection",
-        required=True,
-        help='Collection to scan ("node" / "edge" / "object" / "walker").',
+        help=(
+            'Collection to scan ("node" / "edge" / "object" / "walker"). '
+            'Required for schema migrations; strip-node-edges defaults to "node".'
+        ),
+    )
+    mig.add_argument(
+        "--dsn",
+        help="strip-node-edges: postgresql:// DSN or mongodb:// URI "
+        "(default: the configured prime database).",
+    )
+    mig.add_argument(
+        "--schema",
+        default="public",
+        help="strip-node-edges: Postgres schema holding the collection tables.",
+    )
+    mig.add_argument(
+        "--db-name",
+        default="jvdb",
+        help="strip-node-edges: MongoDB database name.",
+    )
+    mig.add_argument(
+        "--batch",
+        type=int,
+        default=5000,
+        help="strip-node-edges: rows per UPDATE batch.",
     )
     mig.add_argument(
         "--entity",
@@ -283,6 +384,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     _configure_logging(args.verbose)
 
     if args.cmd == "migrate":
+        if args.action == "strip-node-edges":
+            return asyncio.run(_run_strip_node_edges(args))
+        if not args.collection:
+            parser.error("migrate: --collection is required")
         return asyncio.run(_run_migrate(args))
 
     parser.error(f"Unknown command: {args.cmd!r}")

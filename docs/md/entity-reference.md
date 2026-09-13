@@ -51,7 +51,8 @@ class Node(Object):
 
     async def connect(other: "Node", edge: Type["Edge"] = Edge,
                      direction: str = "out", **kwargs) -> "Edge"
-    async def edges(direction: str = "") -> List["Edge"]
+    async def edges(direction: str = "", limit: Optional[int] = None) -> List["Edge"]
+    async def connection_count() -> int  # degree; one COUNT in derive mode
     async def nodes(direction: str = "both", node: Optional[...] = None,
                    edge: Optional[...] = None, **kwargs) -> List["Node"]
     async def node(direction: str = "out", node: Optional[...] = None,
@@ -63,10 +64,17 @@ class Node(Object):
     async def count(cls, query: Optional[dict] = None, **kwargs) -> int  # Inherited from Object
 ```
 
+**Adjacency:** on Postgres, MongoDB and SQLite (derive mode) the edge
+collection is the source of truth — `edge_ids` stays empty in memory and node
+rows carry no `edges` array. Use `edges()`, `connection_count()` and `nodes()`
+rather than reading `edge_ids`. See [graph-context.md](graph-context.md).
+
 **Key Methods:**
 
-- **`nodes()`**: Returns a list of connected nodes with filtering options
+- **`nodes()`**: Returns a list of connected nodes with filtering options — one database round trip on Postgres, MongoDB and SQLite for every filter shape, `limit` included
 - **`node()`**: Returns a single connected node (first match) or None - convenience method when you expect only one result
+- **`count_nodes()`**: Counts connected nodes with the same filters as `nodes()` (one `COUNT`; prefer it to `len(await n.nodes())`)
+- **`nodes_page(sort=, cursor=, limit=)`**: Keyset-paginated neighbours, returns `(nodes, next_cursor)`
 - **`neighborhood(depth)`**: Multi-hop neighbor fetch (Postgres `traverse` fast path or BFS fallback)
 - **`nodes_bulk(node_ids)`**: Batch neighbor fetch for many source IDs in two queries
 - **`delete(cascade=True)`**: Deletes the node and cascades deletion of all connected edges and dependent nodes

@@ -142,6 +142,10 @@ flake8 jvspatial/ tests/
 
 # performance benchmarks (only run when asked; not part of -q above)
 pytest tests/benchmarks --benchmark-only
+
+# hub-node scale recorder (Postgres; 100k tier opt-in via bench_slow)
+JVSPATIAL_POSTGRES_TEST_DSN=postgresql://... \
+  pytest tests/benchmarks/test_hub_node_bench.py -m bench -s
 ```
 
 For details on the benchmark suite (what's in it, what CI does with

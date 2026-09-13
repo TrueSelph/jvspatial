@@ -20,6 +20,9 @@ async def context():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         db = JsonDB(os.path.join(tmpdir, "test.json"))
+        # Assertions read ``edge_ids``; pin persist so a
+        # JVSPATIAL_NODE_EDGE_IDS=derive run does not switch it off.
+        db.edge_ids_mode = "persist"
         ctx = GraphContext(database=db)
         # Set this as the default context so all entities use this database
         set_default_context(ctx)

@@ -45,7 +45,11 @@ def make_graph_expand_handler(
         cursor: int = Query(  # noqa: B008
             default=0,
             ge=0,
-            description="Offset into the node's edge-id list",
+            description="Offset into the node's id-sorted incident edges",
+        ),
+        after: str = Query(  # noqa: B008
+            default="",
+            description="Keyset cursor: pagination.next_after from the previous page (overrides cursor)",
         ),
         detail_level: str = Query(  # noqa: B008
             default="full",
@@ -60,6 +64,7 @@ def make_graph_expand_handler(
                 direction=direction,
                 limit=limit,
                 cursor=cursor,
+                after=after or None,
                 detail_level=detail_level,
             )
         except Exception as e:

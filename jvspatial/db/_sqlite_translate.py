@@ -90,12 +90,22 @@ def _safe_field_path(field: str) -> bool:
     return all(_SAFE_SEGMENT_RE.match(seg) for seg in field.split("."))
 
 
-def _json_extract(field: str) -> str:
+def _json_extract(field: str, table: str = "") -> str:
     """Return the SQL fragment for ``json_extract(data, '$.field.path')``.
 
     Caller must have already verified the path with :func:`_safe_field_path`.
+    ``table`` optionally qualifies the column (``e.data``) for joins.
     """
-    return f"json_extract(data, '$.{field}')"
+    prefix = f"{table}." if table else ""
+    return f"json_extract({prefix}data, '$.{field}')"
+
+
+def _check_table_alias(table: Optional[str]) -> str:
+    if not table:
+        return ""
+    if not _SAFE_SEGMENT_RE.match(table):
+        raise ValueError(f"unsafe table alias: {table!r}")
+    return table
 
 
 def _is_scalar(value: Any) -> bool:
@@ -114,7 +124,7 @@ def _scalar_param(value: Any) -> Any:
 
 
 def _translate_field_clause(
-    field: str, condition: Any
+    field: str, condition: Any, table: str = ""
 ) -> Optional[Tuple[str, List[Any]]]:
     """Translate ``{field: condition}`` for one field.
 
@@ -123,7 +133,7 @@ def _translate_field_clause(
     if not _safe_field_path(field):
         return None
 
-    column = _json_extract(field)
+    column = _json_extract(field, table)
 
     # Plain equality with a scalar value.
     if not isinstance(condition, dict):
@@ -204,7 +214,9 @@ def _translate_field_clause(
     return " AND ".join(fragments), params
 
 
-def _translate_logical(op: str, conditions: Any) -> Optional[Tuple[str, List[Any]]]:
+def _translate_logical(
+    op: str, conditions: Any, table: str = ""
+) -> Optional[Tuple[str, List[Any]]]:
     """Translate ``$and`` / ``$or`` recursively."""
     if not isinstance(conditions, list) or not conditions:
         return None
@@ -213,7 +225,7 @@ def _translate_logical(op: str, conditions: Any) -> Optional[Tuple[str, List[Any
     for sub in conditions:
         if not isinstance(sub, dict):
             return None
-        translated = translate_query(sub)
+        translated = translate_query(sub, table=table)
         if translated is None:
             return None
         sub_sql, sub_params = translated
@@ -223,18 +235,22 @@ def _translate_logical(op: str, conditions: Any) -> Optional[Tuple[str, List[Any
     return joiner.join(parts), params
 
 
-def translate_query(query: Dict[str, Any]) -> Optional[Tuple[str, List[Any]]]:
+def translate_query(
+    query: Dict[str, Any], *, table: Optional[str] = None
+) -> Optional[Tuple[str, List[Any]]]:
     """Translate a Mongo-style query dict to ``(sql_where, params)``.
 
     Returns ``None`` when any portion of the query can't be expressed in
     SQL we trust; the caller should fall back to in-Python filtering.
 
     The returned SQL fragment is meant to be ANDed into a larger WHERE
-    clause; e.g. ``WHERE collection = ? AND (<returned_sql>)``.
+    clause; e.g. ``WHERE collection = ? AND (<returned_sql>)``. ``table``
+    qualifies the ``data`` column with a table alias for joins.
     """
     if not query:
         return "", []
 
+    alias = _check_table_alias(table)
     fragments: List[str] = []
     params: List[Any] = []
 
@@ -242,7 +258,7 @@ def translate_query(query: Dict[str, Any]) -> Optional[Tuple[str, List[Any]]]:
         if key in _IGNORED_TOP_LEVEL:
             continue
         if key in ("$and", "$or"):
-            translated = _translate_logical(key, value)
+            translated = _translate_logical(key, value, alias)
             if translated is None:
                 return None
             sub_sql, sub_params = translated
@@ -252,7 +268,7 @@ def translate_query(query: Dict[str, Any]) -> Optional[Tuple[str, List[Any]]]:
         if key.startswith("$"):
             # Unknown top-level operator -> fallback.
             return None
-        translated = _translate_field_clause(key, value)
+        translated = _translate_field_clause(key, value, alias)
         if translated is None:
             return None
         sub_sql, sub_params = translated
@@ -264,7 +280,9 @@ def translate_query(query: Dict[str, Any]) -> Optional[Tuple[str, List[Any]]]:
     return " AND ".join(fragments), params
 
 
-def translate_sort(sort: Optional[List[Tuple[str, int]]]) -> Optional[str]:
+def translate_sort(
+    sort: Optional[List[Tuple[str, int]]], *, table: Optional[str] = None
+) -> Optional[str]:
     """Translate a sort spec to a SQL ORDER BY fragment.
 
     Returns ``None`` when the sort can't be expressed (unsafe field name,
@@ -276,13 +294,14 @@ def translate_sort(sort: Optional[List[Tuple[str, int]]]) -> Optional[str]:
     """
     if not sort:
         return None
+    alias = _check_table_alias(table)
     parts: List[str] = []
     for field, direction in sort:
         if direction not in (1, -1):
             return None
         if not _safe_field_path(field):
             return None
-        column = _json_extract(field)
+        column = _json_extract(field, alias)
         if direction == 1:
             # ascending: NULLs last
             parts.append(f"({column} IS NULL), {column} ASC")

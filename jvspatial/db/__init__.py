@@ -19,6 +19,7 @@ from .factory import (
 )
 from .jsondb import JsonDB
 from .manager import DatabaseManager, get_database_manager, set_database_manager
+from .query import escape_regex
 
 try:  # Optional dependency (requires aiosqlite)
     from .sqlite import SQLiteDB  # noqa: F401
@@ -69,6 +70,7 @@ __all__ = [
     "get_database_manager",
     "set_database_manager",
     "JsonDB",
+    "escape_regex",
 ]
 
 if _SQLITE_AVAILABLE:

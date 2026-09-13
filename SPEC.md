@@ -111,7 +111,7 @@ AttributeMixin + pydantic.BaseModel
 ### 2.2 Node — graph node
 
 `jvspatial/core/entities/node.py:34+`. Adds:
-- `edge_ids: List[str]` — transient in memory, persisted at the top level as `edges` (`Node._get_top_level_fields` line 55-60)
+- `edge_ids: List[str]` — transient in-memory list. Persisted at the top level as `edges` (`Node._get_top_level_fields`) **only** when the backend's adjacency mode is `persist` (JsonDB, DynamoDB). In `derive` mode (Postgres, MongoDB, SQLite default) node rows carry no `edges`, `connect()` / `disconnect()` / `save()` never write or lock a node row, and adjacency is read from the indexed edge collection (`Node.edges`, `Node.connection_count`, cascade delete, `expand_node`); `edge_ids` stays empty and a legacy stored `edges` array is ignored on read and dropped on the next save (`GraphContext.persists_edge_ids`, `context.py`; §4.2)
 - `_visitor_ref: weakref` — currently visiting walker, transient
 - `_visit_hooks: ClassVar` — populated by `__init_subclass__` from `@on_visit`-decorated methods (line 62+)
 
@@ -251,6 +251,7 @@ cases are documented rather than normalized:
 Adapters declare capabilities as class attributes:
 
 - `supports_transactions: bool` — `True` for MongoDB (replica set); `False` for SQLite (best-effort), JSON, DynamoDB.
+- `edge_ids_mode: str` — where node adjacency lives. `"derive"` for Postgres, MongoDB, SQLite: the edge collection (indexed on `source` / `target` by `Edge.get_indexes`) is the only source of truth. `"persist"` for JSON, DynamoDB: node rows also carry an `edges` array. Resolve the effective value with `resolve_edge_ids_mode(db)` (`db/database.py`): an `edge_ids_mode` set on the adapter instance → `JVSPATIAL_NODE_EDGE_IDS` (`persist` | `derive`) → class default; observability / cache wrappers are unwrapped via `inner`. Rows written in persist mode are converted with `jvspatial migrate strip-node-edges` (`strip_node_edges()` on `PostgresDB` / `MongoDB`).
 
 Callers branching on capabilities should test the flag, not the adapter class.
 
@@ -290,11 +291,13 @@ No built-in migration framework. Adapters do not enforce schemas. Adding optiona
 | `$in`, `$nin` | Membership |
 | `$exists` | Field presence |
 | `$and`, `$or` | Logical combinators |
-| `$regex` | Regex match (string fields) |
+| `$regex` | Regex match (string fields). Never index-backed; build patterns from user input with `jvspatial.db.escape_regex` |
+| `$text` | Top-level `{"$text": {"$search": "words", "$fields": ["context.a", ...]}}`: every search word (case-insensitive, `\w+` tokens, no stemming) occurs in the concatenated fields; without `$fields` every string value is searched |
 
 ### 5.2 Pushdown vs in-memory
 
-- **MongoDB**: native pushdown; queries run server-side.
+- **Postgres**: `translate_query` pushes the whole operator surface into JSONB SQL; `$text` becomes `to_tsvector('simple', …) @@ plainto_tsquery('simple', …)` (requires `$fields`; the GIN from `@fulltext_index` / `attribute(fulltext=True)` serves it when the fields match in order). Per-class indexes are `(entity, <fields>)` (or `WHERE entity = …` with `partial_by_entity`), descending keys `DESC NULLS LAST`, so typed `find(sort=…, limit=…)` walks an index; the whole-document GIN is optional (`JVSPATIAL_PG_GIN_INDEX`). Untranslatable queries fall back to a full scan + `QueryEngine.match`.
+- **MongoDB**: native pushdown; queries run server-side (`$text` uses the collection's text index; `$fields` is stripped).
 - **SQLite**: translated to SQL via `SQLiteTranslator` (subset; complex `$or` chains may fall back).
 - **DynamoDB**: limited pushdown via `Select=COUNT` and key conditions; remainder filtered client-side.
 - **JSON**: full in-memory evaluation after loading matching collection.
@@ -363,6 +366,16 @@ Enabling prefetch may enqueue neighbors before hook-driven `visit()` calls; visi
 ### 6.7 `Node.neighborhood` (`node.py`)
 
 `await node.neighborhood(depth=k, direction=..., edge=..., node=..., limit=...)` returns hydrated `Node` instances within `k` hops. Postgres uses `Database.traverse` + `get_batch`; other backends use per-hop `nodes()` BFS.
+
+### 6.8 Neighbour queries (`Node.nodes` / `count_nodes` / `nodes_page`)
+
+`nodes(direction, node=, edge=, limit=, **props)` normalises every filter shape to `(edge_entities, edge_query, node_entities, node_query)` (`_neighbor_filter_spec`, `node.py`):
+
+- a name or list of names → exact entity match; an **edge** class → its exact entity; a **node** class → the class and every loaded subclass (`isinstance` semantics; `Node` itself means any type);
+- `{Name: criteria}` items → an `$or` of `{"entity": Name, <criteria>}` branches; property kwargs AND onto the node side;
+- bare criteria keys map to `context.<key>` (the attribute `_matches_property_filter` reads); `id`, `entity` (and `source`, `target`, `bidirectional` on edges) are top-level record paths.
+
+When the backend exposes `find_connected_nodes` (Postgres, MongoDB, SQLite) the spec plus `limit` go down in **one** round trip, `direction="both"` included. Each neighbour appears once. Postgres picks a join for one edge type in one direction (duplicate-free under the `(source, target, entity)` unique index, so `LIMIT` streams) and an `id IN (...)` semi-join otherwise. A criterion that does not translate raises `NotImplementedError` in the adapter and `nodes()` takes the Python path — one edge `find` plus a node `find` that still applies every filter; no filter is ever dropped. `count_nodes(...)` is the matching `COUNT` (`count_connected_nodes`; `count_neighbors` is an alias). `nodes_page(sort=, cursor=, limit=)` pages neighbours by keyset with the cursor encoding of `GraphContext.find_page` (`core/pager.py`); the keyset is expressed as a node-side query, so it follows the same pushdown. `nodes_bulk(..., limit_per_source=N)` caps neighbours per source (`ROW_NUMBER() OVER (PARTITION BY source)` on Postgres).
 
 ---
 

@@ -47,8 +47,11 @@ class Root(Node):
                 if not isinstance(context_data, dict):
                     context_data = {}
 
-                # Handle edge_ids from database format (stored as "edges" at top level)
-                edge_ids = node_data.get("edges", [])
+                # Handle edge_ids from database format (stored as "edges" at top
+                # level); ignored in derive mode, where the array is not maintained.
+                edge_ids = (
+                    node_data.get("edges", []) if context.persists_edge_ids() else []
+                )
                 if not isinstance(edge_ids, list):
                     edge_ids = []
 

@@ -57,6 +57,32 @@ user = connected_nodes[0] if connected_nodes else None  # Inefficient
 user = await current_node.node(node=User, direction="out")  # Efficient
 ```
 
+#### Count and page neighbours in the database
+
+On Postgres, MongoDB and SQLite every `nodes()` filter shape — classes,
+names, lists, `{Name: criteria}` dicts, property kwargs — plus `limit` runs as
+one query, so `nodes(edge=[Contains], node=["Leaf"], limit=20)` costs the same
+on a node with 20 neighbours as on one with 100 000. Don't count or page by
+listing:
+
+```python
+# Bad: hydrates every neighbour just to count or slice them
+total = len(await hub.nodes(edge=[Contains]))
+recent = (await hub.nodes(edge=[Contains]))[:20]
+
+# Good: one COUNT, and keyset pages that stay O(page)
+total = await hub.count_nodes(edge=[Contains])
+page, cursor = await hub.nodes_page(
+    edge=[Contains], sort=[("context.created_at", -1)], limit=20
+)
+more, cursor = await hub.nodes_page(
+    edge=[Contains], sort=[("context.created_at", -1)], limit=20, cursor=cursor
+)
+```
+
+A sorted page still has to order every matching neighbour; an unsorted
+`nodes(limit=N)` with a single edge type stops after N rows.
+
 #### Bulk Query Optimization
 
 ```python
