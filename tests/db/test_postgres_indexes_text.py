@@ -45,9 +45,9 @@ _PG_DSN = os.getenv(
 )
 
 
-@compound_index([("track_id", 1), ("created_at", -1)], name="track_recent")
+@compound_index([("group_id", 1), ("created_at", -1)], name="group_recent")
 class IdxEntry(Node):
-    track_id: str = attribute(indexed=True, default="")
+    group_id: str = attribute(indexed=True, default="")
     created_at: str = ""
     note: str = attribute(indexed=True, index_partial_by_entity=True, default="")
 
@@ -126,25 +126,25 @@ async def _explain(admin: Any, sql: str, params: List[Any]) -> List[Dict[str, An
 
 async def test_per_class_indexes_are_entity_scoped():
     async with _pg() as (ctx, db, admin, schema):
-        await db.create_index("node", "context.track_id")  # pre-0.0.18 unscoped
-        assert "node_context_track_id_idx" in await _indexes(admin, schema, "node")
+        await db.create_index("node", "context.group_id")  # pre-0.0.18 unscoped
+        assert "node_context_group_id_idx" in await _indexes(admin, schema, "node")
 
         await ctx.ensure_indexes(IdxEntry)
         idx = await _indexes(admin, schema, "node")
 
-        single = idx["node_entity_context_track_id_idx"]
-        assert "(entity, ((data #>> '{context,track_id}'::text[])))" in single
-        compound = idx["node_entity_context_track_id_context_created_at_idx"]
+        single = idx["node_entity_context_group_id_idx"]
+        assert "(entity, ((data #>> '{context,group_id}'::text[])))" in single
+        compound = idx["node_entity_context_group_id_context_created_at_idx"]
         assert compound.startswith("CREATE INDEX")
         assert "DESC NULLS LAST" in compound
         partial = idx["node_idxentry_context_note_idx"]
         assert "WHERE (entity = 'IdxEntry'::text)" in partial
-        assert "node_context_track_id_idx" not in idx  # legacy replaced
+        assert "node_context_group_id_idx" not in idx  # legacy replaced
 
 
 async def test_stale_edge_index_is_rebuilt_on_entity_column():
     async with _pg() as (ctx, db, admin, schema):
-        await ctx.save(IdxEntry(track_id="t"))  # bootstraps the tables
+        await ctx.save(IdxEntry(group_id="t"))  # bootstraps the tables
         await db._bootstrap_collection("edge")
         await admin.execute(
             f"CREATE UNIQUE INDEX edge_source_target_entity_uniq ON {schema}.edge "
@@ -165,7 +165,7 @@ async def test_typed_sorted_find_walks_the_entity_leading_index():
             {
                 "id": generate_id("n", entity),
                 "entity": entity,
-                "context": {"track_id": f"t{i % 40}", "created_at": f"2026-01-{i:05d}"},
+                "context": {"group_id": f"t{i % 40}", "created_at": f"2026-01-{i:05d}"},
             }
             for entity in ("IdxEntry", "Other1", "Other2", "Other3", "Other4")
             for i in range(1500)
@@ -174,7 +174,7 @@ async def test_typed_sorted_find_walks_the_entity_leading_index():
         await admin.execute(f"ANALYZE {schema}.node")
 
         where, params = translate_query(
-            {"entity": "IdxEntry", "context.track_id": "t7"}
+            {"entity": "IdxEntry", "context.group_id": "t7"}
         )
         order = translate_sort([("context.created_at", -1)])
         await admin.execute(f"SET search_path TO {schema}")
@@ -184,12 +184,12 @@ async def test_typed_sorted_find_walks_the_entity_leading_index():
             params,
         )
         names = {p.get("Index Name") for p in plan}
-        assert "node_entity_context_track_id_context_created_at_idx" in names, plan
+        assert "node_entity_context_group_id_context_created_at_idx" in names, plan
         assert not any(p["Node Type"] == "Sort" for p in plan), plan
 
         found = await db.find(
             "node",
-            {"entity": "IdxEntry", "context.track_id": "t7"},
+            {"entity": "IdxEntry", "context.group_id": "t7"},
             sort=[("context.created_at", -1)],
             limit=20,
         )
@@ -202,11 +202,11 @@ async def test_typed_sorted_find_walks_the_entity_leading_index():
 
 async def test_gin_index_can_be_turned_off(monkeypatch, caplog):
     async with _pg() as (ctx, db, admin, schema):
-        await ctx.save(IdxEntry(track_id="t"))
+        await ctx.save(IdxEntry(group_id="t"))
         assert "node_data_gin" in await _indexes(admin, schema, "node")
 
     async with _pg(gin_index="off") as (ctx, db, admin, schema):
-        await ctx.save(IdxEntry(track_id="t"))
+        await ctx.save(IdxEntry(group_id="t"))
         assert "node_data_gin" not in await _indexes(admin, schema, "node")
         with caplog.at_level(logging.WARNING, logger="jvspatial.db.postgres"):
             await db.find("node", {"context.tags": {"$all": ["a"]}})
@@ -386,9 +386,9 @@ async def test_find_edges_between_limit(tmp_path):
     ctx = GraphContext(database=JsonDB(base_path=str(tmp_path / "j")))
     set_default_context(ctx)
     try:
-        hub = await IdxEntry.create(track_id="hub")
+        hub = await IdxEntry.create(group_id="hub")
         for i in range(5):
-            await hub.connect(await IdxEntry.create(track_id=f"l{i}"), edge=IdxLink)
+            await hub.connect(await IdxEntry.create(group_id=f"l{i}"), edge=IdxLink)
         assert len(await ctx.find_edges_between(hub.id, edge_class=IdxLink)) == 5
         assert (
             len(await ctx.find_edges_between(hub.id, edge_class=IdxLink, limit=2)) == 2

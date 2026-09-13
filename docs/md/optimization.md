@@ -61,21 +61,21 @@ user = await current_node.node(node=User, direction="out")  # Efficient
 
 On Postgres, MongoDB and SQLite every `nodes()` filter shape — classes,
 names, lists, `{Name: criteria}` dicts, property kwargs — plus `limit` runs as
-one query, so `nodes(edge=[Contains], node=["Entry"], limit=20)` costs the same
+one query, so `nodes(edge=[Contains], node=["Leaf"], limit=20)` costs the same
 on a node with 20 neighbours as on one with 100 000. Don't count or page by
 listing:
 
 ```python
 # Bad: hydrates every neighbour just to count or slice them
-total = len(await track.nodes(edge=[Contains]))
-recent = (await track.nodes(edge=[Contains]))[:20]
+total = len(await hub.nodes(edge=[Contains]))
+recent = (await hub.nodes(edge=[Contains]))[:20]
 
 # Good: one COUNT, and keyset pages that stay O(page)
-total = await track.count_nodes(edge=[Contains])
-page, cursor = await track.nodes_page(
+total = await hub.count_nodes(edge=[Contains])
+page, cursor = await hub.nodes_page(
     edge=[Contains], sort=[("context.created_at", -1)], limit=20
 )
-more, cursor = await track.nodes_page(
+more, cursor = await hub.nodes_page(
     edge=[Contains], sort=[("context.created_at", -1)], limit=20, cursor=cursor
 )
 ```

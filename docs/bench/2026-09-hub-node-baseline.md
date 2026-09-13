@@ -193,10 +193,13 @@ Code: `dc2a6cc` + the Phase 2 change set.
 Code: `905d122` + the Phase 3 change set.
 
 **Typed-find gate.** `test_typed_find_is_index_bound` runs
-`find({"entity": "BenchEntry", "context.track_id": t}, sort=[("context.created_at", -1)], limit=20)`
+`find({"entity": "BenchEntry", "context.group_id": g}, sort=[("context.created_at", -1)], limit=20)`
 50 times on a shared `node` table of 1M rows. The rows are spread over ten
-entities, and `BenchEntry` holds 100k of them: 1000 tracks × 100. The class
-declares `@compound_index([("track_id", 1), ("created_at", -1)])`.
+entities, and `BenchEntry` holds 100k of them: 1000 groups × 100. The class
+declares `@compound_index([("group_id", 1), ("created_at", -1)])`.
+(Archived runs below still show the earlier fixture field name `track_id` in
+index identifiers; the field was renamed to `group_id` so the harness stays
+domain-agnostic.)
 
 | typed find (sorted, limit 20) | rows | p50 / p95 ms | index walked | sort node | node_data_gin |
 |---|---|---|---|---|---|
@@ -205,11 +208,11 @@ declares `@compound_index([("track_id", 1), ("created_at", -1)])`.
 
 **Gate: passed.** p95 is 2.96 ms, well under the 10 ms bar, and the plan is
 index-bound with the whole-document GIN off. One scan of
-`(entity, track_id, created_at DESC NULLS LAST)` returns the first 20 rows
+`(entity, <group field>, created_at DESC NULLS LAST)` returns the first 20 rows
 with no Sort node. On 0.0.17 the same class index skipped `entity` and
 ordered descending keys `NULLS FIRST`. Postgres therefore had to AND it with
-the entity index and sort every matching row. At this track size that still
-stays under 10 ms locally, but the cost grows with the rows per track.
+the entity index and sort every matching row. At this group size that still
+stays under 10 ms locally, but the cost grows with the rows per group.
 
 Hub-node numbers on the same code:
 
@@ -264,6 +267,9 @@ gates before cutting 0.0.18.
 | typed find (sorted, limit 20) | rows | p50 / p95 ms | index walked | sort node | node_data_gin |
 |---|---|---|---|---|---|
 | `51186f1` | 1,000,000 | 1.03 / 1.81 | node_entity_context_track_id_context_created_at_idx | no | off |
+
+(Field renamed `track_id` → `group_id` after this run; same compound shape,
+new index name is `…_group_id_…`.)
 
 **Gates: still passed.**
 

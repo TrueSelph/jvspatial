@@ -82,11 +82,11 @@ class BenchContains(Edge):
     """Typed containment edge (hub -> leaf, leaf -> sink)."""
 
 
-@compound_index([("track_id", 1), ("created_at", -1)], name="bench_track_recent")
+@compound_index([("group_id", 1), ("created_at", -1)], name="bench_group_recent")
 class BenchEntry(Node):
-    """Record-style node for the typed-find gate (sorted, limited per track)."""
+    """Record-style node for the typed-find gate (sorted, limited per group)."""
 
-    track_id: str = ""
+    group_id: str = ""
     created_at: str = ""
 
 
@@ -457,8 +457,8 @@ async def test_typed_find_is_index_bound(
     """Sorted, limited typed ``find`` on a shared ``node`` table of N rows.
 
     ``N`` defaults to 1M (``JVSPATIAL_BENCH_TYPED_ROWS``) spread over ten
-    entities; ``BenchEntry`` holds a tenth, 1000 tracks of ~100 rows each.
-    Measures ``find({"entity": "BenchEntry", "context.track_id": t},
+    entities; ``BenchEntry`` holds a tenth, 1000 groups of ~100 rows each.
+    Measures ``find({"entity": "BenchEntry", "context.group_id": t},
     sort=created_at desc, limit=20)`` with the whole-document GIN off and
     records whether the plan walks an index without a Sort node.
     """
@@ -486,7 +486,7 @@ async def test_typed_find_is_index_bound(
                         "id": generate_id("n", entity),
                         "entity": entity,
                         "context": {
-                            "track_id": f"t{(i // len(entities)) % 1000}",
+                            "group_id": f"t{(i // len(entities)) % 1000}",
                             "created_at": f"2026-09-{i:08d}",
                         },
                     }
@@ -499,12 +499,12 @@ async def test_typed_find_is_index_bound(
             seed_s = time.perf_counter() - t0
             await admin.execute(f"ANALYZE {schema}.node")
 
-            per_track = min(20, rows // len(entities) // 1000)
+            per_group = min(20, rows // len(entities) // 1000)
             samples: List[float] = []
             for k in range(50):
                 query = {
                     "entity": "BenchEntry",
-                    "context.track_id": f"t{(k * 37) % 1000}",
+                    "context.group_id": f"t{(k * 37) % 1000}",
                 }
                 ms, _, out = await _timed(
                     functools.partial(
@@ -516,12 +516,12 @@ async def test_typed_find_is_index_bound(
                     )
                 )
                 samples.append(ms)
-                assert len(out) == per_track
+                assert len(out) == per_group
 
             from jvspatial.db._postgres_translate import translate_query, translate_sort
 
             where, params = translate_query(
-                {"entity": "BenchEntry", "context.track_id": "t7"}
+                {"entity": "BenchEntry", "context.group_id": "t7"}
             )
             order = translate_sort([("context.created_at", -1)])
             raw = await admin.fetchval(
