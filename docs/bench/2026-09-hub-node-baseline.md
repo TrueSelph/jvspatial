@@ -234,3 +234,42 @@ Seeding note: the Phase 3 hub tier seeds through `create_database(observe=True)`
 which now forwards `bulk_save_detailed` to COPY (fixed in `905d122`). Earlier
 tiers seeded per record; that only affected setup time, not the measured
 operations.
+
+## Final pre-release — `51186f1` (Phase 5 + wrappers/tenant fixes)
+
+Raw: [`2026-09-hub-node-final.jsonl`](2026-09-hub-node-final.jsonl). Same machine and
+Postgres image as the Phase 0–3 runs. Confirms the full stack still holds the
+gates before cutting 0.0.18.
+
+| operation | 1k p50 / p95 ms (trips) | 10k p50 / p95 ms (trips) | 100k p50 / p95 ms (trips) |
+|---|---|---|---|
+| `ctx.get(Hub)` (hydrate hub) | 0.7 / 1.0 | 0.6 / 1.2 | 0.9 / 1.9 |
+| `hub.connect(leaf, edge=E)` | 2.1 / 3.3 (3) | 1.9 / 2.8 (3) | 2.1 / 3.4 (3) |
+| `hub.save()` after scalar change | 0.8 / 1.3 | 0.8 / 4.2 | 0.8 / 1.4 |
+| `hub.nodes(edge=[E], node=['Leaf'], limit=20)` | 1.2 / 1.5 (1) | 1.2 / 1.8 (1) | 1.7 / 2.6 (1) |
+| `hub.nodes(edge=E, limit=20)` | 1.4 / 2.0 (1) | 1.4 / 1.8 (1) | 2.0 / 2.0 (1) |
+| `sink.nodes(edge=[E], node=['Leaf'], direction='in', limit=20)` | 1.3 / 2.2 (1) | 1.3 / 1.9 (1) | 1.6 / 2.0 (1) |
+| `sink.nodes(edge=[E], node=['Leaf'], direction='in')` | 23.1 / 48.7 (1) | 274.7 / 281.4 (1) | 2493.6 / 2600.1 (1) |
+| `len(await hub.nodes(edge=[E]))` | 23.0 / 50.7 (1) | 276.8 / 344.6 (1) | 2367.4 / 2500.3 (1) |
+| `hub.count_nodes(edge=[E])` | 3.8 / 4.2 (1) | 43.0 / 47.9 (1) | 103.3 / 110.7 (1) |
+| 32× concurrent `connect()` (ms) | 18 wall / 18 max | 19 wall / 19 max | 17 wall / 16 max |
+
+| size (after seed → after 82 hub writes) | 1k | 10k | 100k |
+|---|---|---|---|
+| hub row `pg_column_size(data)` | 134 B → 136 B | 134 B → 136 B | 134 B → 136 B |
+| `node_data_gin` size | 104.0 KB → 280.0 KB | 808.0 KB → 816.0 KB | 10.5 MB → 10.5 MB |
+| `node` table total | 504.0 KB → 704.0 KB | 4.0 MB → 4.0 MB | 41.8 MB → 41.8 MB |
+| `edge` table total | 1.8 MB → 2.1 MB | 16.5 MB → 16.5 MB | 161.7 MB → 161.8 MB |
+
+| typed find (sorted, limit 20) | rows | p50 / p95 ms | index walked | sort node | node_data_gin |
+|---|---|---|---|---|---|
+| `51186f1` | 1,000,000 | 1.03 / 1.81 | node_entity_context_track_id_context_created_at_idx | no | off |
+
+**Gates: still passed.**
+
+- A1: `connect()` 100k p95 is 3.4 ms vs 3.3 ms at 1k (≈ 1.0×; bar ≤ 1.5×).
+  `save()` p50 stays ~0.8 ms at every tier.
+- A3: list-form `nodes(..., limit=20)` is 1 round trip and flat (~1–3 ms).
+- A6: typed find p95 1.81 ms, index-bound, GIN off.
+- Concurrent `connect()` wall ≈ 17–19 ms at every degree (no row-lock serialisation).
+- Numbers sit within run-to-run noise of the Phase 3 table.

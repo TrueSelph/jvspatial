@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.18] - 2026-09-13
+
 ### Added
 
 - **Hub-node scale recorder** (`tests/benchmarks/test_hub_node_bench.py`,
