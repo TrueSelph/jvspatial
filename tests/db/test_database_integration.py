@@ -278,16 +278,13 @@ def mock_context(mock_database):
             entity_type_code = context._get_entity_type_code(cls)
 
             if entity_type_code == "n":
-                # Handle Node-specific logic
-                # Extract edge_ids from data (stored as "edges" at top level)
-                edge_ids = data.get("edges", [])
-
-                # Remove edge_ids, id, and type_code from context_data as they're handled separately
+                # Adjacency lives in the edge collection; ignore any legacy
+                # top-level ``edges`` key on the node record.
                 context_data.pop("edge_ids", None)
                 context_data.pop("id", None)
                 context_data.pop("type_code", None)
 
-                obj = target_class(id=data["id"], edge_ids=edge_ids, **context_data)
+                obj = target_class(id=data["id"], **context_data)
 
             elif entity_type_code == "e":
                 # Handle Edge-specific logic with source/target at top level

@@ -432,6 +432,38 @@ class JsonDB(Database):
 
         return current
 
+    async def strip_node_edges(
+        self,
+        collection: str = "node",
+        *,
+        batch_size: int = 5000,
+        dry_run: bool = False,
+    ) -> int:
+        """Remove legacy ``edges`` arrays from node JSON files.
+
+        Idempotent. Returns the number of records that carried (or still carry,
+        under ``dry_run``) an ``edges`` key.
+        """
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+        collection_path = self.base_path / collection
+        if not collection_path.exists():
+            return 0
+        stripped = 0
+        for json_file in sorted(collection_path.glob("*.json")):
+            try:
+                record = await self._async_load_record(json_file)
+            except Exception:
+                continue
+            if not isinstance(record, dict) or "edges" not in record:
+                continue
+            stripped += 1
+            if dry_run:
+                continue
+            record.pop("edges", None)
+            await self.save(collection, record)
+        return stripped
+
     async def create_index(
         self,
         collection: str,

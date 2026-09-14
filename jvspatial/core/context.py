@@ -1,11 +1,9 @@
 """GraphContext for managing database dependencies."""
 
-import asyncio
 import contextvars
-import inspect
 import logging
 import time
-from contextlib import asynccontextmanager, contextmanager, suppress
+from contextlib import asynccontextmanager, contextmanager
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -21,7 +19,7 @@ from typing import (
     cast,
 )
 
-from jvspatial.db.database import Database, resolve_edge_ids_mode
+from jvspatial.db.database import Database
 from jvspatial.db.factory import create_database, get_current_database
 from jvspatial.db.manager import get_database_manager
 
@@ -54,30 +52,6 @@ logger = logging.getLogger(__name__)
 
 # Global registry to track which collections have had indexes ensured
 _ensured_indexes: Set[str] = set()
-
-
-def _coerce_edge_id_list(value: Any) -> List[str]:
-    """Normalize *value* to a list of edge ID strings for persistence merge logic."""
-    if value is None:
-        return []
-    if isinstance(value, (list, tuple)):
-        return [str(x) for x in value]
-    return []
-
-
-async def _unwrap_db_get_result(raw: Any) -> Optional[Dict[str, Any]]:
-    """Resolve ``await db.get(...)`` to a dict or None (handles nested AsyncMock / awaitables)."""
-    cur: Any = raw
-    for _ in range(5):
-        if cur is None:
-            return None
-        if isinstance(cur, dict):
-            return cur
-        if inspect.isawaitable(cur):
-            cur = await cur  # type: ignore[func-returns-value]
-            continue
-        return None
-    return None
 
 
 # Simple performance monitor for tracking operations
@@ -408,33 +382,6 @@ class GraphContext:
             self._cache = create_cache()
         else:
             self._cache = cache_backend
-
-        # Serialize node edge list persistence for a given id so merge+save does not
-        # interleave with atomic_add_edge_id / atomic_remove_edge_id (lost updates).
-        self._node_edge_write_locks: Dict[str, asyncio.Lock] = {}
-        self._node_edge_locks_creation_lock = asyncio.Lock()
-
-    @asynccontextmanager
-    async def _node_edge_write_guard(self, node_id: str):
-        async with self._node_edge_locks_creation_lock:
-            lock = self._node_edge_write_locks.get(node_id)
-            if lock is None:
-                lock = asyncio.Lock()
-                self._node_edge_write_locks[node_id] = lock
-        async with lock:
-            yield
-
-    def persists_edge_ids(self) -> bool:
-        """Whether node documents persist their incident edge ids (``edges``).
-
-        ``False`` when the active backend derives adjacency from the edge
-        collection (``edge_ids_mode="derive"`` — the Postgres, MongoDB and
-        SQLite default): ``connect()`` / ``save()`` then never touch the node
-        rows and ``Node.edge_ids`` stays an unpopulated in-memory list. ``True``
-        for ``"persist"`` (JsonDB, DynamoDB). See
-        :func:`jvspatial.db.database.resolve_edge_ids_mode`.
-        """
-        return resolve_edge_ids_mode(self.database) == "persist"
 
     @property
     def database(self) -> Database:
@@ -800,23 +747,11 @@ class GraphContext:
         if self._cache:
             await self._cache.delete(entity_id)
 
-    async def save(
-        self,
-        entity,
-        *,
-        merge_node_edges: bool = True,
-        _holding_node_edge_lock: bool = False,
-    ):
+    async def save(self, entity):
         """Save an entity to the database.
 
         Args:
             entity: Entity instance to save
-            merge_node_edges: For nodes, whether to union persisted ``edges`` with the
-                on-disk copy so concurrent ``atomic_add_edge_id`` updates are not lost.
-                Set to False when persisting an authoritative edge list (e.g. after
-                ``atomic_remove_edge_id``) so removals are not undone by a stale read.
-            _holding_node_edge_lock: Internal: caller already holds
-                ``_node_edge_write_guard`` for this node (avoids deadlock).
 
         Returns:
             The saved entity instance
@@ -824,12 +759,7 @@ class GraphContext:
         # Export entity - Node, Edge, and Walker return nested format
         if hasattr(entity, "type_code"):
             type_code = getattr(entity, "type_code", "")
-            if type_code == "n":  # Node - include edges for database persistence
-                record = await entity.export(include_edges=True)
-                # Ensure entity field is set
-                if "entity" not in record:
-                    record["entity"] = entity.entity
-            elif type_code in ("e", "w"):  # Edge or Walker
+            if type_code in ("n", "e", "w"):
                 record = await entity.export()
                 # Ensure entity field is set
                 if "entity" not in record:
@@ -902,53 +832,12 @@ class GraphContext:
             hasattr(entity, "type_code") and getattr(entity, "type_code", "") == "n"
         )
 
-        if is_node and not self.persists_edge_ids():
-            # Derive mode: adjacency lives in the edge collection. Never write
-            # an ``edges`` array (a legacy in-memory copy must not re-persist
-            # it), and there is no array merge to serialise per node.
+        # Adjacency lives in the edge collection. Never write a legacy ``edges``
+        # array onto node rows (a leftover in-memory copy must not re-persist it).
+        if is_node:
             record.pop("edges", None)
-            await db.save(collection, record)
-            await self._add_to_cache(entity.id, entity)
-            return entity
 
-        async def _merge_edges_and_write() -> None:
-            # Merge node edge lists with the DB so full-document saves do not clobber
-            # edge IDs added concurrently via atomic_add_edge_id (or another writer).
-            if merge_node_edges and is_node:
-                merged = _coerce_edge_id_list(record.get("edges"))
-                save_merge = getattr(db, "save_with_edge_merge", None)
-                if callable(save_merge) and self._is_postgres(db):
-                    saved = await save_merge(collection, record)
-                    if saved is not None:
-                        merged = _coerce_edge_id_list(saved.get("edges"))
-                        record.update(saved)
-                else:
-                    fresh = await _unwrap_db_get_result(
-                        await db.get(collection, entity.id)
-                    )
-                    e_mem = set(_coerce_edge_id_list(record.get("edges")))
-                    e_db = set(_coerce_edge_id_list((fresh or {}).get("edges")))
-                    merged = sorted(e_mem | e_db)
-                    record["edges"] = merged
-                    await db.save(collection, record)
-                if hasattr(entity, "edge_ids"):
-                    object.__setattr__(entity, "edge_ids", list(merged))
-            elif is_node:
-                # Authoritative save: keep exported edges and mirror them onto the entity.
-                merged = _coerce_edge_id_list(record.get("edges"))
-                record["edges"] = merged
-                if hasattr(entity, "edge_ids"):
-                    object.__setattr__(entity, "edge_ids", list(merged))
-                await db.save(collection, record)
-            else:
-                await db.save(collection, record)
-
-        if is_node and not _holding_node_edge_lock:
-            async with self._node_edge_write_guard(entity.id):
-                await _merge_edges_and_write()
-        else:
-            await _merge_edges_and_write()
-        # Update cache with latest version
+        await db.save(collection, record)
         await self._add_to_cache(entity.id, entity)
         return entity
 
@@ -971,14 +860,9 @@ class GraphContext:
 
         if isinstance(entity, Node):
             # Check if this is a recursive call from Node.delete() by checking
-            # if cascade=False and the node has no edges (cleaned up by Node.delete()).
-            # In derive mode ``edge_ids`` is never populated, so ask the edge
-            # collection instead.
-            if not cascade and (
-                len(entity.edge_ids) == 0
-                if self.persists_edge_ids()
-                else await entity.connection_count() == 0
-            ):
+            # if cascade=False and the node has no remaining incident edges
+            # (cleaned up by Node.delete()).
+            if not cascade and await entity.connection_count() == 0:
                 # Node.delete() has cleaned up edges, just delete the entity
                 collection = self._get_collection_name("n")
                 await self.database.delete(collection, entity.id)
@@ -987,25 +871,6 @@ class GraphContext:
 
             await entity.delete(cascade=cascade)
             return
-
-        # For Edge entities, clean up edge_ids on source/target nodes before deletion
-        from .entities.edge import Edge
-
-        if isinstance(entity, Edge):
-            source_id = getattr(entity, "source", None)
-            target_id = getattr(entity, "target", None)
-            for node_id in (source_id, target_id):
-                if not node_id:
-                    continue
-                try:
-                    await self.atomic_remove_edge_id(node_id, entity.id)
-                except Exception:
-                    logger.warning(
-                        "Failed to remove edge %s from node %s edge_ids",
-                        entity.id,
-                        node_id,
-                        exc_info=True,
-                    )
 
         collection = self._get_collection_name(entity.type_code)
         db = self.database
@@ -1248,97 +1113,6 @@ class GraphContext:
             return True
         except Exception:
             return False
-
-    async def atomic_add_edge_id(self, node_id: str, edge_id: str) -> bool:
-        """Atomically add *edge_id* to a node's ``edges`` list using $addToSet.
-
-        Falls back to read-modify-write when the database does not support
-        atomic updates or when the document is not found.
-
-        Returns True on success, False on failure. A no-op returning True in
-        derive mode (:meth:`persists_edge_ids` is ``False``).
-        """
-        if not self.persists_edge_ids():
-            return True
-        db = self.database
-        if self._is_mongodb(db) or self._is_postgres(db):
-            try:
-                result = await db.find_one_and_update(
-                    "node",
-                    {"_id": node_id},
-                    {"$addToSet": {"edges": edge_id}},
-                )
-                if result is not None:
-                    cached = await self._get_from_cache(node_id)
-                    if (
-                        cached
-                        and hasattr(cached, "edge_ids")
-                        and edge_id not in cached.edge_ids
-                    ):
-                        cached.edge_ids.append(edge_id)
-                    return True
-            except Exception:
-                logger.warning(
-                    "atomic_add_edge_id failed for node %s edge %s, falling back",
-                    node_id,
-                    edge_id,
-                    exc_info=True,
-                )
-
-        # Fallback: read-modify-write (used for JsonDB, SQLite, etc.)
-        from .entities.node import Node
-
-        async with self._node_edge_write_guard(node_id):
-            node = await self.get(Node, node_id)
-            if node and edge_id not in node.edge_ids:
-                node.edge_ids.append(edge_id)
-                await self.save(node, _holding_node_edge_lock=True)
-        return node is not None
-
-    async def atomic_remove_edge_id(self, node_id: str, edge_id: str) -> bool:
-        """Atomically remove *edge_id* from a node's ``edges`` list using $pull.
-
-        Falls back to read-modify-write when the database does not support
-        atomic updates or when the document is not found.
-
-        Returns True on success, False on failure. A no-op returning True in
-        derive mode (:meth:`persists_edge_ids` is ``False``).
-        """
-        if not self.persists_edge_ids():
-            return True
-        db = self.database
-        if self._is_mongodb(db) or self._is_postgres(db):
-            try:
-                result = await db.find_one_and_update(
-                    "node",
-                    {"_id": node_id},
-                    {"$pull": {"edges": edge_id}},
-                )
-                if result is not None:
-                    cached = await self._get_from_cache(node_id)
-                    if cached and hasattr(cached, "edge_ids"):
-                        with suppress(ValueError):
-                            cached.edge_ids.remove(edge_id)
-                    return True
-            except Exception:
-                logger.warning(
-                    "atomic_remove_edge_id failed for node %s edge %s, falling back",
-                    node_id,
-                    edge_id,
-                    exc_info=True,
-                )
-
-        # Fallback: read-modify-write
-        from .entities.node import Node
-
-        async with self._node_edge_write_guard(node_id):
-            node = await self.get(Node, node_id)
-            if node and edge_id in node.edge_ids:
-                node.edge_ids.remove(edge_id)
-                await self.save(
-                    node, merge_node_edges=False, _holding_node_edge_lock=True
-                )
-        return node is not None
 
     async def atomic_increment(self, node_id: str, field: str, amount: int = 1) -> bool:
         """Atomically increment a numeric field on a node using $inc.
@@ -1882,21 +1656,12 @@ class GraphContext:
 
             # entity_type_code already computed above
 
-            # Legacy rows may still carry an ``edges`` array; in derive mode it
-            # is stale (no longer maintained) and is ignored.
-            node_edge_ids: List[str] = []
-            if entity_type_code == "n" and self.persists_edge_ids():
-                node_edge_ids = data.get("edges", [])
-
             if self._fast_deserialize_enabled():
                 if entity_type_code == "n":
-                    edge_ids = node_edge_ids
                     context_data.pop("edge_ids", None)
                     context_data.pop("id", None)
                     context_data.pop("type_code", None)
-                    entity = target_class.model_construct(
-                        id=data["id"], edge_ids=edge_ids, **context_data
-                    )
+                    entity = target_class.model_construct(id=data["id"], **context_data)
                 elif entity_type_code == "e":
                     context_data.pop("source", None)
                     context_data.pop("target", None)
@@ -1919,17 +1684,12 @@ class GraphContext:
                 return entity
 
             if entity_type_code == "n":
-                # Handle Node-specific logic
-                # Extract edge_ids from data (stored as "edges" at top level)
-                # Edges are included in database exports but excluded from default exports
-                edge_ids = node_edge_ids
-
-                # Remove edge_ids, id, and type_code from context_data as they're handled separately
+                # Remove legacy adjacency keys and system fields from context
                 context_data.pop("edge_ids", None)
                 context_data.pop("id", None)
                 context_data.pop("type_code", None)
 
-                entity = target_class(id=data["id"], edge_ids=edge_ids, **context_data)
+                entity = target_class(id=data["id"], **context_data)
 
             elif entity_type_code == "e":
                 # Handle Edge-specific logic with source/target at top level
@@ -2016,10 +1776,9 @@ class GraphContext:
             # Export all entities of this type
             records = []
             for entity in type_entities:
+                record = await entity.export()
                 if getattr(entity, "type_code", "") == "n":
-                    record = await entity.export(include_edges=True)
-                else:
-                    record = await entity.export()
+                    record.pop("edges", None)
                 records.append(record)
 
             # Save all records of this type

@@ -47,25 +47,17 @@ class Root(Node):
                 if not isinstance(context_data, dict):
                     context_data = {}
 
-                # Handle edge_ids from database format (stored as "edges" at top
-                # level); ignored in derive mode, where the array is not maintained.
-                edge_ids = (
-                    node_data.get("edges", []) if context.persists_edge_ids() else []
-                )
-                if not isinstance(edge_ids, list):
-                    edge_ids = []
-
                 # Ensure we have a valid ID
                 node_id = node_data.get("id", id)
                 if node_id != "n.Root.root":
                     node_id = "n.Root.root"
 
-                root = cls(id=node_id, edge_ids=edge_ids, **context_data)
+                root = cls(id=node_id, **context_data)
                 root._graph_context = context
                 return root
 
             # Create new Root node if not found
-            node = cls(id=id, edge_ids=[], _visitor_ref=None)
+            node = cls(id=id, _visitor_ref=None)
             node._graph_context = context
             await node.save()
             existing = await context.database.get("node", id)

@@ -15,7 +15,7 @@ Usage::
     jvspatial migrate --collection node          # all entities in collection
     jvspatial migrate --collection node --apply  # actually persist changes
 
-    # derive-mode adjacency: drop the legacy ``edges`` array from node rows
+    # drop legacy node ``edges`` arrays (adjacency always lives in the edge collection)
     jvspatial migrate strip-node-edges --dsn postgresql://... --apply
     jvspatial migrate strip-node-edges --dsn mongodb://... --db-name app --apply
 """
@@ -228,7 +228,7 @@ async def _run_migrate(args: argparse.Namespace) -> int:
 
 
 async def _run_strip_node_edges(args: argparse.Namespace) -> int:
-    """Strip the legacy ``edges`` array from node rows (derive-mode migration).
+    """Strip the legacy ``edges`` array from node rows.
 
     Returns process exit code (0 on success, >0 on failure).
     """
@@ -254,8 +254,8 @@ async def _run_strip_node_edges(args: argparse.Namespace) -> int:
     strip = getattr(db, "strip_node_edges", None)
     if not callable(strip):
         logger.error(
-            "%s keeps adjacency on node rows (edge_ids_mode=persist); "
-            "nothing to strip.",
+            "%s does not implement strip_node_edges; "
+            "supported on Postgres and MongoDB.",
             type(db).__name__,
         )
         return 2
@@ -312,7 +312,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["strip-node-edges"],
         help=(
             "Optional data migration. strip-node-edges: remove the legacy "
-            "'edges' array from node rows (Postgres / MongoDB derive mode)."
+            "'edges' array from node rows (Postgres / MongoDB / JsonDB)."
         ),
     )
     mig.add_argument(

@@ -293,11 +293,6 @@ class PostgresDB(Database):
     # at the operation level (atomic single-row update).
     supports_transactions: bool = True
 
-    # Node adjacency is derived from the indexed edge table; node rows do not
-    # carry an ``edges`` array, so connect()/save() never rewrite (or row-lock)
-    # a hub. See :func:`jvspatial.db.database.resolve_edge_ids_mode`.
-    edge_ids_mode: str = "derive"
-
     def __init__(
         self,
         dsn: Optional[str] = None,
@@ -771,59 +766,6 @@ class PostgresDB(Database):
                 )
         return data
 
-    async def save_with_edge_merge(
-        self, collection: str, data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Upsert a record, unioning ``edges`` with any existing row in one statement.
-
-        Only used in ``edge_ids_mode="persist"``. In the default ``"derive"``
-        mode node rows carry no ``edges`` array and ``GraphContext.save``
-        writes them with a plain :meth:`save`.
-        """
-        await self._bootstrap_collection(collection)
-        rec_id, entity, tenant, _ = self._split_payload(data)
-        col = _safe_collection(collection)
-        schema = _safe_collection(self.schema_name)
-        incoming_json = json.dumps(data)
-
-        async with self._acquire_conn() as conn:
-            row = await conn.fetchrow(
-                f"""
-                INSERT INTO {schema}.{col} (id, entity, tenant_id, data, updated_at)
-                VALUES ($1, $2, $3, $4::jsonb, NOW())
-                ON CONFLICT (id) DO UPDATE SET
-                    entity = EXCLUDED.entity,
-                    tenant_id = EXCLUDED.tenant_id,
-                    data = jsonb_set(
-                        EXCLUDED.data,
-                        '{{edges}}',
-                        (
-                            SELECT COALESCE(
-                                jsonb_agg(DISTINCT elem ORDER BY elem),
-                                '[]'::jsonb
-                            )
-                            FROM (
-                                SELECT jsonb_array_elements_text(
-                                    COALESCE({col}.data->'edges', '[]'::jsonb)
-                                ) AS elem
-                                UNION
-                                SELECT jsonb_array_elements_text(
-                                    COALESCE(EXCLUDED.data->'edges', '[]'::jsonb)
-                                ) AS elem
-                            ) merged
-                        )
-                    ),
-                    updated_at = NOW()
-                RETURNING data
-                """,
-                rec_id,
-                entity,
-                tenant,
-                incoming_json,
-            )
-        result = self._record_from_row(row) if row is not None else data
-        return result if result is not None else data
-
     async def strip_node_edges(
         self,
         collection: str = "node",
@@ -831,13 +773,13 @@ class PostgresDB(Database):
         batch_size: int = 5000,
         dry_run: bool = False,
     ) -> int:
-        """Remove the legacy ``edges`` array from node rows (derive-mode migration).
+        """Remove the legacy ``edges`` array from node rows.
 
         One keyset pass over the primary key, stripping ``edges`` from each
         batch with ``UPDATE … SET data = data - 'edges'`` — idempotent and safe
-        to run while the application serves traffic in derive mode (which
-        never writes the array back). Tables with ``FORCE ROW LEVEL SECURITY``
-        must be migrated by a role that bypasses RLS.
+        to run while the application serves traffic (saves never write the
+        array back). Tables with ``FORCE ROW LEVEL SECURITY`` must be
+        migrated by a role that bypasses RLS.
 
         Afterwards run ``VACUUM (ANALYZE) <collection>`` and
         ``REINDEX INDEX CONCURRENTLY <collection>_data_gin`` to reclaim the

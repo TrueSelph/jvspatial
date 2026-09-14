@@ -154,15 +154,11 @@ class Node(Object):
     Attributes:
         id: Unique identifier for the node (protected - inherited from Object)
         visitor: Current walker visiting the node (transient - not persisted)
-        edge_ids: List of connected edge IDs
     """
 
     type_code: str = attribute(transient=True, default="n")
     _visitor_ref: Optional[weakref.ReferenceType] = attribute(
         private=True, default=None
-    )
-    edge_ids: List[str] = attribute(
-        transient=True, default_factory=list, description="List of connected edge IDs"
     )
     _visit_hooks: ClassVar[
         Dict[Union[Optional[Type["Walker"]], str], List[Callable]]
@@ -171,10 +167,7 @@ class Node(Object):
     @classmethod
     def _get_top_level_fields(cls: Type["Node"]) -> set:
         """Get top-level fields for Node persistence format."""
-        return {
-            "edges",
-            "id",
-        }  # edge_ids is stored as "edges" at top level; id is top-level on node docs
+        return {"id"}
 
     @classmethod
     def get_indexes(cls: Type["Node"]) -> List[Dict[str, Any]]:
@@ -316,23 +309,8 @@ class Node(Object):
                 matching_edge = existing_edge
                 break
 
-        # Derive mode: the edge row is the adjacency — node rows and the
-        # in-memory ``edge_ids`` lists are left untouched (no hub rewrite).
-        persist = context.persists_edge_ids()
-
-        # If an existing edge is found, return it instead of creating a duplicate
+        # The edge row is the adjacency — node rows are never rewritten.
         if matching_edge:
-            if not persist:
-                return matching_edge
-            # Ensure edge IDs are in both nodes' edge_ids lists (in case they're missing)
-            if matching_edge.id not in self.edge_ids:
-                await context.atomic_add_edge_id(self.id, matching_edge.id)
-                if matching_edge.id not in self.edge_ids:
-                    self.edge_ids.append(matching_edge.id)
-            if matching_edge.id not in other.edge_ids:
-                await context.atomic_add_edge_id(other.id, matching_edge.id)
-                if matching_edge.id not in other.edge_ids:
-                    other.edge_ids.append(matching_edge.id)
             return matching_edge
 
         # No existing edge found, create a new one
@@ -352,18 +330,6 @@ class Node(Object):
                     return retry_edges[0]
             raise
 
-        if not persist:
-            return connection
-
-        # Atomically update both nodes' edge_ids
-        await context.atomic_add_edge_id(self.id, connection.id)
-        if connection.id not in self.edge_ids:
-            self.edge_ids.append(connection.id)
-
-        await context.atomic_add_edge_id(other.id, connection.id)
-        if connection.id not in other.edge_ids:
-            other.edge_ids.append(connection.id)
-
         return connection
 
     async def edges(
@@ -371,9 +337,8 @@ class Node(Object):
     ) -> List["Edge"]:
         """Get edges connected to this node.
 
-        In derive mode (Postgres / MongoDB / SQLite default) the edge
-        collection is queried by ``source`` / ``target`` — index-backed, one
-        round trip. In persist mode the node's ``edge_ids`` are fetched.
+        Queries the edge collection by ``source`` / ``target`` — index-backed
+        on SQL backends, one round trip.
 
         Args:
             direction: Filter edges by direction ('in', 'out', 'both')
@@ -384,67 +349,30 @@ class Node(Object):
         """
         context = await self.get_context()
 
-        if not context.persists_edge_ids():
-            query: Dict[str, Any]
-            if direction == "out":
-                query = {"source": self.id}
-            elif direction == "in":
-                query = {"target": self.id}
-            else:
-                query = {"$or": [{"source": self.id}, {"target": self.id}]}
-            rows = await context.database.find("edge", query, limit=limit)
-            if limit is None and len(rows) > 10_000:
-                logger.debug(
-                    "Node.edges(%s) loaded %d edges; pass limit= or use "
-                    "connection_count() for hub nodes",
-                    self.id,
-                    len(rows),
-                )
-            derived: List["Edge"] = []
-            for row in rows:
-                edge_obj = await context._deserialize_entity(Edge, row)
-                if edge_obj:
-                    derived.append(edge_obj)
-            return derived
-
-        if not self.edge_ids:
-            return []
-
-        # Use batch query for efficiency (N+1 -> 1 query)
-        edge_results = await context.database.find(
-            "edge", {"id": {"$in": self.edge_ids}}
-        )
-
-        edges = []
-        for result in edge_results:
-            try:
-                edge_obj = await context._deserialize_entity(Edge, result)
-                if edge_obj:
-                    edges.append(edge_obj)
-            except Exception as e:
-                # Log at debug level and skip invalid edges
-                logger.debug(f"Skipping invalid edge during deserialization: {e}")
-                continue
-
-        # Filter by direction if specified
+        query: Dict[str, Any]
         if direction == "out":
-            edges = [e for e in edges if e.source == self.id]
+            query = {"source": self.id}
         elif direction == "in":
-            edges = [e for e in edges if e.target == self.id]
-        return edges if limit is None else edges[:limit]
+            query = {"target": self.id}
+        else:
+            query = {"$or": [{"source": self.id}, {"target": self.id}]}
+        rows = await context.database.find("edge", query, limit=limit)
+        if limit is None and len(rows) > 10_000:
+            logger.debug(
+                "Node.edges(%s) loaded %d edges; pass limit= or use "
+                "connection_count() for hub nodes",
+                self.id,
+                len(rows),
+            )
+        derived: List["Edge"] = []
+        for row in rows:
+            edge_obj = await context._deserialize_entity(Edge, row)
+            if edge_obj:
+                derived.append(edge_obj)
+        return derived
 
     async def _incident_edges(self: "Node", context: "GraphContext") -> List["Edge"]:
         """Every edge touching this node, either endpoint (used by cascade delete)."""
-        if context.persists_edge_ids():
-            found: List["Edge"] = []
-            for edge_id in self.edge_ids:
-                try:
-                    edge = await Edge.get(edge_id)
-                    if edge:
-                        found.append(edge)
-                except Exception:
-                    continue
-            return found
         return await self.edges()
 
     async def nodes(
@@ -1316,22 +1244,8 @@ class Node(Object):
         try:
             context = await self.get_context()
             edges = await context.find_edges_between(self.id, other.id, edge_type)
-            persist = context.persists_edge_ids()
 
             for found_edge in edges:
-                if persist:
-                    # Atomically remove edge_id from both nodes, then delete the edge
-                    await context.atomic_remove_edge_id(self.id, found_edge.id)
-                    if found_edge.id in self.edge_ids:
-                        self.edge_ids.remove(found_edge.id)
-
-                    await context.atomic_remove_edge_id(other.id, found_edge.id)
-                    if found_edge.id in other.edge_ids:
-                        other.edge_ids.remove(found_edge.id)
-
-                # Delete the edge document (context.delete already handles
-                # edge_ids cleanup, but we already did it atomically above,
-                # so use a direct DB delete to avoid double work).
                 db = context.database
                 await db.delete("edge", found_edge.id)
                 await context._cache.delete(found_edge.id)
@@ -1368,15 +1282,13 @@ class Node(Object):
     async def connection_count(self) -> int:
         """Get the number of connections (edges) for this node.
 
-        In derive mode this is one ``COUNT`` over the edge collection's
-        ``source`` / ``target`` indexes — the canonical degree query.
+        One ``COUNT`` over the edge collection's ``source`` / ``target``
+        indexes — the canonical degree query.
 
         Returns:
             Number of connected edges
         """
         context = await self.get_context()
-        if context.persists_edge_ids():
-            return len(self.edge_ids)
         return await context.database.count(
             "edge", {"$or": [{"source": self.id}, {"target": self.id}]}
         )
@@ -1428,17 +1340,6 @@ class Node(Object):
                 edge_obj = await context._deserialize_entity(EdgeClass, edge_data)
                 if edge_obj:
                     incoming_edges.append(edge_obj)
-            except Exception:
-                continue
-
-        # Persist mode: also check edges from edge_ids where this node is the
-        # target (the edge query above already covers derive mode).
-        for edge_id in self.edge_ids if context.persists_edge_ids() else []:
-            try:
-                edge = await Edge.get(edge_id)
-                # Only include edges where this node is the target (incoming)
-                if edge and edge.target == self.id and edge not in incoming_edges:
-                    incoming_edges.append(edge)
             except Exception:
                 continue
 
@@ -1621,13 +1522,6 @@ class Node(Object):
         # Delete incoming edges to this node
         for edge in incoming_edges:
             try:
-                if edge.source != self.id:
-                    await context.atomic_remove_edge_id(edge.source, edge.id)
-
-                if edge.id in self.edge_ids:
-                    self.edge_ids.remove(edge.id)
-
-                # Direct DB delete (edge_ids already handled atomically above)
                 await context.database.delete("edge", edge.id)
                 await context._cache.delete(edge.id)
             except Exception:
@@ -1636,12 +1530,6 @@ class Node(Object):
         # Clean up outgoing edges from this node
         for edge in outgoing_edges:
             try:
-                if edge.target != self.id:
-                    await context.atomic_remove_edge_id(edge.target, edge.id)
-
-                if edge.id in self.edge_ids:
-                    self.edge_ids.remove(edge.id)
-
                 await context.database.delete("edge", edge.id)
                 await context._cache.delete(edge.id)
             except Exception:
@@ -1669,12 +1557,9 @@ class Node(Object):
                     # Continue even if dependent node deletion fails
                     continue
 
-        # All edges have already been deleted from the database
-        self.edge_ids = []
-
         # Finally, delete this node itself. Direct delete rather than
-        # ``context.delete`` — its "no edges left?" check would cost a COUNT in
-        # derive mode, and the edges are already gone.
+        # ``context.delete`` — its "no edges left?" check would cost a COUNT,
+        # and the edges are already gone.
         await context.database.delete(context._get_collection_name("n"), self.id)
         await context._remove_from_cache(self.id)
 
@@ -1706,28 +1591,25 @@ class Node(Object):
         exclude_transient: bool = True,
         exclude: Optional[Union[set, Dict[str, Any]]] = None,
         flat: bool = False,
-        include_edges: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Export node to a dictionary.
 
         Returns a nested persistence format with id, entity, context for database storage.
         Includes all fields from the class hierarchy (class and parent classes, not child classes).
-        Edges are excluded by default but can be included for database persistence.
 
         Args:
             exclude_transient: Whether to automatically exclude transient fields (default: True)
             exclude: Additional fields to exclude (can be a set of field names or a dict)
             flat: If True, return attributes at top level instead of nested under context (for API responses)
-            include_edges: Whether to include edges in export (default: False, set to True for database persistence)
             **kwargs: Additional arguments passed to base export/model_dump()
 
         Returns:
-            Nested format dictionary with id, entity, context (and optionally edges) for database storage,
+            Nested format dictionary with id, entity, context for database storage,
             or flat format {id, entity, **context} when flat=True
         """
         # Nested persistence format - structure for database storage
-        # Exclude _visitor_ref from context (id, edge_ids, and type_code are transient and auto-excluded)
+        # Exclude _visitor_ref from context (id and type_code are transient and auto-excluded)
         # Object.export() returns nested format, extract the context
         parent_export = await super().export(
             exclude={"_visitor_ref"},
@@ -1752,9 +1634,5 @@ class Node(Object):
                 "entity": self.entity,
                 "context": context_data,
             }
-
-        # Include edges only when explicitly requested (e.g., for database persistence)
-        if include_edges:
-            result["edges"] = self.edge_ids
 
         return result

@@ -47,12 +47,10 @@ dependent nodes (nodes that are solely connected to the node being deleted).
 
 ```python
 class Node(Object):
-    edge_ids: List[str] = Field(default_factory=list)
-
     async def connect(other: "Node", edge: Type["Edge"] = Edge,
                      direction: str = "out", **kwargs) -> "Edge"
     async def edges(direction: str = "", limit: Optional[int] = None) -> List["Edge"]
-    async def connection_count() -> int  # degree; one COUNT in derive mode
+    async def connection_count() -> int  # degree; one COUNT over the edge collection
     async def nodes(direction: str = "both", node: Optional[...] = None,
                    edge: Optional[...] = None, **kwargs) -> List["Node"]
     async def node(direction: str = "out", node: Optional[...] = None,
@@ -64,10 +62,9 @@ class Node(Object):
     async def count(cls, query: Optional[dict] = None, **kwargs) -> int  # Inherited from Object
 ```
 
-**Adjacency:** on Postgres, MongoDB and SQLite (derive mode) the edge
-collection is the source of truth — `edge_ids` stays empty in memory and node
-rows carry no `edges` array. Use `edges()`, `connection_count()` and `nodes()`
-rather than reading `edge_ids`. See [graph-context.md](graph-context.md).
+**Adjacency:** the edge collection is the only source of truth — node rows
+carry no `edges` array. Use `edges()`, `connection_count()` and `nodes()`
+rather than inspecting node documents for links. See [graph-context.md](graph-context.md).
 
 **Key Methods:**
 

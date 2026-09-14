@@ -697,9 +697,6 @@ class TestJsonDBEntityOperations:
         """Create GraphContext with JsonDB for testing."""
         from jvspatial.core.context import GraphContext, set_default_context
 
-        # Assertions read the persisted ``edges`` array; pin the mode so a
-        # JVSPATIAL_NODE_EDGE_IDS=derive run does not switch it off.
-        jsondb.edge_ids_mode = "persist"
         ctx = GraphContext(database=jsondb)
         set_default_context(ctx)
         return ctx
@@ -754,7 +751,8 @@ class TestJsonDBEntityOperations:
         assert node_data["context"]["name"] == "test_node"
         assert node_data["context"]["value"] == 100
         assert node_data["context"]["category"] == "test"
-        assert node_data["edges"] == []  # No edges initially
+        assert "edges" not in node_data
+        assert await node.connection_count() == 0
 
         # Verify file was created (JsonDB replaces colons with dots in filenames)
         node_file = (
@@ -805,12 +803,15 @@ class TestJsonDBEntityOperations:
         assert edge_data["source"] == node1.id
         assert edge_data["target"] == node2.id
 
-        # Verify nodes have edge references
+        # Adjacency is derived from the edge collection, not node rows.
         node1_data = await context.database.get("node", node1.id)
         node2_data = await context.database.get("node", node2.id)
-
-        assert edge.id in node1_data["edges"]
-        assert edge.id in node2_data["edges"]
+        assert "edges" not in node1_data
+        assert "edges" not in node2_data
+        assert await node1.connection_count() == 1
+        assert await node2.connection_count() == 1
+        assert {e.id for e in await node1.edges()} == {edge.id}
+        assert {e.id for e in await node2.edges()} == {edge.id}
 
         # Verify files exist (JsonDB replaces colons with dots in filenames)
         edge_file = (
@@ -859,11 +860,19 @@ class TestJsonDBEntityOperations:
         assert works_edge_data is not None
         assert located_edge_data is not None
 
-        # Verify edge references
-        assert works_edge.id in person_data["edges"]
-        assert works_edge.id in company_data["edges"]
-        assert located_edge.id in company_data["edges"]
-        assert located_edge.id in location_data["edges"]
+        # Adjacency is derived from the edge collection, not node rows.
+        assert "edges" not in person_data
+        assert "edges" not in company_data
+        assert "edges" not in location_data
+        assert await person.connection_count() == 1
+        assert await company.connection_count() == 2
+        assert await location.connection_count() == 1
+        assert {e.id for e in await person.edges()} == {works_edge.id}
+        assert {e.id for e in await company.edges()} == {
+            works_edge.id,
+            located_edge.id,
+        }
+        assert {e.id for e in await location.edges()} == {located_edge.id}
 
         # Verify all files exist (JsonDB replaces colons with dots in filenames)
         assert (
@@ -918,12 +927,13 @@ class TestJsonDBEntityOperations:
         )
         assert not edge_file.exists()
 
-        # Verify nodes no longer reference the edge
+        # Adjacency is derived from the edge collection.
         node1_data = await context.database.get("node", node1.id)
         node2_data = await context.database.get("node", node2.id)
-
-        assert edge.id not in node1_data["edges"]
-        assert edge.id not in node2_data["edges"]
+        assert "edges" not in node1_data
+        assert "edges" not in node2_data
+        assert await node1.connection_count() == 0
+        assert await node2.connection_count() == 0
 
 
 class TestJsonDBWalkerTraversal:
@@ -945,9 +955,6 @@ class TestJsonDBWalkerTraversal:
         """Create GraphContext with JsonDB for testing."""
         from jvspatial.core.context import GraphContext, set_default_context
 
-        # Assertions read the persisted ``edges`` array; pin the mode so a
-        # JVSPATIAL_NODE_EDGE_IDS=derive run does not switch it off.
-        jsondb.edge_ids_mode = "persist"
         ctx = GraphContext(database=jsondb)
         set_default_context(ctx)
         return ctx
@@ -1238,8 +1245,8 @@ class TestJsonDBWalkerTraversal:
         edge5 = await node_d.connect(node_e)
 
         # Verify all edges are persisted
-        edge_ids = [edge1.id, edge2.id, edge3.id, edge4.id, edge5.id]
-        for edge_id in edge_ids:
+        persisted_edges = [edge1.id, edge2.id, edge3.id, edge4.id, edge5.id]
+        for edge_id in persisted_edges:
             assert await context.database.get("edge", edge_id) is not None
 
         # Verify all nodes are persisted
@@ -1437,13 +1444,13 @@ class TestJsonDBPersistentOperations:
         agent1_agent2_edge = await agent1.connect(agent2)
 
         # Verify all edges are persisted
-        edge_ids = [
+        persisted_edges = [
             city_org_edge.id,
             org_agent1_edge.id,
             org_agent2_edge.id,
             agent1_agent2_edge.id,
         ]
-        for edge_id in edge_ids:
+        for edge_id in persisted_edges:
             assert await persistent_context.database.get("edge", edge_id) is not None
 
         # Create walker

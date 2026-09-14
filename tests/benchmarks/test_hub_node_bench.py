@@ -179,19 +179,12 @@ async def _bench_graph() -> AsyncIterator[Tuple[GraphContext, Any, str]]:
         await admin.close()
 
 
-def _persists_edge_ids(ctx: GraphContext) -> bool:
-    probe = getattr(ctx, "persists_edge_ids", None)
-    return bool(probe()) if callable(probe) else True
-
-
 async def _seed(ctx: GraphContext, db: Any, degree: int, spare: int) -> Dict[str, Any]:
     """Seed hub -> ``degree`` leaves and ``degree`` leaves -> sink via COPY.
 
     Also seeds ``spare`` unconnected leaves for the write measurements.
-    Records mirror the persisted format of the active adjacency mode:
-    with persisted edge ids the hub row carries ``degree`` ids in ``edges``.
+    Node rows carry no ``edges`` array — adjacency lives in the edge collection.
     """
-    persist = _persists_edge_ids(ctx)
     hub_id = generate_id("n", "BenchHub")
     sink_id = generate_id("n", "BenchHub")
     leaf_ids = [generate_id("n", "BenchLeaf") for _ in range(degree)]
@@ -202,14 +195,13 @@ async def _seed(ctx: GraphContext, db: Any, degree: int, spare: int) -> Dict[str
     nodes: List[Dict[str, Any]] = []
     edges: List[Dict[str, Any]] = []
     for i, (lid, oe, ie) in enumerate(zip(leaf_ids, out_eids, in_eids)):
-        rec: Dict[str, Any] = {
-            "id": lid,
-            "entity": "BenchLeaf",
-            "context": {"idx": i, "title": f"leaf {i}"},
-        }
-        if persist:
-            rec["edges"] = [oe, ie]
-        nodes.append(rec)
+        nodes.append(
+            {
+                "id": lid,
+                "entity": "BenchLeaf",
+                "context": {"idx": i, "title": f"leaf {i}"},
+            }
+        )
         edges.append(
             {
                 "id": oe,
@@ -231,23 +223,21 @@ async def _seed(ctx: GraphContext, db: Any, degree: int, spare: int) -> Dict[str
             }
         )
     for j, sid in enumerate(spare_ids):
-        rec = {
-            "id": sid,
-            "entity": "BenchLeaf",
-            "context": {"idx": degree + j, "title": f"spare {j}"},
-        }
-        if persist:
-            rec["edges"] = []
-        nodes.append(rec)
-    for hid, label, eids in ((hub_id, "hub", out_eids), (sink_id, "sink", in_eids)):
-        rec = {
-            "id": hid,
-            "entity": "BenchHub",
-            "context": {"label": label, "counter": 0},
-        }
-        if persist:
-            rec["edges"] = list(eids)
-        nodes.append(rec)
+        nodes.append(
+            {
+                "id": sid,
+                "entity": "BenchLeaf",
+                "context": {"idx": degree + j, "title": f"spare {j}"},
+            }
+        )
+    for hid, label in ((hub_id, "hub"), (sink_id, "sink")):
+        nodes.append(
+            {
+                "id": hid,
+                "entity": "BenchHub",
+                "context": {"label": label, "counter": 0},
+            }
+        )
 
     for coll, recs in (("node", nodes), ("edge", edges)):
         for off in range(0, len(recs), _SEED_CHUNK):
@@ -258,7 +248,6 @@ async def _seed(ctx: GraphContext, db: Any, degree: int, spare: int) -> Dict[str
         "hub_id": hub_id,
         "sink_id": sink_id,
         "spare_ids": spare_ids,
-        "persist": persist,
     }
 
 
@@ -314,7 +303,7 @@ async def test_hub_node_scale(degree: int, request: pytest.FixtureRequest) -> No
             await admin.execute(f"ANALYZE {schema}.edge")
             results["sizes_after_seed"] = await _sizes(admin, schema, seeded["hub_id"])
 
-            # -- hub hydration (the persisted edge list rides along) --
+            # -- hub hydration --
             samples: List[float] = []
             for _ in range(read_iters):
                 await ctx.clear_cache()
@@ -438,7 +427,6 @@ async def test_hub_node_scale(degree: int, request: pytest.FixtureRequest) -> No
         "degree": degree,
         "jvspatial": jvspatial.__version__,
         "git_sha": _git_sha(),
-        "edge_ids_mode": "persist" if seeded["persist"] else "derive",
         "postgres": pg_version,
         "seed_seconds": round(seed_s, 2),
         "read_iterations": read_iters,

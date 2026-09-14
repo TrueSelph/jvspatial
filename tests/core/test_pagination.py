@@ -714,9 +714,7 @@ class TestPaginationWithNodes:
             mock_context.database.find.return_value = node_data
 
             async def mock_deserialize(cls, data):
-                return PaginationTestNode(
-                    id=data["id"], edge_ids=data.get("edges", []), **data["context"]
-                )
+                return PaginationTestNode(id=data["id"], **data["context"])
 
             mock_context._deserialize_entity.side_effect = mock_deserialize
 

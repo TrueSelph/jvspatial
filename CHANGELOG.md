@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.19] - 2026-09-14
+
+### Removed
+
+- **Persist-mode node adjacency.** The edge collection is the only source of
+  truth on every backend (including JsonDB and DynamoDB). Deleted:
+  `Database.edge_ids_mode`, `resolve_edge_ids_mode`, `JVSPATIAL_NODE_EDGE_IDS`,
+  `GraphContext.persists_edge_ids`, `atomic_add_edge_id` /
+  `atomic_remove_edge_id`, `PostgresDB.save_with_edge_merge`,
+  `Node.edge_ids`, and `Node.export(include_edges=…)`. `connect()` /
+  `disconnect()` / `save()` never rewrite or row-lock a node for adjacency.
+  Legacy `edges` arrays are still ignored on read, dropped on the next
+  `save()`, and reclaimable with `jvspatial migrate strip-node-edges`
+  (`strip_node_edges()` on Postgres / MongoDB / JsonDB).
+
 ## [0.0.18] - 2026-09-13
 
 ### Added

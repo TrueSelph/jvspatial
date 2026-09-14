@@ -84,7 +84,7 @@ def _render_hub(records: List[Dict[str, Any]]) -> str:
     meta = records[0]
     out.append(
         f"jvspatial {meta['jvspatial']} @ `{meta['git_sha']}`, "
-        f"edge_ids_mode=`{meta['edge_ids_mode']}`, Postgres {meta['postgres']}"
+        f"adjacency=derive (edge collection), Postgres {meta['postgres']}"
     )
     out.append("")
     out.append(

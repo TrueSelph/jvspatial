@@ -23,7 +23,7 @@ db/
 ├── sqlite.py              # aiosqlite backend + Mongo→SQL translator
 ├── mongodb.py             # motor backend
 ├── dynamodb.py            # aioboto3 backend
-├── postgres.py            # asyncpg + JSONB backend (traverse CTE, save_with_edge_merge)
+├── postgres.py            # asyncpg + JSONB backend (traverse CTE)
 ├── _atomic.py             # internal: crash-safe write helper
 ├── _path_locks.py         # internal: bounded-LRU per-path locks
 ├── _cache.py              # internal: read-through cache wrapper
@@ -39,7 +39,7 @@ db/
 | SQLite | No (single-conn fsync) | `executemany` + `IN` | Mongo→SQL pushdown | Translator covers `$eq/$ne/$gt/$gte/$lt/$lte/$in/$nin/$exists`, AND, `$and/$or` |
 | MongoDB | **Yes** (replica set required) | `bulk_write`, `$in` | `count_documents` / `estimated_document_count` | Native compound ops; shared retry helper |
 | DynamoDB | No | `BatchGetItem`/`BatchWriteItem` (100/batch) | `Select="COUNT"` | Throttle retry with backoff |
-| Postgres | **Yes** | `COPY` bulk upsert, `find_many` | SQL `COUNT` pushdown | `traverse` (recursive CTE), `find_connected_nodes`, `save_with_edge_merge` |
+| Postgres | **Yes** | `COPY` bulk upsert, `find_many` | SQL `COUNT` pushdown | `traverse` (recursive CTE), `find_connected_nodes` |
 
 ## Public API (from `jvspatial.db`)
 
@@ -59,13 +59,13 @@ db/
 ## Invariants
 
 - **`Database.supports_transactions` is a capability flag.** Branch on it; do not sniff adapter class. (`database.py:84`)
-- **`Database.edge_ids_mode` says where node adjacency lives.** `"derive"` (Postgres, MongoDB, SQLite): the edge collection only; node rows carry no `edges`. `"persist"` (JSON, DynamoDB): node rows also store `edges`. Read the effective value with `resolve_edge_ids_mode(db)` — instance attribute → `JVSPATIAL_NODE_EDGE_IDS` → class default. `strip_node_edges()` (Postgres, MongoDB) removes legacy arrays; CLI `jvspatial migrate strip-node-edges`.
+- **Node adjacency always lives in the edge collection** (indexed on `source` / `target` by `Edge.get_indexes`). Node rows never store an `edges` array. `strip_node_edges()` (Postgres, MongoDB, JsonDB) removes legacy arrays; CLI `jvspatial migrate strip-node-edges`.
 - **`find_many` and `bulk_save` are public and benefit from native overrides.** Defaults exist but are slow. (`database.py:176+`)
 - **`find_one_and_update` / `find_one_and_delete` are NOT atomic by default.** MongoDB and Postgres override with native atomic versions (`FOR UPDATE` on Postgres).
 - **Neighbour pushdown** (via `getattr`, not on the ABC): `find_connected_nodes` / `count_connected_nodes` on Postgres, MongoDB and SQLite take `edge_entities`, `node_entities`, `edge_query`, `node_query` (record paths), `sort` and `limit`, and raise `NotImplementedError` for anything they cannot translate so `Node.nodes()` falls back without dropping a filter. Postgres adds `find_connected_nodes_bulk(limit_per_source=...)`.
 - **Postgres per-class indexes are entity-scoped.** `ensure_indexes` passes the class's entity to `create_index` for annotation-declared indexes: `(entity, <fields>)` by default, `WHERE entity = ...` with `partial_by_entity`. Descending keys are `DESC NULLS LAST`; stale pre-0.0.18 definitions are rebuilt. The whole-document GIN is optional (`gin_index="off"` / `JVSPATIAL_PG_GIN_INDEX=off`).
 - **`$text` pushes down on Postgres only** (`to_tsvector('simple', …) @@ plainto_tsquery`, `$fields` required, GIN from `@fulltext_index` / `attribute(fulltext=True)`); SQLite / JsonDB / DynamoDB evaluate it in memory with the same semantics, MongoDB uses its text index. `escape_regex()` for literal `$regex` patterns.
-- **Postgres-only helpers** (via `getattr`, not on the ABC): `traverse`, `find_connected_nodes_bulk`, `save_with_edge_merge` (persist mode only).
+- **Postgres-only helpers** (via `getattr`, not on the ABC): `traverse`, `find_connected_nodes_bulk`.
 - **Atomic JSON writes use `temp + fsync + rename + fsync(dir)`.** No partial records survive a crash. (`_atomic.py`)
 - **Per-file locks serialize concurrent writes to the same record only.** Different files run in parallel. (`_path_locks.py`)
 - **`QueryEngine` LRU is bounded.** Default 1024; configurable. Unbounded query construction will not leak memory. (`query.py`)

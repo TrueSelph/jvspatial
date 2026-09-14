@@ -1,9 +1,9 @@
-"""Node adjacency modes (``edge_ids_mode``) — parity across backends.
+"""Node adjacency from the edge collection — parity across backends.
 
-Every scenario runs on each reachable backend in both modes: ``persist``
-(node rows carry an ``edges`` array) and ``derive`` (the edge collection is
-the only source of truth). Results must match; derive mode must never write
-an ``edges`` array or lock a node row on ``connect()``.
+Adjacency always lives in the edge collection (indexed on ``source`` /
+``target``). Node rows never carry an ``edges`` array. Every scenario runs on
+each reachable backend; results must match, and ``connect()`` must never lock
+or rewrite a node row.
 
 Postgres runs when ``JVSPATIAL_POSTGRES_TEST_DSN`` is reachable, MongoDB when
 ``JVSPATIAL_MONGODB_TEST_URI`` is set and reachable; otherwise those params skip.
@@ -23,8 +23,6 @@ from jvspatial.core import context as context_module
 from jvspatial.core.context import GraphContext, set_default_context
 from jvspatial.core.entities import Edge, Node, Root
 from jvspatial.core.graph_expansion import expand_node
-from jvspatial.db._observable import ObservableDatabase
-from jvspatial.db.database import resolve_edge_ids_mode
 from jvspatial.db.jsondb import JsonDB
 from jvspatial.db.sqlite import SQLiteDB
 
@@ -74,17 +72,13 @@ async def _mongo_client() -> Any:
     return client
 
 
-_PARAMS = [
-    (backend, mode)
-    for backend in ("json", "sqlite", "postgres", "mongodb")
-    for mode in ("persist", "derive")
-]
+_BACKENDS = ("json", "sqlite", "postgres", "mongodb")
 
 
-@pytest.fixture(params=_PARAMS, ids=[f"{b}-{m}" for b, m in _PARAMS])
+@pytest.fixture(params=_BACKENDS, ids=list(_BACKENDS))
 async def graph(request, tmp_path):
-    """Yield ``(ctx, db, mode, backend)`` with the mode set explicitly."""
-    backend, mode = request.param
+    """Yield ``(ctx, db, backend)`` with a fresh database."""
+    backend = request.param
     cleanup: List[Any] = []
     if backend == "json":
         db: Any = JsonDB(base_path=str(tmp_path / "json"))
@@ -116,12 +110,11 @@ async def graph(request, tmp_path):
 
         cleanup.append(_drop_mongo)
 
-    db.edge_ids_mode = mode
     ctx = GraphContext(database=db)
     set_default_context(ctx)
     context_module._ensured_indexes.clear()
     try:
-        yield ctx, db, mode, backend
+        yield ctx, db, backend
     finally:
         set_default_context(None)
         context_module._ensured_indexes.clear()
@@ -163,13 +156,8 @@ async def _dangling_edges(db: Any) -> List[str]:
     ]
 
 
-async def test_mode_resolution(graph):
-    ctx, _db, mode, _backend = graph
-    assert ctx.persists_edge_ids() is (mode == "persist")
-
-
 async def test_connect_and_read_parity(graph):
-    ctx, _db, _mode, _backend = graph
+    ctx, _db, _backend = graph
     a, b, c, eids = await _triangle()
 
     assert {e.target for e in await a.edges("out")} == {b.id, c.id}
@@ -192,7 +180,7 @@ async def test_connect_and_read_parity(graph):
 
 
 async def test_disconnect_parity(graph):
-    ctx, db, _mode, _backend = graph
+    ctx, db, _backend = graph
     a, b, c, eids = await _triangle()
 
     assert await a.disconnect(b) is True
@@ -202,25 +190,19 @@ async def test_disconnect_parity(graph):
     assert {n.id for n in await a.nodes()} == {c.id}
 
 
-async def test_save_writes_edges_array_only_in_persist_mode(graph):
-    _ctx, db, mode, _backend = graph
-    a, _b, _c, eids = await _triangle()
+async def test_save_never_writes_edges_array(graph):
+    _ctx, db, _backend = graph
+    a, _b, _c, _eids = await _triangle()
     a.name = "renamed"
     await a.save()
 
     raw = await db.get("node", a.id)
     assert raw["context"]["name"] == "renamed"
-    if mode == "derive":
-        assert "edges" not in raw
-        assert a.edge_ids == []
-    else:
-        assert set(raw["edges"]) == {eids["ab"], eids["ac"]}
+    assert "edges" not in raw
 
 
-async def test_derive_connect_takes_no_node_row_lock(graph, monkeypatch):
-    _ctx, db, mode, _backend = graph
-    if mode != "derive":
-        pytest.skip("derive-mode property")
+async def test_connect_takes_no_node_row_lock(graph, monkeypatch):
+    _ctx, db, _backend = graph
     hub = await DerivePerson.create(name="hub")
     leaves = [await DerivePerson.create(name=f"l{i}") for i in range(3)]
 
@@ -247,21 +229,17 @@ async def test_derive_connect_takes_no_node_row_lock(graph, monkeypatch):
 
 
 async def test_concurrent_connect_to_one_hub(graph):
-    ctx, db, mode, _backend = graph
+    ctx, _db, _backend = graph
     hub = await DerivePerson.create(name="hub")
     leaves = [await DerivePerson.create(name=f"l{i}") for i in range(12)]
     await asyncio.gather(*(hub.connect(leaf, edge=DeriveKnows) for leaf in leaves))
 
     assert await (await _fresh(ctx, hub)).connection_count() == 12
     assert {n.id for n in await hub.nodes()} == {leaf.id for leaf in leaves}
-    if mode == "persist":
-        assert len((await db.get("node", hub.id))["edges"]) == 12
 
 
-async def test_legacy_edges_array_is_ignored_in_derive_mode(graph):
-    ctx, db, mode, _backend = graph
-    if mode != "derive":
-        pytest.skip("derive-mode property")
+async def test_legacy_edges_array_is_ignored(graph):
+    ctx, db, _backend = graph
     a = await DerivePerson.create(name="a")
     b = await DerivePerson.create(name="b")
     await a.connect(b, edge=DeriveKnows)
@@ -271,7 +249,6 @@ async def test_legacy_edges_array_is_ignored_in_derive_mode(graph):
     await db.save("node", raw)
 
     legacy = await _fresh(ctx, a)
-    assert legacy.edge_ids == []
     assert await legacy.connection_count() == 1
     assert {n.id for n in await legacy.nodes()} == {b.id}
 
@@ -281,7 +258,7 @@ async def test_legacy_edges_array_is_ignored_in_derive_mode(graph):
 
 
 async def test_cascade_delete_parity(graph):
-    ctx, db, _mode, _backend = graph
+    ctx, db, _backend = graph
     parent = await DerivePerson.create(name="parent")
     a = await DerivePerson.create(name="a")
     only_via_a = await DerivePerson.create(name="b")
@@ -305,7 +282,7 @@ async def test_cascade_delete_parity(graph):
 
 
 async def test_context_delete_without_cascade_removes_edges(graph):
-    ctx, db, _mode, _backend = graph
+    ctx, db, _backend = graph
     a = await DerivePerson.create(name="a")
     b = await DerivePerson.create(name="b")
     await a.connect(b, edge=DeriveKnows)
@@ -318,19 +295,18 @@ async def test_context_delete_without_cascade_removes_edges(graph):
 
 
 async def test_root_rehydrates(graph):
-    _ctx, _db, mode, _backend = graph
+    _ctx, _db, _backend = graph
     root = await Root.get()
     app = await DerivePerson.create(name="app")
     await root.connect(app, edge=DeriveKnows)
 
     again = await Root.get()
     assert {n.id for n in await again.nodes()} == {app.id}
-    if mode == "derive":
-        assert again.edge_ids == []
+    assert await again.connection_count() == 1
 
 
 async def test_expand_node_pages_from_edge_collection(graph):
-    ctx, _db, _mode, _backend = graph
+    ctx, _db, _backend = graph
     hub = await DerivePerson.create(name="hub")
     kids = [await DerivePerson.create(name=f"k{i}") for i in range(5)]
     for kid in kids:
@@ -358,15 +334,20 @@ async def test_expand_node_pages_from_edge_collection(graph):
 
 
 async def test_strip_node_edges_migration(graph):
-    ctx, db, mode, backend = graph
-    if backend not in ("postgres", "mongodb") or mode != "persist":
-        pytest.skip("migration runs on Postgres/MongoDB rows written in persist mode")
+    ctx, db, backend = graph
+    if backend not in ("postgres", "mongodb", "json"):
+        pytest.skip("strip_node_edges is implemented on Postgres/MongoDB/JsonDB")
     a, b, c, _eids = await _triangle()
     before = {n.id for n in await a.nodes()}
-    assert "edges" in await db.get("node", a.id)
+
+    # Inject legacy ``edges`` arrays onto existing node rows.
+    for node in (a, b, c):
+        raw = await db.get("node", node.id)
+        raw["edges"] = [f"e.legacy.{node.id}"]
+        await db.save("node", raw)
+        assert "edges" in await db.get("node", node.id)
 
     assert await db.strip_node_edges(dry_run=True) == 3
-    db.edge_ids_mode = "derive"
     assert await db.strip_node_edges(batch_size=2) == 3
     assert await db.strip_node_edges() == 0
     for node in (a, b, c):
@@ -375,6 +356,9 @@ async def test_strip_node_edges_migration(graph):
     fresh_a = await _fresh(ctx, a)
     assert {n.id for n in await fresh_a.nodes()} == before
     assert await fresh_a.connection_count() == 2
+
+    if backend not in ("postgres", "mongodb"):
+        return
 
     # CLI: dry run by default, --apply strips.
     raw = await db.get("node", b.id)
@@ -392,24 +376,3 @@ async def test_strip_node_edges_migration(graph):
     apply = parser.parse_args(["migrate", "strip-node-edges", *target, "--apply"])
     assert await _run_strip_node_edges(apply) == 0
     assert "edges" not in await db.get("node", b.id)
-
-
-async def test_mode_resolution_precedence(tmp_path, monkeypatch):
-    monkeypatch.delenv("JVSPATIAL_NODE_EDGE_IDS", raising=False)
-    sqlite = SQLiteDB(db_path=str(tmp_path / "p.db"))
-    json_db = JsonDB(base_path=str(tmp_path / "j"))
-    assert resolve_edge_ids_mode(sqlite) == "derive"
-    assert resolve_edge_ids_mode(json_db) == "persist"
-    assert resolve_edge_ids_mode(ObservableDatabase(sqlite)) == "derive"
-
-    monkeypatch.setenv("JVSPATIAL_NODE_EDGE_IDS", "persist")
-    assert resolve_edge_ids_mode(sqlite) == "persist"
-    monkeypatch.setenv("JVSPATIAL_NODE_EDGE_IDS", "derive")
-    assert resolve_edge_ids_mode(ObservableDatabase(json_db)) == "derive"
-
-    json_db.edge_ids_mode = "persist"  # explicit instance config beats env
-    assert resolve_edge_ids_mode(ObservableDatabase(json_db)) == "persist"
-
-    monkeypatch.setenv("JVSPATIAL_NODE_EDGE_IDS", "bogus")
-    assert resolve_edge_ids_mode(sqlite) == "derive"
-    await sqlite.close()

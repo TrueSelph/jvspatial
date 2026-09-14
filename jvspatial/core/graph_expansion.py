@@ -20,14 +20,6 @@ if TYPE_CHECKING:
     from jvspatial.core.context import GraphContext
 
 
-def _coerce_edge_id_list(value: Any) -> List[str]:
-    if value is None:
-        return []
-    if isinstance(value, (list, tuple)):
-        return [str(x) for x in value]
-    return []
-
-
 def _incident_query(node_id: str) -> Dict[str, Any]:
     """Edge-collection query for every edge touching ``node_id``."""
     return {"$or": [{"source": node_id}, {"target": node_id}]}
@@ -36,16 +28,7 @@ def _incident_query(node_id: str) -> Dict[str, Any]:
 async def _node_degrees(
     context: GraphContext, records: Dict[str, Dict[str, Any]]
 ) -> Dict[str, int]:
-    """Degree per node record.
-
-    Persist mode reads the stored ``edges`` array; derive mode counts the
-    edge collection (the array, if a legacy row still has one, is stale).
-    """
-    if context.persists_edge_ids():
-        return {
-            nid: len(_coerce_edge_id_list(rec.get("edges")))
-            for nid, rec in records.items()
-        }
+    """Degree per node record — count incident edges in the edge collection."""
     ids = list(records)
     db = context.database
     counts = await asyncio.gather(*(db.count("edge", _incident_query(n)) for n in ids))

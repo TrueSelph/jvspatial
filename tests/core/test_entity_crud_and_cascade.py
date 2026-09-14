@@ -74,7 +74,7 @@ class TestGraphContextCRUD:
         assert node.id is not None
         assert node.name == "test_node"
         assert node.value == 42
-        assert len(node.edge_ids) == 0
+        assert await node.connection_count() == 0
 
     @pytest.mark.asyncio
     async def test_node_read(self, temp_context):
@@ -422,10 +422,6 @@ class TestNodeCascadeDeletion:
             unique_path = f"{tmpdir}/test_{uuid.uuid4().hex}"
             config = {"db_type": "json", "db_config": {"base_path": unique_path}}
             database = create_database(config["db_type"], **config["db_config"])
-            # Assertions read ``edge_ids``; pin persist so a
-            # JVSPATIAL_NODE_EDGE_IDS=derive run does not switch it off
-            # (derive-mode cascade is covered in test_edge_ids_derive.py).
-            database.edge_ids_mode = "persist"
             context = GraphContext(database=database)
             # Set as default context so entity methods use it
             set_default_context(context)
@@ -444,10 +440,12 @@ class TestNodeCascadeDeletion:
         edge2 = await parent.connect(child2)
 
         # Verify edges exist
-        assert edge1.id in parent.edge_ids
-        assert edge2.id in parent.edge_ids
-        assert edge1.id in child1.edge_ids
-        assert edge2.id in child2.edge_ids
+        assert await parent.connection_count() == 2
+        assert await child1.connection_count() == 1
+        assert await child2.connection_count() == 1
+        assert {e.id for e in await parent.edges()} == {edge1.id, edge2.id}
+        assert {e.id for e in await child1.edges()} == {edge1.id}
+        assert {e.id for e in await child2.edges()} == {edge2.id}
 
         # Delete parent node without cascade (to preserve child nodes)
         await parent.delete(cascade=False)
@@ -455,22 +453,15 @@ class TestNodeCascadeDeletion:
         # Verify parent is deleted
         assert await temp_context.get(TestNode, parent.id) is None
 
-        # With new implementation: only incoming edges to parent are deleted
-        # Outgoing edges from parent remain until the target nodes are deleted
-        # Since we're not cascading, child nodes are preserved, so edges remain
-        # However, edges should be removed from parent's edge_ids (parent is deleted)
-        # and from child nodes' edge_ids (since parent is deleted, edges are invalid)
-
-        # Note: Current implementation only deletes incoming edges to the deleted node
-        # Outgoing edges are not automatically deleted. They remain in the database
-        # but should be cleaned up from child nodes' edge_ids
+        # Outgoing edges from the deleted node are removed from the edge collection.
         child1_retrieved = await temp_context.get(TestNode, child1.id)
         child2_retrieved = await temp_context.get(TestNode, child2.id)
         assert child1_retrieved is not None
         assert child2_retrieved is not None
-        # Edges are removed from child nodes' edge_ids when parent is deleted
-        assert edge1.id not in child1_retrieved.edge_ids
-        assert edge2.id not in child2_retrieved.edge_ids
+        assert await Edge.get(edge1.id) is None
+        assert await Edge.get(edge2.id) is None
+        assert await child1_retrieved.connection_count() == 0
+        assert await child2_retrieved.connection_count() == 0
 
     @pytest.mark.asyncio
     async def test_node_delete_with_incoming_edges(self, temp_context):
@@ -483,8 +474,10 @@ class TestNodeCascadeDeletion:
         edge = await child.connect(parent)
 
         # Verify edge exists
-        assert edge.id in parent.edge_ids
-        assert edge.id in child.edge_ids
+        assert await parent.connection_count() == 1
+        assert await child.connection_count() == 1
+        assert {e.id for e in await parent.edges()} == {edge.id}
+        assert {e.id for e in await child.edges()} == {edge.id}
 
         # Delete parent node without cascade (to preserve child node)
         await parent.delete(cascade=False)
@@ -495,10 +488,10 @@ class TestNodeCascadeDeletion:
         # Verify incoming edge to parent is deleted
         assert await temp_context.get(Edge, edge.id) is None
 
-        # Verify edge_id is removed from child node (child preserved)
+        # Verify child is preserved and has no remaining incident edges
         child_retrieved = await temp_context.get(TestNode, child.id)
         assert child_retrieved is not None
-        assert edge.id not in child_retrieved.edge_ids
+        assert await child_retrieved.connection_count() == 0
 
     @pytest.mark.asyncio
     async def test_node_delete_with_bidirectional_edges(self, temp_context):
@@ -511,8 +504,10 @@ class TestNodeCascadeDeletion:
         edge = await node1.connect(node2, direction="both")
 
         # Verify edge exists in both nodes
-        assert edge.id in node1.edge_ids
-        assert edge.id in node2.edge_ids
+        assert await node1.connection_count() == 1
+        assert await node2.connection_count() == 1
+        assert {e.id for e in await node1.edges()} == {edge.id}
+        assert {e.id for e in await node2.edges()} == {edge.id}
 
         # Delete node1 without cascade (to preserve node2)
         await node1.delete(cascade=False)
@@ -520,13 +515,10 @@ class TestNodeCascadeDeletion:
         # Verify node1 is deleted
         assert await temp_context.get(TestNode, node1.id) is None
 
-        # With new implementation: only incoming edges to node1 are deleted
-        # For bidirectional edges, if node1 is the target, the edge is deleted
-        # The edge should be removed from node2's edge_ids
         node2_retrieved = await temp_context.get(TestNode, node2.id)
         assert node2_retrieved is not None
-        # Edge is removed from node2's edge_ids when node1 (target) is deleted
-        assert edge.id not in node2_retrieved.edge_ids
+        assert await Edge.get(edge.id) is None
+        assert await node2_retrieved.connection_count() == 0
 
     @pytest.mark.asyncio
     async def test_node_delete_cascade_solely_connected_nodes(self, temp_context):
@@ -557,9 +549,7 @@ class TestNodeCascadeDeletion:
         # Verify parent is deleted
         assert await temp_context.get(TestNode, parent.id) is None
 
-        # Verify incoming edges to parent are deleted
-        # Note: edge1 and edge2 are outgoing from parent, so they're cleaned up
-        # when parent is deleted (removed from child nodes' edge_ids and deleted)
+        # Verify incident edges from parent are deleted with the node
 
         # child1 is reachable FROM parent and has edge3 to grandchild
         # grandchild is also reachable FROM parent (via child1)
@@ -598,19 +588,15 @@ class TestNodeCascadeDeletion:
         # Verify parent is deleted
         assert await TestNode.get(parent.id) is None
 
-        # With new implementation: only incoming edges to parent are deleted
-        # Outgoing edges from parent (edge1, edge2) remain until target nodes are deleted
-        # Since we're not cascading, child nodes are preserved
-        # However, edges should be removed from child nodes' edge_ids
-
-        # Verify child nodes are preserved (not cascaded)
+        # Verify child nodes are preserved (not cascaded) and edges are gone
         child1_retrieved = await TestNode.get(child1.id)
         child2_retrieved = await TestNode.get(child2.id)
         assert child1_retrieved is not None
         assert child2_retrieved is not None
-        # Edges are removed from child nodes' edge_ids when parent is deleted
-        assert edge1.id not in child1_retrieved.edge_ids
-        assert edge2.id not in child2_retrieved.edge_ids
+        assert await Edge.get(edge1.id) is None
+        assert await Edge.get(edge2.id) is None
+        assert await child1_retrieved.connection_count() == 0
+        assert await child2_retrieved.connection_count() == 0
 
     @pytest.mark.asyncio
     async def test_node_delete_cascade_preserves_shared_nodes(self, temp_context):
@@ -655,10 +641,10 @@ class TestNodeCascadeDeletion:
         assert (
             child1_retrieved is not None
         ), "child1 should be preserved (has connection to shared which has external connection)"
-        assert (
-            edge1.id not in child1_retrieved.edge_ids
-        ), "edge1 should be removed from child1"
-        assert edge3.id in child1_retrieved.edge_ids, "edge3 should remain in child1"
+        assert await Edge.get(edge1.id) is None, "edge1 should be deleted with parent"
+        assert edge3.id in {
+            e.id for e in await child1_retrieved.edges()
+        }, "edge3 should remain in child1"
 
         # child2 is reachable FROM parent, but has edge4 to shared
         # shared has an incoming edge from external_node (not reachable from parent)
@@ -667,19 +653,19 @@ class TestNodeCascadeDeletion:
         assert (
             child2_retrieved is not None
         ), "child2 should be preserved (has connection to shared which has external connection)"
-        assert (
-            edge2.id not in child2_retrieved.edge_ids
-        ), "edge2 should be removed from child2"
-        assert edge4.id in child2_retrieved.edge_ids, "edge4 should remain in child2"
+        assert await Edge.get(edge2.id) is None, "edge2 should be deleted with parent"
+        assert edge4.id in {
+            e.id for e in await child2_retrieved.edges()
+        }, "edge4 should remain in child2"
 
         # Verify shared node is preserved (has external connection from external_node)
         shared_retrieved = await TestNode.get(shared.id)
         assert (
             shared_retrieved is not None
         ), "shared should be preserved (has external connection from external_node)"
-        assert (
-            edge_external_shared.id in shared_retrieved.edge_ids
-        ), "edge from external_node should remain in shared"
+        assert edge_external_shared.id in {
+            e.id for e in await shared_retrieved.edges()
+        }, "edge from external_node should remain in shared"
 
         # Verify external_node is preserved (not reachable from parent)
         external_node_retrieved = await TestNode.get(external_node.id)
@@ -809,8 +795,8 @@ class TestNodeCascadeDeletion:
         assert agents_retrieved is not None, "Agents (ancestor) should be preserved"
 
         # Verify edge from App to Agents is preserved
-        assert edge_app_agents.id in app_retrieved.edge_ids
-        assert edge_app_agents.id in agents_retrieved.edge_ids
+        assert edge_app_agents.id in {e.id for e in await app_retrieved.edges()}
+        assert edge_app_agents.id in {e.id for e in await agents_retrieved.edges()}
 
         # Verify dependent nodes are deleted (Actions and Action nodes)
         assert (
@@ -902,12 +888,13 @@ class TestNodeCascadeDeletion:
             action1_retrieved is not None
         ), "Action1 should be preserved (has external connection via SharedNode)"
         # Verify Action1 still has connection to SharedNode
+        action1_incident = {e.id for e in await action1_retrieved.edges()}
         assert (
-            edge_shared_action1.id in action1_retrieved.edge_ids
+            edge_shared_action1.id in action1_incident
         ), "Action1 should still have edge to SharedNode"
         # Since Actions is also preserved (due to Action1's external connection), the edge from Actions to Action1 remains
         assert (
-            edge_actions_action1.id in action1_retrieved.edge_ids
+            edge_actions_action1.id in action1_incident
         ), "Edge Actions->Action1 should remain (Actions is preserved)"
 
         # Verify Actions and Action2 behavior
@@ -933,12 +920,12 @@ class TestNodeCascadeDeletion:
 
         # Verify edges are cleaned up properly
         # Since Actions is preserved, edges from Actions remain
-        assert (
-            edge_actions_action1.id in action1_retrieved.edge_ids
-        ), "Edge Actions->Action1 should remain (Actions preserved)"
-        assert (
-            edge_actions_action2.id in action2_retrieved.edge_ids
-        ), "Edge Actions->Action2 should remain (Actions preserved)"
+        assert edge_actions_action1.id in {
+            e.id for e in await action1_retrieved.edges()
+        }, "Edge Actions->Action1 should remain (Actions preserved)"
+        assert edge_actions_action2.id in {
+            e.id for e in await action2_retrieved.edges()
+        }, "Edge Actions->Action2 should remain (Actions preserved)"
 
         # Verify External is preserved (connected to Action1 which is preserved)
         assert (
@@ -948,9 +935,9 @@ class TestNodeCascadeDeletion:
         # Verify SharedNode is preserved (outside deletion path)
         shared_node_retrieved = await TestNode.get(shared_node_id)
         assert shared_node_retrieved is not None, "SharedNode should be preserved"
-        assert (
-            edge_shared_action1.id in shared_node_retrieved.edge_ids
-        ), "SharedNode should still have edge to Action1"
+        assert edge_shared_action1.id in {
+            e.id for e in await shared_node_retrieved.edges()
+        }, "SharedNode should still have edge to Action1"
 
         # Verify edge from Action1 to External is preserved
         assert (
@@ -958,9 +945,7 @@ class TestNodeCascadeDeletion:
         ), "Edge Action1->External should be preserved"
 
         # Verify edges from deletion path
-        # Edge Actions->Action1: Since Actions is preserved, this edge may still exist
-        # but should be removed from Action1's edge_ids (already verified above)
-        # Edge Actions->Action2: Since both Actions and Action2 are preserved, this edge should still exist
+        # Edge Actions->Action1/Action2 remain while Actions is preserved
         # Edge Agent->Memory: Should be deleted since Memory is deleted
         assert (
             await Edge.get(edge_agent_memory.id) is None
@@ -1030,7 +1015,7 @@ class TestContextDeleteDelegation:
         # Verify child is preserved (no cascade)
         child_retrieved = await TestNode.get(child.id)
         assert child_retrieved is not None
-        assert edge.id not in child_retrieved.edge_ids
+        assert await child_retrieved.connection_count() == 0
 
     @pytest.mark.asyncio
     async def test_context_delete_object_simple(self, temp_context):

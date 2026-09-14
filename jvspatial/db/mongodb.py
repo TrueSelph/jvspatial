@@ -94,11 +94,6 @@ class MongoDB(Database):
     # (audit §5.9 / SPEC §4.2).
     supports_transactions: bool = True
 
-    # Node adjacency is derived from the edge collection (indexed on
-    # source/target by ``Edge.get_indexes``); node documents carry no
-    # ``edges`` array. See ``jvspatial.db.database.resolve_edge_ids_mode``.
-    edge_ids_mode: str = "derive"
-
     def __init__(
         self,
         uri: str = "mongodb://localhost:27017",
@@ -331,10 +326,10 @@ class MongoDB(Database):
         batch_size: int = 5000,
         dry_run: bool = False,
     ) -> int:
-        """Remove the legacy ``edges`` array from node documents (derive-mode migration).
+        """Remove the legacy ``edges`` array from node documents.
 
         Batched ``$unset`` — idempotent and safe to run while the application
-        serves traffic in derive mode (which never writes the array back).
+        serves traffic (saves never write the array back).
 
         Returns:
             Documents stripped, or — with ``dry_run`` — documents that still

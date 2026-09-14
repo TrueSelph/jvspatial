@@ -4,6 +4,11 @@
 **Purpose:** fix the "before" numbers for the hub-node scale remediation, then
 append an "after" table per phase. Every phase cites this file.
 
+> **Note (jvspatial 0.0.19):** the `edge_ids_mode` / `JVSPATIAL_NODE_EDGE_IDS`
+> toggle recorded in the phase tables below was removed — adjacency is always
+> the edge collection. Treat `derive` rows as the permanent posture; `persist`
+> rows are historical only.
+
 ## How the numbers are produced
 
 Harness: [`tests/benchmarks/test_hub_node_bench.py`](../../tests/benchmarks/test_hub_node_bench.py)

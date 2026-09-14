@@ -213,30 +213,27 @@ See [vector-store.md](vector-store.md) for details.
 
 ### Node adjacency lives in the `edge` table
 
-`PostgresDB.edge_ids_mode = "derive"`: node rows carry no `edges` array.
-Adjacency is read from the `edge` table through the `source` / `target`
-functional indexes that `Edge.get_indexes()` declares, so `connect()`,
-`disconnect()` and `save()` cost the same on a node with ten edges as on one
-with a hundred thousand, and concurrent writers never queue on a hub's row
-lock. Keep index auto-creation on (`JVSPATIAL_AUTO_CREATE_INDEXES`, default on
-outside serverless) or run `ensure_indexes(Edge)` at deploy time — without
-those indexes every adjacency read scans the `edge` table.
+Node rows carry no `edges` array. Adjacency is read from the `edge` table
+through the `source` / `target` functional indexes that `Edge.get_indexes()`
+declares, so `connect()`, `disconnect()` and `save()` cost the same on a node
+with ten edges as on one with a hundred thousand, and concurrent writers never
+queue on a hub's row lock. Keep index auto-creation on
+(`JVSPATIAL_AUTO_CREATE_INDEXES`, default on outside serverless) or run
+`ensure_indexes(Edge)` at deploy time — without those indexes every adjacency
+read scans the `edge` table.
 
-Rows written by 0.0.17 and earlier still carry the array. Reads ignore it and
-the next save of each node drops it; to reclaim the space in one pass:
+Rows written by 0.0.17 and earlier may still carry the array. Reads ignore it
+and the next save of each node drops it; to reclaim the space in one pass:
 
 ```bash
 jvspatial migrate strip-node-edges --dsn "$JVSPATIAL_POSTGRES_DSN"          # dry run: count rows
 jvspatial migrate strip-node-edges --dsn "$JVSPATIAL_POSTGRES_DSN" --apply  # strip, batched
 ```
 
-It is idempotent and safe while the application serves traffic (derive mode
-never writes the array back). Tables with `FORCE ROW LEVEL SECURITY` must be
+It is idempotent and safe while the application serves traffic (saves never
+write the array back). Tables with `FORCE ROW LEVEL SECURITY` must be
 migrated by a role that bypasses RLS. Afterwards run `VACUUM (ANALYZE) node`
 and `REINDEX INDEX CONCURRENTLY node_data_gin` to return the space.
-
-To keep the pre-0.0.18 behaviour set `JVSPATIAL_NODE_EDGE_IDS=persist` (or
-`db.edge_ids_mode = "persist"` on the adapter).
 
 ## Pool tuning
 
@@ -357,7 +354,6 @@ precedence):
 | `JVSPATIAL_POSTGRES_MAX_POOL_SIZE`      | Pool max size override                             |
 | `JVSPATIAL_POSTGRES_POOLER_MODE`        | `"session"` (default) or `"transaction"`           |
 | `JVSPATIAL_POSTGRES_COMMAND_TIMEOUT`    | Per-statement timeout in seconds (default 60)      |
-| `JVSPATIAL_NODE_EDGE_IDS`               | `"derive"` (Postgres default) or `"persist"`       |
 | `JVSPATIAL_PG_GIN_INDEX`                | `"full"` (default) or `"off"` — whole-document GIN |
 
 ## Operational tips

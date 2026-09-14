@@ -23,9 +23,10 @@ version under the `_v` key. When a record is loaded:
    and continues with the as-stored values — we never downgrade silently.
 
 Migrations are pure functions: `(dict) -> dict`. They get the raw
-persisted record (with its `entity` / `context` / `edges` / etc. shape)
-and return the upgraded record. The framework handles `_v` stamping
-itself.
+persisted record (with its `entity` / `context` / etc. shape — node
+records no longer carry a top-level `edges` array; use
+`jvspatial migrate strip-node-edges` for legacy scrub) and return the
+upgraded record. The framework handles `_v` stamping itself.
 
 ## Authoring a migration
 
