@@ -191,6 +191,109 @@ class Object(AttributeMixin, BaseModel):
             await flush_fn()
         return obj
 
+    @classmethod
+    async def create_if_absent(
+        cls: Type["Object"], **kwargs: Any
+    ) -> tuple["Object", bool]:
+        """Create and persist only if absent for the given ``id``.
+
+        Idempotent when the caller supplies a deterministic ``id``.
+        Unlike :meth:`create` / :meth:`save`, never updates an existing row.
+        Returns ``(entity, created)`` where ``entity`` is the stored winner
+        (rehydrated from the database when ``created`` is ``False``).
+
+        Does not call through :meth:`save`. For
+        :class:`~jvspatial.core.mixins.DeferredSaveMixin` types, ``flush()``
+        runs only when ``created`` is ``True`` (mirrors :meth:`create`'s
+        end-of-batch clear when the insert won).
+        """
+        obj = cls(**kwargs)
+        context = await obj.get_context()
+        await context.ensure_indexes(cls)
+
+        # Build the persistence record the same way GraphContext.save does,
+        # but route through insert_if_absent instead of save.
+        if hasattr(obj, "type_code"):
+            type_code = getattr(obj, "type_code", "")
+            if type_code in ("n", "e", "w"):
+                record = await obj.export()
+                if "entity" not in record:
+                    record["entity"] = obj.entity
+            else:
+                record = await obj.export()
+                entity_id = getattr(obj, "id", None)
+                if entity_id:
+                    id_parts = entity_id.split(".")
+                    entity_name_resolver = getattr(cls, "_entity_name", None)
+                    expected_entity_name = (
+                        entity_name_resolver()
+                        if callable(entity_name_resolver)
+                        else cls.__name__
+                    )
+                    if (
+                        len(id_parts) != 3
+                        or id_parts[0] != obj.type_code
+                        or id_parts[1] != expected_entity_name
+                    ):
+                        new_id = generate_id(obj.type_code, expected_entity_name)
+                        object.__setattr__(obj, "id", new_id)
+                        record["id"] = new_id
+        else:
+            record = await obj.export()
+            from jvspatial.utils.serialization import serialize_datetime
+
+            record = serialize_datetime(record)
+            if "entity" not in record and hasattr(obj, "entity"):
+                record["entity"] = obj.entity
+
+        from jvspatial.utils.normalization import (
+            is_text_normalization_enabled,
+            normalize_data,
+        )
+
+        if is_text_normalization_enabled():
+            record = normalize_data(record)
+
+        if hasattr(obj, "get_collection_name"):
+            collection = obj.get_collection_name()
+        else:
+            type_code = obj.type_code
+            if type_code == "n":
+                collection = "node"
+            elif type_code == "e":
+                collection = "edge"
+            else:
+                collection = type_code.lower()
+
+        is_node = hasattr(obj, "type_code") and getattr(obj, "type_code", "") == "n"
+        if is_node:
+            record.pop("edges", None)
+
+        result = await context.database.insert_if_absent(collection, record)
+
+        if result.created:
+            entity: Object = obj
+            await context._add_to_cache(entity.id, entity)
+            flush_fn = getattr(entity, "flush", None)
+            if (
+                flush_fn is not None
+                and callable(flush_fn)
+                and inspect.iscoroutinefunction(flush_fn)
+            ):
+                await flush_fn()
+            return entity, True
+
+        entity_opt = await context._deserialize_entity(cls, result.record)
+        if entity_opt is None:
+            raise RuntimeError(
+                f"create_if_absent could not rehydrate {cls.__name__} "
+                f"from stored record id={result.record.get('id')!r}"
+            )
+        entity = entity_opt
+        entity._graph_context = context
+        await context._add_to_cache(entity.id, entity)
+        return entity, False
+
     async def update(
         self: "Object",
         properties: Dict[str, Any],
