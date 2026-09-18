@@ -34,12 +34,13 @@ from typing import (
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import (
     ConnectionFailure,
+    DuplicateKeyError,
     OperationFailure,
     PyMongoError,
     ServerSelectionTimeoutError,
 )
 
-from jvspatial.db.database import Database
+from jvspatial.db.database import Database, InsertIfAbsentResult
 from jvspatial.exceptions import DatabaseError
 from jvspatial.utils.retry import retry_async
 
@@ -294,6 +295,43 @@ class MongoDB(Database):
             return data
 
         return await self._run_with_reconnect("save", _save_op)
+
+    async def insert_if_absent(
+        self,
+        collection: str,
+        data: Dict[str, Any],
+        *,
+        conflict_target: str = "id",
+    ) -> InsertIfAbsentResult:
+        """Insert via ``insert_one``; on DuplicateKeyError, ``find_one`` winner."""
+        record_id = self._validate_insert_if_absent(data, conflict_target)
+        payload = dict(data)
+        payload["id"] = record_id
+        if "_id" not in payload:
+            payload["_id"] = record_id
+
+        async def _insert_op() -> InsertIfAbsentResult:
+            await self._ensure_connected()
+            if self._db is None:
+                raise DatabaseError("MongoDB database connection not established")
+            collection_obj = self._db[collection]
+            try:
+                await collection_obj.insert_one(payload)
+                return InsertIfAbsentResult(record=payload, created=True)
+            except DuplicateKeyError:
+                existing = await collection_obj.find_one({"_id": record_id})
+                if existing is None:
+                    # Rare: conflict on a secondary unique index, not _id
+                    existing = await collection_obj.find_one({"id": record_id})
+                if existing is None:
+                    raise DatabaseError(
+                        "insert_if_absent hit DuplicateKeyError but no row "
+                        f"with id={record_id!r} exists in collection "
+                        f"{collection!r}"
+                    )
+                return InsertIfAbsentResult(record=existing, created=False)
+
+        return await self._run_with_reconnect("insert_if_absent", _insert_op)
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a record by ID."""

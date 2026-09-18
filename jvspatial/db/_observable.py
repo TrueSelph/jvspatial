@@ -47,7 +47,7 @@ from typing import (
     Union,
 )
 
-from jvspatial.db.database import BulkSaveResult, Database
+from jvspatial.db.database import BulkSaveResult, Database, InsertIfAbsentResult
 from jvspatial.observability import db_op_counter
 from jvspatial.observability.metrics import (
     MetricsRecorder,
@@ -210,6 +210,23 @@ class ObservableDatabase(Database):
         """Instrumented ``save`` (emits structured log + metric)."""
         return await self._instrument(
             "save", collection, lambda: self.inner.save(collection, data)
+        )
+
+    async def insert_if_absent(
+        self,
+        collection: str,
+        data: Dict[str, Any],
+        *,
+        conflict_target: str = "id",
+    ) -> InsertIfAbsentResult:
+        """Instrumented ``insert_if_absent`` (emits structured log + metric)."""
+        return await self._instrument(
+            "insert_if_absent",
+            collection,
+            lambda: self.inner.insert_if_absent(
+                collection, data, conflict_target=conflict_target
+            ),
+            result_count_extractor=lambda r: (1 if getattr(r, "created", False) else 0),
         )
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:

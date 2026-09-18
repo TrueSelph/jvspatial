@@ -31,7 +31,7 @@ from ._sqlite_translate import (
     translate_query,
     translate_sort,
 )
-from .database import Database, finalize_find_results
+from .database import Database, InsertIfAbsentResult, finalize_find_results
 from .query import QueryEngine
 
 logger = logging.getLogger(__name__)
@@ -502,6 +502,52 @@ class SQLiteDB(Database):
             )
             await connection.commit()
             return record
+
+    async def insert_if_absent(
+        self,
+        collection: str,
+        data: Dict[str, Any],
+        *,
+        conflict_target: str = "id",
+    ) -> InsertIfAbsentResult:
+        """Insert only when ``id`` is absent. Never ``INSERT OR REPLACE``.
+
+        Uses ``INSERT OR IGNORE`` so primary-key (and other unique) conflicts
+        leave existing rows untouched. On ignore with an existing same-id
+        row, returns that stored record with ``created=False``.
+        """
+        record_id = self._validate_insert_if_absent(data, conflict_target)
+        async with self._lock:
+            connection = await self._get_connection()
+            record = data.copy()
+            record["id"] = record_id
+            payload = json.dumps(record)
+            cursor = await connection.execute(
+                """
+                INSERT OR IGNORE INTO records (collection, id, data)
+                VALUES (?, ?, ?)
+                """,
+                (collection, record_id, payload),
+            )
+            await connection.commit()
+            if cursor.rowcount and cursor.rowcount > 0:
+                return InsertIfAbsentResult(record=record, created=True)
+            # Conflict (or ignore for another unique constraint): load by id.
+            sel = await connection.execute(
+                "SELECT data FROM records WHERE collection = ? AND id = ?",
+                (collection, record_id),
+            )
+            row = await sel.fetchone()
+            await sel.close()
+            if row is None:
+                from jvspatial.db.database import DatabaseError
+
+                raise DatabaseError(
+                    "insert_if_absent ignored a constraint conflict but no "
+                    f"row with id={record_id!r} exists in collection "
+                    f"{collection!r}"
+                )
+            return InsertIfAbsentResult(record=json.loads(row["data"]), created=False)
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a record from the database.

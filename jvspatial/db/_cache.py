@@ -38,7 +38,7 @@ import time
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from jvspatial.db.database import BulkSaveResult, Database
+from jvspatial.db.database import BulkSaveResult, Database, InsertIfAbsentResult
 from jvspatial.runtime.serverless import is_serverless_mode
 
 logger = logging.getLogger(__name__)
@@ -156,6 +156,22 @@ class CachingDatabase(Database):
             # than just invalidating -- a save is the strongest possible
             # confirmation of the current state.
             self._cache_put(collection, str(rec_id), dict(result))
+        return result
+
+    async def insert_if_absent(
+        self,
+        collection: str,
+        data: Dict[str, Any],
+        *,
+        conflict_target: str = "id",
+    ) -> InsertIfAbsentResult:
+        """Forward insert-if-absent and cache the stored winner."""
+        result = await self.inner.insert_if_absent(
+            collection, data, conflict_target=conflict_target
+        )
+        rec_id = result.record.get("id", result.record.get("_id"))
+        if rec_id is not None and self._enabled():
+            self._cache_put(collection, str(rec_id), dict(result.record))
         return result
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
