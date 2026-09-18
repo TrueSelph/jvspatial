@@ -74,7 +74,7 @@ from .core.mixins import (
 )
 
 # Simplified database and cache
-from .db import Database, create_database
+from .db import Database, InsertIfAbsentResult, create_database
 from .db.work_claim import claim_record, delete_claimed_record, release_claim
 
 # Observability primitives
@@ -140,6 +140,7 @@ __all__ = [
     "Server",
     # Database & Cache
     "Database",
+    "InsertIfAbsentResult",
     "create_database",
     "create_cache",
     # Observability
