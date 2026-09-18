@@ -17,15 +17,18 @@ bump (post-1.0) or a minor bump (pre-1.0) and must be called out in
 These names are exported from `jvspatial/__init__.py`'s `__all__` and
 are the canonical import path:
 
-- **Core entities.** `Object`, `Node`, `Edge`, `Walker`, `Root`,
-  `GraphContext`.
+- **Core entities.** `Object` (including `Object.create_if_absent`),
+  `Node`, `Edge`, `Walker`, `Root`, `GraphContext`.
 - **Decorators.** `attribute`, `endpoint`.
 - **Server / config.** `Server`, `ServerConfig`.
-- **Database.** `Database`, `create_database`. The
+- **Database.** `Database`, `create_database`, `InsertIfAbsentResult`. The
   `Database.supports_transactions` capability flag is part of this
   surface, as are the bulk methods `Database.find_many` and
-  `Database.bulk_save`. Adapters not overriding the bulk methods
-  fall through to the (slower) default serial implementations.
+  `Database.bulk_save`, and `Database.insert_if_absent` (v1:
+  `conflict_target="id"` only). Adapters not overriding the bulk methods
+  fall through to the (slower) default serial implementations. Custom
+  adapters must implement `insert_if_absent` or callers hit
+  `NotImplementedError`.
 - **Cache.** `create_cache`.
 - **Mixins.** `DeferredSaveMixin`, `deferred_saves_globally_allowed`,
   `flush_deferred_entities`.

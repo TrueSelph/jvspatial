@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.20] - 2026-09-18
+
+### Added
+
+- **`Database.insert_if_absent` / `Object.create_if_absent`.** Atomic
+  insert-if-absent on primary key `id` across SQLite (`INSERT OR IGNORE`),
+  Postgres (`ON CONFLICT DO NOTHING RETURNING`), MongoDB (`insert_one` +
+  `DuplicateKeyError`), JsonDB (path lock), and DynamoDB
+  (`attribute_not_exists(id)`). Returns `InsertIfAbsentResult(record, created)`
+  / `(entity, created)` without calling through upsert `save()`. Wrappers
+  (`CachingDatabase`, `ObservableDatabase`) forward correctly.
+  `DeferredSaveMixin.flush()` runs only when `created=True`.
+
 ## [0.0.19] - 2026-09-14
 
 ### Removed
