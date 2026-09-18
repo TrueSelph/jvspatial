@@ -560,7 +560,7 @@ class DynamoDB(Database):
         *,
         conflict_target: str = "id",
     ) -> InsertIfAbsentResult:
-        """PutItem when id is absent; on ConditionalCheckFailed, GetItem."""
+        """Insert via PutItem when id is absent; on conflict, GetItem."""
         record_id = self._validate_insert_if_absent(data, conflict_target)
         payload = dict(data)
         payload["id"] = record_id
