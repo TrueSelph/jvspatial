@@ -127,6 +127,44 @@ class TestPostgresCRUD:
         loaded = await pg_db.get("node", "n.x.upsert")
         assert loaded["context"]["v"] == 2
 
+    async def test_insert_if_absent_creates_then_preserves(
+        self, pg_db: "PostgresDB"
+    ) -> None:
+        from jvspatial.db.database import InsertIfAbsentResult
+
+        first = {"id": "n.x.iia", "entity": "x", "context": {"v": 1}}
+        r1 = await pg_db.insert_if_absent("node", first)
+        assert isinstance(r1, InsertIfAbsentResult)
+        assert r1.created is True
+        assert r1.record["context"]["v"] == 1
+
+        r2 = await pg_db.insert_if_absent(
+            "node", {"id": "n.x.iia", "entity": "x", "context": {"v": 99}}
+        )
+        assert r2.created is False
+        assert r2.record["context"]["v"] == 1
+        loaded = await pg_db.get("node", "n.x.iia")
+        assert loaded is not None
+        assert loaded["context"]["v"] == 1
+
+    async def test_insert_if_absent_concurrent_same_id(
+        self, pg_db: "PostgresDB"
+    ) -> None:
+        rec_id = "n.x.iia.conc"
+        results = await asyncio.gather(
+            *[
+                pg_db.insert_if_absent(
+                    "node",
+                    {"id": rec_id, "entity": "x", "context": {"n": i}},
+                )
+                for i in range(12)
+            ]
+        )
+        assert sum(1 for r in results if r.created) == 1
+        winner = next(r.record for r in results if r.created)
+        for r in results:
+            assert r.record == winner
+
     async def test_delete_removes(self, pg_db: "PostgresDB") -> None:
         await pg_db.save("node", {"id": "n.x.del", "entity": "x", "context": {}})
         await pg_db.delete("node", "n.x.del")
