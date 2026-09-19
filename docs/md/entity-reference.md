@@ -21,6 +21,8 @@ class Object(BaseModel):
     @classmethod
     async def create(cls, **kwargs) -> "Object"
     @classmethod
+    async def create_if_absent(cls, **kwargs) -> tuple["Object", bool]
+    @classmethod
     async def find(cls, query: Optional[dict] = None, **filters) -> List["Object"]
     @classmethod
     async def find_one(cls, query: Optional[dict] = None, **filters) -> Optional["Object"]
@@ -29,6 +31,12 @@ class Object(BaseModel):
     async def delete(cascade: bool = False) -> None  # cascade is ignored for Object entities
     async def export() -> dict
 ```
+
+**`create_if_absent`** — persist only when no row exists for the given `id`.
+Returns `(entity, created)`. On conflict, rehydrates the **stored** winner
+(never merges proposed fields). Does not call through upsert `save()`.
+Requires a deterministic `id` for idempotency; auto-generated ids always
+create. See `Database.insert_if_absent` / `InsertIfAbsentResult`.
 
 **Convenience Methods**
 

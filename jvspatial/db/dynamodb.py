@@ -36,7 +36,7 @@ except ImportError:
     ClientError = Exception  # type: ignore[assignment, misc]
     Config = None  # type: ignore[assignment, misc]
 
-from jvspatial.db.database import Database, finalize_find_results
+from jvspatial.db.database import Database, InsertIfAbsentResult, finalize_find_results
 from jvspatial.db.query import QueryEngine
 from jvspatial.exceptions import DatabaseError
 from jvspatial.utils.retry import retry_async
@@ -552,6 +552,65 @@ class DynamoDB(Database):
 
         await self._run_with_throttle_retry("save", _put_op)
         return data
+
+    async def insert_if_absent(
+        self,
+        collection: str,
+        data: Dict[str, Any],
+        *,
+        conflict_target: str = "id",
+    ) -> InsertIfAbsentResult:
+        """Insert via PutItem when id is absent; on conflict, GetItem."""
+        record_id = self._validate_insert_if_absent(data, conflict_target)
+        payload = dict(data)
+        payload["id"] = record_id
+        table_name = await self._ensure_table_exists(collection)
+
+        item = {
+            "collection": {"S": collection},
+            "id": {"S": record_id},
+            "data": {"S": json.dumps(payload, default=str)},
+        }
+        indexed_attrs = self._extract_indexed_fields(payload, collection)
+        item.update(indexed_attrs)
+
+        async def _put_op() -> InsertIfAbsentResult:
+            client = await self._get_client()
+            try:
+                await asyncio.wait_for(
+                    client.put_item(
+                        TableName=table_name,
+                        Item=item,
+                        ConditionExpression="attribute_not_exists(id)",
+                    ),
+                    timeout=30.0,
+                )
+                return InsertIfAbsentResult(record=payload, created=True)
+            except ClientError as e:
+                code = e.response.get("Error", {}).get("Code", "")
+                if code != "ConditionalCheckFailedException":
+                    raise
+                response = await client.get_item(
+                    TableName=table_name,
+                    Key={
+                        "collection": {"S": collection},
+                        "id": {"S": record_id},
+                    },
+                )
+                if "Item" not in response:
+                    raise DatabaseError(
+                        "insert_if_absent conditional check failed but no "
+                        f"row with id={record_id!r} exists in collection "
+                        f"{collection!r}"
+                    ) from e
+                existing = json.loads(response["Item"]["data"]["S"])
+                return InsertIfAbsentResult(record=existing, created=False)
+            except asyncio.TimeoutError:
+                raise DatabaseError(
+                    f"DynamoDB insert_if_absent timed out for table: {table_name}"
+                )
+
+        return await self._run_with_throttle_retry("insert_if_absent", _put_op)
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a record by ID.

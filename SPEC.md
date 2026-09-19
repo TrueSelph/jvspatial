@@ -102,7 +102,7 @@ AttributeMixin + pydantic.BaseModel
 
 `jvspatial/core/entities/object.py`. Provides:
 - `id`, `entity`, `type_code` fields
-- CRUD methods: `create()`, `get()`, `find()`, `save()`, `delete()`, `count()`, `export()`
+- CRUD methods: `create()`, `create_if_absent()`, `get()`, `find()`, `save()`, `delete()`, `count()`, `export()`
 - Context lookup: `set_context()`, `get_context()` (default via `get_default_context()`)
 - Collection mapping via `get_collection_name()` → `{n: node, e: edge, o: object, w: walker}`
 
@@ -211,6 +211,7 @@ When `DeferredSaveMixin` is mixed into an entity *and* `deferred_saves_globally_
 | Method | Required | Description |
 |---|---|---|
 | `save(collection, data)` | Yes | Insert-or-replace by ID; returns saved record |
+| `insert_if_absent(collection, data, *, conflict_target="id")` | Yes (built-ins) | Atomic insert-if-absent on primary key `id` only (v1); returns `InsertIfAbsentResult(record, created)`. Never updates. Default ABC raises `NotImplementedError` after validating args. |
 | `get(collection, id)` | Yes | Fetch by ID or `None` |
 | `delete(collection, id)` | Yes | Idempotent delete by ID |
 | `find(collection, query, *, limit, sort)` | Yes | Mongo-style query; returns list. Ordering contract below |

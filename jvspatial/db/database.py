@@ -67,6 +67,19 @@ class BulkSaveResult:
         return self.saved == self.attempted and not self.failed_ids
 
 
+@dataclass(frozen=True)
+class InsertIfAbsentResult:
+    """Outcome of :meth:`Database.insert_if_absent`.
+
+    ``record`` is the **stored** document (newly inserted or the existing
+    winner). ``created`` is ``True`` only when this call performed the
+    insert. Never merges proposed fields into an existing row.
+    """
+
+    record: Dict[str, Any]
+    created: bool
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -214,6 +227,60 @@ class Database(ABC):
             Saved record with any database-generated fields
         """
         pass
+
+    @staticmethod
+    def _validate_insert_if_absent(data: Dict[str, Any], conflict_target: str) -> str:
+        """Validate v1 ``insert_if_absent`` arguments; return the record id.
+
+        Raises:
+            ValueError: ``conflict_target`` is not ``'id'``, or ``data``
+                lacks a non-empty ``id``.
+        """
+        if conflict_target != "id":
+            raise ValueError(
+                "insert_if_absent conflict_target must be 'id' in v1; "
+                f"got {conflict_target!r}"
+            )
+        if not data or data.get("id") is None or data.get("id") == "":
+            raise ValueError(
+                "insert_if_absent requires data with a non-empty 'id' field"
+            )
+        return str(data["id"])
+
+    async def insert_if_absent(
+        self,
+        collection: str,
+        data: Dict[str, Any],
+        *,
+        conflict_target: str = "id",
+    ) -> InsertIfAbsentResult:
+        """Insert ``data`` only when no row exists for ``conflict_target``.
+
+        v1 supports ``conflict_target='id'`` (primary key) only. On
+        conflict, returns the **existing stored** record unchanged
+        (``created=False``). Must not call through :meth:`save`.
+
+        Built-in adapters override this with an atomic backend primitive.
+        The default raises :class:`NotImplementedError` after validation
+        so custom adapters fail loudly until they implement it.
+
+        Args:
+            collection: Collection name
+            data: Record data (must include non-empty ``id``)
+            conflict_target: Conflict key; must be ``'id'`` in v1
+
+        Returns:
+            :class:`InsertIfAbsentResult` with the stored record and
+            whether this call created it
+
+        Raises:
+            ValueError: Invalid ``conflict_target`` or missing ``id``
+            NotImplementedError: Adapter has not implemented this method
+        """
+        self._validate_insert_if_absent(data, conflict_target)
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement insert_if_absent"
+        )
 
     @abstractmethod
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
@@ -647,6 +714,7 @@ __all__ = [
     "DatabaseError",
     "VersionConflictError",
     "BulkSaveResult",
+    "InsertIfAbsentResult",
     "encode_cursor",
     "decode_cursor",
     "finalize_find_results",

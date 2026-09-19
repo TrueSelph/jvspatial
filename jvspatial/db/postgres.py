@@ -88,6 +88,8 @@ from ._postgres_translate import translate_query, translate_sort, tsvector_expre
 from .database import (
     BulkSaveResult,
     Database,
+    DatabaseError,
+    InsertIfAbsentResult,
     decode_cursor,
     finalize_find_results,
 )
@@ -765,6 +767,54 @@ class PostgresDB(Database):
                     *bind,
                 )
         return data
+
+    async def insert_if_absent(
+        self,
+        collection: str,
+        data: Dict[str, Any],
+        *,
+        conflict_target: str = "id",
+    ) -> InsertIfAbsentResult:
+        """Insert only when ``id`` is absent; never ``ON CONFLICT DO UPDATE``.
+
+        Uses ``INSERT ... ON CONFLICT (id) DO NOTHING RETURNING data``. When
+        no row is returned, ``SELECT`` loads the existing stored record.
+        Honors tenant scoping via :meth:`_acquire_conn`.
+        """
+        self._validate_insert_if_absent(data, conflict_target)
+        await self._bootstrap_collection(collection)
+        rec_id, entity, tenant, data_json = self._split_payload(data)
+        col = _safe_collection(collection)
+        schema = _safe_collection(self.schema_name)
+
+        async with self._acquire_conn() as conn:
+            row = await conn.fetchrow(
+                f"""
+                INSERT INTO {schema}.{col} (id, entity, tenant_id, data, updated_at)
+                VALUES ($1, $2, $3, $4::jsonb, NOW())
+                ON CONFLICT (id) DO NOTHING
+                RETURNING data
+                """,
+                rec_id,
+                entity,
+                tenant,
+                data_json,
+            )
+            if row is not None:
+                return InsertIfAbsentResult(
+                    record=self._record_from_row(row), created=True
+                )
+            existing = await conn.fetchrow(
+                f"SELECT data FROM {schema}.{col} WHERE id = $1", rec_id
+            )
+            if existing is None:
+                raise DatabaseError(
+                    "insert_if_absent conflicted but no row with "
+                    f"id={rec_id!r} exists in collection {collection!r}"
+                )
+            return InsertIfAbsentResult(
+                record=self._record_from_row(existing), created=False
+            )
 
     async def strip_node_edges(
         self,
@@ -2169,6 +2219,47 @@ class PostgresTransaction:
             data_json,
         )
         return data
+
+    async def insert_if_absent(
+        self,
+        collection: str,
+        data: Dict[str, Any],
+        *,
+        conflict_target: str = "id",
+    ) -> InsertIfAbsentResult:
+        """Insert-if-absent within this transaction (same SQL as PostgresDB)."""
+        self._db._validate_insert_if_absent(data, conflict_target)
+        col = _safe_collection(collection)
+        schema = _safe_collection(self._db.schema_name)
+        await self._db._bootstrap_collection(collection)
+        rec_id, entity, tenant, data_json = self._db._split_payload(data)
+        row = await self._connection.fetchrow(
+            f"""
+            INSERT INTO {schema}.{col} (id, entity, tenant_id, data, updated_at)
+            VALUES ($1, $2, $3, $4::jsonb, NOW())
+            ON CONFLICT (id) DO NOTHING
+            RETURNING data
+            """,
+            rec_id,
+            entity,
+            tenant,
+            data_json,
+        )
+        if row is not None:
+            return InsertIfAbsentResult(
+                record=self._db._record_from_row(row), created=True
+            )
+        existing = await self._connection.fetchrow(
+            f"SELECT data FROM {schema}.{col} WHERE id = $1", rec_id
+        )
+        if existing is None:
+            raise DatabaseError(
+                "insert_if_absent conflicted but no row with "
+                f"id={rec_id!r} exists in collection {collection!r}"
+            )
+        return InsertIfAbsentResult(
+            record=self._db._record_from_row(existing), created=False
+        )
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Fetch a single record by ``id`` from ``collection`` in this transaction."""

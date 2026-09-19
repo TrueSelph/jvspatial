@@ -5,7 +5,12 @@ and essential CRUD operations. Includes multi-database management with
 a prime default database for core persistence operations.
 """
 
-from .database import Database, DatabaseError, VersionConflictError
+from .database import (
+    Database,
+    DatabaseError,
+    InsertIfAbsentResult,
+    VersionConflictError,
+)
 from .factory import (
     create_database,
     create_default_database,
@@ -57,6 +62,7 @@ __all__ = [
     "Database",
     "DatabaseError",
     "VersionConflictError",
+    "InsertIfAbsentResult",
     "create_database",
     "create_default_database",
     "get_prime_database",

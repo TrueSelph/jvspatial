@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from jvspatial.db._atomic import atomic_write_bytes, cleanup_orphan_tmp_files
 from jvspatial.db._path_locks import PathLockManager
-from jvspatial.db.database import Database, finalize_find_results
+from jvspatial.db.database import Database, InsertIfAbsentResult, finalize_find_results
 from jvspatial.db.query import QueryEngine
 from jvspatial.runtime.serverless import is_serverless_mode
 
@@ -250,6 +250,40 @@ class JsonDB(Database):
         """
         await asyncio.to_thread(self._sync_write_record, collection, dict(data))
         return data
+
+    async def insert_if_absent(
+        self,
+        collection: str,
+        data: Dict[str, Any],
+        *,
+        conflict_target: str = "id",
+    ) -> InsertIfAbsentResult:
+        """Insert under path lock only when the record file is absent."""
+        record_id = self._validate_insert_if_absent(data, conflict_target)
+        payload = dict(data)
+        payload["id"] = record_id
+
+        def _sync_insert_if_absent() -> InsertIfAbsentResult:
+            record_path = self._get_record_path(collection, record_id)
+            with self._path_locks.lock(str(record_path)):
+                if record_path.exists():
+                    try:
+                        with open(record_path, "rb") as f:
+                            existing = _loads(f.read())
+                    except (ValueError, OSError):
+                        existing = None
+                    if existing is None:
+                        from jvspatial.db.database import DatabaseError
+
+                        raise DatabaseError(
+                            "insert_if_absent found an unreadable existing "
+                            f"file for id={record_id!r}"
+                        )
+                    return InsertIfAbsentResult(record=existing, created=False)
+                atomic_write_bytes(record_path, _dumps(payload))
+                return InsertIfAbsentResult(record=payload, created=True)
+
+        return await asyncio.to_thread(_sync_insert_if_absent)
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a record by ID."""
