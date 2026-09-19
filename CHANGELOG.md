@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.21] - 2026-09-19
+
+### Added
+
+- **`PostgresTransaction.find_one_and_update`.** Public compare-and-set on the
+  held asyncpg connection (`SELECT … FOR UPDATE` + upsert) so CAS and
+  `insert_if_absent` share one transaction handle. Enables atomic work-kernel
+  transition + outbox units without private `_connection` access.
+
 ## [0.0.20] - 2026-09-18
 
 ### Added

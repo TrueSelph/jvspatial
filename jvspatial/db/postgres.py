@@ -2326,6 +2326,94 @@ class PostgresTransaction:
             records = finalize_find_results(records, sort=sort, limit=limit)
         return records
 
+    async def find_one_and_update(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        update: Dict[str, Any],
+        upsert: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically find + update the first match on this transaction's connection.
+
+        Uses ``SELECT ... FOR UPDATE`` on the held connection so the row lock
+        participates in the outer transaction. Callers that also
+        ``insert_if_absent`` on the same handle get one atomic unit of work
+        on commit/rollback. Does not open a nested pool transaction.
+        """
+        from .database import _normalize_id_query
+
+        await self._db._bootstrap_collection(collection)
+        col = _safe_collection(collection)
+        schema = _safe_collection(self._db.schema_name)
+
+        q = _normalize_id_query(query)
+        translated = translate_query(q) if q else ("", [])
+        if translated is None:
+            # Fall back to in-transaction find + match (still on held conn).
+            candidates = await self.find(collection, q, limit=None)
+            matched = next(
+                (r for r in candidates if QueryEngine.match(r, q)),
+                None,
+            )
+            if matched is None:
+                if not upsert:
+                    return None
+                doc: Dict[str, Any] = {}
+                doc_id = query.get("_id", query.get("id"))
+                if doc_id is not None:
+                    doc["_id"] = doc_id
+                    doc["id"] = str(doc_id)
+                QueryEngine.apply_update(doc, update, apply_set_on_insert=True)
+            else:
+                doc = dict(matched)
+                QueryEngine.apply_update(doc, update, apply_set_on_insert=False)
+            record_id = doc.get("id", doc.get("_id"))
+            if record_id is not None:
+                doc["id"] = str(record_id)
+            await self.save(collection, doc)
+            return doc
+
+        where_sql, params = translated
+        clause = f" WHERE {where_sql}" if where_sql else ""
+        row = await self._connection.fetchrow(
+            f"SELECT ctid, data FROM {schema}.{col}{clause} " f"LIMIT 1 FOR UPDATE",
+            *params,
+        )
+        if row is None:
+            if not upsert:
+                return None
+            doc = {}
+            doc_id = query.get("_id", query.get("id"))
+            if doc_id is not None:
+                doc["_id"] = doc_id
+                doc["id"] = str(doc_id)
+            QueryEngine.apply_update(doc, update, apply_set_on_insert=True)
+        else:
+            doc = self._db._record_from_row(row)
+            QueryEngine.apply_update(doc, update, apply_set_on_insert=False)
+
+        record_id = doc.get("id", doc.get("_id"))
+        if record_id is not None:
+            doc["id"] = str(record_id)
+
+        rec_id, entity, tenant, data_json = self._db._split_payload(doc)
+        await self._connection.execute(
+            f"""
+            INSERT INTO {schema}.{col} (id, entity, tenant_id, data, updated_at)
+            VALUES ($1, $2, $3, $4::jsonb, NOW())
+            ON CONFLICT (id) DO UPDATE SET
+                entity     = EXCLUDED.entity,
+                tenant_id  = EXCLUDED.tenant_id,
+                data       = EXCLUDED.data,
+                updated_at = NOW()
+            """,
+            rec_id,
+            entity,
+            tenant,
+            data_json,
+        )
+        return doc
+
     async def commit(self) -> None:
         """Commit the wrapped asyncpg transaction. Idempotent."""
         if not self.is_active or self.is_committed or self.is_rolled_back:
