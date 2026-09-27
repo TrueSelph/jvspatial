@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-27
+
 ### Security
 
 - JWT validation now rejects user lookup failures and uses current database roles and permissions. Logout invalidates the access token and its bound refresh token; token revocation failures are surfaced. Public registration never grants admin access. Auth entry points have per-IP rate limits, generic account-state errors, and a 12-character password minimum.
