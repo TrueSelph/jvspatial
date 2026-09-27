@@ -32,6 +32,8 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional
 
 import pytest
 
+from jvspatial.core.entities import Edge, Node
+
 try:
     import asyncpg
 except ImportError:  # pragma: no cover - dependency gated below
@@ -782,3 +784,43 @@ class TestPostgresPgvector:
             },
         )
         assert [r["id"] for r in out] == ["d.x", "d.y"]
+
+
+class _TxnFolder(Node):
+    name: str = ""
+
+
+class _TxnNote(Node):
+    title: str = ""
+
+
+class _TxnContains(Edge):
+    pass
+
+
+class TestGraphTransaction:
+    async def test_node_and_edge_roll_back_together(self, pg_db: "PostgresDB") -> None:
+        from jvspatial.core.context import graph_transaction
+
+        with pytest.raises(RuntimeError, match="abort"):
+            async with graph_transaction(pg_db):
+                folder = await _TxnFolder.create(name="inbox")
+                note = await _TxnNote.create(title="hello")
+                await folder.connect(note, edge=_TxnContains)
+                raise RuntimeError("abort")
+        assert await pg_db.find("node", {}) == []
+        assert await pg_db.find("edge", {}) == []
+
+    async def test_node_and_edge_commit_together(self, pg_db: "PostgresDB") -> None:
+        from jvspatial.core.context import graph_transaction
+
+        async with graph_transaction(pg_db):
+            folder = await _TxnFolder.create(name="inbox")
+            note = await _TxnNote.create(title="hello")
+            await folder.connect(note, edge=_TxnContains)
+            folder_id, note_id = folder.id, note.id
+        nodes = {row["id"] for row in await pg_db.find("node", {})}
+        assert folder_id in nodes
+        assert note_id in nodes
+        edges = await pg_db.find("edge", {})
+        assert len(edges) == 1

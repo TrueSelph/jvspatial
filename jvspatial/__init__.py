@@ -61,7 +61,7 @@ from .cache import create_cache
 
 # Simplified decorators
 from .core.annotations import attribute
-from .core.context import GraphContext
+from .core.context import GraphContext, TransactionUnavailable, graph_transaction
 
 # Unified entity system
 from .core.entities import Edge, Node, Object, Root, Walker
@@ -129,6 +129,8 @@ __all__ = [
     "Walker",
     "Root",
     "GraphContext",
+    "graph_transaction",
+    "TransactionUnavailable",
     # Mixins
     "DeferredSaveMixin",
     "deferred_saves_globally_allowed",

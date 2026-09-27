@@ -7,11 +7,14 @@ is handled internally to maintain semantic simplicity.
 
 from .context import (
     GraphContext,
+    TransactionUnavailable,
     async_graph_context,
+    async_transaction_context,
     clear_default_context,
     clear_default_context_global,
     get_default_context,
     graph_context,
+    graph_transaction,
     reset_default_context,
     scoped_default_context,
     scoped_default_context_async,
@@ -84,4 +87,7 @@ __all__ = [
     "scoped_default_context_async",
     "graph_context",
     "async_graph_context",
+    "graph_transaction",
+    "async_transaction_context",
+    "TransactionUnavailable",
 ]
