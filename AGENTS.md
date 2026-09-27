@@ -76,6 +76,10 @@ CORS does **not** default to wildcard. CSP is strict on app routes, relaxed only
 
 Auth-enabled servers also retain the per-IP 5-request/60-second cap on register, login, forgot-password, and reset-password when global rate limiting is off. `RateLimitConfig(auth_entrypoint_rate_limit_enabled=False)` is an explicit opt-out for tests or hosts with a trusted replacement limiter; do not infer it from the global limiter flag.
 
+Raw FastAPI routes may defer authentication to FastAPI only when they declare an enforcing `SecurityBase` dependency. Dependency function names do not prove authentication. Admin-only routes and routes with jvspatial auth metadata still use framework authentication and RBAC.
+
+In-memory `$regex` evaluation has a per-candidate timeout. Preserve that bound when changing query backends or operators; input length limits alone do not prevent backtracking. Webhook requests with idempotency keys must claim a durable record before handler execution and persist an outcome before success is returned. A pending claim needs reconciliation before a new attempt.
+
 ### 9. Walker protection
 
 `max_steps=10000`, `max_visits_per_node=100`, `max_execution_time=300s`, `max_queue_size=1000` are defaults that prevent DOS. Disabling protection is allowed locally; never disable globally or in code that touches user input.

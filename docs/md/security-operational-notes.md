@@ -13,6 +13,8 @@ This page complements [environment-configuration.md](environment-configuration.m
 
 Webhook authentication can read API keys from query parameters or path segments (see webhook configuration). **Prefer header-based API keys in production.** Query and path parameters are more likely to appear in access logs, reverse proxies, browser history, and `Referer` headers.
 
+Webhook idempotency keys are claimed atomically in the shared database before the handler runs. An in-flight retry or reused key with different request content returns 409. If a worker dies after a claim, the outcome may be uncertain; inspect the downstream effect before clearing the pending record. A database write failure returns 503 rather than relying on process-local memory. Claims only guard requests that supply an idempotency header. Keep webhook side effects idempotent at their own boundary when practical.
+
 ## JWT blacklist (fail-closed)
 
 If the database or cache path used for token blacklist checks raises an error, validation **fails closed** by default: the token is treated as blacklisted. Failures are logged at **ERROR** with stack traces. `JVSPATIAL_AUTH_BLACKLIST_FAIL_CLOSED=false` restores the previous availability behavior and should be used only with a documented acceptance of revocation risk. Use a shared session store across workers for prompt cross-worker revocation.

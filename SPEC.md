@@ -305,7 +305,7 @@ No built-in migration framework. Adapters do not enforce schemas. Adding optiona
 | `$in`, `$nin` | Membership |
 | `$exists` | Field presence |
 | `$and`, `$or` | Logical combinators |
-| `$regex` | Regex match (string fields). Never index-backed; build patterns from user input with `jvspatial.db.escape_regex` |
+| `$regex` | Regex match (string fields). Never index-backed; build patterns from user input with `jvspatial.db.escape_regex`. In-memory matching caps pattern and candidate lengths and applies a 5 ms per-candidate timeout (`jvspatial/db/query.py`). Native database regex execution follows that database's resource limits. |
 | `$text` | Top-level `{"$text": {"$search": "words", "$fields": ["context.a", ...]}}`: every search word (case-insensitive, `\w+` tokens, no stemming) occurs in the concatenated fields; without `$fields` every string value is searched |
 
 ### 5.2 Pushdown vs in-memory
@@ -480,6 +480,8 @@ OpenAPI docs at `/docs` and `/redoc` in development unless `JVSPATIAL_DOCS_DISAB
 
 `jvspatial/api/auth/rbac.py` — roles map to permission unions. Wildcard support (e.g. `users:*`). Admin-only routes enforced on `/status`, `/logs`, and `/graph` subtrees by default. Endpoint-configuration lookup errors deny access; a successful lookup with no jvspatial metadata still requires authentication but has no undeclared role requirement, supporting mounted ASGI apps and raw FastAPI routes (`jvspatial/api/components/auth_middleware.py:153`).
 
+For a raw FastAPI route, the authentication middleware defers to FastAPI only when the route declares an enforcing `SecurityBase` dependency. Dependency names and optional security dependencies do not bypass framework authentication. Admin-only routes and routes with jvspatial endpoint metadata continue through framework authentication and RBAC (`jvspatial/api/components/endpoint_auth_resolver.py`).
+
 ### 9.3 Session management
 
 `SessionManager` tracks active sessions per user. **Per-process, in-memory** — true limits in multi-worker deployments are `limit × workers`. Document this when configuring session caps.
@@ -490,7 +492,7 @@ JWT tokens are blacklisted on logout, and the bound refresh token is deactivated
 
 ### 9.5 Webhook authentication
 
-`jvspatial/api/integrations/webhooks/` — required HMAC signatures are checked on every HTTP method. GET signs the raw query string; body-bearing methods sign the raw body (`jvspatial/api/integrations/webhooks/middleware.py:340`). Comparison is constant-time. Per-source secret rotation and configurable replay protection are supported.
+`jvspatial/api/integrations/webhooks/` — required HMAC signatures are checked on every HTTP method. GET signs the raw query string; body-bearing methods sign the raw body (`jvspatial/api/integrations/webhooks/middleware.py`). Comparison is constant-time. For requests with an idempotency header, the middleware atomically claims a deterministic key in the shared database before invoking the handler. A completed retry with identical method, path, and body replays the cached response. Pending claims and key reuse with different request content return 409. Claim or outcome storage failures fail closed; pending claims are retained for reconciliation, even after their TTL (`jvspatial/api/integrations/webhooks/{utils,middleware,models}.py`).
 
 ---
 

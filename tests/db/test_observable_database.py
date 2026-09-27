@@ -97,7 +97,11 @@ class TestSlowQuery:
         await jsondb.save("node", {"id": "x", "v": 1})
         with caplog.at_level(logging.WARNING, logger="jvspatial.db.observable"):
             await wrapped.get("node", "x")
-        warns = [r for r in caplog.records if r.levelno == logging.WARNING]
+        warns = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == "jvspatial.db.observable"
+        ]
         assert warns, "expected a WARNING-level slow query log"
         assert "SLOW" in warns[-1].message
 
@@ -107,7 +111,11 @@ class TestSlowQuery:
         await jsondb.save("node", {"id": "x", "v": 1})
         with caplog.at_level(logging.INFO, logger="jvspatial.db.observable"):
             await wrapped.get("node", "x")
-        warns = [r for r in caplog.records if r.levelno == logging.WARNING]
+        warns = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and r.name == "jvspatial.db.observable"
+        ]
         assert warns == []
 
 

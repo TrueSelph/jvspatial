@@ -404,10 +404,12 @@ class TestMimeTypeDetection:
         mime = validator.detect_mime_type(jpeg_content, "image.jpg")
         assert "image" in mime.lower()
 
-    async def test_png_detection(self):
+    async def test_png_detection(self, monkeypatch):
         """Test PNG MIME type detection."""
         # PNG header
         png_content = b"\x89PNG\r\n\x1a\n"
+        # Header-only fixture is not a complete PNG for libmagic.
+        monkeypatch.setattr("jvspatial.storage.security.validator.HAS_MAGIC", False)
         validator = FileValidator()
         mime = validator.detect_mime_type(png_content, "image.png")
         assert "image" in mime.lower()
@@ -541,10 +543,11 @@ class TestAllowedMimeTypes:
         result = validator.validate_file(content, "photo.jpg")
         assert result["valid"] is True
 
-    async def test_allowed_image_png(self):
+    async def test_allowed_image_png(self, monkeypatch):
         """Test that PNG images are allowed."""
         validator = FileValidator()
         content = b"\x89PNG\r\n\x1a\n"
+        monkeypatch.setattr("jvspatial.storage.security.validator.HAS_MAGIC", False)
         result = validator.validate_file(content, "graphic.png")
         assert result["valid"] is True
 
@@ -666,11 +669,13 @@ class TestValidatorEdgeCases:
         with pytest.raises((AttributeError, TypeError)):
             validator.validate_file(None, "file.txt")
 
-    async def test_binary_data_validated(self):
+    async def test_binary_data_validated(self, monkeypatch):
         """Test that binary data is properly validated."""
         # Use a different extension since .bin is blocked
         validator = FileValidator()
         binary_data = bytes(range(256))
+        # This test exercises the size result, not libmagic classification.
+        monkeypatch.setattr("jvspatial.storage.security.validator.HAS_MAGIC", False)
         # Use .dat which isn't explicitly blocked
         result = validator.validate_file(binary_data, "data.txt")
         assert result["size_bytes"] == 256
@@ -948,18 +953,20 @@ class TestDocumentationExamples:
 class TestHintMime:
     """Tests for the hint_mime parameter in detect_mime_type and validate_file."""
 
-    def test_detect_mime_type_hint_used_when_extension_missing(self):
+    def test_detect_mime_type_hint_used_when_extension_missing(self, monkeypatch):
         """hint_mime is used when neither magic nor extension can detect the type."""
         validator = FileValidator()
+        monkeypatch.setattr("jvspatial.storage.security.validator.HAS_MAGIC", False)
         content = b"\x00\x01\x02\x03unknown_binary"
         mime = validator.detect_mime_type(
             content, filename="0_upload", hint_mime="image/jpeg"
         )
         assert mime == "image/jpeg"
 
-    def test_detect_mime_type_hint_ignored_when_extension_works(self):
+    def test_detect_mime_type_hint_ignored_when_extension_works(self, monkeypatch):
         """hint_mime is not used when extension-based detection succeeds."""
         validator = FileValidator()
+        monkeypatch.setattr("jvspatial.storage.security.validator.HAS_MAGIC", False)
         content = b"plain text"
         mime = validator.detect_mime_type(
             content, filename="photo.jpg", hint_mime="image/png"
@@ -982,9 +989,10 @@ class TestHintMime:
         mime = validator.detect_mime_type(content, filename="upload", hint_mime=None)
         assert mime == "application/octet-stream"
 
-    def test_validate_file_with_hint_mime(self):
+    def test_validate_file_with_hint_mime(self, monkeypatch):
         """validate_file accepts hint_mime and uses it when detection fails."""
         validator = FileValidator()
+        monkeypatch.setattr("jvspatial.storage.security.validator.HAS_MAGIC", False)
         content = b"\x00\x01\x02\x03jpeg_binary"
         result = validator.validate_file(
             content, filename="0_upload", hint_mime="image/jpeg"

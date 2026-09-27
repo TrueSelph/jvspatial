@@ -42,7 +42,7 @@ async def generate_id_async(type_: str, class_name: str) -> str:
 
     @deprecated(
         replacement="jvspatial.core.utils.generate_id",
-        remove_in="0.1.0",
+        remove_in="0.2.0",
         name="jvspatial.core.utils.generate_id_async",
     )
     def _emit() -> None:

@@ -10,6 +10,8 @@ import time
 from collections import OrderedDict
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
+import regex
+
 from jvspatial.exceptions import QueryError
 
 # Default upper bound for the per-instance ``optimize_query`` cache. The
@@ -515,9 +517,12 @@ class QueryEngine:
                 ):
                     return False
                 try:
-                    if re.search(pattern, value, flags) is None:
+                    # Length limits alone do not stop catastrophic backtracking.
+                    # The third-party regex engine enforces a wall-clock budget
+                    # for each candidate evaluated by in-memory backends.
+                    if regex.search(pattern, value, flags, timeout=0.005) is None:
                         return False
-                except re.error:
+                except (regex.error, TimeoutError):
                     return False
             elif op == "$options":
                 pass  # MongoDB-style; handled with $regex above

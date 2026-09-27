@@ -8,7 +8,7 @@ This middleware handles all webhook-specific processing including:
 - Route parameter extraction
 """
 
-import json
+import base64
 import logging
 import time
 from typing import Any, Callable, Dict, Optional
@@ -207,6 +207,13 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                 logger.debug(
                     f"Returning cached response for duplicate request: {request.state.idempotency_key}"
                 )
+                cached = cached_response.get("_jvspatial_webhook_response_v1")
+                if cached:
+                    return Response(
+                        content=base64.b64decode(cached["body_b64"]),
+                        status_code=cached["status_code"],
+                        media_type=cached["content_type"],
+                    )
                 return JSONResponse(content=cached_response, status_code=200)
 
             # The handler must complete while the ASGI request is alive. For
@@ -215,15 +222,40 @@ class WebhookMiddleware(BaseHTTPMiddleware):
 
             # Store response for idempotency if needed
             idempotency_key = getattr(request.state, "idempotency_key", None)
-            if idempotency_key and isinstance(response, JSONResponse):
+            if idempotency_key:
                 try:
-                    response_content = (
-                        response.body.decode("utf-8") if response.body else "{}"
+                    body = getattr(response, "body", None)
+                    if body is None:
+                        chunks = []
+                        total_size = 0
+                        async for chunk in response.body_iterator:
+                            total_size += len(chunk)
+                            if total_size > self.config.max_payload_size:
+                                raise ValueError(
+                                    "Webhook response exceeds idempotency cache limit"
+                                )
+                            chunks.append(chunk)
+                        body = b"".join(chunks)
+
+                        async def replay_body():
+                            yield body
+
+                        response.body_iterator = replay_body()
+                    response_data = {
+                        "_jvspatial_webhook_response_v1": {
+                            "body_b64": base64.b64encode(body).decode("ascii"),
+                            "status_code": response.status_code,
+                            "content_type": response.headers.get("content-type"),
+                        }
+                    }
+                    await store_idempotent_response(
+                        idempotency_key, response_data, status_code=response.status_code
                     )
-                    response_data = json.loads(response_content)
-                    await store_idempotent_response(idempotency_key, response_data)
                 except Exception as e:
-                    logger.warning(f"Failed to cache response for idempotency: {e}")
+                    logger.exception("Failed to persist webhook idempotency outcome")
+                    raise HTTPException(
+                        status_code=503, detail="Webhook outcome pending reconciliation"
+                    ) from e
 
             return response
 
@@ -375,7 +407,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                 request.state.parsed_payload = processed_data.get("parsed_payload")
                 request.state.idempotency_key = processed_data.get("idempotency_key")
                 request.state.is_duplicate_request = processed_data["is_duplicate"]
-                request.state.hmac_verified = processed_data["hmac_verified"]
+                request.state.hmac_verified = processed_data.get("hmac_verified", False)
 
                 # Set cached response for duplicates
                 if cached_response:

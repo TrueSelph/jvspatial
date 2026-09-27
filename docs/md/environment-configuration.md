@@ -135,7 +135,7 @@ export JVSPATIAL_TEXT_NORMALIZATION_ENABLED=false
 
 Removed JWT env names (do not use): `JVSPATIAL_JWT_EXPIRATION_HOURS`, `JVSPATIAL_JWT_REFRESH_EXPIRATION_DAYS`.
 | `ADMIN_EMAIL` | string | — | Admin email for bootstrap. When set with `ADMIN_PASSWORD`, creates an admin user on first run. Pass to `auth.bootstrap_admin_email`. |
-| `ADMIN_PASSWORD` | string | — | Admin password for bootstrap (min 6 chars). Pass to `auth.bootstrap_admin_password`. |
+| `ADMIN_PASSWORD` | string | — | Admin password for bootstrap (min 12 chars). Pass to `auth.bootstrap_admin_password`. |
 | `ADMIN_NAME` | string | — | Admin display name for bootstrap. Defaults to email. Pass to `auth.bootstrap_admin_name`. |
 
 Example usage in Server config:

@@ -20,9 +20,12 @@ from jvspatial.api.components.auth_middleware import AuthenticationMiddleware
 from jvspatial.api.config import ServerConfig
 from jvspatial.api.integrations.storage.service import FileStorageService
 from jvspatial.api.integrations.webhooks.middleware import WebhookMiddleware
+from jvspatial.api.integrations.webhooks.models import cleanup_expired_webhook_data
 from jvspatial.api.integrations.webhooks.utils import (
     WebhookConfig,
     generate_hmac_signature,
+    reserve_idempotency,
+    store_idempotent_response,
 )
 from jvspatial.api.server_configurator import ServerConfigurator
 from jvspatial.core.context import GraphContext, scoped_default_context
@@ -291,6 +294,119 @@ async def test_signed_get_webhook_binds_query_string():
     with pytest.raises(HTTPException) as exc:
         await middleware._process_webhook_request(tampered, config)
     assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_webhook_idempotency_claim_is_durable_and_rejects_inflight(tmp_path):
+    context = GraphContext(database=JsonDB(str(tmp_path / "webhook")))
+    request = _request("/webhook/order")
+    request.scope["method"] = "POST"
+    with scoped_default_context(context):
+        assert await reserve_idempotency("order-1", request, b"{}", 3600) == (
+            False,
+            None,
+        )
+        with pytest.raises(HTTPException) as pending:
+            await reserve_idempotency("order-1", request, b"{}", 3600)
+        assert pending.value.status_code == 409
+        await store_idempotent_response("order-1", {"ok": True})
+        assert await reserve_idempotency("order-1", request, b"{}", 3600) == (
+            True,
+            {"ok": True},
+        )
+        with pytest.raises(HTTPException) as changed:
+            await reserve_idempotency("order-1", request, b'{"changed":true}', 3600)
+        assert changed.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_webhook_middleware_replays_completed_response_once(tmp_path):
+    import httpx
+
+    context = GraphContext(database=JsonDB(str(tmp_path / "webhook-middleware")))
+    app = FastAPI()
+    app.add_middleware(WebhookMiddleware, config=WebhookConfig(https_required=False))
+    calls = []
+
+    @app.post("/webhook/order")
+    async def handler():
+        calls.append(1)
+        return {"count": len(calls)}
+
+    transport = httpx.ASGITransport(app=app)
+    with scoped_default_context(context):
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            headers = {"X-Idempotency-Key": "order-42"}
+            first = await client.post("/webhook/order", json={}, headers=headers)
+            second = await client.post("/webhook/order", json={}, headers=headers)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json() == {"count": 1}
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_invalid_webhook_json_does_not_claim_key(tmp_path):
+    import httpx
+
+    context = GraphContext(database=JsonDB(str(tmp_path / "invalid-webhook")))
+    app = FastAPI()
+    app.add_middleware(WebhookMiddleware, config=WebhookConfig(https_required=False))
+
+    @app.post("/webhook/order")
+    async def handler():
+        return {"ok": True}
+
+    transport = httpx.ASGITransport(app=app)
+    with scoped_default_context(context):
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            headers = {"X-Idempotency-Key": "retry-after-400"}
+            invalid = await client.post(
+                "/webhook/order",
+                content=b"{invalid",
+                headers={**headers, "Content-Type": "application/json"},
+            )
+            valid = await client.post("/webhook/order", json={}, headers=headers)
+    assert invalid.status_code == 400
+    assert valid.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_concurrent_webhook_claim_has_one_winner(tmp_path):
+    context = GraphContext(database=JsonDB(str(tmp_path / "concurrent-webhook")))
+    request = _request("/webhook/order")
+    request.scope["method"] = "POST"
+
+    async def claim():
+        try:
+            return await reserve_idempotency("shared-key", request, b"{}", 3600)
+        except HTTPException as exc:
+            return exc.status_code
+
+    with scoped_default_context(context):
+        outcomes = await asyncio.gather(claim(), claim())
+    assert outcomes.count((False, None)) == 1
+    assert outcomes.count(409) == 1
+
+
+@pytest.mark.asyncio
+async def test_expired_pending_webhook_claim_requires_reconciliation(tmp_path):
+    context = GraphContext(database=JsonDB(str(tmp_path / "pending-webhook")))
+    request = _request("/webhook/order")
+    request.scope["method"] = "POST"
+    with scoped_default_context(context):
+        assert await reserve_idempotency("pending-key", request, b"{}", -1) == (
+            False,
+            None,
+        )
+        assert (await cleanup_expired_webhook_data())["keys_cleaned"] == 0
+        with pytest.raises(HTTPException) as pending:
+            await reserve_idempotency("pending-key", request, b"{}", 3600)
+        assert pending.value.status_code == 409
 
 
 @pytest.mark.asyncio

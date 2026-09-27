@@ -52,6 +52,7 @@ dependencies = [
     "schedule>=1.2.2",  # Job scheduling
     "typing-extensions>=4.0.0",  # For @override decorator and enhanced typing
     "aiosqlite>=0.19.0",  # SQLite database backend
+    "regex>=2024.11.6",  # Bounded-time in-memory $regex evaluation
 ]
 
 [project.optional-dependencies]

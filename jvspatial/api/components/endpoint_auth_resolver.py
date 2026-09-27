@@ -192,24 +192,6 @@ class EndpointAuthResolver:
                         and request_method not in route.methods
                     ):
                         continue
-                    if route.dependencies:
-                        for dep in route.dependencies:
-                            s = str(dep).lower()
-                            # Heuristic: detect FastAPI security dependencies by known
-                            # class/function names. More robust than substring "auth".
-                            if any(
-                                kw in s
-                                for kw in (
-                                    "httpbearer",
-                                    "httpbasic",
-                                    "httpdigest",
-                                    "oauth2passwordbearer",
-                                    "apikey",
-                                    "security",
-                                    "bearer",
-                                )
-                            ):
-                                return True
                     if "/auth/" in request_path and not self._path_matcher.is_exempt(
                         request_path
                     ):
@@ -251,8 +233,18 @@ class EndpointAuthResolver:
             return True
 
     def endpoint_has_fastapi_auth(self, request: Request) -> bool:
-        """Check if route has FastAPI auth dependencies."""
+        """Check for an enforcing FastAPI security dependency on a raw route.
+
+        Dependency names are not evidence of authentication. A dependency
+        called ``auth_context`` may simply return optional request metadata.
+        """
         try:
+            from fastapi.security.base import SecurityBase
+
+            if path_requires_admin_only_role(request.url.path):
+                return False
+            if self.get_endpoint_config(request) is not None:
+                return False
             if (
                 not self._server
                 or not getattr(self._server, "app", None)
@@ -286,11 +278,13 @@ class EndpointAuthResolver:
                     and request.method not in route.methods
                 ):
                     continue
-                if route.dependencies:
-                    for dep in route.dependencies:
-                        s = str(dep).lower()
-                        if "security" in s or "bearer" in s or "auth" in s:
-                            return True
+                pending = list(route.dependant.dependencies)
+                while pending:
+                    dependency = pending.pop()
+                    security = dependency.call
+                    if isinstance(security, SecurityBase) and security.auto_error:
+                        return True
+                    pending.extend(dependency.dependencies)
             return False
         except Exception:
             return False

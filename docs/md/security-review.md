@@ -10,6 +10,8 @@
 
 The September review found 37 additional items. The May conclusion below describes the May review only. The numbered entries here correspond to the combined backlog; the code and regression tests in this PR are the remediation evidence.
 
+The pre-merge 0.1.0 review also found a short catastrophic-backtracking `$regex` pattern, a name-based FastAPI authentication bypass, and an idempotency path that had no durable claim and could silently fall back to memory. The fixes and regressions are in `jvspatial/db/query.py`, `jvspatial/api/components/endpoint_auth_resolver.py`, `jvspatial/api/integrations/webhooks/{utils,middleware,models}.py`, and `tests/security/test_combined_review_regressions.py`. Operational handling of uncertain webhook outcomes is described in [security-operational-notes.md](security-operational-notes.md).
+
 | # | Remediation | Evidence |
 |---|---|---|
 | 1 | User lookup errors reject JWTs | `jvspatial/api/auth/service.py:1031`; `tests/security/test_combined_review_regressions.py` |

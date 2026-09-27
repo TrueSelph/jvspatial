@@ -8,7 +8,7 @@ Get your jvspatial API secured in 5 minutes with comprehensive authentication in
 ## Prerequisites
 
 - jvspatial installed: `pip install jvspatial`
-- Python 3.8+ environment
+- Python 3.9+ environment
 
 ## Step 1: Basic Setup (2 minutes)
 
@@ -45,7 +45,7 @@ if __name__ == "__main__":
 ```
 
 **That's it!** Your server now has full authentication with:
-- User registration (`POST /api/auth/register`) — first user becomes admin (bootstrap)
+- User registration (`POST /api/auth/register`) — creates a regular user when registration is open
 - Current user (`GET /api/auth/me`) — returns authenticated user
 - User login (`POST /api/auth/login`)
 - JWT token validation and RBAC (roles and permissions)
@@ -87,30 +87,30 @@ async def advanced_ops():
 
 ## Step 3: Create Your First User (1 minute)
 
-### First-user bootstrap (automatic)
+### Admin bootstrap
 
-When no users exist, `POST /api/auth/register` creates the first user and assigns the `admin` role. This is the recommended way to bootstrap your application.
+Public registration never assigns the `admin` role. Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` (at least 12 characters) before first startup to bootstrap an admin. `bootstrap_admin_email` and `bootstrap_admin_password` in the server configuration use these values. Public registration is available only when `registration_open` is enabled.
 
-### Option A: Via API (Recommended)
+### Option A: Register a regular user via API
 
 ```bash
 # Start your server
 python auth_server.py
 
-# Register first user (becomes admin automatically)
+# Register a regular user
 curl -X POST "http://localhost:8000/api/auth/register" \
   -H "Content-Type: application/json" \
-  -d '{"email": "admin@example.com", "password": "admin123"}'
+  -d '{"email": "user@example.com", "password": "example-password-123"}'
 
 # Login to get token
 curl -X POST "http://localhost:8000/api/auth/login" \
   -H "Content-Type: application/json" \
-  -d '{"email": "admin@example.com", "password": "admin123"}'
+  -d '{"email": "user@example.com", "password": "example-password-123"}'
 ```
 
 ### Option B: Admin creates users (after bootstrap)
 
-Once users exist, public registration is disabled. Admins create users via:
+To disable public registration, set `registration_open=False`. Admins can create users via:
 
 ```bash
 # Admin creates a new user with roles
@@ -119,7 +119,7 @@ curl -X POST "http://localhost:8000/api/auth/admin/users" \
   -H "Content-Type: application/json" \
   -d '{
     "email": "user@example.com",
-    "password": "user123",
+    "password": "example-password-123",
     "roles": ["user"],
     "permissions": []
   }'
@@ -168,7 +168,7 @@ if __name__ == "__main__":
     server.run()
 ```
 
-Run it: `python quickstart.py`. Register the first user via `POST /api/auth/register` — they become admin automatically. Visit: http://localhost:8000/docs
+Run it: `python quickstart.py`. Register a regular user via `POST /api/auth/register`. Configure bootstrap admin credentials before startup when admin access is needed. Visit: http://localhost:8000/docs
 
 ## Advanced Features (Optional)
 

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- In-memory `$regex` queries now have a per-candidate execution timeout, preventing short catastrophic-backtracking patterns from monopolizing the server. Raw FastAPI route auth detection now requires an enforcing security dependency; dependency names no longer bypass framework auth.
+- Webhook idempotency now atomically reserves a key before invoking the handler and persists the response for replay. In-flight or uncertain outcomes return 409; persistence failures return 503 and require reconciliation before retry.
 - JWT validation now rejects user lookup failures and uses current database roles and permissions. Logout invalidates the access token and its bound refresh token; token revocation failures are surfaced. Public registration never grants admin access. Auth entry points have per-IP rate limits, generic account-state errors, and a 12-character password minimum.
 - Signed GET webhooks require HMAC. Webhook routes default to POST, API-key scopes match path segments, expired cached keys are rejected, and idempotency lookup errors fail closed. Webhook handlers finish within the request; durable asynchronous work must use an external queue.
 - JsonDB record paths and local storage version IDs are confined to their roots. SQL index field paths are validated and raw `where=` predicates are rejected. Graph deletion, walker errors, DynamoDB bulk writes, and deferred operations now report failures instead of success.
@@ -24,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `AGENTS.md` is now the canonical agent guide. Its former `CLAUDE.md` content has been consolidated there; `CLAUDE.md` is removed.
+- The deprecated `generate_id_async` alias remains available in 0.1.0; its removal target is 0.2.0.
 
 ## [0.0.22] - 2026-09-26
 
@@ -616,7 +619,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
-- `jvspatial.core.utils.generate_id_async` — deprecated alias for `generate_id`. ID generation is pure computation (SPEC §3.2); the async signature was a vestige. Scheduled for removal in 0.1.0. (Audit §3.11.)
+- `jvspatial.core.utils.generate_id_async` — deprecated alias for `generate_id`. ID generation is pure computation (SPEC §3.2); the async signature was a vestige. Removal target updated to 0.2.0 in the 0.1.0 release. (Audit §3.11.)
 
 ### Removed
 
