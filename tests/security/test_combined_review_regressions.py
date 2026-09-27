@@ -24,6 +24,7 @@ from jvspatial.api.integrations.webhooks.utils import (
     WebhookConfig,
     generate_hmac_signature,
 )
+from jvspatial.api.server_configurator import ServerConfigurator
 from jvspatial.core.context import GraphContext, scoped_default_context
 from jvspatial.core.entities import Node
 from jvspatial.core.entities.node_query import NodeQuery
@@ -197,6 +198,33 @@ def test_undeclared_private_attribute_is_rejected():
     node = Node()
     with pytest.raises(AttributeError):
         node._unexpected = "hidden"
+
+
+def test_declared_private_method_can_be_replaced_on_an_instance():
+    class PluginNode(Node):
+        async def _load_token(self):
+            return "real"
+
+    node = PluginNode()
+    replacement = AsyncMock(return_value="test")
+    node._load_token = replacement
+    assert node._load_token is replacement
+    with pytest.raises(AttributeError):
+        node._unknown_helper = replacement
+
+
+def test_auth_rate_limit_bypass_is_explicit_and_defaults_on():
+    config = ServerConfig()
+    config.auth.enabled = True
+    registry = SimpleNamespace(_function_registry={}, _walker_registry={})
+    server = SimpleNamespace(config=config, _endpoint_registry=registry)
+    configurator = ServerConfigurator(server)
+
+    assert config.rate_limit.auth_entrypoint_rate_limit_enabled is True
+    assert "/api/auth/reset-password" in configurator._build_rate_limit_config()
+
+    config.rate_limit.auth_entrypoint_rate_limit_enabled = False
+    assert "/api/auth/reset-password" not in configurator._build_rate_limit_config()
 
 
 @pytest.mark.asyncio

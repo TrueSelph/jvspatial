@@ -106,7 +106,7 @@ AttributeMixin + pydantic.BaseModel
 - Context lookup: `set_context()`, `get_context()` (default via `get_default_context()`)
 - Collection mapping via `get_collection_name()` → `{n: node, e: edge, o: object, w: walker}`
 
-**Invariant**: `__setattr__` validates field names against the class hierarchy. Setting an undeclared attribute on an `Object` (post-init) is rejected. Prevents schema injection through attribute assignment.
+**Invariant**: `__setattr__` validates field names against the class hierarchy. Setting an undeclared attribute on an `Object` (post-init) is rejected. Declared private attributes and helpers may be replaced on an instance; a new underscore name is still rejected (`jvspatial/core/entities/object.py:147`). Prevents schema injection through attribute assignment.
 
 ### 2.2 Node — graph node
 
@@ -517,6 +517,8 @@ ServerConfig(
     graph_endpoint_enabled=True,
 )
 ```
+
+Auth entry points have a per-IP 5-request/60-second cap by default, including when global rate limiting is disabled. Hosts with a trusted replacement limiter and test environments can set `RateLimitConfig(auth_entrypoint_rate_limit_enabled=False)` explicitly (`jvspatial/api/config_groups.py:344`, `jvspatial/api/server_configurator.py:173`). The global limiter setting alone does not disable this protection.
 
 Flat keyword arguments (e.g. `Server(db_type=..., jwt_secret=...)`) are mapped to the appropriate group by a model validator (lines 103-128). The flat form is convenient; the hierarchical form is canonical.
 

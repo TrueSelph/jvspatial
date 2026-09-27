@@ -20,3 +20,5 @@ If the database or cache path used for token blacklist checks raises an error, v
 ## In-memory rate limiting and auth rate helpers
 
 In-process counters (for example `MemoryRateLimitBackend` and in-memory auth attempt tracking) **do not synchronize across workers or hosts**. For multiple uvicorn workers, Kubernetes replicas, or autoscaling groups, use a **shared backend** (for example Redis-backed rate limiting) so limits apply globally.
+
+Auth entry points keep their 5/60s per-IP cap when global rate limiting is off. Set `rate_limit.auth_entrypoint_rate_limit_enabled=False` only in tests or when the host application supplies an equivalent trusted limiter. This is an explicit server configuration choice; disabling the global limiter does not turn it off (`jvspatial/api/server_configurator.py:95`, `jvspatial/api/server_configurator.py:173`).

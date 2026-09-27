@@ -93,7 +93,11 @@ class ServerConfigurator:
         """Configure rate limiting middleware if rate limiting is enabled."""
         server = self._server
         global_enabled = server.config.rate_limit.rate_limit_enabled
-        if not global_enabled and not server.config.auth.enabled:
+        auth_limits_enabled = (
+            server.config.auth.enabled
+            and server.config.rate_limit.auth_entrypoint_rate_limit_enabled
+        )
+        if not global_enabled and not auth_limits_enabled:
             return
 
         try:
@@ -171,7 +175,10 @@ class ServerConfigurator:
             registry._walker_registry.items(), rate_limits, api_prefix
         )
 
-        if server.config.auth.enabled:
+        if (
+            server.config.auth.enabled
+            and server.config.rate_limit.auth_entrypoint_rate_limit_enabled
+        ):
             for path in (
                 "/auth/register",
                 "/auth/login",

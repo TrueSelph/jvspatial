@@ -47,7 +47,7 @@ The September review found 37 additional items. The May conclusion below describ
 | 33 | Trail append tasks are retained and failures logged; async traversal awaits append | `jvspatial/core/entities/walker_components/walker_trail.py:70`; `walker.py` |
 | 34 | Scheduler coroutines run on the server event loop | `jvspatial/api/integrations/scheduler/scheduler.py:608` |
 | 35 | Regex patterns and values are bounded before evaluation | `jvspatial/db/query.py:512` |
-| 36 | Underscore attributes must be declared private fields | `jvspatial/core/entities/object.py:157` |
+| 36 | Underscore attributes must be declared on the class hierarchy; declared private helpers can be replaced | `jvspatial/core/entities/object.py:157` |
 | 37 | Incorrect DeferredSaveMixin MRO raises at class creation | `jvspatial/core/mixins/deferred_save.py:157` |
 
 Security-sensitive changes to auth and secrets are entries 1–7, 10–11, 17, 19–22, 25, and 31–32. Each has a code location above. Deployment decisions for shared revocation storage, session and rate-limit stores, schema migrations, and database transactions remain in `ROADMAP.md` §2.
