@@ -159,11 +159,15 @@ class SQLiteDB(Database):
             and self.db_path_str != ":memory:"
         ):
             logger.debug(
-                "SQLiteDB rebinding to a new event loop; abandoning "
+                "SQLiteDB rebinding to a new event loop; closing "
                 "connection owned by %r and reconnecting on %r",
                 self._owning_loop,
                 current_loop,
             )
+            # The aiosqlite worker thread outlives its owning loop. Dropping
+            # the reference without closing it leaks that thread and can keep
+            # the interpreter alive after the test or server has stopped.
+            await self._connection.close()
             self._connection = None
             self._owning_loop = None
             self._initialized = False

@@ -8,6 +8,10 @@
 
 ## 2026-09-27 combined gap and security review
 
+The consumer release pass found two cross-backend consistency defects: PostgreSQL `$exists: false` excluded explicit JSON `null`, and a graph transaction left pre-commit entities in the parent cache. The query translator now matches in-memory null semantics; the transaction isolates its identity map and evicts touched parent entries after its outcome. Index setup is cached per database instance so a second store cannot silently miss a unique index. PostgreSQL integration and transaction cache regressions cover these paths in `tests/db/test_postgres_integration.py` and `tests/core/test_graph_transaction.py`.
+
+The full framework suite also exposed an `aiosqlite` worker thread left alive after file-backed SQLite rebinding across event loops. Rebinding now closes the prior connection, and `tests/db/test_sqlite_cross_loop_audit.py` verifies the old thread stops.
+
 The pre-merge consumer assessment also identified plaintext OAuth RSA private keys in the persisted `OAuthSigningKey` row. The keystore now encrypts new keys when `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` is configured, rewraps existing plaintext rows on first load, and fails closed for a missing or incorrect key on encrypted rows. Tests cover encryption, migration, and wrong-key failure in `tests/api/auth/oauth/test_oauth_keys.py`. Production hosts must provide and safeguard the key; managed KMS/HSM custody and routine rotation remain operational work.
 
 The September review found 37 additional items. The May conclusion below describes the May review only. The numbered entries here correspond to the combined backlog; the code and regression tests in this PR are the remediation evidence.

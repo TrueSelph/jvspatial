@@ -4,8 +4,10 @@ This module tests the registry-based authentication checking behavior,
 ensuring that auth settings are properly respected for all registered endpoints.
 """
 
+import asyncio
 import os
 import tempfile
+from unittest.mock import patch
 
 import pytest
 from fastapi import Depends, FastAPI, Request
@@ -17,7 +19,8 @@ from jvspatial.api.components.auth_middleware import AuthenticationMiddleware
 from jvspatial.api.config import ServerConfig
 from jvspatial.api.decorators.route import endpoint
 from jvspatial.api.server import Server
-from jvspatial.core.entities import Walker
+from jvspatial.core.context import scoped_default_context
+from jvspatial.core.entities import Root, Walker
 
 
 class TestAuthenticationMiddleware:
@@ -156,13 +159,21 @@ class TestAuthenticationMiddleware:
         server.app = server._create_app_instance()
         from fastapi.testclient import TestClient
 
-        client = TestClient(server.app)
-        # Trigger lifespan to ensure root node exists (required for walkers)
-        client.get("/health")
-
-        # Try to access without auth - should succeed
-        response = client.post("/api/test/walker-public", json={})
-        assert response.status_code == 200
+        # Entering TestClient runs lifespan and creates the Root walker needs.
+        context = server.get_graph_context()
+        assert context is not None
+        with scoped_default_context(context):
+            asyncio.run(Root.get())
+        with (
+            scoped_default_context(context),
+            patch(
+                "jvspatial.api.endpoints.walker_executor.get_default_context",
+                return_value=context,
+            ),
+            TestClient(server.app) as client,
+        ):
+            response = client.post("/api/test/walker-public", json={})
+            assert response.status_code == 200
 
     def test_walker_endpoint_with_auth_true_requires_auth(self, server):
         """Test that walker endpoint with auth=True requires authentication."""

@@ -35,10 +35,13 @@ def test_cross_loop_reuse_auto_rebinds():
             await db.save("widgets", {"id": "w1", "qty": 1})
 
         asyncio.run(first())
+        old_connection = db._connection
+        assert old_connection is not None
 
         async def second() -> None:
             # Auto-rebind on a new loop — no error.
             await db.save("widgets", {"id": "w2", "qty": 2})
+            assert not old_connection.is_alive()
             got = await db.get("widgets", "w2")
             assert got is not None
             await db.close()

@@ -42,7 +42,7 @@ def test_object_pager_has_no_cache_attribute():
 
 
 @pytest.mark.asyncio
-async def test_after_id_with_order_by_rejected():
+async def test_after_id_with_order_by_rejected(context):
     pager = ObjectPager(PageNode, page_size=3, order_by="value")
     with pytest.raises(ValueError, match="after_id"):
         await pager.get_page(after_id="n.PageNode.abc")

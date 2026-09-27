@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- PostgreSQL `$exists` now treats JSON `null` like the in-memory query engine, fixing queries for absent or null nested values.
+- File-backed SQLite closes the old `aiosqlite` connection when rebinding across event loops, preventing a leaked worker thread from keeping the process alive.
+- Graph transactions isolate their request identity map and invalidate touched parent cache entries after commit or rollback. Index setup is cached per database instance so a second store receives its own indexes.
+- Tests now restore mocked walker metadata, bind their own graph context, and enter the test client's lifespan before traversing Root, removing order-dependent suite failures.
+
 ## [0.1.0] - 2026-09-27
 
 ### Security

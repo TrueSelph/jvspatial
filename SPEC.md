@@ -276,6 +276,8 @@ Callers branching on capabilities should test the flag, not the adapter class.
 | MongoDB | `jvspatial/db/mongodb.py` | Yes | `motor`; native bulk writes; native compound ops |
 | DynamoDB | `jvspatial/db/dynamodb.py` | No | `aioboto3`; throttle-retry; `BatchGetItem` chunks of 100 |
 
+For a file-backed SQLite database reused on a different event loop, the adapter closes the old `aiosqlite` connection and its worker thread before opening a connection on the new loop. An in-memory SQLite database retains its existing connection so its contents are not lost (`jvspatial/db/sqlite.py`).
+
 ### 4.4 Atomic IO (JSON)
 
 `jvspatial/db/_atomic.py` provides crash-safe writes: temp file → `fsync` → `rename` → `fsync(directory)`. Per-file mutex via `PathLockManager` (`_path_locks.py`) serializes concurrent writes to the same record. Bounded LRU prevents lock-table growth.
@@ -303,7 +305,7 @@ No built-in migration framework. Adapters do not enforce schemas. Adding optiona
 | `$eq`, `$ne` | Equality / inequality |
 | `$gt`, `$gte`, `$lt`, `$lte` | Comparison |
 | `$in`, `$nin` | Membership |
-| `$exists` | Field presence |
+| `$exists` | In-memory and PostgreSQL: a non-null value is present; missing and explicit JSON `null` count as absent. MongoDB retains native field-presence semantics, where explicit `null` counts as present. |
 | `$and`, `$or` | Logical combinators |
 | `$regex` | Regex match (string fields). Never index-backed; build patterns from user input with `jvspatial.db.escape_regex`. In-memory matching caps pattern and candidate lengths and applies a 5 ms per-candidate timeout (`jvspatial/db/query.py`). Native database regex execution follows that database's resource limits. |
 | `$text` | Top-level `{"$text": {"$search": "words", "$fields": ["context.a", ...]}}`: every search word (case-insensitive, `\w+` tokens, no stemming) occurs in the concatenated fields; without `$fields` every string value is searched |
@@ -408,6 +410,8 @@ When an entity needs a context, it resolves in this order:
 ### 7.2 Scoping
 
 `GraphContext` is request-scoped by convention. The API server installs a per-request context via middleware (`jvspatial/api/components/auth_middleware.py` and lifecycle), so endpoint handlers reach the correct database without manual injection.
+
+`graph_transaction` uses an isolated request identity map while the transaction is open. On commit or rollback it evicts entities touched in the transaction from the parent context cache, so subsequent reads do not return pre-commit data or rolled-back objects (`jvspatial/core/context.py`). Index setup is cached per database instance; ensuring a model's indexes on one database does not suppress them on another.
 
 ### 7.3 Performance monitoring
 

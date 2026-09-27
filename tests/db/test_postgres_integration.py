@@ -190,6 +190,20 @@ class TestPostgresCRUD:
         ids = sorted(r["id"] for r in out)
         assert ids == ["n.x.0", "n.x.2", "n.x.4"]
 
+    async def test_exists_treats_json_null_as_absent(self, pg_db: "PostgresDB") -> None:
+        for suffix, context in (
+            ("missing", {}),
+            ("null", {"nested": {"value": None}}),
+            ("set", {"nested": {"value": "present"}}),
+        ):
+            await pg_db.save(
+                "node", {"id": f"n.x.{suffix}", "entity": "x", "context": context}
+            )
+        absent = await pg_db.find("node", {"context.nested.value": {"$exists": False}})
+        present = await pg_db.find("node", {"context.nested.value": {"$exists": True}})
+        assert {row["id"] for row in absent} == {"n.x.missing", "n.x.null"}
+        assert {row["id"] for row in present} == {"n.x.set"}
+
     async def test_count_with_filter(self, pg_db: "PostgresDB") -> None:
         for i in range(10):
             await pg_db.save(

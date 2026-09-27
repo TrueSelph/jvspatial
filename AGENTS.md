@@ -88,6 +88,12 @@ OAuth hosts in production must set `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` from a s
 
 `max_steps=10000`, `max_visits_per_node=100`, `max_execution_time=300s`, `max_queue_size=1000` are defaults that prevent DOS. Disabling protection is allowed locally; never disable globally or in code that touches user input.
 
+### 11. Cross-context persistence
+
+The in-memory matcher and PostgreSQL pushdown treat both missing and JSON `null` as absent for `$exists`; MongoDB retains its native field-presence semantics. `graph_transaction` isolates request identity state and invalidates touched entities in the parent cache after commit or rollback. Index setup must be scoped to the database instance so one store cannot suppress another store's indexes. Preserve these contracts when changing query translation, caches, or transactions.
+
+File-backed SQLite closes its prior connection when rebinding to another event loop; dropping it without `close()` leaks the `aiosqlite` worker thread and can keep the process alive.
+
 ---
 
 ## Common gotchas
