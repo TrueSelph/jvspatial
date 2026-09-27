@@ -2198,39 +2198,70 @@ async def async_graph_context(database: Optional[Database] = None):
     yield ctx
 
 
-@asynccontextmanager
-async def async_transaction_context(database: Optional[Database] = None):
-    """Async context manager for database transactions.
+class TransactionUnavailable(RuntimeError):
+    """The configured store cannot host a graph transaction."""
 
-    Captures the transaction object returned by ``begin_transaction()`` and
-    passes it to ``commit_transaction``/``rollback_transaction`` so that the
-    MongoDB session handle is not lost between calls.
+
+def _transaction_database(database: Optional[Any]) -> Any:
+    """Unwrap observable/cache wrappers to the adapter that owns connections."""
+    current = database
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if callable(getattr(current, "begin_transaction", None)):
+            return current
+        nested = getattr(current, "inner", None)
+        if nested is None:
+            break
+        current = nested
+    return database
+
+
+@asynccontextmanager
+async def graph_transaction(database: Optional[Any] = None):
+    """Run Node and Edge writes in one ACID transaction.
+
+    Opens the backend transaction, binds a :class:`GraphContext` to that
+    handle, and makes it the task-local default so ``Node.create`` and
+    ``Node.connect`` participate. Success commits; any exception rolls
+    back every write in the block.
+
+    Requires a backend that exposes ``begin_transaction``,
+    ``commit_transaction``, and ``rollback_transaction`` (Postgres today).
 
     Usage:
-        async with async_transaction_context(my_db) as ctx:
-            node = await ctx.create_node(name="Test")
-            # All operations are automatically committed
+        async with graph_transaction(db) as ctx:
+            parent = await Folder.create(name="inbox")
+            child = await Note.create(title="hello")
+            await parent.connect(child, edge=Contains)
     """
-    ctx = GraphContext(database)
-    txn = None
+    db = _transaction_database(database)
+    if db is None:
+        probe = GraphContext()
+        db = _transaction_database(probe.database)
+    required = ("begin_transaction", "commit_transaction", "rollback_transaction")
+    if not all(callable(getattr(db, name, None)) for name in required):
+        raise TransactionUnavailable(
+            "graph_transaction requires a database with begin/commit/rollback"
+        )
+    txn = await db.begin_transaction()
+    ctx = GraphContext(txn)
     try:
-        if hasattr(ctx.database, "begin_transaction"):
-            txn = await ctx.database.begin_transaction()
-        yield ctx
-        if txn is not None and hasattr(ctx.database, "commit_transaction"):
-            await ctx.database.commit_transaction(txn)
-        elif txn is None and hasattr(ctx.database, "commit_transaction"):
-            # Backend's commit_transaction accepts no txn argument (non-Mongo)
-            try:
-                await ctx.database.commit_transaction()
-            except TypeError:
-                await ctx.database.commit_transaction(None)
-    except Exception:
-        if txn is not None and hasattr(ctx.database, "rollback_transaction"):
-            await ctx.database.rollback_transaction(txn)
-        elif txn is None and hasattr(ctx.database, "rollback_transaction"):
-            try:
-                await ctx.database.rollback_transaction()
-            except TypeError:
-                await ctx.database.rollback_transaction(None)
+        async with scoped_default_context_async(ctx):
+            yield ctx
+        await db.commit_transaction(txn)
+    except BaseException:
+        await db.rollback_transaction(txn)
         raise
+
+
+@asynccontextmanager
+async def async_transaction_context(database: Optional[Any] = None):
+    """Alias for :func:`graph_transaction`.
+
+    The previous implementation opened a transaction but kept writing
+    through the pool connection, so ``Node.create`` never joined the
+    commit. Callers should use :func:`graph_transaction`.
+    """
+    async with graph_transaction(database) as ctx:
+        yield ctx

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.22] - 2026-09-26
+
+### Added
+
+- **`graph_transaction`.** Opens the backend transaction, binds a
+  `GraphContext` to that handle, and makes it the task-local default so
+  `Node.create` / `Node.connect` participate. Success commits; any
+  exception rolls back. Stores without begin/commit/rollback raise
+  `TransactionUnavailable`. `async_transaction_context` is now an alias —
+  the old helper opened a transaction but kept writing through the pool.
+
 ## [0.0.21] - 2026-09-19
 
 ### Added
