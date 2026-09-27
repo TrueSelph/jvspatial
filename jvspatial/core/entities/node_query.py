@@ -30,7 +30,7 @@ class NodeQuery:
     async def filter(
         self: "NodeQuery",
         *,
-        node: Optional[Union[str, List[str]]] = None,
+        node: Optional[Union[str, Type["Node"], List[Union[str, Type["Node"]]]]] = None,
         edge: Optional[Union[str, Type["Edge"], List[Union[str, Type["Edge"]]]]] = None,
         direction: str = "both",
         **kwargs: Any,
@@ -51,15 +51,19 @@ class NodeQuery:
 
         filtered_nodes = self.nodes.copy()
         if node:
-            node_types = [node] if isinstance(node, str) else node
+            node_types = [node] if isinstance(node, (str, type)) else node
+            node_names = [
+                kind if isinstance(kind, str) else kind._entity_name()
+                for kind in node_types
+            ]
             filtered_nodes = [
-                n for n in filtered_nodes if n.__class__.__name__ in node_types
+                n for n in filtered_nodes if n.__class__._entity_name() in node_names
             ]
         if edge or direction != "both" or kwargs:
             edge_types = []
             if edge:
                 edge_types = [
-                    e.__name__ if inspect.isclass(e) else e
+                    e._entity_name() if inspect.isclass(e) else e
                     for e in (edge if isinstance(edge, list) else [edge])
                 ]
             valid_nodes = []
@@ -73,7 +77,9 @@ class NodeQuery:
                 ]
                 if edge_types:
                     connectors = [
-                        e for e in connectors if e.__class__.__name__ in edge_types
+                        e
+                        for e in connectors
+                        if e.__class__._entity_name() in edge_types
                     ]
                 if kwargs:
                     connectors = [

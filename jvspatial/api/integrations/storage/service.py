@@ -4,6 +4,7 @@ This module provides a dedicated service class for handling file storage
 operations, separating concerns from the main Server class.
 """
 
+import logging
 import mimetypes
 from typing import Any, Dict, Optional
 
@@ -19,6 +20,7 @@ from jvspatial.env import env, parse_bool_basic
 from jvspatial.storage.exceptions import StorageError
 
 _FILES_OPENAPI_TAGS = ["Files"]
+logger = logging.getLogger(__name__)
 
 
 def _media_type_for_path(file_path: str) -> str:
@@ -65,6 +67,18 @@ class FileStorageService:
         self.proxy_manager = proxy_manager
         self.config = config
 
+    def _proxy_public_url(self, code: str) -> str:
+        base_url = (
+            getattr(
+                getattr(self.config, "file_storage", None),
+                "file_storage_base_url",
+                None,
+            )
+            or getattr(self.file_interface, "base_url", "")
+            or ""
+        )
+        return f"{base_url.rstrip('/')}{APIRoutes.PROXY_PREFIX}/{code}"
+
     async def handle_upload(
         self,
         file: UploadFile,
@@ -107,20 +121,21 @@ class FileStorageService:
 
             # Create proxy if requested
             if create_proxy and self.proxy_manager:
-                proxy_url = self.proxy_manager.create_proxy(
+                proxy = await self.proxy_manager.create_proxy(
                     file_path=file_path,
                     expires_in=proxy_expires_in,
                     one_time=proxy_one_time,
                 )
-                result["proxy_url"] = proxy_url
-                result["proxy_code"] = proxy_url.split("/")[-1]
+                result["proxy_url"] = self._proxy_public_url(proxy.code)
+                result["proxy_code"] = proxy.code
 
             return result
 
         except (PathTraversalError, ValidationError) as e:
             raise HTTPException(status_code=400, detail=str(e))
-        except StorageError as e:
-            raise HTTPException(status_code=500, detail=str(e))
+        except StorageError:
+            logger.exception("File upload failed")
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     async def handle_serve(self, file_path: str) -> Response:
         """Handle file serving/download.
@@ -140,8 +155,9 @@ class FileStorageService:
             return StreamingResponse(stream, media_type=media_type)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail=ErrorMessages.FILE_NOT_FOUND)
-        except StorageError as e:
-            raise HTTPException(status_code=500, detail=str(e))
+        except StorageError:
+            logger.exception("File serving failed")
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     async def handle_delete(self, file_path: str) -> Dict[str, Any]:
         """Handle file deletion.
@@ -161,8 +177,9 @@ class FileStorageService:
             # ``success`` (audit §3.3).
             success = await self.file_interface.delete_file(file_path)
             return {"success": success, "file_path": file_path}
-        except StorageError as e:
-            raise HTTPException(status_code=500, detail=str(e))
+        except StorageError:
+            logger.exception("File deletion failed")
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     async def handle_create_proxy(
         self,
@@ -198,7 +215,7 @@ class FileStorageService:
             if self.proxy_manager is None:
                 raise HTTPException(500, "Proxy manager not initialized")
 
-            proxy_url = self.proxy_manager.create_proxy(
+            proxy = await self.proxy_manager.create_proxy(
                 file_path=file_path,
                 expires_in=expires_in or default_expiration,
                 one_time=one_time,
@@ -206,13 +223,14 @@ class FileStorageService:
             )
 
             return {
-                "proxy_url": proxy_url,
-                "code": proxy_url.split("/")[-1],
+                "proxy_url": self._proxy_public_url(proxy.code),
+                "code": proxy.code,
                 "file_path": file_path,
                 "expires_in": expires_in or default_expiration,
             }
-        except StorageError as e:
-            raise HTTPException(500, str(e))
+        except StorageError:
+            logger.exception("Proxy creation failed")
+            raise HTTPException(500, "Internal server error")
 
     async def handle_serve_proxied(self, code: str) -> Response:
         """Handle file serving via proxy URL.
@@ -231,7 +249,7 @@ class FileStorageService:
                 raise HTTPException(500, "Proxy manager not initialized")
 
             # Resolve proxy to file path
-            file_path, _metadata = self.proxy_manager.resolve_proxy(code)
+            file_path, _metadata = await self.proxy_manager.resolve_proxy(code)
 
             stream = self.file_interface.serve_file(file_path)
             media_type = _media_type_for_path(file_path)
@@ -239,8 +257,9 @@ class FileStorageService:
 
         except FileNotFoundError:
             raise HTTPException(404, "Proxy not found or expired")
-        except StorageError as e:
-            raise HTTPException(500, str(e))
+        except StorageError:
+            logger.exception("Proxy resolution failed")
+            raise HTTPException(500, "Internal server error")
 
     async def handle_revoke_proxy(self, code: str) -> Dict[str, Any]:
         """Handle proxy URL revocation.
@@ -258,10 +277,11 @@ class FileStorageService:
             if self.proxy_manager is None:
                 raise HTTPException(500, "Proxy manager not initialized")
 
-            success = self.proxy_manager.revoke_proxy(code)
+            success = await self.proxy_manager.revoke_proxy(code)
             return {"success": success, "code": code}
-        except StorageError as e:
-            raise HTTPException(500, str(e))
+        except StorageError:
+            logger.exception("Proxy revocation failed")
+            raise HTTPException(500, "Internal server error")
 
     async def handle_proxy_stats(self, code: str) -> Dict[str, Any]:
         """Handle proxy statistics retrieval.
@@ -279,12 +299,13 @@ class FileStorageService:
             if self.proxy_manager is None:
                 raise HTTPException(500, "Proxy manager not initialized")
 
-            stats = self.proxy_manager.get_stats(code)
+            stats = await self.proxy_manager.get_stats(code)
             if not stats:
                 raise HTTPException(404, "Proxy not found")
             return dict(stats) if stats else {}
-        except StorageError as e:
-            raise HTTPException(500, str(e))
+        except StorageError:
+            logger.exception("Proxy stats failed")
+            raise HTTPException(500, "Internal server error")
 
     @classmethod
     def register_endpoints(
@@ -299,7 +320,7 @@ class FileStorageService:
 
         Routes use OpenAPI tag ``Files`` under ``{api_prefix}/files`` (from
         ``JVSPATIAL_API_PREFIX``). ``GET {FILES_ROOT}/{path}`` is public by default
-        (``JVSPATIAL_FILES_PUBLIC_READ`` true); set it false to require auth for reads.
+        (``JVSPATIAL_FILES_PUBLIC_READ`` true); reads require auth by default.
         ``POST`` upload, ``DELETE``, and proxy admin routes require auth when middleware is on.
         ``GET {PROXY_PREFIX}/{code}`` stays unauthenticated (proxy code is the
         credential).
@@ -308,8 +329,13 @@ class FileStorageService:
             app: FastAPI application instance
             service: FileStorageService instance with handlers
         """
+        auth_enabled = bool(
+            getattr(getattr(service.config, "auth", None), "enabled", False)
+        )
         serve_requires_auth = not env(
-            "JVSPATIAL_FILES_PUBLIC_READ", default=True, parse=parse_bool_basic
+            "JVSPATIAL_FILES_PUBLIC_READ",
+            default=not auth_enabled,
+            parse=parse_bool_basic,
         )
         router = APIRouter(tags=list(_FILES_OPENAPI_TAGS))
 

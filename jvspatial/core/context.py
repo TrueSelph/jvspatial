@@ -18,6 +18,7 @@ from typing import (
     Union,
     cast,
 )
+from weakref import WeakKeyDictionary
 
 from jvspatial.db.database import Database
 from jvspatial.db.factory import create_database, get_current_database
@@ -50,8 +51,9 @@ T = TypeVar("T", bound="Object")
 
 logger = logging.getLogger(__name__)
 
-# Global registry to track which collections have had indexes ensured
-_ensured_indexes: Set[str] = set()
+# Cache index setup per database instance. A process may host multiple stores or
+# schemas; a class ensured on one must not suppress indexes on another.
+_ensured_indexes: WeakKeyDictionary[Any, Set[str]] = WeakKeyDictionary()
 
 
 # Simple performance monitor for tracking operations
@@ -374,6 +376,8 @@ class GraphContext:
             PerformanceMonitor() if enable_performance_monitoring else None
         )
         self.auto_persist_migrations = auto_persist_migrations
+        # Populated only by graph_transaction to invalidate parent cache entries.
+        self._transaction_cache_keys: Optional[Set[str]] = None
 
         # Initialize cache backend
         if cache_backend is None:
@@ -554,6 +558,8 @@ class GraphContext:
 
     async def _add_to_cache(self, entity_id: str, entity: Any) -> None:
         """Add entity to cache."""
+        if self._transaction_cache_keys is not None:
+            self._transaction_cache_keys.add(entity_id)
         imap = _request_identity_map.get()
         if imap is not None:
             imap[entity_id] = entity
@@ -561,6 +567,8 @@ class GraphContext:
 
     async def _evict_from_cache(self, entity_id: str) -> None:
         """Remove an entity from request and process caches."""
+        if self._transaction_cache_keys is not None:
+            self._transaction_cache_keys.add(entity_id)
         imap = _request_identity_map.get()
         if imap is not None:
             imap.pop(entity_id, None)
@@ -875,7 +883,7 @@ class GraphContext:
         collection = self._get_collection_name(entity.type_code)
         db = self.database
         await db.delete(collection, entity.id)
-        await self._cache.delete(entity.id)
+        await self._evict_from_cache(entity.id)
 
     async def find(
         self, entity_class, query: Dict[str, Any], limit: Optional[int] = None
@@ -1127,6 +1135,20 @@ class GraphContext:
 
         Returns True on success, False on failure.
         """
+        from .annotations import is_protected
+        from .entities.node import Node
+
+        if not field.isidentifier() or field.startswith("_"):
+            raise ValueError("Invalid increment field")
+        node = await self.get(Node, node_id)
+        if node is None or not hasattr(node, field):
+            return False
+        if is_protected(type(node), field):
+            raise ValueError("Cannot increment a protected field")
+        current = getattr(node, field)
+        if not isinstance(current, (int, float)) or isinstance(current, bool):
+            raise TypeError("Increment field must be numeric")
+
         db = self.database
         if self._is_mongodb(db):
             try:
@@ -1138,8 +1160,7 @@ class GraphContext:
                 if result is not None:
                     cached = await self._get_from_cache(node_id)
                     if cached and hasattr(cached, field):
-                        current = getattr(cached, field, 0) or 0
-                        object.__setattr__(cached, field, current + amount)
+                        setattr(cached, field, current + amount)
                     return True
             except Exception:
                 logger.warning(
@@ -1150,14 +1171,9 @@ class GraphContext:
                 )
 
         # Fallback: read-modify-write
-        from .entities.node import Node
-
-        node = await self.get(Node, node_id)
-        if node and hasattr(node, field):
-            current = getattr(node, field, 0) or 0
-            setattr(node, field, current + amount)
-            await self.save(node)
-        return node is not None
+        setattr(node, field, current + amount)
+        await self.save(node)
+        return True
 
     # Advanced query operations for performance optimization
     async def find_nodes(
@@ -1435,18 +1451,19 @@ class GraphContext:
 
         # Check if we've already ensured indexes for this collection
         collection_key = f"{collection}:{entity_class._entity_name()}"
-        if collection_key in _ensured_indexes:
+        ensured = _ensured_indexes.setdefault(self.database, set())
+        if collection_key in ensured:
             return  # Already ensured
 
         # Get index definitions from the class
         indexes = entity_class.get_indexes()
         if not indexes:
-            _ensured_indexes.add(collection_key)
+            ensured.add(collection_key)
             return  # No indexes defined
 
         # Check if database supports indexing
         if not hasattr(self.database, "create_index"):
-            _ensured_indexes.add(collection_key)
+            ensured.add(collection_key)
             return  # Database doesn't support indexing
 
         # Per-class (annotation-declared) indexes are scoped to the class's
@@ -1510,7 +1527,7 @@ class GraphContext:
                 )
 
         # Mark as ensured
-        _ensured_indexes.add(collection_key)
+        ensured.add(collection_key)
 
     async def find_edges_between(
         self,
@@ -2246,6 +2263,9 @@ async def graph_transaction(database: Optional[Any] = None):
         )
     txn = await db.begin_transaction()
     ctx = GraphContext(txn)
+    parent_ctx = _default_context_var.get() or _module_default_context
+    ctx._transaction_cache_keys = set()
+    identity_token = begin_request_identity_map()
     try:
         async with scoped_default_context_async(ctx):
             yield ctx
@@ -2253,6 +2273,14 @@ async def graph_transaction(database: Optional[Any] = None):
     except BaseException:
         await db.rollback_transaction(txn)
         raise
+    finally:
+        end_request_identity_map(identity_token)
+        touched = ctx._transaction_cache_keys
+        ctx._transaction_cache_keys = None
+        for entity_id in touched or ():
+            await ctx._evict_from_cache(entity_id)
+            if parent_ctx is not None:
+                await parent_ctx._evict_from_cache(entity_id)
 
 
 @asynccontextmanager

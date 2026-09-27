@@ -7,6 +7,6 @@ The GitHub Actions workflow will automatically create a git tag and publish to P
 # Version follows Semantic Versioning: https://semver.org/
 # Format: MAJOR.MINOR.PATCH
 # - MAJOR: Breaking changes
-# - MINOR: New features, backward compatible
+# - MINOR: New features or breaking changes while pre-1.0
 # - PATCH: Bug fixes, backward compatible
-__version__ = "0.0.22"
+__version__ = "0.1.0"

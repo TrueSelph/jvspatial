@@ -7,7 +7,7 @@
 > **Companion documents**:
 > - [PRD.md](PRD.md) — *why* the library exists (product context, users, success criteria)
 > - [ROADMAP.md](ROADMAP.md) — forward-looking direction and known gaps
-> - [CLAUDE.md](CLAUDE.md) — operational guidance for AI agents maintaining this repo
+> - [AGENTS.md](AGENTS.md) — operational guidance for AI agents maintaining this repo
 > - [docs/md/README.md](docs/md/README.md) — index of detailed how-to documentation
 > - [LLM-CODING-GUIDE.md](LLM-CODING-GUIDE.md) — usage cookbook (code patterns for callers)
 
@@ -106,7 +106,7 @@ AttributeMixin + pydantic.BaseModel
 - Context lookup: `set_context()`, `get_context()` (default via `get_default_context()`)
 - Collection mapping via `get_collection_name()` → `{n: node, e: edge, o: object, w: walker}`
 
-**Invariant**: `__setattr__` validates field names against the class hierarchy. Setting an undeclared attribute on an `Object` (post-init) is rejected. Prevents schema injection through attribute assignment.
+**Invariant**: `__setattr__` validates field names against the class hierarchy. Setting an undeclared attribute on an `Object` (post-init) is rejected. Declared private attributes and helpers may be replaced on an instance; a new underscore name is still rejected (`jvspatial/core/entities/object.py:147`). Prevents schema injection through attribute assignment.
 
 ### 2.2 Node — graph node
 
@@ -276,9 +276,13 @@ Callers branching on capabilities should test the flag, not the adapter class.
 | MongoDB | `jvspatial/db/mongodb.py` | Yes | `motor`; native bulk writes; native compound ops |
 | DynamoDB | `jvspatial/db/dynamodb.py` | No | `aioboto3`; throttle-retry; `BatchGetItem` chunks of 100 |
 
+For a file-backed SQLite database reused on a different event loop, the adapter closes the old `aiosqlite` connection and its worker thread before opening a connection on the new loop. An in-memory SQLite database retains its existing connection so its contents are not lost (`jvspatial/db/sqlite.py`).
+
 ### 4.4 Atomic IO (JSON)
 
 `jvspatial/db/_atomic.py` provides crash-safe writes: temp file → `fsync` → `rename` → `fsync(directory)`. Per-file mutex via `PathLockManager` (`_path_locks.py`) serializes concurrent writes to the same record. Bounded LRU prevents lock-table growth.
+
+JsonDB collection names and record IDs must be single path components. Absolute paths, separators, and `..` are rejected before a record path is used; resolved paths must remain under `base_path` (`jvspatial/db/jsondb.py:138`, `jvspatial/db/jsondb.py:174`).
 
 ### 4.5 Multi-database
 
@@ -301,9 +305,9 @@ No built-in migration framework. Adapters do not enforce schemas. Adding optiona
 | `$eq`, `$ne` | Equality / inequality |
 | `$gt`, `$gte`, `$lt`, `$lte` | Comparison |
 | `$in`, `$nin` | Membership |
-| `$exists` | Field presence |
+| `$exists` | In-memory and PostgreSQL: a non-null value is present; missing and explicit JSON `null` count as absent. MongoDB retains native field-presence semantics, where explicit `null` counts as present. |
 | `$and`, `$or` | Logical combinators |
-| `$regex` | Regex match (string fields). Never index-backed; build patterns from user input with `jvspatial.db.escape_regex` |
+| `$regex` | Regex match (string fields). Never index-backed; build patterns from user input with `jvspatial.db.escape_regex`. In-memory matching caps pattern and candidate lengths and applies a 5 ms per-candidate timeout (`jvspatial/db/query.py`). Native database regex execution follows that database's resource limits. |
 | `$text` | Top-level `{"$text": {"$search": "words", "$fields": ["context.a", ...]}}`: every search word (case-insensitive, `\w+` tokens, no stemming) occurs in the concatenated fields; without `$fields` every string value is searched |
 
 ### 5.2 Pushdown vs in-memory
@@ -351,6 +355,8 @@ When `protection_enabled=True` (default):
 - Enqueue refuses when queue length would exceed `max_queue_size` (silent drop, logged).
 
 Protection is *advisory* for safety, not for security — untrusted user input should not influence walker construction.
+
+Cascade deletion stops and raises on the first edge or dependent-node failure. The parent is deleted only after all required deletions finish (`jvspatial/core/entities/node.py:1527`).
 
 ### 6.4 Trail tracking
 
@@ -405,6 +411,8 @@ When an entity needs a context, it resolves in this order:
 
 `GraphContext` is request-scoped by convention. The API server installs a per-request context via middleware (`jvspatial/api/components/auth_middleware.py` and lifecycle), so endpoint handlers reach the correct database without manual injection.
 
+`graph_transaction` uses an isolated request identity map while the transaction is open. On commit or rollback it evicts entities touched in the transaction from the parent context cache, so subsequent reads do not return pre-commit data or rolled-back objects (`jvspatial/core/context.py`). Index setup is cached per database instance; ensuring a model's indexes on one database does not suppress them on another.
+
 ### 7.3 Performance monitoring
 
 `PerformanceMonitor` (within `GraphContext`) records:
@@ -458,7 +466,7 @@ Endpoints decorated at import time are collected in a deferred registry (`api/en
 
 When `auth_enabled=True`, the server registers `/auth/register`, `/auth/login`, `/auth/logout`, plus token refresh and password reset endpoints. With `auth_enabled=False`, no auth endpoints are registered.
 
-OpenAPI docs at `/docs` and `/redoc` unless `JVSPATIAL_DOCS_DISABLED` is truthy (see §10.5).
+OpenAPI docs at `/docs` and `/redoc` in development unless `JVSPATIAL_DOCS_DISABLED` is truthy. In `JVSPATIAL_ENVIRONMENT=production`, docs are unpublished by default (see §10.5; `jvspatial/api/components/app_builder.py:62`).
 
 ---
 
@@ -470,10 +478,13 @@ OpenAPI docs at `/docs` and `/redoc` unless `JVSPATIAL_DOCS_DISABLED` is truthy 
 - **API keys**: SHA-256 hashed at rest, plaintext returned **only once** on creation. Verification uses `hmac.compare_digest` (constant-time).
 - **Refresh tokens**: rotate on use; previous tokens invalidated.
 - **Password reset**: `token_lookup` field provides O(1) lookup; constant-time comparison.
+- **Live user check**: JWT decoding never authenticates without a loaded active user. User lookup errors reject the token; roles and permissions come from the loaded row, not JWT claims (`jvspatial/api/auth/service.py:1031`, `jvspatial/api/auth/service.py:1083`).
 
 ### 9.2 Authorization (RBAC)
 
-`jvspatial/api/auth/rbac.py` — roles map to permission unions. Wildcard support (e.g. `users:*`). Admin-only routes enforced on `/status`, `/logs`, and `/graph` subtrees by default.
+`jvspatial/api/auth/rbac.py` — roles map to permission unions. Wildcard support (e.g. `users:*`). Admin-only routes enforced on `/status`, `/logs`, and `/graph` subtrees by default. Endpoint-configuration lookup errors deny access; a successful lookup with no jvspatial metadata still requires authentication but has no undeclared role requirement, supporting mounted ASGI apps and raw FastAPI routes (`jvspatial/api/components/auth_middleware.py:153`).
+
+For a raw FastAPI route, the authentication middleware defers to FastAPI only when the route declares an enforcing `SecurityBase` dependency. Dependency names and optional security dependencies do not bypass framework authentication. Admin-only routes and routes with jvspatial endpoint metadata continue through framework authentication and RBAC (`jvspatial/api/components/endpoint_auth_resolver.py`).
 
 ### 9.3 Session management
 
@@ -481,11 +492,15 @@ OpenAPI docs at `/docs` and `/redoc` unless `JVSPATIAL_DOCS_DISABLED` is truthy 
 
 ### 9.4 Logout blacklist
 
-JWT tokens are blacklisted on logout. Blacklist storage is per-worker in default config. Cross-worker invalidation requires a shared blacklist store (caller-provided).
+JWT tokens are blacklisted on logout, and the bound refresh token is deactivated (`jvspatial/api/auth/service.py:978`). Blacklist lookup errors fail closed by default (`jvspatial/api/auth/service.py:493`). Blacklist storage is per-worker in default config. Cross-worker invalidation requires a shared blacklist store (caller-provided).
 
 ### 9.5 Webhook authentication
 
-`jvspatial/api/integrations/webhooks/` — HMAC signature verification with constant-time comparison. Per-source secret rotation supported. Replay protection via timestamp window (configurable).
+`jvspatial/api/integrations/webhooks/` — required HMAC signatures are checked on every HTTP method. GET signs the raw query string; body-bearing methods sign the raw body (`jvspatial/api/integrations/webhooks/middleware.py`). Comparison is constant-time. For requests with an idempotency header, the middleware atomically claims a deterministic key in the shared database before invoking the handler. A completed retry with identical method, path, and body replays the cached response. Pending claims and key reuse with different request content return 409. Claim or outcome storage failures fail closed; pending claims are retained for reconciliation, even after their TTL (`jvspatial/api/integrations/webhooks/{utils,middleware,models}.py`).
+
+### 9.6 OAuth signing keys
+
+When `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` is set to a valid Fernet key, `OAuthSigningKey.save()` encrypts private PEM before persistence. The signing keystore returns a plaintext copy for signing while the stored row remains encrypted; a legacy plaintext row is rewrapped on first load. An encrypted row fails closed when the key is absent or incorrect. In `JVSPATIAL_ENVIRONMENT=production`, the OAuth keystore refuses to load or create keys without the encryption key. `build_jwks()` publishes only public material. Hosts with production OAuth must provision the encryption key and preserve it across workers and restarts. Key rotation and backup recovery require an operator procedure; this contract does not provide KMS/HSM custody (`jvspatial/api/auth/oauth/{keys,models}.py`).
 
 ---
 
@@ -513,6 +528,8 @@ ServerConfig(
 )
 ```
 
+Auth entry points have a per-IP 5-request/60-second cap by default, including when global rate limiting is disabled. Hosts with a trusted replacement limiter and test environments can set `RateLimitConfig(auth_entrypoint_rate_limit_enabled=False)` explicitly (`jvspatial/api/config_groups.py:344`, `jvspatial/api/server_configurator.py:173`). The global limiter setting alone does not disable this protection.
+
 Flat keyword arguments (e.g. `Server(db_type=..., jwt_secret=...)`) are mapped to the appropriate group by a model validator (lines 103-128). The flat form is convenient; the hierarchical form is canonical.
 
 ### 10.2 Merge order
@@ -537,7 +554,7 @@ Unknown `JVSPATIAL_*` keys are rejected at startup to catch typos and removed se
 
 ### 10.5 Docs gating
 
-`JVSPATIAL_DOCS_DISABLED` (truthy values: `1`, `true`, `yes`, `on`) disables `/docs`, `/redoc`, `/openapi.json`, and `/docs/oauth2-redirect` at app build time. CSP headers are relaxed only on docs paths to allow the Swagger UI CDN; app routes retain strict CSP.
+`JVSPATIAL_DOCS_DISABLED` (truthy values: `1`, `true`, `yes`, `on`) disables `/docs`, `/redoc`, `/openapi.json`, and `/docs/oauth2-redirect` at app build time. Its default is true when `JVSPATIAL_ENVIRONMENT=production`; an explicit false value re-enables docs. CSP headers are relaxed only on docs paths to allow the Swagger UI CDN; app routes retain strict CSP (`jvspatial/api/components/app_builder.py:62`).
 
 **Source of truth**: `jvspatial/api/components/app_builder.py`.
 
@@ -599,6 +616,7 @@ When LWA is detected, `Server` applies best-effort defaults for `AWS_LWA_PASS_TH
 
 - `storage/security/path_sanitizer.py` — five-stage validation: regex blocklist (11 patterns), normalization with re-check, hidden-file allowlist, symlink resolution, base-directory confinement.
 - `storage/security/validator.py` — content-based MIME via `python-magic`. ~25 allowed types, 14 blocked types, 19 blocked extensions. Internal markers bypassed via metadata validation only (never user-supplied).
+- Local version IDs must be one filename component; version files and pointers must resolve inside the storage root (`jvspatial/storage/interfaces/local.py:192`).
 
 ### 12.2 Upload contract
 
@@ -664,6 +682,7 @@ User input crosses the trust boundary at:
 2. **`Entity.update()`** — validates all field names against the class hierarchy; rejects undeclared attributes (`object.py` setter).
 3. **File uploads** — content-based MIME validation, not extension-based.
 4. **Path inputs** — `path_sanitizer.py` before any filesystem access.
+5. **Index definitions** — SQLite and Postgres accept safe field-path segments and translated partial-filter expressions; raw `where=` SQL is rejected (`jvspatial/db/sqlite.py:344`, `jvspatial/db/postgres.py:1421`).
 
 ### 15.2 Constant-time comparisons
 
@@ -792,7 +811,7 @@ Control-flow exceptions for walkers live in `jvspatial.core.entities`:
 - Database errors propagate to the caller; entity methods may wrap with context.
 - Validation errors raise `ValidationError` with `field_errors`. The API layer maps to HTTP 400.
 - Authentication errors map to HTTP 401; authorization errors to HTTP 403.
-- Walker errors are logged and surface in `walker.response["errors"]`; traversal halts.
+- Non-protection walker errors are reported and raised as `WalkerExecutionError`; protection violations retain their specialized errors (`jvspatial/core/entities/walker.py:902`).
 
 ---
 

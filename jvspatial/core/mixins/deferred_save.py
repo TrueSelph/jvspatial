@@ -154,6 +154,17 @@ class DeferredSaveMixin:
     deferred_saves_auto_on_init: ClassVar[bool] = True
     max_pending_saves: ClassVar[Optional[int]] = None
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Reject entity bases that would mask the mixin's save method."""
+        super().__init_subclass__(**kwargs)
+        bases = cls.__mro__
+        if DeferredSaveMixin in bases and any(
+            base.__name__ in ("Object", "Node", "Edge")
+            and bases.index(base) < bases.index(DeferredSaveMixin)
+            for base in bases
+        ):
+            raise TypeError("DeferredSaveMixin must precede the entity base class")
+
     _deferred_save_mode: bool
     _dirty: bool
     _pending_save_count: int

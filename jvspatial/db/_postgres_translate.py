@@ -195,9 +195,7 @@ def _translate_field_clause(
 
         if op == "$exists":
             fragments.append(
-                f"{extract_jsonb} IS NOT NULL"
-                if operand
-                else f"{extract_jsonb} IS NULL"
+                f"{extract_text} IS NOT NULL" if operand else f"{extract_text} IS NULL"
             )
             continue
 

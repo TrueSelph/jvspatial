@@ -135,6 +135,7 @@ class JsonDB(Database):
 
     def _get_collection_dir(self, collection: str) -> Path:
         """Get the directory path for a collection."""
+        self._validate_path_component(collection, "collection")
         if (
             is_serverless_mode()
             and not self._warned_non_tmp_serverless
@@ -153,8 +154,22 @@ class JsonDB(Database):
         # First-touch orphan sweep (cheap, idempotent, serverless-skipped).
         self._maybe_sweep_orphan_tmp_files()
         collection_dir = self.base_path / collection
+        if not collection_dir.resolve().is_relative_to(self.base_path):
+            raise ValueError("Collection path escapes database root")
         collection_dir.mkdir(parents=True, exist_ok=True)
         return collection_dir
+
+    @staticmethod
+    def _validate_path_component(value: str, label: str) -> None:
+        if (
+            not isinstance(value, str)
+            or value in ("", ".", "..")
+            or "/" in value
+            or "\\" in value
+            or "\x00" in value
+            or Path(value).is_absolute()
+        ):
+            raise ValueError(f"Invalid {label}")
 
     def _get_record_path(self, collection: str, record_id: str) -> Path:
         """Get the file path for a specific record.
@@ -162,8 +177,12 @@ class JsonDB(Database):
         IDs use dot separators (format: "type.ClassName.id") which are
         filesystem-compatible on all platforms including Windows.
         """
+        self._validate_path_component(record_id, "record id")
         collection_dir = self._get_collection_dir(collection)
-        return collection_dir / f"{record_id}.json"
+        record_path = collection_dir / f"{record_id}.json"
+        if not record_path.resolve().is_relative_to(self.base_path):
+            raise ValueError("Record path escapes database root")
+        return record_path
 
     @staticmethod
     def _list_collection_json_files(collection_dir: Path) -> List[Path]:

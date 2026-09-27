@@ -29,6 +29,9 @@ async def test_generate_id_async_emits_deprecation():
     (audit §3.11). It must still work — the call site only sees a
     warning."""
     from jvspatial.core.utils import generate_id_async
+    from jvspatial.utils.deprecation import reset_deprecation_warnings
+
+    reset_deprecation_warnings()
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", DeprecationWarning)

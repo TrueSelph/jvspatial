@@ -10,12 +10,15 @@ This module provides helper functions for webhook processing including:
 import hashlib
 import hmac
 import json
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
 from jvspatial.env import env, normalize_optional_secret_string, parse_bool_basic
+
+logger = logging.getLogger(__name__)
 
 
 class WebhookConfig:
@@ -390,14 +393,59 @@ async def check_idempotency(
         return False, None
 
     except Exception:
-        # Fall back to in-memory manager if database is not available
-        return _idempotency_manager.is_duplicate(idempotency_key)
+        logger.exception("Webhook idempotency lookup failed")
+        raise HTTPException(status_code=503, detail="Idempotency check unavailable")
+
+
+async def reserve_idempotency(
+    idempotency_key: str, request: Request, raw_body: bytes, ttl_seconds: int
+) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    """Atomically claim a key before invoking the webhook handler.
+
+    An unfinished claim remains unavailable after a crash because the handler
+    may already have committed external effects. Operators must reconcile it.
+    """
+    from .models import WebhookIdempotencyKey
+
+    if len(idempotency_key) > 256:
+        raise HTTPException(status_code=400, detail="Idempotency key too long")
+    key_id = (
+        f"o.{WebhookIdempotencyKey._entity_name()}."
+        + hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+    )
+    request_hash = hashlib.sha256(
+        request.method.encode() + b"\0" + request.url.path.encode() + b"\0" + raw_body
+    ).hexdigest()
+    try:
+        record, created = await WebhookIdempotencyKey.create_if_absent(
+            id=key_id,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            request_path=request.url.path,
+            http_method=request.method,
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
+        )
+    except Exception:
+        logger.exception("Webhook idempotency reservation failed")
+        raise HTTPException(status_code=503, detail="Idempotency check unavailable")
+    if created:
+        return False, None
+    if record.request_hash != request_hash:
+        raise HTTPException(
+            status_code=409, detail="Idempotency key reused for another request"
+        )
+    if not record.is_processed:
+        raise HTTPException(
+            status_code=409, detail="Webhook processing outcome pending reconciliation"
+        )
+    return True, record.cached_response
 
 
 async def store_idempotent_response(
     idempotency_key: Optional[str],
     response: Dict[str, Any],
     webhook_event_id: Optional[str] = None,
+    status_code: int = 200,
 ) -> None:
     """Store response for idempotency checking.
 
@@ -409,19 +457,16 @@ async def store_idempotent_response(
     if not idempotency_key:
         return
 
-    try:
-        from .models import mark_idempotency_key_processed
+    from .models import mark_idempotency_key_processed
 
-        # Store in database
-        await mark_idempotency_key_processed(
-            idempotency_key=idempotency_key,
-            response_data=response,
-            webhook_event_id=webhook_event_id,
-        )
-
-    except Exception:
-        # Fall back to in-memory manager if database is not available
-        _idempotency_manager.store_response(idempotency_key, response)
+    result = await mark_idempotency_key_processed(
+        idempotency_key=idempotency_key,
+        response_data=response,
+        webhook_event_id=webhook_event_id,
+        status_code=status_code,
+    )
+    if result is None:
+        raise RuntimeError("Idempotency reservation missing during response store")
 
 
 def get_webhook_config_from_env() -> WebhookConfig:
@@ -492,17 +537,30 @@ async def validate_and_process_webhook(
     if config.hmac_secret:
         signature = extract_hmac_signature(request)
         if not signature:
-            raise HTTPException(status_code=400, detail="Missing HMAC signature")
+            raise HTTPException(status_code=401, detail="Missing HMAC signature")
 
         if not verify_hmac_signature(raw_body, signature, config.hmac_secret):
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")
+
+    # Reject malformed payloads before reserving a durable key. A 400 must not
+    # strand a pending claim that prevents a corrected delivery.
+    try:
+        parsed_payload = parse_webhook_payload(raw_body, content_type)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
     # Check idempotency (skip for api_key webhooks without idempotency key)
     idempotency_key = None if skip_idempotency else extract_idempotency_key(request)
     is_duplicate = False
     cached_response = None
     if not skip_idempotency:
-        is_duplicate, cached_response = await check_idempotency(idempotency_key)
+        is_duplicate, cached_response = (
+            await reserve_idempotency(
+                idempotency_key, request, raw_body, config.idempotency_ttl
+            )
+            if idempotency_key
+            else (False, None)
+        )
         if is_duplicate:
             return {
                 "raw_body": raw_body,
@@ -510,12 +568,6 @@ async def validate_and_process_webhook(
                 "idempotency_key": idempotency_key,
                 "is_duplicate": True,
             }, cached_response
-
-    # Parse payload
-    try:
-        parsed_payload = parse_webhook_payload(raw_body, content_type)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
     return {
         "raw_body": raw_body,

@@ -146,6 +146,10 @@ The `Server` class is the main entry point for creating jvspatial-powered APIs. 
 
 ## Configuration
 
+### Auth entrypoint rate limit
+
+For auth-enabled servers, `RateLimitConfig.auth_entrypoint_rate_limit_enabled` defaults to `True`. Register, login, forgot-password, and reset-password each retain a 5-request/60-second per-IP cap even if `rate_limit_enabled=False`. Set the flag to `False` explicitly only in tests or when the host provides an equivalent trusted limiter. See the [rate-limiting guide](rate-limiting.md#authentication-entry-points) for the configuration example and shared-backend considerations.
+
 ### Basic Configuration
 
 ```python

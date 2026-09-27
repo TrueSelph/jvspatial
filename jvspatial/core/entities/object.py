@@ -153,8 +153,12 @@ class Object(AttributeMixin, BaseModel):
         if valid_fields is None:
             valid_fields = self._get_class_hierarchy_fields()
 
-        # Check if this is a valid field in the class hierarchy or private attribute
-        if (name in valid_fields) or (name.startswith("_")):
+        # Private names must also be declared on the class hierarchy. Include
+        # methods and descriptors so a declared private helper can be replaced
+        # on an instance (for example by a test double), without admitting a
+        # new, undeclared underscore attribute.
+        private_fields = type(self)._declared_private_fields()
+        if name in valid_fields or name in private_fields:
             # Use normal Pydantic setattr for model fields or private attributes
             super().__setattr__(name, value)
         else:
@@ -504,6 +508,31 @@ class Object(AttributeMixin, BaseModel):
     # an MRO walk per assignment (audit hot-path fix: dropped per-instance
     # cost from ~16us to <5us).
     __hierarchy_fields__: ClassVar[frozenset] = frozenset()
+
+    @classmethod
+    def _declared_private_fields(cls) -> frozenset[str]:
+        """Cache the class declaration scan used by every attribute write."""
+        cached = cls.__dict__.get("__private_fields_cache__")
+        if cached is None:
+            cached = frozenset(
+                key
+                for base in cls.__mro__
+                for key in (
+                    set(getattr(base, "__private_attributes__", {}) or {})
+                    | {
+                        field
+                        for field in vars(base)
+                        if field.startswith("_") and not field.startswith("__")
+                    }
+                    | {
+                        field
+                        for field in getattr(base, "__annotations__", {})
+                        if field.startswith("_") and not field.startswith("__")
+                    }
+                )
+            )
+            type.__setattr__(cls, "__private_fields_cache__", cached)
+        return cached
 
     @classmethod
     def _get_class_hierarchy_fields(cls: Type["Object"]) -> Set[str]:

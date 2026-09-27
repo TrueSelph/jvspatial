@@ -613,7 +613,9 @@ class APIErrorHandler:
 
             # Extract error message from detail - handle string, dict, list, or None
             # Do this before logging so we can use it in log messages
-            error_detail = exc.detail
+            error_detail = (
+                "Internal server error" if exc.status_code >= 500 else exc.detail
+            )
             if error_detail is None:
                 error_message = "An error occurred"
             elif isinstance(error_detail, str):

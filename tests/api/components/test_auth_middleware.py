@@ -4,11 +4,14 @@ This module tests the registry-based authentication checking behavior,
 ensuring that auth settings are properly respected for all registered endpoints.
 """
 
+import asyncio
 import os
 import tempfile
+from unittest.mock import patch
 
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
+from fastapi.security import HTTPBearer
 from fastapi.testclient import TestClient
 from starlette.responses import JSONResponse
 
@@ -16,7 +19,8 @@ from jvspatial.api.components.auth_middleware import AuthenticationMiddleware
 from jvspatial.api.config import ServerConfig
 from jvspatial.api.decorators.route import endpoint
 from jvspatial.api.server import Server
-from jvspatial.core.entities import Walker
+from jvspatial.core.context import scoped_default_context
+from jvspatial.core.entities import Root, Walker
 
 
 class TestAuthenticationMiddleware:
@@ -69,6 +73,32 @@ class TestAuthenticationMiddleware:
         response = client.post("/api/test/protected")
         assert response.status_code == 401
         assert "authentication_required" in response.json()["error_code"]
+
+    def test_dependency_name_does_not_bypass_framework_auth(self, server):
+        server.app = server._create_app_instance()
+
+        async def auth_metadata():
+            return "public metadata"
+
+        @server.app.get("/api/raw/dependency", dependencies=[Depends(auth_metadata)])
+        async def raw_dependency():
+            return {"ok": True}
+
+        response = TestClient(server.app).get("/api/raw/dependency")
+        assert response.status_code == 401
+        assert response.json()["error_code"] == "authentication_required"
+
+    def test_enforcing_fastapi_security_handles_raw_route(self, server):
+        server.app = server._create_app_instance()
+        security = HTTPBearer()
+
+        @server.app.get("/api/raw/security", dependencies=[Depends(security)])
+        async def raw_security():
+            return {"ok": True}
+
+        response = TestClient(server.app).get("/api/raw/security")
+        assert response.status_code in (401, 403)
+        assert response.json().get("error_code") != "authentication_required"
 
     def test_registered_endpoint_with_auth_false_allows_access(self, server):
         """Test that registered endpoint with auth=False allows access without auth."""
@@ -129,13 +159,21 @@ class TestAuthenticationMiddleware:
         server.app = server._create_app_instance()
         from fastapi.testclient import TestClient
 
-        client = TestClient(server.app)
-        # Trigger lifespan to ensure root node exists (required for walkers)
-        client.get("/health")
-
-        # Try to access without auth - should succeed
-        response = client.post("/api/test/walker-public", json={})
-        assert response.status_code == 200
+        # Entering TestClient runs lifespan and creates the Root walker needs.
+        context = server.get_graph_context()
+        assert context is not None
+        with scoped_default_context(context):
+            asyncio.run(Root.get())
+        with (
+            scoped_default_context(context),
+            patch(
+                "jvspatial.api.endpoints.walker_executor.get_default_context",
+                return_value=context,
+            ),
+            TestClient(server.app) as client,
+        ):
+            response = client.post("/api/test/walker-public", json={})
+            assert response.status_code == 200
 
     def test_walker_endpoint_with_auth_true_requires_auth(self, server):
         """Test that walker endpoint with auth=True requires authentication."""
@@ -880,13 +918,13 @@ class TestJwtAuthUsesPrimeDatabase:
             email = f"test_{test_id}@example.com"
             register_response = client.post(
                 "/api/auth/register",
-                json={"email": email, "password": "password123"},
+                json={"email": email, "password": "password12345"},
             )
             assert register_response.status_code == 200, register_response.text
 
             login_response = client.post(
                 "/api/auth/login",
-                json={"email": email, "password": "password123"},
+                json={"email": email, "password": "password12345"},
             )
             assert login_response.status_code == 200, login_response.text
             access_token = login_response.json()["access_token"]

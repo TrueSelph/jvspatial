@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- PostgreSQL `$exists` now treats JSON `null` like the in-memory query engine, fixing queries for absent or null nested values.
+- File-backed SQLite closes the old `aiosqlite` connection when rebinding across event loops, preventing a leaked worker thread from keeping the process alive.
+- Graph transactions isolate their request identity map and invalidate touched parent cache entries after commit or rollback. Index setup is cached per database instance so a second store receives its own indexes.
+- Tests now restore mocked walker metadata, bind their own graph context, and enter the test client's lifespan before traversing Root, removing order-dependent suite failures.
+
+## [0.1.0] - 2026-09-27
+
+### Security
+
+- OAuth RS256 signing keys can be encrypted at rest with `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY`. Existing plaintext keys rewrap on first load; encrypted keys fail closed when the key is missing or wrong. Production OAuth hosts must configure and retain the key.
+
+- In-memory `$regex` queries now have a per-candidate execution timeout, preventing short catastrophic-backtracking patterns from monopolizing the server. Raw FastAPI route auth detection now requires an enforcing security dependency; dependency names no longer bypass framework auth.
+- Webhook idempotency now atomically reserves a key before invoking the handler and persists the response for replay. In-flight or uncertain outcomes return 409; persistence failures return 503 and require reconciliation before retry.
+- JWT validation now rejects user lookup failures and uses current database roles and permissions. Logout invalidates the access token and its bound refresh token; token revocation failures are surfaced. Public registration never grants admin access. Auth entry points have per-IP rate limits, generic account-state errors, and a 12-character password minimum.
+- Signed GET webhooks require HMAC. Webhook routes default to POST, API-key scopes match path segments, expired cached keys are rejected, and idempotency lookup errors fail closed. Webhook handlers finish within the request; durable asynchronous work must use an external queue.
+- JsonDB record paths and local storage version IDs are confined to their roots. SQL index field paths are validated and raw `where=` predicates are rejected. Graph deletion, walker errors, DynamoDB bulk writes, and deferred operations now report failures instead of success.
+- **BREAKING:** Direct file reads require authentication by default when auth is enabled. Set `JVSPATIAL_FILES_PUBLIC_READ=true` only when intentional.
+- **BREAKING:** `JVSPATIAL_ENVIRONMENT=production` unpublishes `/docs`, `/redoc`, and `/openapi.json` by default. Set `JVSPATIAL_DOCS_DISABLED=false` for an explicit override.
+- **BREAKING:** Deferred invoke requires a secret even on loopback. Set `JVSPATIAL_DEFERRED_INVOKE_ALLOW_LOOPBACK=true` only for Lambda Web Adapter self-invoke.
+- **BREAKING:** The in-process scheduler requires a running server event loop and runs coroutine jobs on that loop. Jobs started outside an event loop must use a configured external scheduler.
+- Hosts with their own trusted auth limiter or test suites can explicitly set `rate_limit.auth_entrypoint_rate_limit_enabled=False`; the 5/60s cap remains on by default. Declared private helper methods can be replaced on entity instances, while undeclared underscore attributes remain rejected.
+- Authenticated mounted ASGI apps and raw FastAPI routes without jvspatial endpoint metadata remain reachable. Metadata lookup errors still deny access, and `/status`, `/logs`, and `/graph` retain enforced admin roles.
+
+### Changed
+
+- `AGENTS.md` is now the canonical agent guide. Its former `CLAUDE.md` content has been consolidated there; `CLAUDE.md` is removed.
+- The deprecated `generate_id_async` alias remains available in 0.1.0; its removal target is 0.2.0.
+
 ## [0.0.22] - 2026-09-26
 
 ### Added
@@ -598,7 +628,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
-- `jvspatial.core.utils.generate_id_async` — deprecated alias for `generate_id`. ID generation is pure computation (SPEC §3.2); the async signature was a vestige. Scheduled for removal in 0.1.0. (Audit §3.11.)
+- `jvspatial.core.utils.generate_id_async` — deprecated alias for `generate_id`. ID generation is pure computation (SPEC §3.2); the async signature was a vestige. Removal target updated to 0.2.0 in the 0.1.0 release. (Audit §3.11.)
 
 ### Removed
 

@@ -2,6 +2,8 @@
 
 The jvspatial library provides a unified **MongoDB-style query interface** that works consistently across all database backends. This allows you to use familiar MongoDB query syntax regardless of whether you're using JSON files, MongoDB, or custom database implementations.
 
+`$exists` is a known semantic difference: MongoDB counts an explicit `null` field as present, while the in-memory matcher and PostgreSQL count it as absent. Avoid relying on `$exists` for nullable fields when switching backends.
+
 ## Overview
 
 The query interface provides:

@@ -31,12 +31,12 @@ def test_no_secret_set_denies_non_loopback():
         assert _deferred_invoke_secret_ok(req) is False
 
 
-def test_no_secret_set_allows_loopback():
+def test_no_secret_set_denies_loopback_by_default():
     with patch.dict(os.environ, {}, clear=False):
         os.environ.pop("JVSPATIAL_DEFERRED_INVOKE_SECRET", None)
         for host in ("127.0.0.1", "::1", "localhost", "LOCALHOST"):
             req = _fake_request({}, host=host)
-            assert _deferred_invoke_secret_ok(req) is True, host
+            assert _deferred_invoke_secret_ok(req) is False, host
 
 
 def test_no_client_denies_when_secret_unset():
@@ -46,11 +46,14 @@ def test_no_client_denies_when_secret_unset():
         assert _deferred_invoke_secret_ok(req) is False
 
 
-def test_loopback_allows_even_when_secret_set_without_header():
+def test_loopback_allows_when_explicitly_configured():
     """LWA self-invoke cannot attach custom headers; loopback must still work."""
     with patch.dict(
         os.environ,
-        {"JVSPATIAL_DEFERRED_INVOKE_SECRET": "shh"},  # pragma: allowlist secret
+        {
+            "JVSPATIAL_DEFERRED_INVOKE_SECRET": "shh",
+            "JVSPATIAL_DEFERRED_INVOKE_ALLOW_LOOPBACK": "true",
+        },  # pragma: allowlist secret
         clear=False,
     ):
         req = _fake_request({}, host="127.0.0.1")

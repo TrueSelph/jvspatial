@@ -69,6 +69,7 @@ class SchedulerService:
         self._executor = ThreadPoolExecutor(
             max_workers=self.config.max_concurrent_tasks
         )
+        self._server_loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Task management
         self._tasks: Dict[str, ScheduledTask] = {}
@@ -114,6 +115,11 @@ class SchedulerService:
                 "background scheduler thread model is not supported."
             )
             return None
+
+        try:
+            self._server_loop = asyncio.get_running_loop()
+        except RuntimeError as exc:
+            raise RuntimeError("Scheduler must start on the server event loop") from exc
 
         if interval is None:
             interval = self.config.interval
@@ -615,15 +621,14 @@ class SchedulerService:
         Returns:
             Function result
         """
+        if self._server_loop is None or not self._server_loop.is_running():
+            raise RuntimeError("Scheduler server event loop is unavailable")
+        future = asyncio.run_coroutine_threadsafe(func(), self._server_loop)
         try:
-            # Create new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-            # Run with timeout
-            return loop.run_until_complete(asyncio.wait_for(func(), timeout=timeout))
-        finally:
-            loop.close()
+            return future.result(timeout=timeout)
+        except Exception:
+            future.cancel()
+            raise
 
     def _run_walker_task(self, walker_class: type, timeout: int) -> Any:
         """Run a Walker class.
@@ -635,33 +640,25 @@ class SchedulerService:
         Returns:
             Walker execution result
         """
-        try:
-            # Create new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        if self._server_loop is None or not self._server_loop.is_running():
+            raise RuntimeError("Scheduler server event loop is unavailable")
 
-            async def run_walker():
-                if self.graph_context:
-                    async with self.graph_context:
-                        walker = walker_class()
-                        return await walker.spawn()
-                else:
+        async def run_walker():
+            if self.graph_context:
+                async with self.graph_context:
                     walker = walker_class()
-                    return await walker.spawn()
+                    await walker.spawn()
+                    return {"walker_report": await walker.get_report()}
+            walker = walker_class()
+            await walker.spawn()
+            return {"walker_report": await walker.get_report()}
 
-            # Run with timeout
-            result_walker = loop.run_until_complete(
-                asyncio.wait_for(run_walker(), timeout=timeout)
-            )
-
-            # Return the report as the result
-            if hasattr(result_walker, "get_report"):
-                return {"walker_report": result_walker.get_report()}
-            else:
-                return {"walker_id": result_walker.id}
-
-        finally:
-            loop.close()
+        future = asyncio.run_coroutine_threadsafe(run_walker(), self._server_loop)
+        try:
+            return future.result(timeout=timeout)
+        except Exception:
+            future.cancel()
+            raise
 
     def _update_execution_stats(self, execution_record: TaskExecutionRecord) -> None:
         """Update execution statistics.

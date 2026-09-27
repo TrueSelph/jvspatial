@@ -12,6 +12,7 @@ Exercises the trust boundary end-to-end through ``TestClient``:
 * deny redirects with ``error=access_denied`` and issues no code.
 """
 
+import asyncio
 import base64
 import hashlib
 import secrets
@@ -46,8 +47,11 @@ def _app(tmp):
             oauth_enabled=True,
             oauth_issuer_url=ISSUER,
             oauth_supported_scopes=["mcp", "admin"],
+            bootstrap_admin_email="admin@example.com",
+            bootstrap_admin_password="password12345",
         ),
     )
+    asyncio.run(s._auth_service.bootstrap_admin("admin@example.com", "password12345"))
     return s.get_app()
 
 
@@ -65,21 +69,15 @@ def _pkce():
 def _bearer_for_mcp_user(c):
     """Create a non-admin user with the ``mcp`` permission; return (bearer, user_id).
 
-    The first registered user becomes admin via the bootstrap rule, so we use
-    that admin's bearer to mint a SECOND user with ``roles=["user"]`` and a
+    The explicitly bootstrapped admin's bearer mints a user with ``roles=["user"]`` and a
     direct ``mcp`` permission (so its effective permissions are exactly
     ``{"mcp"}`` — notably NOT ``admin``). We then log in as that second user to
     obtain its session bearer.
     """
-    admin_email = f"admin_{uuid.uuid4().hex}@example.com"
-    r = c.post(
-        "/api/auth/register",
-        json={"email": admin_email, "password": "password123"},
-    )
-    assert r.status_code == 200, r.text
+    admin_email = "admin@example.com"
     admin_login = c.post(
         "/api/auth/login",
-        json={"email": admin_email, "password": "password123"},
+        json={"email": admin_email, "password": "password12345"},
     )
     assert admin_login.status_code == 200, admin_login.text
     admin_bearer = admin_login.json()["access_token"]
@@ -90,7 +88,7 @@ def _bearer_for_mcp_user(c):
         headers={"Authorization": f"Bearer {admin_bearer}"},
         json={
             "email": user_email,
-            "password": "password123",
+            "password": "password12345",
             "roles": ["user"],
             "permissions": ["mcp"],
         },
@@ -104,7 +102,7 @@ def _bearer_for_mcp_user(c):
 
     user_login = c.post(
         "/api/auth/login",
-        json={"email": user_email, "password": "password123"},
+        json={"email": user_email, "password": "password12345"},
     )
     assert user_login.status_code == 200, user_login.text
     return user_login.json()["access_token"], user_id

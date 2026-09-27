@@ -89,10 +89,12 @@ class TestInOperators:
 class TestExistenceAndType:
     def test_exists_true(self) -> None:
         sql, _ = translate_query({"context.x": {"$exists": True}})
+        assert "#>>" in sql
         assert sql.endswith("IS NOT NULL")
 
     def test_exists_false(self) -> None:
         sql, _ = translate_query({"context.x": {"$exists": False}})
+        assert "#>>" in sql
         assert sql.endswith("IS NULL")
 
     def test_type_string(self) -> None:

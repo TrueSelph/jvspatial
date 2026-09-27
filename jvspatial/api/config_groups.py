@@ -246,7 +246,7 @@ class AuthConfig(BaseModel):
     )
     bootstrap_admin_password: Optional[str] = Field(
         default=None,
-        description="Admin password for bootstrap. Min 6 chars. Typically from ADMIN_PASSWORD env.",
+        description="Admin password for bootstrap. Min 12 chars. Typically from ADMIN_PASSWORD env.",
     )
     bootstrap_admin_name: Optional[str] = Field(
         default=None,
@@ -340,6 +340,13 @@ class RateLimitConfig(BaseModel):
 
     rate_limit_enabled: bool = Field(
         default=False, description="Enable rate limiting middleware"
+    )
+    auth_entrypoint_rate_limit_enabled: bool = Field(
+        default=True,
+        description=(
+            "Limit auth entry points even when the global limiter is disabled; "
+            "set false only when a trusted host limiter covers them or in tests"
+        ),
     )
     rate_limit_default_requests: int = Field(
         default=60, description="Default requests per window"

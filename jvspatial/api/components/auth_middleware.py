@@ -152,10 +152,19 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         # RBAC: check roles and permissions if endpoint requires them
         rbac_enabled = getattr(self.auth_config, "rbac_enabled", True)
         if rbac_enabled:
-            endpoint_config = self._auth_resolver.get_endpoint_config(request)
+            try:
+                endpoint_config = self._auth_resolver.get_endpoint_config(request)
+            except Exception:
+                self._logger.exception("Endpoint auth configuration unavailable")
+                return JSONResponse(status_code=403, content={"message": "Forbidden"})
             endpoint_config = self._merge_admin_only_roles(
                 request.url.path, endpoint_config
             )
+            # A successful lookup can legitimately find no jvspatial endpoint
+            # metadata on a mounted ASGI app or a raw FastAPI route. The user
+            # has still been authenticated above. Admin-only paths acquire a
+            # mandatory role from _merge_admin_only_roles even in that case.
+            # Lookup failures themselves remain fail-closed in the except arm.
             rbac_error = self._check_rbac(user, endpoint_config)
             if rbac_error:
                 return rbac_error
@@ -461,11 +470,13 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 request_path = request.url.path
 
                 def _endpoint_allowed(ep: str) -> bool:
-                    # Support wildcard: /api/webhook/* matches /api/webhook/xyz
+                    # A wildcard must cover complete path segments.
                     if ep.endswith("*"):
-                        prefix = ep[:-1]
-                        return request_path.startswith(prefix)
-                    return request_path.startswith(ep)
+                        prefix = ep[:-1].rstrip("/")
+                        return request_path == prefix or request_path.startswith(
+                            prefix + "/"
+                        )
+                    return request_path == ep
 
                 if not any(
                     _endpoint_allowed(ep) for ep in api_key_entity.allowed_endpoints

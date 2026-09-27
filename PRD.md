@@ -126,7 +126,7 @@ Explicit out-of-scope statements. These represent decisions, not gaps.
 - **A caller building a new graph-backed service can get to a working CRUD endpoint in under 30 minutes**, following [docs/md/quick-start-guide.md](docs/md/quick-start-guide.md) and one of the [examples/api/](examples/api/) reference implementations, without reading any source code.
 - **A caller can switch backends (JSON → SQLite → MongoDB → DynamoDB) without rewriting queries or entities** — only configuration changes.
 - **A caller deploying to Lambda does not need to write Lambda-specific code**, beyond the entry adapter for their function. Defaults adapt; deferred work has a single registration point.
-- **An AI agent maintaining the library can locate the right code path from a single CLAUDE.md read**, without having to crawl the docs tree.
+- **An AI agent maintaining the library can locate the right code path from a single AGENTS.md read**, without having to crawl the docs tree.
 - **A security reviewer can audit the trust boundary by reading SPEC §15** and confirm every claim against `file:line` citations.
 
 ### 6.2 Quantitative

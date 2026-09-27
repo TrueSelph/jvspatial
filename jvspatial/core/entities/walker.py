@@ -860,7 +860,7 @@ class Walker(AttributeMixin, BaseModel):
                     if hasattr(current, "id"):
                         self._protection.record_visit(current.id)
 
-                    self._trail_tracker.record_step(
+                    await self._trail_tracker.arecord_step(
                         current.id if hasattr(current, "id") else str(current)
                     )
 
@@ -900,9 +900,11 @@ class Walker(AttributeMixin, BaseModel):
                     details=pv.details,
                 ) from pv
             except Exception as e:
-                # Handle other (non-protection) errors gracefully.
                 await self.report(f"Error during traversal: {e}")
-                break
+                raise WalkerExecutionError(
+                    walker_class=type(self).__name__,
+                    reason="traversal_failed",
+                ) from e
 
         return await self.get_report()
 

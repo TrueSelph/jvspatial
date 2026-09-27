@@ -4,6 +4,7 @@ This module provides Entity classes for webhook event tracking, idempotency mana
 and response caching using the JVspatial GraphContext system.
 """
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
@@ -351,8 +352,11 @@ async def mark_idempotency_key_processed(
     Returns:
         Updated WebhookIdempotencyKey or None if not found
     """
-    key_records = await WebhookIdempotencyKey.find({"idempotency_key": idempotency_key})
-    key_record = key_records[0] if key_records else None
+    key_id = (
+        f"o.{WebhookIdempotencyKey._entity_name()}."
+        + hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+    )
+    key_record = await WebhookIdempotencyKey.get(key_id)
 
     if not key_record:
         return None
@@ -382,29 +386,55 @@ async def cleanup_expired_webhook_data() -> Dict[str, int]:
     now = datetime.now(timezone.utc)
 
     # Clean up expired webhook events
-    expired_events = await WebhookEvent.find({"expires_at": {"$lt": now}})
+    try:
+        expired_events = await WebhookEvent.find({"expires_at": {"$lt": now}})
+    except TypeError:
+        # JsonDB persists datetimes as strings and its in-memory matcher
+        # cannot compare them with a datetime operand.
+        expired_events = [
+            event
+            for event in await WebhookEvent.find({})
+            if event.expires_at is not None and event.expires_at < now
+        ]
 
     for _event_count, event in enumerate(expired_events, 1):
         await event.delete()
 
     # Clean up expired idempotency keys
-    expired_keys = await WebhookIdempotencyKey.find({"expires_at": {"$lt": now}})
+    try:
+        expired_keys = await WebhookIdempotencyKey.find({"expires_at": {"$lt": now}})
+    except TypeError:
+        expired_keys = [
+            key for key in await WebhookIdempotencyKey.find({}) if key.expires_at < now
+        ]
 
-    for _key_count, key in enumerate(expired_keys, 1):
-        await key.delete()
+    keys_cleaned = 0
+    for key in expired_keys:
+        # A pending claim may have committed external side effects before a
+        # worker died. Keep it until an operator reconciles the outcome.
+        if key.is_processed:
+            await key.delete()
+            keys_cleaned += 1
 
     # Clean up exhausted retry records older than 7 days
     week_ago = now - timedelta(days=7)
-    old_retries = await WebhookRetryRecord.find(
-        {"is_exhausted": True, "updated_at": {"$lt": week_ago}}
-    )
+    try:
+        old_retries = await WebhookRetryRecord.find(
+            {"is_exhausted": True, "updated_at": {"$lt": week_ago}}
+        )
+    except TypeError:
+        old_retries = [
+            retry
+            for retry in await WebhookRetryRecord.find({"is_exhausted": True})
+            if retry.updated_at < week_ago
+        ]
 
     for _retry_count, retry in enumerate(old_retries, 1):
         await retry.delete()
 
     return {
         "events_cleaned": len(expired_events),
-        "keys_cleaned": len(expired_keys),
+        "keys_cleaned": keys_cleaned,
         "retries_cleaned": len(old_retries),
     }
 

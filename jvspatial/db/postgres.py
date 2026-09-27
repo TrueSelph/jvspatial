@@ -1450,8 +1450,8 @@ class PostgresDB(Database):
           of the fields in order (``<col>_<entity>_<fields>_fts``, scoped to
           ``entity`` when given), matching
           ``{"$text": {"$search": ..., "$fields": [<same fields>]}}``.
-        * ``where`` / ``index_partial_filter_expression`` — partial index
-          predicate (raw SQL, or the Mongo-style dialect).
+        * ``index_partial_filter_expression`` — partial index predicate in
+          the supported Mongo-style dialect. Raw ``where=`` SQL is rejected.
         * ``method`` — ``btree`` (default), ``hash``, ``gin``, ``gist``, ``brin``.
 
         An existing index of the same name defined by the pre-0.0.18 rules
@@ -1496,12 +1496,10 @@ class PostgresDB(Database):
         )
 
         where_parts: List[str] = []
-        partial = kwargs.get("where")
-        if partial:
-            # We don't try to parse the partial expression — caller is
-            # responsible for getting it right. We do require it to be a
-            # simple Postgres predicate string.
-            where_parts.append(str(partial))
+        if kwargs.get("where"):
+            raise ValueError(
+                "Raw index predicates are unsupported; use a partial filter expression"
+            )
         else:
             # Translate Mongo-style ``index_partial_filter_expression``
             # (the cross-backend kwarg used by ``attribute(index_unique=...,
@@ -1530,8 +1528,7 @@ class PostgresDB(Database):
                     raise ValueError(
                         "PostgresDB.create_index: cannot translate "
                         f"index_partial_filter_expression {pfe!r} to a "
-                        "PG WHERE clause. Pass an explicit ``where=`` "
-                        "argument or use a supported filter shape "
+                        "PG WHERE clause. Use a supported filter shape "
                         "(equality / $gt / $exists on safe field paths "
                         "with scalar values)."
                     )

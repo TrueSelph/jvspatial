@@ -35,11 +35,11 @@ class TestChangePasswordEndpoint:
         email = f"test_{test_id}@example.com"
         client.post(
             "/api/auth/register",
-            json={"email": email, "password": "password123"},
+            json={"email": email, "password": "password12345"},
         )
         login_response = client.post(
             "/api/auth/login",
-            json={"email": email, "password": "password123"},
+            json={"email": email, "password": "password12345"},
         )
         assert login_response.status_code == 200
         access_token = login_response.json()["access_token"]
@@ -48,8 +48,8 @@ class TestChangePasswordEndpoint:
             "/api/auth/change-password",
             headers={"Authorization": f"Bearer {access_token}"},
             json={
-                "current_password": "password123",
-                "new_password": "newpass456",
+                "current_password": "password12345",
+                "new_password": "newpass456789",
             },
         )
         assert change_response.status_code == 200
@@ -58,14 +58,14 @@ class TestChangePasswordEndpoint:
         # Old password should fail
         old_login = client.post(
             "/api/auth/login",
-            json={"email": email, "password": "password123"},
+            json={"email": email, "password": "password12345"},
         )
         assert old_login.status_code == 401
 
         # New password should work
         new_login = client.post(
             "/api/auth/login",
-            json={"email": email, "password": "newpass456"},
+            json={"email": email, "password": "newpass456789"},
         )
         assert new_login.status_code == 200
 
@@ -84,11 +84,11 @@ class TestChangePasswordEndpoint:
         email = f"test_{test_id}@example.com"
         client.post(
             "/api/auth/register",
-            json={"email": email, "password": "password123"},
+            json={"email": email, "password": "password12345"},
         )
         login_response = client.post(
             "/api/auth/login",
-            json={"email": email, "password": "password123"},
+            json={"email": email, "password": "password12345"},
         )
         access_token = login_response.json()["access_token"]
 
@@ -97,7 +97,7 @@ class TestChangePasswordEndpoint:
             headers={"Authorization": f"Bearer {access_token}"},
             json={
                 "current_password": "wrongpassword",
-                "new_password": "newpass456",
+                "new_password": "newpass456789",
             },
         )
         assert change_response.status_code == 400
@@ -120,8 +120,8 @@ class TestChangePasswordEndpoint:
         change_response = client.post(
             "/api/auth/change-password",
             json={
-                "current_password": "password123",
-                "new_password": "newpass456",
+                "current_password": "password12345",
+                "new_password": "newpass456789",
             },
         )
         assert change_response.status_code == 401
@@ -145,11 +145,11 @@ class TestChangePasswordEndpoint:
         email = f"test_{test_id}@example.com"
         client.post(
             "/api/auth/register",
-            json={"email": email, "password": "password123"},
+            json={"email": email, "password": "password12345"},
         )
         login_response = client.post(
             "/api/auth/login",
-            json={"email": email, "password": "password123"},
+            json={"email": email, "password": "password12345"},
         )
         access_token = login_response.json()["access_token"]
 
@@ -157,8 +157,8 @@ class TestChangePasswordEndpoint:
             "/api/auth/change-password",
             headers={"Authorization": f"Bearer {access_token}"},
             json={
-                "current_password": "password123",
-                "new_password": "newpass456",
+                "current_password": "password12345",
+                "new_password": "newpass456789",
             },
         )
         assert change_response.status_code == 404

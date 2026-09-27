@@ -167,15 +167,14 @@ class TestRedisSessionStore:
         _, _, ttl = cache.sets[0]
         assert ttl == 300
 
-    async def test_get_error_returns_none(self) -> None:
+    async def test_get_error_propagates_for_fail_closed_auth(self) -> None:
         class _BadCache(_FakeCache):
             async def get(self, key: str) -> Any:
                 raise RuntimeError("redis unreachable")
 
         store = RedisSessionStore(_BadCache(), prefix="jvs:test:")
-        # Treat failure as a miss so the caller falls back to the DB
-        # rather than crashing.
-        assert await store.get("k") is None
+        with pytest.raises(RuntimeError, match="redis unreachable"):
+            await store.get("k")
 
 
 # ---- AuthenticationService integration -------------------------------------

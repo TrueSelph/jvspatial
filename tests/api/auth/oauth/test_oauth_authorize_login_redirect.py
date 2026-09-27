@@ -82,9 +82,11 @@ def _register_public_client(c, scope="mcp admin"):
 def _bearer_for_user(c):
     """Register a user (becomes admin via bootstrap) and return its session bearer."""
     email = f"u_{uuid.uuid4().hex}@example.com"
-    r = c.post("/api/auth/register", json={"email": email, "password": "password123"})
+    r = c.post("/api/auth/register", json={"email": email, "password": "password12345"})
     assert r.status_code == 200, r.text
-    login = c.post("/api/auth/login", json={"email": email, "password": "password123"})
+    login = c.post(
+        "/api/auth/login", json={"email": email, "password": "password12345"}
+    )
     assert login.status_code == 200, login.text
     return login.json()["access_token"]
 

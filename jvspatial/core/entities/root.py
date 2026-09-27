@@ -1,6 +1,8 @@
 """Root node class for jvspatial graph."""
 
 import asyncio
+import threading
+import weakref
 from typing import Any, ClassVar, Optional, Type
 
 from typing_extensions import override
@@ -16,7 +18,18 @@ class Root(Node):
     """
 
     id: str = "n.Root.root"
-    _lock: ClassVar[asyncio.Lock] = asyncio.Lock()
+    _locks: ClassVar[weakref.WeakKeyDictionary] = weakref.WeakKeyDictionary()
+    _locks_guard: ClassVar[threading.Lock] = threading.Lock()
+
+    @classmethod
+    def _loop_lock(cls) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        with cls._locks_guard:
+            lock = cls._locks.get(loop)
+            if lock is None:
+                lock = asyncio.Lock()
+                cls._locks[loop] = lock
+            return lock
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize Root with fixed ID.
@@ -36,7 +49,7 @@ class Root(Node):
         Returns:
             Root instance
         """
-        async with cls._lock:
+        async with cls._loop_lock():
             id = "n.Root.root"
             from ..context import get_default_context
 

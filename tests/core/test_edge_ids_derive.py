@@ -20,7 +20,11 @@ import pytest
 
 from jvspatial.cli import _run_strip_node_edges, build_parser
 from jvspatial.core import context as context_module
-from jvspatial.core.context import GraphContext, set_default_context
+from jvspatial.core.context import (
+    GraphContext,
+    scoped_default_context_async,
+    set_default_context,
+)
 from jvspatial.core.entities import Edge, Node, Root
 from jvspatial.core.graph_expansion import expand_node
 from jvspatial.db.jsondb import JsonDB
@@ -296,13 +300,19 @@ async def test_context_delete_without_cascade_removes_edges(graph):
 
 async def test_root_rehydrates(graph):
     _ctx, _db, _backend = graph
-    root = await Root.get()
-    app = await DerivePerson.create(name="app")
-    await root.connect(app, edge=DeriveKnows)
+    async with scoped_default_context_async(_ctx):
+        root = await Root.get()
+        app = await DerivePerson.create(name="app")
+        assert root._graph_context is _ctx
+        assert app._graph_context is _ctx
+        await root.connect(app, edge=DeriveKnows)
+        edges = await _db.find("edge", {"source": root.id})
+        assert {edge["target"] for edge in edges} == {app.id}
 
-    again = await Root.get()
-    assert {n.id for n in await again.nodes()} == {app.id}
-    assert await again.connection_count() == 1
+        again = await Root.get()
+        assert again._graph_context is _ctx
+        assert {n.id for n in await again.nodes()} == {app.id}
+        assert await again.connection_count() == 1
 
 
 async def test_expand_node_pages_from_edge_collection(graph):
