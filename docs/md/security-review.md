@@ -17,7 +17,7 @@ The September review found 37 additional items. The May conclusion below describ
 | 3 | Revocation writes the active session store and surfaces write errors | `jvspatial/api/auth/service.py:1220`, `jvspatial/api/auth/service.py:1270`; `jvspatial/api/auth/_session_store.py:82` |
 | 4 | Logout deactivates the refresh token bound to the access JTI | `jvspatial/api/auth/service.py:974` |
 | 5 | Password reset marks the token used before the password write and distinguishes later revocation failure | `jvspatial/api/auth/service.py:1425` |
-| 6 | Missing or failed endpoint config denies RBAC requests | `jvspatial/api/components/auth_middleware.py:180`; `endpoint_auth_resolver.py:356` |
+| 6 | Config lookup errors deny requests; admin-only routes retain required roles even without metadata | `jvspatial/api/components/auth_middleware.py:153`; `jvspatial/api/components/endpoint_auth_resolver.py:356` |
 | 7 | Signed GET webhooks require HMAC; webhook decorator defaults to POST | `jvspatial/api/integrations/webhooks/middleware.py:348`; `jvspatial/api/decorators/route.py:169` |
 | 8 | Local version IDs and paths are confined to the root | `jvspatial/storage/interfaces/local.py:192` |
 | 9 | JsonDB collection and record paths are confined to `base_path` | `jvspatial/db/jsondb.py:138` |

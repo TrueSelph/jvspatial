@@ -478,7 +478,7 @@ OpenAPI docs at `/docs` and `/redoc` in development unless `JVSPATIAL_DOCS_DISAB
 
 ### 9.2 Authorization (RBAC)
 
-`jvspatial/api/auth/rbac.py` — roles map to permission unions. Wildcard support (e.g. `users:*`). Admin-only routes enforced on `/status`, `/logs`, and `/graph` subtrees by default.
+`jvspatial/api/auth/rbac.py` — roles map to permission unions. Wildcard support (e.g. `users:*`). Admin-only routes enforced on `/status`, `/logs`, and `/graph` subtrees by default. Endpoint-configuration lookup errors deny access; a successful lookup with no jvspatial metadata still requires authentication but has no undeclared role requirement, supporting mounted ASGI apps and raw FastAPI routes (`jvspatial/api/components/auth_middleware.py:153`).
 
 ### 9.3 Session management
 

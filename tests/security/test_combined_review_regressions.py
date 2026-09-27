@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 
 from jvspatial.api.auth.config import AuthConfig
 from jvspatial.api.auth.models import (
@@ -337,6 +337,29 @@ async def test_endpoint_config_lookup_error_denies_request():
     middleware._auth_resolver.get_endpoint_config = lambda _: 1 / 0
     middleware._normalize_user = AsyncMock(return_value=request.state.user)
     response = await middleware.dispatch(request, AsyncMock())
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_route_requires_login_but_no_unlisted_role():
+    middleware = AuthenticationMiddleware(
+        FastAPI(), AuthConfig(auth_enabled=True, test_mode=True), SimpleNamespace()
+    )
+    middleware.path_matcher.is_exempt = lambda _: False
+    middleware._auth_resolver.endpoint_requires_auth = lambda _: True
+    middleware._auth_resolver.endpoint_has_fastapi_auth = lambda _: False
+    middleware._auth_resolver.get_endpoint_config = lambda _: None
+    middleware._normalize_user = AsyncMock(side_effect=lambda user: user)
+    next_handler = AsyncMock(return_value=Response(status_code=200))
+
+    request = _request("/api/mcp")
+    request.state.user = SimpleNamespace(id="user", roles=["user"], permissions=[])
+    response = await middleware.dispatch(request, next_handler)
+    assert response.status_code == 200
+
+    admin_request = _request("/api/graph")
+    admin_request.state.user = request.state.user
+    response = await middleware.dispatch(admin_request, next_handler)
     assert response.status_code == 403
 
 

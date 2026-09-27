@@ -160,8 +160,11 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             endpoint_config = self._merge_admin_only_roles(
                 request.url.path, endpoint_config
             )
-            if endpoint_config is None:
-                return JSONResponse(status_code=403, content={"message": "Forbidden"})
+            # A successful lookup can legitimately find no jvspatial endpoint
+            # metadata on a mounted ASGI app or a raw FastAPI route. The user
+            # has still been authenticated above. Admin-only paths acquire a
+            # mandatory role from _merge_admin_only_roles even in that case.
+            # Lookup failures themselves remain fail-closed in the except arm.
             rbac_error = self._check_rbac(user, endpoint_config)
             if rbac_error:
                 return rbac_error

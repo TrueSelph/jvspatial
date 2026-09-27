@@ -161,4 +161,4 @@ class TestChangePasswordEndpoint:
                 "new_password": "newpass456789",
             },
         )
-        assert change_response.status_code == 403
+        assert change_response.status_code == 404
