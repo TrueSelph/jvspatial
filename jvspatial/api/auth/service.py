@@ -382,7 +382,7 @@ class AuthenticationService:
                     return False
         else:
             # Constant-time comparison is non-negotiable for any secret
-            # comparison (SPEC §15.2, CLAUDE.md invariant §2). The earlier
+            # comparison (SPEC §15.2, AGENTS.md invariant §2). The earlier
             # ``==`` form was timing-leakable on partial hex prefix matches.
             return hmac.compare_digest(
                 hashlib.sha256(token.encode()).hexdigest(), hashed

@@ -25,7 +25,7 @@ class APIKeyService:
             context: GraphContext instance for database operations.
                     If None, defaults to the prime database — never the
                     application default context. Auth state must live on
-                    the prime DB (SPEC §9 / CLAUDE.md §1; audit §4.4).
+                    the prime DB (SPEC §9 / AGENTS.md §1; audit §4.4).
         """
         if context is None:
             from jvspatial.db import get_prime_database

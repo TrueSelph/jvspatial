@@ -6,7 +6,7 @@ This directory holds detailed how-to and reference documentation. For higher-lev
 - [PRD.md](../../PRD.md) — *why* the library exists, target users, non-goals
 - [SPEC.md](../../SPEC.md) — *what* the library guarantees (technical contract)
 - [ROADMAP.md](../../ROADMAP.md) — forward direction and known gaps
-- [CLAUDE.md](../../CLAUDE.md) — agent maintenance guide
+- [AGENTS.md](../../AGENTS.md) — agent maintenance guide
 - [CHANGELOG.md](../../CHANGELOG.md) — release history
 
 The documents below answer *how* to use each subsystem. Every link resolves; entries marked **NEW** were added since the previous index revision.

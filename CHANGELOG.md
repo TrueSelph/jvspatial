@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hosts with their own trusted auth limiter or test suites can explicitly set `rate_limit.auth_entrypoint_rate_limit_enabled=False`; the 5/60s cap remains on by default. Declared private helper methods can be replaced on entity instances, while undeclared underscore attributes remain rejected.
 - Authenticated mounted ASGI apps and raw FastAPI routes without jvspatial endpoint metadata remain reachable. Metadata lookup errors still deny access, and `/status`, `/logs`, and `/graph` retain enforced admin roles.
 
+### Changed
+
+- `AGENTS.md` is now the canonical agent guide. Its former `CLAUDE.md` content has been consolidated there; `CLAUDE.md` is removed.
+
 ## [0.0.22] - 2026-09-26
 
 ### Added

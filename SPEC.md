@@ -7,7 +7,7 @@
 > **Companion documents**:
 > - [PRD.md](PRD.md) — *why* the library exists (product context, users, success criteria)
 > - [ROADMAP.md](ROADMAP.md) — forward-looking direction and known gaps
-> - [CLAUDE.md](CLAUDE.md) — operational guidance for AI agents maintaining this repo
+> - [AGENTS.md](AGENTS.md) — operational guidance for AI agents maintaining this repo
 > - [docs/md/README.md](docs/md/README.md) — index of detailed how-to documentation
 > - [LLM-CODING-GUIDE.md](LLM-CODING-GUIDE.md) — usage cookbook (code patterns for callers)
 
