@@ -27,7 +27,7 @@ The documents below answer *how* to use each subsystem. Every link resolves; ent
 
 | Document | What's in it |
 |---|---|
-| [Entity Reference](entity-reference.md) | `Object`, `Node`, `Edge`, `Walker`, `Root` — fields, lifecycle, persistence shape. |
+| [Entity Reference](entity-reference.md) | `Object`, `Node`, `Edge`, `Walker`, `Root` — fields, protected assignment, lifecycle, persistence shape. |
 | [Attribute Annotations](attribute-annotations.md) | `@attribute(protected, transient, private, indexed, …)` semantics. |
 | [Graph Context](graph-context.md) | Database + cache + monitor binding; multi-database setup. |
 | [Context Management Guide](context-management-guide.md) | When and how to scope `GraphContext` / `ServerContext`. |
@@ -48,7 +48,7 @@ The documents below answer *how* to use each subsystem. Every link resolves; ent
 | [API Architecture](api-architecture.md) | Mixin composition, request lifecycle, middleware stack. |
 | [Decorator Reference](decorator-reference.md) | Every decorator the library ships: `@endpoint`, `@attribute`, `@on_visit`, etc. |
 | [Pagination](pagination.md) | `ObjectPager` usage. |
-| [Rate Limiting](rate-limiting.md) | **NEW** Token-bucket rate limit configuration. |
+| [Rate Limiting](rate-limiting.md) | Global and endpoint limits, including the independent auth-entrypoint cap. |
 | [Error Handling](error-handling.md) | Exception taxonomy and propagation. |
 
 ## Authentication and Security

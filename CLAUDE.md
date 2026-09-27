@@ -58,7 +58,7 @@ Persisted entity discriminator is `cls.__dict__.get("__entity_name__") or cls.__
 
 ### 5. Protected attribute validation
 
-`Object.__setattr__` validates field names against the class hierarchy. Setting an undeclared attribute on an `Object` is rejected. Never use `object.__setattr__(self, ...)` to bypass; if you need a new field, declare it.
+`Object.__setattr__` validates field names against the class hierarchy. Setting an undeclared attribute on an `Object` is rejected, including an underscore-prefixed name. Declare runtime-only state with Pydantic `PrivateAttr`; a private helper already declared on the class can be replaced on an instance. Never use `object.__setattr__(self, ...)` to bypass the check.
 
 ### 6. Deferred-save MRO
 
@@ -71,6 +71,8 @@ Symbols in `jvspatial.__all__` are public — breaking changes require a depreca
 ### 8. CORS / CSP / docs defaults
 
 CORS does **not** default to wildcard. CSP is strict on app routes, relaxed only on `/docs`, `/redoc`, `/openapi.json`. `JVSPATIAL_DOCS_DISABLED` is the production posture. Do not weaken these defaults without a security review entry.
+
+Auth-enabled servers also retain the per-IP 5-request/60-second cap on register, login, forgot-password, and reset-password when global rate limiting is off. `RateLimitConfig(auth_entrypoint_rate_limit_enabled=False)` is an explicit opt-out for tests or hosts with a trusted replacement limiter; do not infer it from the global limiter flag.
 
 ### 9. Walker protection
 
@@ -91,6 +93,8 @@ CORS does **not** default to wildcard. CSP is strict on app routes, relaxed only
 | Walker visits the same node forever | Protection disabled | Re-enable `protection_enabled=True` |
 | `JVSPATIAL_FOO` env var ignored | Not in allowlist | Add to `jvspatial/env_adapter.py` allowlist |
 | SQLite query falls back to in-memory filter | Operator not yet pushed down by `SQLiteTranslator` | Check `jvspatial/db/_sqlite_translate.py` for supported operators |
+| `AttributeError` setting `_runtime_field` on an entity | Private state was never declared | Declare it with Pydantic `PrivateAttr`; only declared private helpers may be replaced |
+| Auth test receives `429` with global limiter off | Auth entrypoint cap is independent | Explicitly disable the auth cap in test server config, or use a trusted host limiter |
 
 ---
 

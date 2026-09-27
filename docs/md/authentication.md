@@ -731,9 +731,9 @@ The authentication middleware uses the **endpoint registry** as the single sourc
    - `auth=True`: Endpoint requires authentication
    - `auth=False`: Endpoint is public (no authentication required)
    - Default: `auth=False` (endpoints are public by default)
-3. **Unregistered Endpoints**: Endpoints not in the registry **require authentication by default** (deny by default security model)
+3. **Unregistered Endpoints**: Endpoints not in the registry, including mounted ASGI apps and raw FastAPI routes, **require authentication by default**. A successful metadata lookup with no jvspatial endpoint configuration does not invent a role requirement; a lookup error denies access. Built-in `/status`, `/logs`, and `/graph` subtrees still require admin roles.
 
-**Important**: Only endpoints explicitly registered with `auth=False` are public. This ensures that:
+**Important**: Outside the documented exempt paths, only endpoints explicitly registered with `auth=False` are public. This ensures that:
 - Dynamically registered endpoints (e.g., from extended applications) respect their `auth` settings
 - Public endpoints with `auth=False` are accessible without authentication
 - The authentication behavior is consistent across all registered endpoints
@@ -746,7 +746,7 @@ The authentication middleware follows a **"deny by default"** security model:
 1. **Exempt Paths**: Paths in `exempt_paths` bypass authentication. Built-in auth paths (`/auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/signup`, `/auth/forgot-password`, `/auth/reset-password`) are always exempt. **`/_internal/deferred`** (jvspatial deferred task / LWA pass-through) is **always** merged in as well—you cannot remove it via `exempt_paths`, because Lambda async invoke cannot send your app JWT. PathMatcher expands these using `APIRoutes.PREFIX` (default `/api`).
 2. **Files HTTP routes** (`FileStorageService`): Registered under **`{JVSPATIAL_API_PREFIX}/files`** (default `/api/files`). **`POST .../files/upload`**, **`DELETE .../files/{path}`**, and proxy admin routes under **`.../files/proxy`** require JWT or API key when auth is enabled. **`GET .../files/{path}`** also requires authentication by default when auth is enabled; set **`JVSPATIAL_FILES_PUBLIC_READ=true`** to allow direct public reads. **`GET {JVSPATIAL_PROXY_PREFIX}/{code}`** (default `/p/{code}`) is explicitly public—the proxy code is the credential. For anonymous direct file URLs when public read is off, use proxy links or add a **narrow** `exempt_paths` pattern only after security review (patterns are path-only, not per HTTP method).
 3. **Registered Endpoints**: Endpoints in the registry with `auth=False` are public
-4. **Unknown Endpoints**: Endpoints not in the registry **require authentication**
+4. **Unknown Endpoints**: Endpoints not in the registry **require authentication**. Mounted apps and raw FastAPI routes remain reachable to authenticated callers unless another policy restricts them; built-in administrative subtrees retain their admin-role check.
 5. **Error Handling**: Any error during authentication checking **denies access**
 
 This approach ensures that:

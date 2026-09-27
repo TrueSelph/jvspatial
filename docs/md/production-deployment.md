@@ -23,7 +23,7 @@ JVSPATIAL_JWT_SECRET_KEY=your-cryptographically-secure-secret-minimum-32-chars
 
 ### 2. Rate Limiting
 
-Rate limiting is **disabled by default**. For production, enable it to protect against brute-force attacks and DoS. **Especially important** when using forgot-password: enable rate limiting to prevent abuse of the public `/auth/forgot-password` endpoint.
+Global rate limiting is **disabled by default**, but auth-enabled servers still cap register, login, forgot-password, and reset-password at 5 requests per 60 seconds per IP. For production, enable the global limiter for the rest of the API and use a shared rate-limit backend across workers or hosts. Keep the auth cap enabled unless a trusted host limiter provides equivalent protection. See the [rate-limiting guide](rate-limiting.md#authentication-entry-points).
 
 ```python
 server = Server(

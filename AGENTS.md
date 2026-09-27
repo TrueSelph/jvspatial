@@ -30,6 +30,8 @@ Full list in [CLAUDE.md § Non-negotiable invariants](CLAUDE.md#non-negotiable-i
 4. Serverless detection precedence: explicit config → current Server config → `SERVERLESS_MODE` env → auto-detect.
 5. Stability tiers in [docs/md/stability.md](docs/md/stability.md) are binding. Public names live in `jvspatial.__all__`; underscore modules are internal.
 6. CORS/CSP/docs defaults fail closed; do not weaken without a security review.
+7. Auth entry points retain their per-IP 5/60s cap when global rate limiting is off. Disable it explicitly only for tests or a trusted replacement limiter; see [CLAUDE.md](CLAUDE.md) and the [rate-limiting guide](docs/md/rate-limiting.md).
+8. Entity private state must be declared (for example with Pydantic `PrivateAttr`). A declared private helper can be replaced on an instance; an undeclared underscore name is rejected.
 
 ---
 

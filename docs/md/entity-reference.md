@@ -46,6 +46,8 @@ create. See `Database.insert_if_absent` / `InsertIfAbsentResult`.
 - `await Object.find_one({"context.email": "alice@example.com"})` → find single object matching query (returns None if not found)
 - `await Object.find_one(email="alice@example.com")` → find single object using keyword arguments
 
+**Attribute assignment:** `Object` rejects names absent from its class hierarchy, including new underscore-prefixed names. Persisted fields should be declared with `@attribute(...)`; runtime-only state should use Pydantic `PrivateAttr`. A private method or descriptor already declared on the class may be replaced on an instance (for example, by a test double), but assigning an undeclared `_helper` still raises `AttributeError`. See [SPEC §2.1](../../SPEC.md#21-object--base-persistable-entity).
+
 #### `Node(Object)`
 Represents graph nodes with connection capabilities.
 

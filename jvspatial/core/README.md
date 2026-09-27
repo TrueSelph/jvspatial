@@ -46,6 +46,7 @@ core/
 
 - **`__entity_name__` is per-subclass.** Resolution: `cls.__dict__.get("__entity_name__") or cls.__name__`. Not inherited. (`entities/object.py:35-44`)
 - **`id` is protected.** Set in `__init__`, cannot be reassigned. (`entities/object.py:46-48`)
+- **Entity attributes are declared.** `Object.__setattr__` rejects new names, including undeclared underscore names. Use Pydantic `PrivateAttr` for runtime-only state; declared private helpers may be replaced on an instance. (`entities/object.py:147-186`)
 - **Walker protection is on by default.** `max_steps=10000`, `max_visits_per_node=100`, `max_execution_time=300s`, `max_queue_size=1000`. Disabling globally is forbidden. (`entities/walker.py:106-115`)
 - **Subclass lookup honors entity-name override and caches positive hits only.** Negative caching would break later imports. (`utils.py:58-89`)
 - **Root is a singleton with fixed ID `n.Root.root`.** Created under async lock. (`entities/root.py`)
