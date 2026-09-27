@@ -136,6 +136,17 @@ jobs:
           git push origin "$TAG_NAME"
           echo "Created and pushed tag: $TAG_NAME"
 
+      - name: Create GitHub Release
+        if: steps.check_tag.outputs.tag_exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.get_version.outputs.tag_name }}" \
+            --title "jvspatial ${{ steps.get_version.outputs.version }}" \
+            --generate-notes \
+            --latest
+          echo "Created GitHub Release ${{ steps.get_version.outputs.tag_name }}"
+
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
