@@ -5,7 +5,6 @@ import hashlib
 import hmac
 import logging
 import secrets
-import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -145,7 +144,7 @@ class AuthenticationService:
             blacklist_fail_closed
             if blacklist_fail_closed is not None
             else env(
-                "JVSPATIAL_AUTH_BLACKLIST_FAIL_CLOSED", default=False, parse=parse_bool
+                "JVSPATIAL_AUTH_BLACKLIST_FAIL_CLOSED", default=True, parse=parse_bool
             )
         )
         self.password_reset_token_expiry_minutes = (
@@ -336,7 +335,7 @@ class AuthenticationService:
             elif _HASHING_LIB == "passlib":
                 return _passlib_context.hash(token)
         else:
-            if env("JVSPATIAL_AUTH_STRICT_HASHING", default=False, parse=parse_bool):
+            if env("JVSPATIAL_AUTH_STRICT_HASHING", default=True, parse=parse_bool):
                 raise RuntimeError(
                     "Secure hashing library required but unavailable. "
                     "Install bcrypt/argon2/passlib or disable JVSPATIAL_AUTH_STRICT_HASHING."
@@ -596,6 +595,7 @@ class AuthenticationService:
 
             return True
         except Exception:
+            self._logger.exception("Failed to blacklist access token")
             return False
 
     def _generate_refresh_token_string(self) -> str:
@@ -777,9 +777,8 @@ class AuthenticationService:
         if not self.registration_open:
             raise RegistrationDisabledError()
 
-        # Bootstrap: first user gets admin role; others get default role
-        user_count = await self._user_count()
-        initial_roles = [self.admin_role] if user_count == 0 else [self.default_role]
+        # Public registration never grants privileges based on a racy user count.
+        initial_roles = [self.default_role]
 
         # Create new user
         from jvspatial.core.utils import generate_id
@@ -824,14 +823,14 @@ class AuthenticationService:
 
         Args:
             email: Admin email address
-            password: Admin password (min 6 characters)
+            password: Admin password (min 12 characters)
             name: Optional display name (defaults to email)
 
         Returns:
             UserResponse if admin was created, None if admin already exists
         """
-        if len(password) < 6:
-            raise ValueError("Password must be at least 6 characters")
+        if len(password) < 12:
+            raise ValueError("Password must be at least 12 characters")
 
         existing = await self._find_user_by_email(email)
         if existing:
@@ -850,7 +849,10 @@ class AuthenticationService:
                     if user and self.admin_role in (user.roles or []):
                         return None
                 except Exception:
-                    continue
+                    self._logger.exception(
+                        "Unable to inspect existing user during admin bootstrap"
+                    )
+                    raise
 
         from jvspatial.core.utils import generate_id
 
@@ -919,7 +921,7 @@ class AuthenticationService:
 
         # Check if user is active
         if not user.is_active:
-            raise ValueError("User account is deactivated")
+            raise ValueError("Invalid email or password")
 
         # Update last_accessed timestamp and save (includes password migration if applied)
         user._graph_context = self.context
@@ -982,7 +984,13 @@ class AuthenticationService:
         Returns:
             True if successfully logged out, False otherwise
         """
-        return await self._blacklist_token(token)
+        payload = self._decode_jwt_token(token)
+        if not payload or not await self._blacklist_token(token):
+            return False
+        jti = payload.get("jti")
+        if jti:
+            await self._deactivate_refresh_tokens(payload.get("user_id", ""), jti)
+        return True
 
     async def validate_token(self, token: str) -> Optional[UserResponse]:
         """Validate a JWT token and return user information.
@@ -1022,17 +1030,11 @@ class AuthenticationService:
 
         # Find user by ID using service's context
         user = None
-        got_db_error = False
         try:
             user = await self._get_user_by_id(user_id)
-        except Exception as e:
-            from jvspatial.exceptions import DatabaseError
-
-            # Only enter JWT-payload fallback for unambiguous DB errors
-            # (connection failures, path mismatches), not for generic exceptions.
-            if isinstance(e, DatabaseError):
-                got_db_error = True
-            self._logger.warning("[validate_token] _get_user_by_id error: %s", e)
+        except Exception:
+            self._logger.exception("[validate_token] user lookup failed")
+            return None
 
         # Fallback: lookup by email when get-by-id fails (e.g. context/db path mismatch).
         if not user:
@@ -1043,7 +1045,8 @@ class AuthenticationService:
                     if user and user.id != user_id:
                         user = None
                 except Exception:
-                    pass
+                    self._logger.exception("[validate_token] email lookup failed")
+                    return None
 
         # Fallback: direct db.find by id (bypasses context.get which may fail)
         if not user:
@@ -1056,20 +1059,8 @@ class AuthenticationService:
                         if user:
                             user._graph_context = self.context
             except Exception:
-                pass
-
-        # Fallback: build UserResponse from payload only when DB raised an error (e.g. path
-        # mismatch). When user simply doesn't exist (None), return None for security.
-        if not user and user_id and got_db_error:
-            return UserResponse(
-                id=user_id,
-                email=payload.get("email", ""),
-                name=payload.get("name", ""),
-                created_at=datetime.now(timezone.utc),
-                is_active=True,
-                roles=payload.get("roles") or [self.default_role],
-                permissions=list(payload.get("permissions") or []),
-            )
+                self._logger.exception("[validate_token] direct lookup failed")
+                return None
 
         if not user:
             # Avoid logging the filesystem path of the database — leaks
@@ -1089,12 +1080,8 @@ class AuthenticationService:
             )
             return None
 
-        # Use roles/permissions from JWT payload if present, else compute from user
-        roles = payload.get("roles")
-        permissions = payload.get("permissions")
-        if roles is None or permissions is None:
-            roles = self._get_user_roles(user)
-            permissions = self._get_effective_permissions_for_user(user)
+        roles = self._get_user_roles(user)
+        permissions = self._get_effective_permissions_for_user(user)
 
         # Update last_accessed timestamp on token validation (user is authenticating).
         # Non-blocking: do not fail auth if save fails (e.g. SQLite lock under concurrent load).
@@ -1238,7 +1225,7 @@ class AuthenticationService:
         refresh_token_entity._graph_context = self.context
         await self.context.save(refresh_token_entity)
 
-        # Optionally blacklist the associated access token
+        # Blacklist the associated access token before reporting success.
         if refresh_token_entity.access_token_jti:
             # Try to blacklist the access token (may fail if already expired)
             # We can't decode it without the token string, but we can add to blacklist by JTI
@@ -1260,12 +1247,16 @@ class AuthenticationService:
             blacklist_entry._graph_context = self.context
             try:
                 await self.context.save(blacklist_entry)
-                # Update cache
-                cache_key = f"blacklist:{refresh_token_entity.access_token_jti}"
-                self._blacklist_cache[cache_key] = (True, time.time())
+                await self._session_store.set(
+                    f"blacklist:{refresh_token_entity.access_token_jti}",
+                    True,
+                    ttl=self.blacklist_cache_ttl_seconds,
+                )
             except Exception:
-                # Ignore errors - token may already be expired or blacklisted
-                pass
+                self._logger.exception(
+                    "Failed to blacklist access token during refresh revocation"
+                )
+                raise
 
         return True
 
@@ -1289,20 +1280,17 @@ class AuthenticationService:
         access_token_jtis = []
 
         for data in results:
-            try:
-                refresh_token_entity = await self.context._deserialize_entity(
-                    RefreshToken, data
-                )
-                if refresh_token_entity:
-                    refresh_token_entity._graph_context = self.context
-                    refresh_token_entity.is_active = False
-                    await self.context.save(refresh_token_entity)
-                    revoked_count += 1
+            refresh_token_entity = await self.context._deserialize_entity(
+                RefreshToken, data
+            )
+            if refresh_token_entity:
+                refresh_token_entity._graph_context = self.context
+                refresh_token_entity.is_active = False
+                await self.context.save(refresh_token_entity)
+                revoked_count += 1
 
-                    if refresh_token_entity.access_token_jti:
-                        access_token_jtis.append(refresh_token_entity.access_token_jti)
-            except Exception:
-                continue
+                if refresh_token_entity.access_token_jti:
+                    access_token_jtis.append(refresh_token_entity.access_token_jti)
 
         # Blacklist all associated access tokens
         from jvspatial.core.utils import generate_id
@@ -1312,25 +1300,45 @@ class AuthenticationService:
         )
 
         for jti in access_token_jtis:
+            blacklist_id = generate_id("o", "TokenBlacklist")
+            blacklist_entry = TokenBlacklist(
+                id=blacklist_id,
+                token_id=jti,
+                user_id=user_id,
+                expires_at=estimated_expires_at,
+            )
+            blacklist_entry._graph_context = self.context
             try:
-                blacklist_id = generate_id("o", "TokenBlacklist")
-                blacklist_entry = TokenBlacklist(
-                    id=blacklist_id,
-                    token_id=jti,
-                    user_id=user_id,
-                    expires_at=estimated_expires_at,
-                )
-                blacklist_entry._graph_context = self.context
                 await self.context.save(blacklist_entry)
-
-                # Update cache
-                cache_key = f"blacklist:{jti}"
-                self._blacklist_cache[cache_key] = (True, time.time())
+                await self._session_store.set(
+                    f"blacklist:{jti}", True, ttl=self.blacklist_cache_ttl_seconds
+                )
             except Exception:
-                # Ignore errors - token may already be expired or blacklisted
-                pass
+                self._logger.exception(
+                    "Failed to blacklist access token during bulk revocation"
+                )
+                raise
 
         return revoked_count
+
+    async def _deactivate_refresh_tokens(self, user_id: str, access_jti: str) -> None:
+        """Deactivate refresh tokens bound to one access-token JTI."""
+        await self.context.ensure_indexes(RefreshToken)
+        collection, query = await RefreshToken._build_database_query(
+            self.context,
+            {
+                "context.user_id": user_id,
+                "context.access_token_jti": access_jti,
+                "context.is_active": True,
+            },
+            {},
+        )
+        for data in await self.context.database.find(collection, query):
+            entity = await self.context._deserialize_entity(RefreshToken, data)
+            if entity:
+                entity._graph_context = self.context
+                entity.is_active = False
+                await self.context.save(entity)
 
     async def change_password(
         self, user_id: str, current_password: str, new_password: str
@@ -1340,7 +1348,7 @@ class AuthenticationService:
         Args:
             user_id: User ID
             current_password: Current password for verification
-            new_password: New password (min 6 characters)
+            new_password: New password (min 12 characters)
 
         Returns:
             True on success
@@ -1355,6 +1363,8 @@ class AuthenticationService:
         if not self._verify_password(current_password, user.password_hash):
             raise ValueError("Current password is incorrect")
 
+        if len(new_password) < 12:
+            raise ValueError("Password must be at least 12 characters")
         user.password_hash = self._hash_password(new_password)
         user._graph_context = self.context
         await self.context.save(user)
@@ -1431,7 +1441,7 @@ class AuthenticationService:
 
         Args:
             token: Plaintext reset token from email
-            new_password: New password (min 6 characters)
+            new_password: New password (min 12 characters)
 
         Returns:
             True on success
@@ -1468,18 +1478,28 @@ class AuthenticationService:
                 if not user:
                     raise ValueError("Invalid or expired token")
 
+                if len(new_password) < 12:
+                    raise ValueError("Password must be at least 12 characters")
+                entity.used_at = now
+                await self.context.save(entity)
                 user.password_hash = self._hash_password(new_password)
                 await self.context.save(user)
 
-                entity.used_at = now
-                await self.context.save(entity)
-
-                await self.revoke_all_user_tokens(entity.user_id)
+                try:
+                    await self.revoke_all_user_tokens(entity.user_id)
+                except Exception:
+                    self._logger.exception(
+                        "Password reset succeeded but token revocation failed"
+                    )
+                    raise RuntimeError(
+                        "Password reset completed; token revocation failed"
+                    )
                 return True
             except ValueError:
                 raise
             except Exception:
-                continue
+                self._logger.exception("Password reset failed")
+                raise
 
         raise ValueError("Invalid or expired token")
 
@@ -1549,6 +1569,7 @@ class AuthenticationService:
         user.roles = roles_update.roles
         user._graph_context = self.context
         await self.context.save(user)
+        await self.revoke_all_user_tokens(user_id)
 
         return await self.get_user_by_id(user_id)
 
@@ -1571,6 +1592,7 @@ class AuthenticationService:
         user.permissions = permissions_update.permissions
         user._graph_context = self.context
         await self.context.save(user)
+        await self.revoke_all_user_tokens(user_id)
 
         return await self.get_user_by_id(user_id)
 

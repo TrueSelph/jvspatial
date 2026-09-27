@@ -62,7 +62,7 @@ Persisted entity discriminator is `cls.__dict__.get("__entity_name__") or cls.__
 
 ### 6. Deferred-save MRO
 
-`class MyEntity(DeferredSaveMixin, Node)` — mixin must come **before** the base. Wrong order silently disables batching. Tests should assert MRO-sensitive behavior.
+`class MyEntity(DeferredSaveMixin, Node)` — mixin must come **before** the base. Wrong order raises at subclass creation. Tests should assert MRO-sensitive behavior.
 
 ### 7. Stability tier discipline
 

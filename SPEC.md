@@ -280,6 +280,8 @@ Callers branching on capabilities should test the flag, not the adapter class.
 
 `jvspatial/db/_atomic.py` provides crash-safe writes: temp file → `fsync` → `rename` → `fsync(directory)`. Per-file mutex via `PathLockManager` (`_path_locks.py`) serializes concurrent writes to the same record. Bounded LRU prevents lock-table growth.
 
+JsonDB collection names and record IDs must be single path components. Absolute paths, separators, and `..` are rejected before a record path is used; resolved paths must remain under `base_path` (`jvspatial/db/jsondb.py:138`, `jvspatial/db/jsondb.py:174`).
+
 ### 4.5 Multi-database
 
 `jvspatial/db/manager.py` — one "prime" database for core ops (auth, sessions, API keys), plus additional databases for specialized use. Auth state is **always** on the prime database; this cannot be relocated.
@@ -351,6 +353,8 @@ When `protection_enabled=True` (default):
 - Enqueue refuses when queue length would exceed `max_queue_size` (silent drop, logged).
 
 Protection is *advisory* for safety, not for security — untrusted user input should not influence walker construction.
+
+Cascade deletion stops and raises on the first edge or dependent-node failure. The parent is deleted only after all required deletions finish (`jvspatial/core/entities/node.py:1527`).
 
 ### 6.4 Trail tracking
 
@@ -458,7 +462,7 @@ Endpoints decorated at import time are collected in a deferred registry (`api/en
 
 When `auth_enabled=True`, the server registers `/auth/register`, `/auth/login`, `/auth/logout`, plus token refresh and password reset endpoints. With `auth_enabled=False`, no auth endpoints are registered.
 
-OpenAPI docs at `/docs` and `/redoc` unless `JVSPATIAL_DOCS_DISABLED` is truthy (see §10.5).
+OpenAPI docs at `/docs` and `/redoc` in development unless `JVSPATIAL_DOCS_DISABLED` is truthy. In `JVSPATIAL_ENVIRONMENT=production`, docs are unpublished by default (see §10.5; `jvspatial/api/components/app_builder.py:62`).
 
 ---
 
@@ -470,6 +474,7 @@ OpenAPI docs at `/docs` and `/redoc` unless `JVSPATIAL_DOCS_DISABLED` is truthy 
 - **API keys**: SHA-256 hashed at rest, plaintext returned **only once** on creation. Verification uses `hmac.compare_digest` (constant-time).
 - **Refresh tokens**: rotate on use; previous tokens invalidated.
 - **Password reset**: `token_lookup` field provides O(1) lookup; constant-time comparison.
+- **Live user check**: JWT decoding never authenticates without a loaded active user. User lookup errors reject the token; roles and permissions come from the loaded row, not JWT claims (`jvspatial/api/auth/service.py:1031`, `jvspatial/api/auth/service.py:1083`).
 
 ### 9.2 Authorization (RBAC)
 
@@ -481,11 +486,11 @@ OpenAPI docs at `/docs` and `/redoc` unless `JVSPATIAL_DOCS_DISABLED` is truthy 
 
 ### 9.4 Logout blacklist
 
-JWT tokens are blacklisted on logout. Blacklist storage is per-worker in default config. Cross-worker invalidation requires a shared blacklist store (caller-provided).
+JWT tokens are blacklisted on logout, and the bound refresh token is deactivated (`jvspatial/api/auth/service.py:978`). Blacklist lookup errors fail closed by default (`jvspatial/api/auth/service.py:493`). Blacklist storage is per-worker in default config. Cross-worker invalidation requires a shared blacklist store (caller-provided).
 
 ### 9.5 Webhook authentication
 
-`jvspatial/api/integrations/webhooks/` — HMAC signature verification with constant-time comparison. Per-source secret rotation supported. Replay protection via timestamp window (configurable).
+`jvspatial/api/integrations/webhooks/` — required HMAC signatures are checked on every HTTP method. GET signs the raw query string; body-bearing methods sign the raw body (`jvspatial/api/integrations/webhooks/middleware.py:340`). Comparison is constant-time. Per-source secret rotation and configurable replay protection are supported.
 
 ---
 
@@ -537,7 +542,7 @@ Unknown `JVSPATIAL_*` keys are rejected at startup to catch typos and removed se
 
 ### 10.5 Docs gating
 
-`JVSPATIAL_DOCS_DISABLED` (truthy values: `1`, `true`, `yes`, `on`) disables `/docs`, `/redoc`, `/openapi.json`, and `/docs/oauth2-redirect` at app build time. CSP headers are relaxed only on docs paths to allow the Swagger UI CDN; app routes retain strict CSP.
+`JVSPATIAL_DOCS_DISABLED` (truthy values: `1`, `true`, `yes`, `on`) disables `/docs`, `/redoc`, `/openapi.json`, and `/docs/oauth2-redirect` at app build time. Its default is true when `JVSPATIAL_ENVIRONMENT=production`; an explicit false value re-enables docs. CSP headers are relaxed only on docs paths to allow the Swagger UI CDN; app routes retain strict CSP (`jvspatial/api/components/app_builder.py:62`).
 
 **Source of truth**: `jvspatial/api/components/app_builder.py`.
 
@@ -599,6 +604,7 @@ When LWA is detected, `Server` applies best-effort defaults for `AWS_LWA_PASS_TH
 
 - `storage/security/path_sanitizer.py` — five-stage validation: regex blocklist (11 patterns), normalization with re-check, hidden-file allowlist, symlink resolution, base-directory confinement.
 - `storage/security/validator.py` — content-based MIME via `python-magic`. ~25 allowed types, 14 blocked types, 19 blocked extensions. Internal markers bypassed via metadata validation only (never user-supplied).
+- Local version IDs must be one filename component; version files and pointers must resolve inside the storage root (`jvspatial/storage/interfaces/local.py:192`).
 
 ### 12.2 Upload contract
 
@@ -664,6 +670,7 @@ User input crosses the trust boundary at:
 2. **`Entity.update()`** — validates all field names against the class hierarchy; rejects undeclared attributes (`object.py` setter).
 3. **File uploads** — content-based MIME validation, not extension-based.
 4. **Path inputs** — `path_sanitizer.py` before any filesystem access.
+5. **Index definitions** — SQLite and Postgres accept safe field-path segments and translated partial-filter expressions; raw `where=` SQL is rejected (`jvspatial/db/sqlite.py:344`, `jvspatial/db/postgres.py:1421`).
 
 ### 15.2 Constant-time comparisons
 
@@ -792,7 +799,7 @@ Control-flow exceptions for walkers live in `jvspatial.core.entities`:
 - Database errors propagate to the caller; entity methods may wrap with context.
 - Validation errors raise `ValidationError` with `field_errors`. The API layer maps to HTTP 400.
 - Authentication errors map to HTTP 401; authorization errors to HTTP 403.
-- Walker errors are logged and surface in `walker.response["errors"]`; traversal halts.
+- Non-protection walker errors are reported and raised as `WalkerExecutionError`; protection violations retain their specialized errors (`jvspatial/core/entities/walker.py:902`).
 
 ---
 

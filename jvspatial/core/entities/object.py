@@ -153,8 +153,20 @@ class Object(AttributeMixin, BaseModel):
         if valid_fields is None:
             valid_fields = self._get_class_hierarchy_fields()
 
-        # Check if this is a valid field in the class hierarchy or private attribute
-        if (name in valid_fields) or (name.startswith("_")):
+        # Private names must also be declared on the class hierarchy.
+        private_fields = {
+            key
+            for base in type(self).__mro__
+            for key in (
+                set(getattr(base, "__private_attributes__", {}) or {})
+                | {
+                    field
+                    for field in getattr(base, "__annotations__", {})
+                    if field.startswith("_") and not field.startswith("__")
+                }
+            )
+        }
+        if name in valid_fields or name in private_fields:
             # Use normal Pydantic setattr for model fields or private attributes
             super().__setattr__(name, value)
         else:

@@ -836,9 +836,8 @@ class DynamoDB(Database):
                     unprocessed = retry_response.get("UnprocessedItems", {})
 
                 if unprocessed:
-                    # Log warning but don't fail - some items may be throttled
-                    logger.warning(
-                        f"Some items remain unprocessed after {max_retries} retries for collection '{collection}': {len(unprocessed.get(table_name, []))}"
+                    raise DatabaseError(
+                        f"DynamoDB batch write left {len(unprocessed.get(table_name, []))} items unprocessed"
                     )
 
             except ClientError as e:
@@ -874,10 +873,8 @@ class DynamoDB(Database):
     async def bulk_save(self, collection: str, records: List[Dict[str, Any]]) -> int:
         """Bulk write via :meth:`batch_write`.
 
-        DynamoDB's batch_write_item handles partial failures with
-        unprocessed-item retry. The count returned reflects the
-        records we *attempted* to write -- the underlying batch_write
-        logs a warning on items still unprocessed after retries.
+        Returns only after every record has been processed; unprocessed
+        writes after retries raise DatabaseError.
         """
         if not records:
             return 0

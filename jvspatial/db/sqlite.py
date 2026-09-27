@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import uuid
 from pathlib import Path
 from typing import (
@@ -286,16 +287,17 @@ class SQLiteDB(Database):
     def _resolve_index_where(**kwargs: Any) -> Optional[str]:
         """Resolve a CREATE INDEX WHERE clause from kwargs.
 
-        Honors an explicit ``where=`` string, otherwise translates a
-        Mongo-style partial filter under any of the names
+        Rejects raw ``where=`` SQL and translates a Mongo-style partial
+        filter under any of the names
         ``get_indexes()`` / annotations may emit. Returns ``None`` when
         no partial filter was requested. Raises ``ValueError`` when a
         partial filter is present but cannot be translated — never
         silently demote a partial unique index to a global unique.
         """
-        explicit = kwargs.get("where")
-        if isinstance(explicit, str) and explicit.strip():
-            return explicit.strip()
+        if kwargs.get("where"):
+            raise ValueError(
+                "Raw index predicates are unsupported; use a partial filter expression"
+            )
 
         pfe = (
             kwargs.get("index_partial_filter_expression")
@@ -309,8 +311,7 @@ class SQLiteDB(Database):
             raise ValueError(
                 "SQLiteDB.create_index: cannot translate "
                 f"index_partial_filter_expression {pfe!r} to a "
-                "SQLite WHERE clause. Pass an explicit ``where=`` "
-                "argument or use a supported filter shape "
+                "SQLite WHERE clause. Use a supported filter shape "
                 "(equality / $gt / $exists on safe field paths "
                 "with scalar values)."
             )
@@ -354,9 +355,9 @@ class SQLiteDB(Database):
             field_or_fields: Single field name (str) or list of (field_name, direction) tuples for compound indexes
             unique: Whether the index should enforce uniqueness
             **kwargs: Partial-filter options (``partialFilterExpression``,
-                ``partial_filter_expression``,
-                ``index_partial_filter_expression``, or explicit ``where=``).
-                Same Mongo dialect as PostgresDB.create_index.
+                ``partial_filter_expression``, or
+                ``index_partial_filter_expression``). Raw ``where=`` SQL is
+                rejected. Same Mongo dialect as PostgresDB.create_index.
 
         Note:
             SQLite indexes on nested JSON fields use json_extract() function.
@@ -380,6 +381,13 @@ class SQLiteDB(Database):
             fields = field_or_fields
             field_names = "_".join(field.replace(".", "_") for field, _ in fields)
             index_name = f"idx_{collection}_{field_names}"
+
+        safe_segment = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+        if not safe_segment.fullmatch(collection) or any(
+            not all(safe_segment.fullmatch(seg) for seg in field.split("."))
+            for field, _ in fields
+        ):
+            raise ValueError("Unsafe index collection or field path")
 
         where_sql = self._resolve_index_where(**kwargs)
 
@@ -446,16 +454,9 @@ class SQLiteDB(Database):
             )
 
         except Exception as e:
-            # Partial unique indexes protect Conversation/Interaction
-            # coexistence — never swallow create failures for those.
-            if unique and where_sql:
-                raise RuntimeError(
-                    f"Failed to create partial unique index '{index_name}' "
-                    f"on collection '{collection}': {e}"
-                ) from e
-            logger.warning(
-                f"Failed to create index '{index_name}' on collection '{collection}': {e}"
-            )
+            raise RuntimeError(
+                f"Failed to create index '{index_name}' on collection '{collection}'"
+            ) from e
 
     async def close(self) -> None:
         """Close the underlying SQLite connection.

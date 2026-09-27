@@ -10,12 +10,15 @@ This module provides helper functions for webhook processing including:
 import hashlib
 import hmac
 import json
+import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException, Request
 
 from jvspatial.env import env, normalize_optional_secret_string, parse_bool_basic
+
+logger = logging.getLogger(__name__)
 
 
 class WebhookConfig:
@@ -390,8 +393,8 @@ async def check_idempotency(
         return False, None
 
     except Exception:
-        # Fall back to in-memory manager if database is not available
-        return _idempotency_manager.is_duplicate(idempotency_key)
+        logger.exception("Webhook idempotency lookup failed")
+        raise HTTPException(status_code=503, detail="Idempotency check unavailable")
 
 
 async def store_idempotent_response(
@@ -492,7 +495,7 @@ async def validate_and_process_webhook(
     if config.hmac_secret:
         signature = extract_hmac_signature(request)
         if not signature:
-            raise HTTPException(status_code=400, detail="Missing HMAC signature")
+            raise HTTPException(status_code=401, detail="Missing HMAC signature")
 
         if not verify_hmac_signature(raw_body, signature, config.hmac_secret):
             raise HTTPException(status_code=401, detail="Invalid HMAC signature")

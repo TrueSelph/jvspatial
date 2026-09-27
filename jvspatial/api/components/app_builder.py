@@ -59,8 +59,12 @@ class AppBuilder:
         # (audit §7.2 / §7.12).
         from jvspatial.env import env, parse_bool
 
+        production = (
+            str(env("JVSPATIAL_ENVIRONMENT", default="development")).lower()
+            == "production"
+        )
         docs_disabled = bool(
-            env("JVSPATIAL_DOCS_DISABLED", default=False, parse=parse_bool)
+            env("JVSPATIAL_DOCS_DISABLED", default=production, parse=parse_bool)
         )
 
         app_kwargs: Dict[str, Any] = {

@@ -354,7 +354,8 @@ class EndpointAuthResolver:
                         return route.endpoint._jvspatial_endpoint_config  # type: ignore[attr-defined]
             return None
         except Exception:
-            return None
+            self._logger.exception("Endpoint auth configuration lookup failed")
+            raise
 
 
 __all__ = ["EndpointAuthResolver", "path_requires_admin_only_role"]

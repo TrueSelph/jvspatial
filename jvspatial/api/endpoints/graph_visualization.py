@@ -69,9 +69,7 @@ def make_graph_expand_handler(
             )
         except Exception as e:
             logger.exception("graph expand failed")
-            raise HTTPException(
-                status_code=500, detail=f"Graph expand failed: {e}"
-            ) from e
+            raise HTTPException(status_code=500, detail="Internal server error") from e
         tag = weak_etag_for_payload(payload)
         return JSONResponse(
             content=payload,
@@ -111,9 +109,7 @@ def make_graph_subgraph_handler(
             )
         except Exception as e:
             logger.exception("graph subgraph failed")
-            raise HTTPException(
-                status_code=500, detail=f"Graph subgraph failed: {e}"
-            ) from e
+            raise HTTPException(status_code=500, detail="Internal server error") from e
         tag = weak_etag_for_payload(payload)
         return JSONResponse(
             content=payload,

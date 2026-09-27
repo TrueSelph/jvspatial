@@ -8,7 +8,6 @@ This middleware handles all webhook-specific processing including:
 - Route parameter extraction
 """
 
-import asyncio
 import json
 import logging
 import time
@@ -20,7 +19,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from jvspatial.api.constants import APIRoutes
 from jvspatial.env import normalize_optional_secret_string
-from jvspatial.runtime.serverless import is_serverless_mode
 
 from .utils import (
     WebhookConfig,
@@ -211,26 +209,8 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                 )
                 return JSONResponse(content=cached_response, status_code=200)
 
-            # Handle async processing if enabled and background tasks allowed
-            serverless_mode = is_serverless_mode(getattr(self.server, "config", None))
-            if (
-                webhook_config
-                and webhook_config.get("async_processing", False)
-                and not serverless_mode
-            ):
-                # Queue for async processing and return immediate response
-                task_id = self._queue_async_processing(request, call_next)
-                from datetime import datetime
-
-                response_data = {
-                    "status": "queued",
-                    "timestamp": datetime.now().isoformat(),
-                    "message": "Webhook queued for asynchronous processing",
-                    "task_id": task_id,
-                }
-                return JSONResponse(content=response_data, status_code=200)
-
-            # Continue to the endpoint handler
+            # The handler must complete while the ASGI request is alive. For
+            # durable asynchronous work, handlers should enqueue externally.
             response = await call_next(request)
 
             # Store response for idempotency if needed
@@ -241,31 +221,26 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                         response.body.decode("utf-8") if response.body else "{}"
                     )
                     response_data = json.loads(response_content)
-                    if not serverless_mode:
-                        asyncio.create_task(
-                            store_idempotent_response(idempotency_key, response_data)
-                        )
-                    else:
-                        await store_idempotent_response(idempotency_key, response_data)
+                    await store_idempotent_response(idempotency_key, response_data)
                 except Exception as e:
                     logger.warning(f"Failed to cache response for idempotency: {e}")
 
             return response
 
         except HTTPException as e:
-            # Convert HTTPException to proper webhook response
+            # Preserve authentication and availability failures for callers.
             logger.warning(f"Webhook processing failed: {e.detail}")
             from datetime import datetime
 
             error_response = {
                 "status": "error",
                 "timestamp": datetime.now().isoformat(),
-                "message": e.detail,
+                "message": (
+                    e.detail if e.status_code < 500 else "Internal processing error"
+                ),
                 "error_code": e.status_code,
             }
-            return JSONResponse(
-                content=error_response, status_code=200
-            )  # Always return 200 for webhooks
+            return JSONResponse(content=error_response, status_code=e.status_code)
 
         except Exception as e:
             # Handle unexpected errors
@@ -278,9 +253,7 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                 "message": "Internal processing error",
                 "error_code": 500,
             }
-            return JSONResponse(
-                content=error_response, status_code=200
-            )  # Always return 200 for webhooks
+            return JSONResponse(content=error_response, status_code=500)
 
     def _is_webhook_request(self, request: Request) -> bool:
         """Check if request is a webhook request.
@@ -355,18 +328,32 @@ class WebhookMiddleware(BaseHTTPMiddleware):
                 )
 
             if request.method == "GET":
-                # Light path for GET: no body, HMAC, or idempotency
+                # Sign the raw query string so its parameters cannot be changed.
                 if config.https_required and request.url.scheme != "https":
                     raise HTTPException(
                         status_code=400,
                         detail="HTTPS required for webhook endpoints",
                     )
+                if webhook_config and webhook_config.get("signature_required"):
+                    from .utils import extract_hmac_signature, verify_hmac_signature
+
+                    signature = extract_hmac_signature(request)
+                    if not signature or not verify_hmac_signature(
+                        request.scope.get("query_string", b""),
+                        signature,
+                        config.hmac_secret or "",
+                    ):
+                        raise HTTPException(
+                            status_code=401, detail="Invalid HMAC signature"
+                        )
                 request.state.raw_body = b""
                 request.state.content_type = ""
                 request.state.parsed_payload = dict(request.query_params)
                 request.state.idempotency_key = None
                 request.state.is_duplicate_request = False
-                request.state.hmac_verified = False
+                request.state.hmac_verified = bool(
+                    webhook_config and webhook_config.get("signature_required")
+                )
                 request.state.webhook_route = self._extract_route_parameter(request)
             else:
                 # Full path for POST/PUT/PATCH
@@ -480,41 +467,6 @@ class WebhookMiddleware(BaseHTTPMiddleware):
             https_required=https_required,
             allowed_content_types=base_config.allowed_content_types,
         )
-
-    async def _queue_async_processing(
-        self, request: Request, call_next: Callable
-    ) -> str:
-        """Queue webhook for asynchronous processing.
-
-        Args:
-            request: FastAPI request object
-            call_next: Next handler in chain
-
-        Returns:
-            Task ID for tracking
-        """
-        import asyncio
-        import uuid
-
-        task_id = str(uuid.uuid4())
-
-        # Create async task for processing
-        async def process_async():
-            try:
-                response = await call_next(request)
-                logger.debug(f"Async webhook processing completed: {task_id}")
-                return response
-            except Exception as e:
-                logger.error(
-                    f"Async webhook processing failed: {task_id}, {e}", exc_info=True
-                )
-                raise
-
-        # Queue the task (in production, use proper task queue like Celery)
-        asyncio.create_task(process_async())
-
-        logger.debug(f"Webhook queued for async processing: {task_id}")
-        return task_id
 
     def _extract_route_parameter(self, request: Request) -> Optional[str]:
         """Extract route parameter from webhook URL path.

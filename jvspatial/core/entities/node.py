@@ -1341,7 +1341,8 @@ class Node(Object):
                 if edge_obj:
                     incoming_edges.append(edge_obj)
             except Exception:
-                continue
+                logger.exception("Failed to inspect incoming edge during node deletion")
+                raise
 
         # Remove duplicates
         seen_edge_ids = set()
@@ -1408,7 +1409,10 @@ class Node(Object):
                                 # Only add nodes reachable via outgoing edges
                                 nodes_to_check.add(edge.target)
                     except Exception:
-                        continue
+                        logger.exception(
+                            "Failed to inspect outgoing edges during node deletion"
+                        )
+                        raise
 
                 # For each candidate node, check if it should be deleted
                 for candidate_id in nodes_to_check:
@@ -1504,7 +1508,10 @@ class Node(Object):
 
                                 return True
                             except Exception:
-                                return False
+                                logger.exception(
+                                    "Failed to inspect connected node during cascade deletion"
+                                )
+                                raise
 
                         # Check if candidate is only connected to deletion set
                         if await is_node_only_connected_to_deletion_set(
@@ -1513,8 +1520,10 @@ class Node(Object):
                             nodes_to_delete.add(candidate_id)
                             changed = True
                     except Exception:
-                        # Continue even if check fails
-                        continue
+                        logger.exception(
+                            "Failed to inspect cascade candidate during node deletion"
+                        )
+                        raise
 
             # Remove self from nodes_to_delete (we'll delete it separately at the end)
             nodes_to_delete.discard(self.id)
@@ -1525,7 +1534,8 @@ class Node(Object):
                 await context.database.delete("edge", edge.id)
                 await context._cache.delete(edge.id)
             except Exception:
-                continue
+                logger.exception("Failed to delete incoming edge during node deletion")
+                raise
 
         # Clean up outgoing edges from this node
         for edge in outgoing_edges:
@@ -1533,7 +1543,8 @@ class Node(Object):
                 await context.database.delete("edge", edge.id)
                 await context._cache.delete(edge.id)
             except Exception:
-                continue
+                logger.exception("Failed to delete outgoing edge during node deletion")
+                raise
 
         # If cascade is enabled, delete all dependent nodes
         if cascade and nodes_to_delete:
@@ -1545,7 +1556,10 @@ class Node(Object):
                     if node:
                         dependent_nodes.append(node)
                 except Exception:
-                    continue
+                    logger.exception(
+                        "Failed to load dependent node during cascade deletion"
+                    )
+                    raise
 
             # Delete dependent nodes recursively
             # Each node will delete its own incoming edges and any further dependent nodes
@@ -1554,8 +1568,10 @@ class Node(Object):
                     # Recursively delete with cascade=True to handle nested dependencies
                     await dependent_node.delete(cascade=True)
                 except Exception:
-                    # Continue even if dependent node deletion fails
-                    continue
+                    logger.exception(
+                        "Failed to delete dependent node during cascade deletion"
+                    )
+                    raise
 
         # Finally, delete this node itself. Direct delete rather than
         # ``context.delete`` — its "no edges left?" check would cost a COUNT,

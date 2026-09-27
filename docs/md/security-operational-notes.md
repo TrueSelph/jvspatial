@@ -13,9 +13,9 @@ This page complements [environment-configuration.md](environment-configuration.m
 
 Webhook authentication can read API keys from query parameters or path segments (see webhook configuration). **Prefer header-based API keys in production.** Query and path parameters are more likely to appear in access logs, reverse proxies, browser history, and `Referer` headers.
 
-## JWT blacklist (fail-open)
+## JWT blacklist (fail-closed)
 
-If the database or cache path used for token blacklist checks raises an error, validation **fails open**: the token is treated as **not** blacklisted so the API stays available. Failures are logged at **ERROR** with stack traces—monitor these logs in production because revocation may be ineffective until the underlying issue is fixed.
+If the database or cache path used for token blacklist checks raises an error, validation **fails closed** by default: the token is treated as blacklisted. Failures are logged at **ERROR** with stack traces. `JVSPATIAL_AUTH_BLACKLIST_FAIL_CLOSED=false` restores the previous availability behavior and should be used only with a documented acceptance of revocation risk. Use a shared session store across workers for prompt cross-worker revocation.
 
 ## In-memory rate limiting and auth rate helpers
 

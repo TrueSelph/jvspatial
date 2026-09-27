@@ -508,6 +508,12 @@ class QueryEngine:
                         flags |= re.IGNORECASE
                 elif isinstance(condition, dict) and condition.get("$options") == "i":
                     flags |= re.IGNORECASE
+                if (
+                    not isinstance(pattern, str)
+                    or len(pattern) > 256
+                    or len(value) > 8192
+                ):
+                    return False
                 try:
                     if re.search(pattern, value, flags) is None:
                         return False

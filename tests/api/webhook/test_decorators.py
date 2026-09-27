@@ -40,7 +40,7 @@ class TestWebhookEndpointDecorator:
         assert hasattr(basic_webhook, "_jvspatial_endpoint_config")
         config = basic_webhook._jvspatial_endpoint_config
         assert config["path"] == "/webhook/basic"
-        assert config["methods"] == ["GET"]
+        assert config["methods"] == ["POST"]
         assert config["auth_required"] is False
         assert config["permissions"] == []
         assert config["roles"] == []
@@ -146,7 +146,7 @@ class TestWebhookEndpointDecorator:
         assert hasattr(WebhookWalker, "_jvspatial_endpoint_config")
         config = WebhookWalker._jvspatial_endpoint_config
         assert config["path"] == "/webhook/walker"
-        assert config["methods"] == ["GET"]
+        assert config["methods"] == ["POST"]
         assert config["webhook"] is True
 
         # Clean up

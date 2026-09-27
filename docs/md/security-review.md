@@ -1,4 +1,4 @@
-# jvspatial — Security Code Review (Final)
+# jvspatial — Security Code Review
 
 **Date:** 2026-05-02
 **Reviewer:** Claude Code (primary) + Explore agent (parallel scan)
@@ -6,11 +6,57 @@
 **Scope:** Full codebase — `jvspatial/` package, authentication, storage, API middleware, database backends, webhooks, scheduler, serverless
 **Prior reviews:** 2026-05-01 (13 findings, all remediated) → 2026-05-02 reassessment (7 findings, all remediated)
 
+## 2026-09-27 combined gap and security review
+
+The September review found 37 additional items. The May conclusion below describes the May review only. The numbered entries here correspond to the combined backlog; the code and regression tests in this PR are the remediation evidence.
+
+| # | Remediation | Evidence |
+|---|---|---|
+| 1 | User lookup errors reject JWTs | `jvspatial/api/auth/service.py:1031`; `tests/security/test_combined_review_regressions.py` |
+| 2 | Current user roles and permissions replace JWT claims; role updates revoke tokens | `jvspatial/api/auth/service.py:1083`, `jvspatial/api/auth/service.py:1530` |
+| 3 | Revocation writes the active session store and surfaces write errors | `jvspatial/api/auth/service.py:1220`, `jvspatial/api/auth/service.py:1270`; `jvspatial/api/auth/_session_store.py:82` |
+| 4 | Logout deactivates the refresh token bound to the access JTI | `jvspatial/api/auth/service.py:974` |
+| 5 | Password reset marks the token used before the password write and distinguishes later revocation failure | `jvspatial/api/auth/service.py:1425` |
+| 6 | Missing or failed endpoint config denies RBAC requests | `jvspatial/api/components/auth_middleware.py:180`; `endpoint_auth_resolver.py:356` |
+| 7 | Signed GET webhooks require HMAC; webhook decorator defaults to POST | `jvspatial/api/integrations/webhooks/middleware.py:348`; `jvspatial/api/decorators/route.py:169` |
+| 8 | Local version IDs and paths are confined to the root | `jvspatial/storage/interfaces/local.py:192` |
+| 9 | JsonDB collection and record paths are confined to `base_path` | `jvspatial/db/jsondb.py:138` |
+| 10 | API-key allowlists match exact paths or complete wildcard segments | `jvspatial/api/components/auth_middleware.py:468` |
+| 11 | Public registration always assigns the default role | `jvspatial/api/auth/service.py:775` |
+| 12 | Handled 500 responses use generic details | `jvspatial/api/components/error_handler.py:616`; `graph_visualization.py`; `storage/service.py` |
+| 13 | Proxy manager calls are awaited and URLs use returned codes | `jvspatial/api/integrations/storage/service.py:110` |
+| 14 | Node and edge filters use `_entity_name()` | `jvspatial/core/entities/node_query.py:50` |
+| 15 | Cascade deletion raises on edge or child failure | `jvspatial/core/entities/node.py:1527` |
+| 16 | Traversal errors raise after reporting | `jvspatial/core/entities/walker.py:900` |
+| 17 | Blacklist lookup fails closed by default | `jvspatial/api/auth/service.py:144` |
+| 18 | File reads are private by default with auth enabled | `jvspatial/api/integrations/storage/service.py:311` |
+| 19 | Auth entry points have per-IP rate limits; account-state errors are generic | `jvspatial/api/server_configurator.py:95`; `auth_configurator.py` |
+| 20 | Cached webhook API keys are checked for active state and expiry | `jvspatial/api/integrations/webhooks/webhook_auth.py:186` |
+| 21 | Deferred invoke requires a secret on loopback unless explicitly exempted for LWA | `jvspatial/api/deferred_invoke_route.py:58` |
+| 22 | Refresh-token hashing follows the strict hashing default | `jvspatial/api/auth/service.py:339` |
+| 23 | SQL index paths are validated; raw `where=` is rejected | `jvspatial/db/sqlite.py:343`; `postgres.py:1421` |
+| 24 | Production docs are unpublished by default | `jvspatial/api/components/app_builder.py:61` |
+| 25 | New passwords require at least 12 characters | `jvspatial/api/auth/models.py:20`; `service.py` |
+| 26 | Webhook handlers and idempotency storage complete within the request | `jvspatial/api/integrations/webhooks/middleware.py:215` |
+| 27 | DynamoDB bulk writes raise on unprocessed items | `jvspatial/db/dynamodb.py:838` |
+| 28 | Atomic increment validates fields before writing and returns false for missing fields | `jvspatial/core/context.py:1114` |
+| 29 | Root lock is created per event loop | `jvspatial/core/entities/root.py:19` |
+| 30 | Exported `retry` awaits and retries coroutines | `jvspatial/utils/decorators.py:150` |
+| 31 | Admin bootstrap aborts on unreadable user rows | `jvspatial/api/auth/service.py:847` |
+| 32 | Webhook idempotency database errors return 503 | `jvspatial/api/integrations/webhooks/utils.py:392` |
+| 33 | Trail append tasks are retained and failures logged; async traversal awaits append | `jvspatial/core/entities/walker_components/walker_trail.py:70`; `walker.py` |
+| 34 | Scheduler coroutines run on the server event loop | `jvspatial/api/integrations/scheduler/scheduler.py:608` |
+| 35 | Regex patterns and values are bounded before evaluation | `jvspatial/db/query.py:512` |
+| 36 | Underscore attributes must be declared private fields | `jvspatial/core/entities/object.py:157` |
+| 37 | Incorrect DeferredSaveMixin MRO raises at class creation | `jvspatial/core/mixins/deferred_save.py:157` |
+
+Security-sensitive changes to auth and secrets are entries 1–7, 10–11, 17, 19–22, 25, and 31–32. Each has a code location above. Deployment decisions for shared revocation storage, session and rate-limit stores, schema migrations, and database transactions remain in `ROADMAP.md` §2.
+
 ---
 
 ## Executive Summary
 
-This is the final security assessment of jvspatial. All 20 findings across two review cycles (13 from 2026-05-01, 7 from 2026-05-02 reassessment) have been implemented, verified, and confirmed passing the full test suite. **Zero remaining security findings.**
+At the close of the May 2026 review, all 20 findings across two cycles (13 from 2026-05-01, 7 from 2026-05-02 reassessment) had been implemented and verified. The September 2026 combined review above identified additional findings and records their remediation.
 
 The codebase is in production-ready security condition with mature, defense-in-depth design across authentication, storage, webhooks, walker protection, and configuration validation.
 
@@ -183,4 +229,4 @@ All findings were cross-referenced between passes and verified against current c
 
 ## Conclusion
 
-**Zero remaining security findings.** All 20 issues across two review cycles have been remediated, verified, and confirmed passing the full test suite. The codebase demonstrates mature, defense-in-depth security design across authentication, storage, webhooks, walker protection, rate limiting, and configuration validation. jvspatial is in production-ready security condition.
+All 20 issues in the May 2026 review were remediated at that time. See the September 2026 combined review above for later findings and fixes. Deployment readiness still depends on the operator's shared-store and infrastructure choices documented in `ROADMAP.md` §2.

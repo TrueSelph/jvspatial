@@ -183,7 +183,13 @@ async def authenticate_webhook_api_key(
             cached = _API_KEY_CACHE.get(cache_key)
             if cached is not None:
                 cached_expiry, cached_entity = cached
-                if cached_expiry > now and cached_entity is not None:
+                entity_expiry = getattr(cached_entity, "expires_at", None)
+                if (
+                    cached_expiry > now
+                    and cached_entity is not None
+                    and cached_entity.is_active
+                    and (entity_expiry is None or entity_expiry.timestamp() > now)
+                ):
                     api_key_entity = cached_entity
                     cache_hit = True
                     logger.debug(
@@ -241,9 +247,11 @@ async def authenticate_webhook_api_key(
 
             def _endpoint_allowed(ep: str) -> bool:
                 if ep.endswith("*"):
-                    prefix = ep[:-1]
-                    return request_path.startswith(prefix)
-                return request_path.startswith(ep)
+                    prefix = ep[:-1].rstrip("/")
+                    return request_path == prefix or request_path.startswith(
+                        prefix + "/"
+                    )
+                return request_path == ep
 
             if not any(
                 _endpoint_allowed(ep) for ep in api_key_entity.allowed_endpoints

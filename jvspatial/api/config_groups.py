@@ -246,7 +246,7 @@ class AuthConfig(BaseModel):
     )
     bootstrap_admin_password: Optional[str] = Field(
         default=None,
-        description="Admin password for bootstrap. Min 6 chars. Typically from ADMIN_PASSWORD env.",
+        description="Admin password for bootstrap. Min 12 chars. Typically from ADMIN_PASSWORD env.",
     )
     bootstrap_admin_name: Optional[str] = Field(
         default=None,

@@ -199,10 +199,10 @@ class AuthConfigurator:
                     status_code=422,
                     detail="email and password are required",
                 )
-            if len(password) < 6:
+            if len(password) < 12:
                 raise HTTPException(
                     status_code=422,
-                    detail="password must be at least 6 characters",
+                    detail="password must be at least 12 characters",
                 )
             try:
                 auth_service = get_auth_service()
@@ -226,8 +226,8 @@ class AuthConfigurator:
                 return user
             except RegistrationDisabledError:
                 raise
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Registration unavailable")
             except Exception as e:
                 self._logger.error(f"Registration error: {e}")
                 raise HTTPException(status_code=500, detail="Internal server error")
@@ -267,8 +267,8 @@ class AuthConfigurator:
                 auth_service = get_auth_service()
                 token_response = await auth_service.login_user(login_data)
                 return token_response
-            except ValueError as e:
-                raise HTTPException(status_code=401, detail=str(e))
+            except ValueError:
+                raise HTTPException(status_code=401, detail="Invalid email or password")
             except Exception as e:
                 self._logger.error(f"Login error: {e}")
                 raise HTTPException(status_code=500, detail="Internal server error")

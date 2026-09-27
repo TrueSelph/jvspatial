@@ -1127,6 +1127,20 @@ class GraphContext:
 
         Returns True on success, False on failure.
         """
+        from .annotations import is_protected
+        from .entities.node import Node
+
+        if not field.isidentifier() or field.startswith("_"):
+            raise ValueError("Invalid increment field")
+        node = await self.get(Node, node_id)
+        if node is None or not hasattr(node, field):
+            return False
+        if is_protected(type(node), field):
+            raise ValueError("Cannot increment a protected field")
+        current = getattr(node, field)
+        if not isinstance(current, (int, float)) or isinstance(current, bool):
+            raise TypeError("Increment field must be numeric")
+
         db = self.database
         if self._is_mongodb(db):
             try:
@@ -1138,8 +1152,7 @@ class GraphContext:
                 if result is not None:
                     cached = await self._get_from_cache(node_id)
                     if cached and hasattr(cached, field):
-                        current = getattr(cached, field, 0) or 0
-                        object.__setattr__(cached, field, current + amount)
+                        setattr(cached, field, current + amount)
                     return True
             except Exception:
                 logger.warning(
@@ -1150,14 +1163,9 @@ class GraphContext:
                 )
 
         # Fallback: read-modify-write
-        from .entities.node import Node
-
-        node = await self.get(Node, node_id)
-        if node and hasattr(node, field):
-            current = getattr(node, field, 0) or 0
-            setattr(node, field, current + amount)
-            await self.save(node)
-        return node is not None
+        setattr(node, field, current + amount)
+        await self.save(node)
+        return True
 
     # Advanced query operations for performance optimization
     async def find_nodes(

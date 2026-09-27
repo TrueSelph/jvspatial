@@ -13,12 +13,12 @@ class UserCreate(BaseModel):
 
     Password complexity enforcement (uppercase, lowercase, digits, special
     characters, common-password denylist) is left to the application layer.
-    Only minimum length (6) is enforced at the framework level.
+    Only minimum length (12) is enforced at the framework level.
     """
 
     email: EmailStr = Field(..., description="User email address")
     password: str = Field(
-        ..., min_length=6, description="User password (min 6 characters)"
+        ..., min_length=12, description="User password (min 12 characters)"
     )
 
 
@@ -27,7 +27,7 @@ class UserCreateAdmin(BaseModel):
 
     email: EmailStr = Field(..., description="User email address")
     password: str = Field(
-        ..., min_length=6, description="User password (min 6 characters)"
+        ..., min_length=12, description="User password (min 12 characters)"
     )
     name: str = Field(
         default="",
@@ -106,7 +106,7 @@ class PasswordChangeRequest(BaseModel):
 
     current_password: str = Field(..., description="Current password for verification")
     new_password: str = Field(
-        ..., min_length=6, description="New password (min 6 characters)"
+        ..., min_length=12, description="New password (min 12 characters)"
     )
 
 
@@ -121,7 +121,7 @@ class ResetPasswordRequest(BaseModel):
 
     token: str = Field(..., description="Password reset token from email")
     new_password: str = Field(
-        ..., min_length=6, description="New password (min 6 characters)"
+        ..., min_length=12, description="New password (min 12 characters)"
     )
 
 

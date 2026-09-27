@@ -79,8 +79,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         Returns:
             Client identifier string
         """
-        # Try to get authenticated user/API key ID for more accurate tracking
-        if hasattr(request.state, "user") and request.state.user:
+        path = request.url.path
+        auth_attack_path = isinstance(path, str) and path.endswith(
+            (
+                "/auth/register",
+                "/auth/login",
+                "/auth/forgot-password",
+                "/auth/reset-password",
+            )
+        )
+        # Auth entry points use IP buckets even if another middleware set a user.
+        if (
+            not auth_attack_path
+            and hasattr(request.state, "user")
+            and request.state.user
+        ):
             user = request.state.user
             # Extract user_id from various formats
             if hasattr(user, "id"):

@@ -148,6 +148,24 @@ def retry(
     """
 
     def decorator(func: T) -> T:
+        if inspect.iscoroutinefunction(func):
+
+            @functools.wraps(func)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                import asyncio
+
+                current_delay = delay
+                for attempt in range(max_attempts):
+                    try:
+                        return await func(*args, **kwargs)
+                    except Exception:
+                        if attempt == max_attempts - 1:
+                            raise
+                        await asyncio.sleep(current_delay)
+                        current_delay *= backoff
+
+            return async_wrapper  # type: ignore[return-value]
+
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             current_delay = delay

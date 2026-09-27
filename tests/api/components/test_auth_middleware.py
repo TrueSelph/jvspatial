@@ -880,13 +880,13 @@ class TestJwtAuthUsesPrimeDatabase:
             email = f"test_{test_id}@example.com"
             register_response = client.post(
                 "/api/auth/register",
-                json={"email": email, "password": "password123"},
+                json={"email": email, "password": "password12345"},
             )
             assert register_response.status_code == 200, register_response.text
 
             login_response = client.post(
                 "/api/auth/login",
-                json={"email": email, "password": "password123"},
+                json={"email": email, "password": "password12345"},
             )
             assert login_response.status_code == 200, login_response.text
             access_token = login_response.json()["access_token"]

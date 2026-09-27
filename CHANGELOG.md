@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- JWT validation now rejects user lookup failures and uses current database roles and permissions. Logout invalidates the access token and its bound refresh token; token revocation failures are surfaced. Public registration never grants admin access. Auth entry points have per-IP rate limits, generic account-state errors, and a 12-character password minimum.
+- Signed GET webhooks require HMAC. Webhook routes default to POST, API-key scopes match path segments, expired cached keys are rejected, and idempotency lookup errors fail closed. Webhook handlers finish within the request; durable asynchronous work must use an external queue.
+- JsonDB record paths and local storage version IDs are confined to their roots. SQL index field paths are validated and raw `where=` predicates are rejected. Graph deletion, walker errors, DynamoDB bulk writes, and deferred operations now report failures instead of success.
+- **BREAKING:** Direct file reads require authentication by default when auth is enabled. Set `JVSPATIAL_FILES_PUBLIC_READ=true` only when intentional.
+- **BREAKING:** `JVSPATIAL_ENVIRONMENT=production` unpublishes `/docs`, `/redoc`, and `/openapi.json` by default. Set `JVSPATIAL_DOCS_DISABLED=false` for an explicit override.
+- **BREAKING:** Deferred invoke requires a secret even on loopback. Set `JVSPATIAL_DEFERRED_INVOKE_ALLOW_LOOPBACK=true` only for Lambda Web Adapter self-invoke.
+- **BREAKING:** The in-process scheduler requires a running server event loop and runs coroutine jobs on that loop. Jobs started outside an event loop must use a configured external scheduler.
+
 ## [0.0.22] - 2026-09-26
 
 ### Added

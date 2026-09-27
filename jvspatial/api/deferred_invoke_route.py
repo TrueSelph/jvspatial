@@ -46,16 +46,18 @@ def _is_loopback_client(request: Request) -> bool:
 def _deferred_invoke_secret_ok(request: Request) -> bool:
     """Authorize the internal deferred-invoke endpoint.
 
-    Lambda Web Adapter self-invoke POSTs from loopback without auth headers, so
-    loopback peers are always allowed. Non-loopback callers (Function URL /
-    API Gateway) fail closed when ``JVSPATIAL_DEFERRED_INVOKE_SECRET`` is unset
-    or empty (audit §4.16 / SPEC §15.2); when set, they must send the value in
+    Lambda Web Adapter self-invoke POSTs from loopback without auth headers;
+    deployments can explicitly enable that exception with
+    ``JVSPATIAL_DEFERRED_INVOKE_ALLOW_LOOPBACK``. Otherwise every peer must
+    send ``JVSPATIAL_DEFERRED_INVOKE_SECRET`` in
     ``X-JVSPATIAL-Deferred-Authorize`` or ``Authorization: Bearer …``.
 
     Disable the route entirely via ``JVSPATIAL_DEFERRED_INVOKE_DISABLED=true``
     if you do not need it.
     """
-    if _is_loopback_client(request):
+    if _is_loopback_client(request) and env(
+        "JVSPATIAL_DEFERRED_INVOKE_ALLOW_LOOPBACK", default=False, parse=parse_bool
+    ):
         return True
 
     secret = env("JVSPATIAL_DEFERRED_INVOKE_SECRET") or ""
@@ -79,10 +81,10 @@ def _deferred_invoke_secret_ok(request: Request) -> bool:
 def register_deferred_invoke_route(app: FastAPI) -> None:
     """Mount the internal deferred-invoke endpoint.
 
-    Loopback callers (LWA pass-through) are always authorized. Non-loopback
-    callers require ``JVSPATIAL_DEFERRED_INVOKE_SECRET`` via header
+    All callers require ``JVSPATIAL_DEFERRED_INVOKE_SECRET`` via header
     ``X-JVSPATIAL-Deferred-Authorize`` or ``Authorization: Bearer …``.
     Set ``JVSPATIAL_DEFERRED_INVOKE_DISABLED=true`` to skip registering the route.
+    Set ``JVSPATIAL_DEFERRED_INVOKE_ALLOW_LOOPBACK=true`` only for LWA self-invoke.
     """
 
     if _deferred_invoke_disabled():

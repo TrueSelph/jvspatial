@@ -92,7 +92,8 @@ class ServerConfigurator:
     def _configure_rate_limit_middleware(self, app: FastAPI) -> None:
         """Configure rate limiting middleware if rate limiting is enabled."""
         server = self._server
-        if not server.config.rate_limit.rate_limit_enabled:
+        global_enabled = server.config.rate_limit.rate_limit_enabled
+        if not global_enabled and not server.config.auth.enabled:
             return
 
         try:
@@ -112,7 +113,11 @@ class ServerConfigurator:
             app.add_middleware(
                 RateLimitMiddleware,
                 config=rate_limits,
-                default_limit=server.config.rate_limit.rate_limit_default_requests,
+                default_limit=(
+                    server.config.rate_limit.rate_limit_default_requests
+                    if global_enabled
+                    else 0
+                ),
                 default_window=server.config.rate_limit.rate_limit_default_window,
                 backend=backend,
             )
@@ -165,6 +170,17 @@ class ServerConfigurator:
         self._add_rate_limits_from_registry_items(
             registry._walker_registry.items(), rate_limits, api_prefix
         )
+
+        if server.config.auth.enabled:
+            for path in (
+                "/auth/register",
+                "/auth/login",
+                "/auth/forgot-password",
+                "/auth/reset-password",
+            ):
+                rate_limits[f"{api_prefix}{path}"] = RateLimitConfig(
+                    requests=5, window=60
+                )
 
         for path, override in server.config.rate_limit.rate_limit_overrides.items():
             full_path = (
