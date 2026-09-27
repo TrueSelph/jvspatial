@@ -93,19 +93,31 @@ class OAuthSigningKey(Object):
     """A persisted RS256 signing keypair.
 
     Active keys sign new tokens; inactive-but-recent keys remain in JWKS for the
-    verification window (rotation). Private PEM is stored as-is here; production
-    deployments should wrap it (env/KMS) — see plan assumptions.
+    verification window (rotation). The keystore encrypts private PEM before
+    persistence when ``JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY`` is configured.
     """
 
     kid: str = Field(..., description="Key ID (JWKS 'kid')")
     public_pem: str = Field(..., description="PEM-encoded public key")
-    private_pem: str = Field(..., description="PEM-encoded private key")
+    private_pem: str = Field(..., description="Encrypted private key or legacy PEM")
     algorithm: str = Field(default="RS256", description="Signing algorithm")
     active: bool = Field(default=True, description="Whether this key signs new tokens")
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="Creation timestamp",
     )
+
+    async def save(self) -> "OAuthSigningKey":
+        """Never persist plaintext when key encryption is configured."""
+        from jvspatial.api.auth.oauth.keys import _ENCRYPTED_PREFIX, _cipher
+
+        cipher = _cipher()
+        if cipher is not None and not self.private_pem.startswith(_ENCRYPTED_PREFIX):
+            self.private_pem = _ENCRYPTED_PREFIX + cipher.encrypt(
+                self.private_pem.encode("utf-8")
+            ).decode("ascii")
+        await super().save()
+        return self
 
 
 class OAuthRevokedToken(Object):

@@ -494,6 +494,10 @@ JWT tokens are blacklisted on logout, and the bound refresh token is deactivated
 
 `jvspatial/api/integrations/webhooks/` — required HMAC signatures are checked on every HTTP method. GET signs the raw query string; body-bearing methods sign the raw body (`jvspatial/api/integrations/webhooks/middleware.py`). Comparison is constant-time. For requests with an idempotency header, the middleware atomically claims a deterministic key in the shared database before invoking the handler. A completed retry with identical method, path, and body replays the cached response. Pending claims and key reuse with different request content return 409. Claim or outcome storage failures fail closed; pending claims are retained for reconciliation, even after their TTL (`jvspatial/api/integrations/webhooks/{utils,middleware,models}.py`).
 
+### 9.6 OAuth signing keys
+
+When `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` is set to a valid Fernet key, `OAuthSigningKey.save()` encrypts private PEM before persistence. The signing keystore returns a plaintext copy for signing while the stored row remains encrypted; a legacy plaintext row is rewrapped on first load. An encrypted row fails closed when the key is absent or incorrect. `build_jwks()` publishes only public material. Hosts with production OAuth must provision the encryption key and preserve it across workers and restarts. Key rotation and backup recovery require an operator procedure; this contract does not provide KMS/HSM custody (`jvspatial/api/auth/oauth/{keys,models}.py`).
+
 ---
 
 ## 10. Configuration and Environment

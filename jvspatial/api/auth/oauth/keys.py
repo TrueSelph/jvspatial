@@ -6,14 +6,50 @@ active signing key, and builds the JWKS (public keys only) the AS publishes.
 
 from __future__ import annotations
 
+import os
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 import jwt  # PyJWT
+from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from jvspatial.api.auth.oauth.models import OAuthSigningKey
+
+_ENCRYPTED_PREFIX = "fernet:v1:"
+_ENCRYPTION_ENV = "JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY"
+
+
+def _cipher() -> Optional[Fernet]:
+    value = os.environ.get(_ENCRYPTION_ENV)
+    if not value:
+        return None
+    try:
+        return Fernet(value.encode("ascii"))
+    except ValueError as exc:
+        raise RuntimeError(f"{_ENCRYPTION_ENV} is not a valid Fernet key") from exc
+
+
+async def _read_private_key(key: OAuthSigningKey) -> OAuthSigningKey:
+    """Return a signing copy with plaintext PEM; keep the persisted row encrypted."""
+    cipher = _cipher()
+    stored = key.private_pem
+    if stored.startswith(_ENCRYPTED_PREFIX):
+        if cipher is None:
+            raise RuntimeError(
+                f"{_ENCRYPTION_ENV} is required to read OAuth signing keys"
+            )
+        try:
+            plaintext = cipher.decrypt(stored[len(_ENCRYPTED_PREFIX) :].encode("ascii"))
+        except (InvalidToken, ValueError) as exc:
+            raise RuntimeError("OAuth signing key decryption failed") from exc
+        return key.model_copy(update={"private_pem": plaintext.decode("utf-8")})
+    if cipher is None:
+        return key
+    # Existing plaintext rows are rewrapped on first use after enabling encryption.
+    await key.save()
+    return key.model_copy(update={"private_pem": stored})
 
 
 def _generate_rsa_pem_pair() -> Tuple[str, str]:
@@ -46,7 +82,7 @@ async def generate_signing_key() -> OAuthSigningKey:
         active=True,
     )
     await key.save()
-    return key
+    return key.model_copy(update={"private_pem": private_pem})
 
 
 async def get_active_signing_key() -> Optional[OAuthSigningKey]:
@@ -58,7 +94,9 @@ async def get_active_signing_key() -> Optional[OAuthSigningKey]:
     )
     if not active:
         return None
-    return sorted(active, key=lambda k: k.created_at, reverse=True)[0]
+    return await _read_private_key(
+        sorted(active, key=lambda k: k.created_at, reverse=True)[0]
+    )
 
 
 async def ensure_signing_key() -> OAuthSigningKey:

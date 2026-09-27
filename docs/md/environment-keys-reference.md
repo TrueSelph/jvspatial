@@ -56,6 +56,7 @@ For full examples and default values, see:
 ### Auth and rate limit
 - `JVSPATIAL_AUTH_ENABLED` - Enables auth.
 - `JVSPATIAL_JWT_SECRET_KEY` - JWT signing secret.
+- `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` - Fernet key for OAuth RSA private keys at rest. Supply from a secret manager in production; retain the same key across workers and restarts.
 - `JVSPATIAL_JWT_ALGORITHM` - JWT algorithm.
 - `JVSPATIAL_JWT_EXPIRE_MINUTES` - Access token expiry (minutes).
 - `JVSPATIAL_JWT_REFRESH_EXPIRE_DAYS` - Refresh token expiry (days).

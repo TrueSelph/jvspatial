@@ -2,6 +2,10 @@
 
 This page complements [environment-configuration.md](environment-configuration.md) with deployment-facing security behavior.
 
+## OAuth signing key custody
+
+Set `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` to a Fernet key from your secret manager before enabling OAuth in production. Generate one with `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'`. The keystore encrypts new private keys before persistence and rewraps a legacy plaintext key when it is first loaded. Back up the encryption key separately from the database, keep it identical across workers, and restrict both secret and database access. Missing or incorrect keys cause encrypted-key signing to fail closed. A database backup taken before the first rewrap still contains plaintext and must be protected or replaced. This is application-level encryption, not a managed KMS/HSM integration; key rotation requires an explicit re-encryption procedure before retiring the old key.
+
 ## Redis cache
 
 - Use a **dedicated Redis instance** (or logical database + ACLs) per application. Do not share the same keyspace with untrusted writers.

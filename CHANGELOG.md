@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- OAuth RS256 signing keys can be encrypted at rest with `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY`. Existing plaintext keys rewrap on first load; encrypted keys fail closed when the key is missing or wrong. Production OAuth hosts must configure and retain the key.
+
 - In-memory `$regex` queries now have a per-candidate execution timeout, preventing short catastrophic-backtracking patterns from monopolizing the server. Raw FastAPI route auth detection now requires an enforcing security dependency; dependency names no longer bypass framework auth.
 - Webhook idempotency now atomically reserves a key before invoking the handler and persists the response for replay. In-flight or uncertain outcomes return 409; persistence failures return 503 and require reconciliation before retry.
 - JWT validation now rejects user lookup failures and uses current database roles and permissions. Logout invalidates the access token and its bound refresh token; token revocation failures are surfaced. Public registration never grants admin access. Auth entry points have per-IP rate limits, generic account-state errors, and a 12-character password minimum.

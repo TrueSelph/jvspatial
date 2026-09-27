@@ -8,6 +8,8 @@
 
 ## 2026-09-27 combined gap and security review
 
+The pre-merge consumer assessment also identified plaintext OAuth RSA private keys in the persisted `OAuthSigningKey` row. The keystore now encrypts new keys when `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` is configured, rewraps existing plaintext rows on first load, and fails closed for a missing or incorrect key on encrypted rows. Tests cover encryption, migration, and wrong-key failure in `tests/api/auth/oauth/test_oauth_keys.py`. Production hosts must provide and safeguard the key; managed KMS/HSM custody and routine rotation remain operational work.
+
 The September review found 37 additional items. The May conclusion below describes the May review only. The numbered entries here correspond to the combined backlog; the code and regression tests in this PR are the remediation evidence.
 
 The pre-merge 0.1.0 review also found a short catastrophic-backtracking `$regex` pattern, a name-based FastAPI authentication bypass, and an idempotency path that had no durable claim and could silently fall back to memory. The fixes and regressions are in `jvspatial/db/query.py`, `jvspatial/api/components/endpoint_auth_resolver.py`, `jvspatial/api/integrations/webhooks/{utils,middleware,models}.py`, and `tests/security/test_combined_review_regressions.py`. Operational handling of uncertain webhook outcomes is described in [security-operational-notes.md](security-operational-notes.md).

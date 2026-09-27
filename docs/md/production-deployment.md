@@ -117,6 +117,7 @@ JVSPATIAL_WEBHOOK_HMAC_SECRET=your-webhook-secret-minimum-32-chars
 | Variable | Production Recommendation |
 |----------|---------------------------|
 | `JVSPATIAL_JWT_SECRET_KEY` | **Required** - cryptographically secure, 32+ chars |
+| `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` | **Required when OAuth is enabled** - Fernet key from a secret manager; see [key custody](security-operational-notes.md#oauth-signing-key-custody) |
 | `JVSPATIAL_RATE_LIMIT_ENABLED` | `true` |
 | `JVSPATIAL_DEBUG` | `false` |
 | `JVSPATIAL_LOG_LEVEL` | `info` or `warning` |

@@ -80,7 +80,11 @@ Raw FastAPI routes may defer authentication to FastAPI only when they declare an
 
 In-memory `$regex` evaluation has a per-candidate timeout. Preserve that bound when changing query backends or operators; input length limits alone do not prevent backtracking. Webhook requests with idempotency keys must claim a durable record before handler execution and persist an outcome before success is returned. A pending claim needs reconciliation before a new attempt.
 
-### 9. Walker protection
+### 9. OAuth signing key custody
+
+OAuth hosts in production must set `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` from a secret manager. The keystore persists encrypted private keys, migrates legacy plaintext keys on read, and fails closed if an encrypted key cannot be decrypted. Keep the same key across workers and restarts; follow [security-operational-notes.md](docs/md/security-operational-notes.md#oauth-signing-key-custody) for backups and rotation.
+
+### 10. Walker protection
 
 `max_steps=10000`, `max_visits_per_node=100`, `max_execution_time=300s`, `max_queue_size=1000` are defaults that prevent DOS. Disabling protection is allowed locally; never disable globally or in code that touches user input.
 
