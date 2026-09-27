@@ -102,3 +102,11 @@ async def test_existing_key_migrates_and_wrong_key_fails_closed(
     monkeypatch.delenv("JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY")
     with pytest.raises(RuntimeError, match="required"):
         await keystore.ensure_signing_key()
+
+
+@pytest.mark.asyncio
+async def test_production_refuses_plaintext_key_storage(temp_context, monkeypatch):
+    monkeypatch.delenv("JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setenv("JVSPATIAL_ENVIRONMENT", "production")
+    with pytest.raises(RuntimeError, match="required for production"):
+        await keystore.ensure_signing_key()

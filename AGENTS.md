@@ -82,7 +82,7 @@ In-memory `$regex` evaluation has a per-candidate timeout. Preserve that bound w
 
 ### 9. OAuth signing key custody
 
-OAuth hosts in production must set `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` from a secret manager. The keystore persists encrypted private keys, migrates legacy plaintext keys on read, and fails closed if an encrypted key cannot be decrypted. Keep the same key across workers and restarts; follow [security-operational-notes.md](docs/md/security-operational-notes.md#oauth-signing-key-custody) for backups and rotation.
+OAuth hosts in production must set `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` from a secret manager. With `JVSPATIAL_ENVIRONMENT=production`, the keystore refuses to load or create a key without it. The keystore persists encrypted private keys, migrates legacy plaintext keys on read, and fails closed if an encrypted key cannot be decrypted. Keep the same key across workers and restarts; follow [security-operational-notes.md](docs/md/security-operational-notes.md#oauth-signing-key-custody) for backups and rotation.
 
 ### 10. Walker protection
 

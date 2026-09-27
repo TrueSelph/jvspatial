@@ -496,7 +496,7 @@ JWT tokens are blacklisted on logout, and the bound refresh token is deactivated
 
 ### 9.6 OAuth signing keys
 
-When `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` is set to a valid Fernet key, `OAuthSigningKey.save()` encrypts private PEM before persistence. The signing keystore returns a plaintext copy for signing while the stored row remains encrypted; a legacy plaintext row is rewrapped on first load. An encrypted row fails closed when the key is absent or incorrect. `build_jwks()` publishes only public material. Hosts with production OAuth must provision the encryption key and preserve it across workers and restarts. Key rotation and backup recovery require an operator procedure; this contract does not provide KMS/HSM custody (`jvspatial/api/auth/oauth/{keys,models}.py`).
+When `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` is set to a valid Fernet key, `OAuthSigningKey.save()` encrypts private PEM before persistence. The signing keystore returns a plaintext copy for signing while the stored row remains encrypted; a legacy plaintext row is rewrapped on first load. An encrypted row fails closed when the key is absent or incorrect. In `JVSPATIAL_ENVIRONMENT=production`, the OAuth keystore refuses to load or create keys without the encryption key. `build_jwks()` publishes only public material. Hosts with production OAuth must provision the encryption key and preserve it across workers and restarts. Key rotation and backup recovery require an operator procedure; this contract does not provide KMS/HSM custody (`jvspatial/api/auth/oauth/{keys,models}.py`).
 
 ---
 

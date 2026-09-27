@@ -24,6 +24,10 @@ _ENCRYPTION_ENV = "JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY"
 def _cipher() -> Optional[Fernet]:
     value = os.environ.get(_ENCRYPTION_ENV)
     if not value:
+        if os.environ.get("JVSPATIAL_ENVIRONMENT", "").lower() == "production":
+            raise RuntimeError(
+                f"{_ENCRYPTION_ENV} is required for production OAuth signing keys"
+            )
         return None
     try:
         return Fernet(value.encode("ascii"))
