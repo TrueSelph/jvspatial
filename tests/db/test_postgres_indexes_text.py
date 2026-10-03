@@ -33,6 +33,7 @@ from jvspatial.db import escape_regex
 from jvspatial.db._postgres_translate import translate_query, translate_sort
 from jvspatial.db.jsondb import JsonDB
 from jvspatial.db.mongodb import _native_query
+from jvspatial.db.postgres import _postgres_index_name
 from jvspatial.db.query import QueryEngine
 from jvspatial.db.sqlite import SQLiteDB
 from jvspatial.exceptions import QueryError
@@ -119,6 +120,43 @@ async def _explain(admin: Any, sql: str, params: List[Any]) -> List[Dict[str, An
     raw = await admin.fetchval(f"EXPLAIN (FORMAT JSON) {sql}", *params)
     plan = json.loads(raw) if isinstance(raw, str) else raw
     return _plan_nodes(plan[0]["Plan"])
+
+
+async def test_long_index_names_are_shortened_deterministically():
+    base = "node_entity_context_agent_id_context_namespace_context_label"
+    name = _postgres_index_name(base, "uniq")
+
+    assert name == _postgres_index_name(base, "uniq")
+    assert len(name.encode("utf-8")) <= 63
+    assert name.endswith("_uniq")
+    assert name != _postgres_index_name(f"{base}_other", "uniq")
+
+
+async def test_long_compound_index_is_created_and_reused():
+    async with _pg() as (_ctx, db, admin, schema):
+        fields = [
+            ("context.agent_id", 1),
+            ("context.namespace", 1),
+            ("context.label", 1),
+        ]
+        await db.create_index(
+            "node", fields, unique=True, entity="LongAction", entity_leading=True
+        )
+        await db.create_index(
+            "node", fields, unique=True, entity="LongAction", entity_leading=True
+        )
+
+        indexes = await _indexes(admin, schema, "node")
+        matching = [
+            (name, definition)
+            for name, definition in indexes.items()
+            if name.endswith("_uniq") and "context,label" in definition
+        ]
+        assert len(matching) == 1
+        name, definition = matching[0]
+        assert len(name.encode("utf-8")) <= 63
+        assert "CREATE UNIQUE INDEX" in definition
+        assert "entity" in definition
 
 
 # ---- entity-scoped per-class indexes ------------------------------------------
