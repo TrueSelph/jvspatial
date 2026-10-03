@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- PostgreSQL compound index names now fit its 63-byte identifier limit. Long names keep deterministic digests and their index suffix, so typed action indexes are created instead of silently skipped at startup.
+- Concurrent first use of a PostgreSQL collection now serializes its schema bootstrap, avoiding races while creating the shared table and base indexes.
 - PostgreSQL `$exists` now treats JSON `null` like the in-memory query engine, fixing queries for absent or null nested values.
 - File-backed SQLite closes the old `aiosqlite` connection when rebinding across event loops, preventing a leaked worker thread from keeping the process alive.
 - Graph transactions isolate their request identity map and invalidate touched parent cache entries after commit or rollback. Index setup is cached per database instance so a second store receives its own indexes.

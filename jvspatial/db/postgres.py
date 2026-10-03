@@ -68,6 +68,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import hashlib
 import json
 import logging
 import re
@@ -130,6 +131,25 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 # max 63 bytes (Postgres limit). We do NOT support quoted identifiers; pin to
 # the safe ASCII subset so we never need to worry about escape edge cases.
 _SAFE_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+_POSTGRES_MAX_IDENTIFIER_BYTES = 63
+
+
+def _postgres_index_name(base: str, suffix: str) -> str:
+    """Build a stable index name within PostgreSQL's 63-byte identifier limit.
+
+    Keep existing names unchanged when possible. Long compound field paths are
+    shortened with a digest of the complete name, preserving collision
+    resistance and the ``idx`` / ``uniq`` / ``fts`` suffix.
+    """
+    full_name = f"{base}_{suffix}"
+    if len(full_name.encode("utf-8")) <= _POSTGRES_MAX_IDENTIFIER_BYTES:
+        return full_name
+
+    digest = hashlib.sha256(full_name.encode("utf-8")).hexdigest()[:10]
+    fixed_bytes = len(digest) + len(suffix) + 2  # two underscores
+    prefix_bytes = _POSTGRES_MAX_IDENTIFIER_BYTES - fixed_bytes
+    shortened = f"{base[:prefix_bytes]}_{digest}_{suffix}"
+    return shortened
 
 
 _PARAM_RE = re.compile(r"\$(\d+)")
@@ -390,6 +410,7 @@ class PostgresDB(Database):
         # Collections we've already created the table + base indexes for.
         # Avoids running CREATE TABLE IF NOT EXISTS on the hot path.
         self._collections_bootstrapped: Set[str] = set()
+        self._collection_bootstrap_locks: Dict[str, asyncio.Lock] = {}
 
         # Vector columns configured per collection. Map collection ->
         # {field_name: dim}. Populated by :meth:`enable_vector_column`;
@@ -428,6 +449,7 @@ class PostgresDB(Database):
         # ``asyncio.Lock`` binds to its loop too, so it has to go as well.
         self._pool_lock = asyncio.Lock()
         self._collections_bootstrapped.clear()
+        self._collection_bootstrap_locks.clear()
 
     async def _ensure_pool(self) -> "Pool":
         """Lazily create the asyncpg pool. Idempotent + concurrency-safe."""
@@ -467,6 +489,7 @@ class PostgresDB(Database):
             self._pool = None
             self._pool_loop = None
             self._collections_bootstrapped.clear()
+            self._collection_bootstrap_locks.clear()
 
     # ---- tenant scope (C6) -------------------------------------------------
 
@@ -613,6 +636,13 @@ class PostgresDB(Database):
         """
         if collection in self._collections_bootstrapped:
             return
+        lock = self._collection_bootstrap_locks.setdefault(collection, asyncio.Lock())
+        async with lock:
+            if collection in self._collections_bootstrapped:
+                return
+            await self._create_collection_schema(collection)
+
+    async def _create_collection_schema(self, collection: str) -> None:
         col = _safe_collection(collection)
         schema = _safe_collection(self.schema_name)
         gin_sql = (
@@ -1446,6 +1476,8 @@ class PostgresDB(Database):
           (``<col>_<entity>_<fields>_idx``; smaller, one per class).
           ``drop_legacy=True`` also drops the unscoped pre-0.0.18
           ``<col>_<fields>_idx`` / ``_uniq`` index it replaces.
+          Generated names stay within PostgreSQL's 63-byte identifier limit;
+          overlong compound names retain a stable digest and index suffix.
         * ``fulltext=True`` — a GIN index over ``to_tsvector('simple', ...)``
           of the fields in order (``<col>_<entity>_<fields>_fts``, scoped to
           ``entity`` when given), matching
@@ -1562,7 +1594,7 @@ class PostgresDB(Database):
             scope = "entity_"
         else:
             scope = ""
-        index_name = f"{col}_{scope}{field_names}_{suffix}"
+        index_name = _postgres_index_name(f"{col}_{scope}{field_names}", suffix)
         unique_sql = "UNIQUE " if unique and not fulltext else ""
         body = f"ON {schema}.{col} USING {method} ({', '.join(keys)}){where_clause}"
 
@@ -1588,7 +1620,8 @@ class PostgresDB(Database):
                     f"CREATE {unique_sql}INDEX IF NOT EXISTS {index_name} {body}"
                 )
             if kwargs.get("drop_legacy") and scope:
-                legacy = f"{col}_{field_names}_{'uniq' if unique else 'idx'}"
+                legacy_suffix = "uniq" if unique else "idx"
+                legacy = _postgres_index_name(f"{col}_{field_names}", legacy_suffix)
                 await conn.execute(f"DROP INDEX IF EXISTS {schema}.{legacy}")
 
     # ---- atomic compound ops (C4) ------------------------------------------
