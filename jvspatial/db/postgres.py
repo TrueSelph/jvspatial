@@ -606,7 +606,7 @@ class PostgresDB(Database):
                 "tenant_id = NULLIF(current_setting('app.tenant_id', true), '')"
             )
 
-        policy_name = f"{col}_tenant_isolation"
+        policy_name = _postgres_index_name(col, "tenant_isolation")
         # ALTER + CREATE POLICY both error if duplicated; check + drop +
         # recreate so re-runs are idempotent. ``DROP POLICY IF EXISTS``
         # is supported on PG 9.5+.
@@ -645,18 +645,30 @@ class PostgresDB(Database):
     async def _create_collection_schema(self, collection: str) -> None:
         col = _safe_collection(collection)
         schema = _safe_collection(self.schema_name)
+        gin_name = _postgres_index_name(col, "data_gin")
+        entity_name = _postgres_index_name(col, "entity_idx")
+        tenant_name = _postgres_index_name(col, "tenant_idx")
         gin_sql = (
-            f"CREATE INDEX IF NOT EXISTS {col}_data_gin "
+            f"CREATE INDEX IF NOT EXISTS {gin_name} "
             f"ON {schema}.{col} USING GIN (data jsonb_path_ops);"
             if self.gin_index == "full"
             else ""
         )
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            # Single round trip — CREATE IF NOT EXISTS is cheap when the
-            # table already exists.
-            await conn.execute(
-                f"""
+            # An asyncio lock only coordinates callers sharing this instance.
+            # PostgreSQL must also serialize first use across workers and
+            # independently constructed PostgresDB instances. Keep the
+            # advisory lock and DDL in one transaction so the lock survives
+            # until the table and all base indexes have been created.
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+                    schema,
+                    col,
+                )
+                await conn.execute(
+                    f"""
                 CREATE TABLE IF NOT EXISTS {schema}.{col} (
                     id         TEXT PRIMARY KEY,
                     entity     TEXT NOT NULL,
@@ -667,13 +679,13 @@ class PostgresDB(Database):
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
                 {gin_sql}
-                CREATE INDEX IF NOT EXISTS {col}_entity_idx
+                CREATE INDEX IF NOT EXISTS {entity_name}
                     ON {schema}.{col} (entity);
-                CREATE INDEX IF NOT EXISTS {col}_tenant_idx
+                CREATE INDEX IF NOT EXISTS {tenant_name}
                     ON {schema}.{col} (tenant_id)
                     WHERE tenant_id IS NOT NULL;
                 """
-            )
+                )
         self._collections_bootstrapped.add(collection)
 
     # ---- payload helpers ---------------------------------------------------
@@ -1608,7 +1620,7 @@ class PostgresDB(Database):
             if existing is not None and _STALE_INDEX_DEF_RE.search(existing):
                 # Build the corrected index first so a unique constraint is
                 # never absent, then swap it in under the canonical name.
-                temp = f"{index_name[:52]}_rebuild"
+                temp = _postgres_index_name(index_name, "rebuild")
                 await conn.execute(f"DROP INDEX IF EXISTS {schema}.{temp}")
                 await conn.execute(f"CREATE {unique_sql}INDEX {temp} {body}")
                 await conn.execute(f"DROP INDEX {schema}.{index_name}")
@@ -1851,7 +1863,7 @@ class PostgresDB(Database):
         await self._bootstrap_collection(collection)
         col = _safe_collection(collection)
         schema = _safe_collection(self.schema_name)
-        index_name = f"{col}_{field_name}_{index}_idx"
+        index_name = _postgres_index_name(f"{col}_{field_name}_{index}", "idx")
 
         async with self._pool_lock:
             pool = await self._ensure_pool()

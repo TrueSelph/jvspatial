@@ -122,6 +122,66 @@ async def _explain(admin: Any, sql: str, params: List[Any]) -> List[Dict[str, An
     return _plan_nodes(plan[0]["Plan"])
 
 
+async def test_collection_bootstrap_serializes_across_database_instances():
+    from jvspatial.db.postgres import PostgresDB
+
+    async with _pg() as (_ctx, db, admin, schema):
+        other = PostgresDB(dsn=_PG_DSN, schema_name=schema, min_size=1, max_size=4)
+        collection = "bootstrap_race"
+        tasks: List[asyncio.Task[None]] = []
+        try:
+            await asyncio.gather(db._ensure_pool(), other._ensure_pool())
+            async with admin.transaction():
+                await admin.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+                    schema,
+                    collection,
+                )
+                tasks = [
+                    asyncio.create_task(instance._bootstrap_collection(collection))
+                    for instance in (db, other)
+                ]
+                await asyncio.sleep(0.1)
+                assert all(not task.done() for task in tasks)
+            await asyncio.gather(*tasks)
+            assert collection in db._collections_bootstrapped
+            assert collection in other._collections_bootstrapped
+            indexes = await _indexes(admin, schema, collection)
+            assert f"{collection}_entity_idx" in indexes
+            assert f"{collection}_tenant_idx" in indexes
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await other.close()
+
+
+async def test_long_collection_gets_distinct_base_indexes_and_rls_policy():
+    collection = "collection_" + "x" * 51
+    async with _pg(gin_index="full") as (_ctx, db, admin, schema):
+        await db._bootstrap_collection(collection)
+        await db.enable_rls(collection)
+
+        indexes = await _indexes(admin, schema, collection)
+        expected = {
+            _postgres_index_name(collection, suffix)
+            for suffix in ("data_gin", "entity_idx", "tenant_idx")
+        }
+        assert len(expected) == 3
+        assert expected.issubset(indexes)
+        assert all(len(name.encode("utf-8")) <= 63 for name in expected)
+
+        policies = await admin.fetch(
+            "SELECT policyname FROM pg_policies WHERE schemaname = $1 AND tablename = $2",
+            schema,
+            collection,
+        )
+        assert [row["policyname"] for row in policies] == [
+            _postgres_index_name(collection, "tenant_isolation")
+        ]
+
+
 async def test_long_index_names_are_shortened_deterministically():
     base = "node_entity_context_agent_id_context_namespace_context_label"
     name = _postgres_index_name(base, "uniq")

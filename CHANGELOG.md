@@ -11,12 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- PostgreSQL compound index names now fit its 63-byte identifier limit. Long names keep deterministic digests and their index suffix, so typed action indexes are created instead of silently skipped at startup.
-- Concurrent first use of a PostgreSQL collection now serializes its schema bootstrap, avoiding races while creating the shared table and base indexes.
-- PostgreSQL `$exists` now treats JSON `null` like the in-memory query engine, fixing queries for absent or null nested values.
-- File-backed SQLite closes the old `aiosqlite` connection when rebinding across event loops, preventing a leaked worker thread from keeping the process alive.
-- Graph transactions isolate their request identity map and invalidate touched parent cache entries after commit or rollback. Index setup is cached per database instance so a second store receives its own indexes.
-- Tests now restore mocked walker metadata, bind their own graph context, and enter the test client's lifespan before traversing Root, removing order-dependent suite failures.
+- PostgreSQL compound, base, vector, and tenant-policy names now fit its 63-byte identifier limit. Long names keep deterministic digests and their suffix, so indexes are created instead of silently skipped at startup.
+- Concurrent first use of a PostgreSQL collection now serializes schema bootstrap across database instances and workers, avoiding races while creating the shared table and base indexes.
 
 ## [0.1.0] - 2026-09-27
 
@@ -40,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `AGENTS.md` is now the canonical agent guide. Its former `CLAUDE.md` content has been consolidated there; `CLAUDE.md` is removed.
 - The deprecated `generate_id_async` alias remains available in 0.1.0; its removal target is 0.2.0.
+
+### Fixed
+
+- PostgreSQL `$exists` treats JSON `null` like the in-memory query engine, fixing queries for absent or null nested values.
+- File-backed SQLite closes the old `aiosqlite` connection when rebinding across event loops, preventing a leaked worker thread from keeping the process alive.
+- Graph transactions isolate their request identity map and invalidate touched parent cache entries after commit or rollback. Index setup is cached per database instance so a second store receives its own indexes.
+- Tests restore mocked walker metadata, bind their own graph context, and enter the test client's lifespan before traversing Root, removing order-dependent suite failures.
 
 ## [0.0.22] - 2026-09-26
 
