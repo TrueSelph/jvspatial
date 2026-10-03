@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-03
+
 ### Fixed
 
 - PostgreSQL compound index names now fit its 63-byte identifier limit. Long names keep deterministic digests and their index suffix, so typed action indexes are created instead of silently skipped at startup.
