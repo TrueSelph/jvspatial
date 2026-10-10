@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Source-tree example imports work under both the `pytest` console entry point
+  and `python -m pytest`, including graph projection tests and benchmarks in CI.
 - PostgreSQL benchmark fixtures create and clean their isolated schemas before
   graph seeding, allowing the live benchmark lane to run on a fresh database.
 

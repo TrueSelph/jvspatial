@@ -137,6 +137,9 @@ minversion = "7.0"
 # (see docs/md/benchmarks.md and the benchmarks CI workflow).
 addopts = "-ra -q --strict-markers --ignore=tests/benchmarks"
 testpaths = ["tests"]
+# Shared graph fixtures use runnable examples outside the installed package.
+# Make source-tree imports identical for `pytest` and `python -m pytest`.
+pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "module"
 markers = [
