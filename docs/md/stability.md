@@ -30,6 +30,13 @@ are the canonical import path:
   adapters must implement `insert_if_absent` or callers hit
   `NotImplementedError`.
 - **Cache.** `create_cache`.
+- **Graph context for inference.** `GraphContext.project_graph`,
+  `ProjectionRequest`, `ProjectionScope`, `ProjectionAccess`,
+  `ProjectionSemantics`, and `GraphProjection` are stable. The versioned canonical
+  payload and its completeness/access contracts are public. Database extension
+  points `graph_edge_page`, `graph_node_batch`, and
+  `supports_native_graph_paging` have compatibility defaults. Captures are
+  immutable results with best-effort reads, not retained historical generations.
 - **Mixins.** `DeferredSaveMixin`, `deferred_saves_globally_allowed`,
   `flush_deferred_entities`.
 - **Work-claim helpers.** `claim_record`, `release_claim`,

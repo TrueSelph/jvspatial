@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-10
+
+### Added
+
+- Read-only `GraphContext.project_graph` context for language-model inference,
+  with relationship, hierarchy, and ontology views; application-declared type
+  meanings; deterministic evidence paths; and payload-based text/Mermaid rendering.
+- Public `ProjectionRequest`, `ProjectionScope`, `ProjectionAccess`,
+  `ProjectionSemantics`, and immutable `GraphProjection` capture APIs. Explicit
+  scope and field allowlists, batch access decisions, candidate/frontier/detail/
+  byte/time budgets, completeness markers, and fresh authorized expansion requests
+  preserve visibility and distinguish captured results from historical snapshots.
+- Database projection-node batching and incident-edge keyset paging, with native
+  paging on SQLite/PostgreSQL/MongoDB and disclosed compatibility scans elsewhere.
+  Cache wrappers bypass stale record caches for projection reads. Host diagnostics
+  report work without placing inaccessible cardinalities in model context.
+- A runnable dummy supply-chain graph, realistic cross-backend tests, and a
+  reproducible projection/renderer/CRUD scaling recorder.
+
+### Fixed
+
+- PostgreSQL benchmark fixtures create and clean their isolated schemas before
+  graph seeding, allowing the live benchmark lane to run on a fresh database.
+
 ## [0.1.1] - 2026-10-03
 
 ### Fixed

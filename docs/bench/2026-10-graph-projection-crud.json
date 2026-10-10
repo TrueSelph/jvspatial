@@ -1,0 +1,54 @@
+{
+  "baseline": "f645f20",
+  "units": "median milliseconds, 500 operations per sample",
+  "runs": [
+    {
+      "baseline": {
+        "db_get": 0.103583,
+        "db_save": 0.106854,
+        "cached_entity_get": 0.001583
+      },
+      "feature": {
+        "db_get": 0.107104,
+        "db_save": 0.13102,
+        "cached_entity_get": 0.001625
+      }
+    },
+    {
+      "feature": {
+        "db_get": 0.137104,
+        "db_save": 0.186021,
+        "cached_entity_get": 0.001708
+      },
+      "baseline": {
+        "db_get": 0.141563,
+        "db_save": 0.132062,
+        "cached_entity_get": 0.001625
+      }
+    },
+    {
+      "baseline": {
+        "db_get": 0.116292,
+        "db_save": 0.1065,
+        "cached_entity_get": 0.001625
+      },
+      "feature": {
+        "db_get": 0.11475,
+        "db_save": 0.123625,
+        "cached_entity_get": 0.00175
+      }
+    },
+    {
+      "feature": {
+        "db_get": 0.151146,
+        "db_save": 0.120875,
+        "cached_entity_get": 0.001583
+      },
+      "baseline": {
+        "db_get": 0.126062,
+        "db_save": 0.142666,
+        "cached_entity_get": 0.001625
+      }
+    }
+  ]
+}

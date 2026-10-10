@@ -103,6 +103,9 @@ class ObservableDatabase(Database):
         self._backend = _backend_label(inner)
         # Mirror capability flag.
         self.supports_transactions = getattr(inner, "supports_transactions", False)
+        self.supports_native_graph_paging = getattr(
+            inner, "supports_native_graph_paging", False
+        )
 
     # -------------------------- core helpers ---------------------------
 
@@ -260,6 +263,26 @@ class ObservableDatabase(Database):
             collection,
             lambda: self.inner.find(collection, query, limit=limit, sort=sort),
             result_count_extractor=lambda r: len(r) if isinstance(r, list) else 0,
+        )
+
+    async def graph_edge_page(
+        self, node_id: str, *, after: Optional[str] = None, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Instrument and preserve adapter-specific projection paging."""
+        return await self._instrument(
+            "graph_edge_page",
+            "edge",
+            lambda: self.inner.graph_edge_page(node_id, after=after, limit=limit),
+            result_count_extractor=lambda rows: len(rows),
+        )
+
+    async def graph_node_batch(self, ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Instrument fresh raw projection-node reads."""
+        return await self._instrument(
+            "graph_node_batch",
+            "node",
+            lambda: self.inner.graph_node_batch(ids),
+            result_count_extractor=lambda rows: len(rows),
         )
 
     async def count(

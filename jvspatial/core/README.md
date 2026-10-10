@@ -23,6 +23,7 @@ core/
 ├── events.py          # Global event bus + @on_emit
 ├── graph.py           # DOT / Mermaid export
 ├── graph_expansion.py # BFS / subgraph utilities
+├── graph_projection.py # Scoped model context, hierarchy, ontology
 ├── pager.py           # ObjectPager
 └── utils.py           # generate_id, find_subclass_by_name, datetime helpers
 ```
@@ -34,6 +35,7 @@ core/
 | `Object`, `Node`, `Edge`, `Walker`, `Root` | Entity classes (SPEC §2) |
 | `NodeQuery` | Typed node-query helper |
 | `GraphContext` | Database + cache + monitor binding (SPEC §7) |
+| `ProjectionRequest`, `ProjectionScope`, `ProjectionAccess`, `ProjectionSemantics`, `GraphProjection` | Read-only relationship context for language-model inference via `GraphContext.project_graph` (SPEC §6.9) |
 | `get_default_context` / `set_default_context` / `scoped_default_context` | Context lifecycle |
 | `graph_context` / `async_graph_context` | Sync / async context managers |
 | `@on_visit`, `@on_exit`, `@on_emit` | Hook decorators |
