@@ -1,4 +1,4 @@
-# Graph projection qualification — 0.2.0
+# Graph projection qualification — unreleased feature
 
 Date: 2026-10-10. Baseline: main `f645f20`. Python 3.12.9 on macOS 15.4.1 ARM64.
 
@@ -100,7 +100,8 @@ lane. See the [raw comparison](2026-10-graph-projection-crud.json).
   now creates/drops that schema; both targeted reruns passed. All 18 benchmark
   cases were therefore exercised successfully across those runs.
 - `pre-commit run --all-files`: all hooks passed, including new staged files.
-- Wheel and source distribution for **0.2.0** built; `twine check` passed both.
+- Feature wheel and source distribution built; `twine check` passed both.
+  Release version assignment is deferred to a separate chore PR.
 - A clean temporary environment installed the wheel, passed `pip check`, verified
   imports from site-packages and public exports, and captured the nine-node,
   ten-edge dummy case in all three views on native SQLite.

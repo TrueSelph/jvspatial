@@ -1,6 +1,7 @@
 # Graph projections for language-model inference
 
-Status: implemented for version 0.2.0; see [usage](graph-projection.md) and
+Status: implemented; version assignment belongs to a separate release chore PR.
+See [usage](graph-projection.md) and
 [qualification](../bench/2026-10-graph-projection.md). The original design intent
 and acceptance criteria below are retained with the implementation decisions
 recorded at the end.
@@ -52,7 +53,7 @@ inventory of the application's schema.
 ## API shape
 
 ```python
-# Public API implemented in version 0.2.0.
+# Public API implemented in this feature.
 projection = await context.project_graph(
     request,
     scope=application_scope,
