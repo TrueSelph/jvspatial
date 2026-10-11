@@ -92,6 +92,8 @@ OAuth hosts in production must set `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` from a s
 
 The in-memory matcher and PostgreSQL pushdown treat both missing and JSON `null` as absent for `$exists`; MongoDB retains its native field-presence semantics. `graph_transaction` isolates request identity state and invalidates touched entities in the parent cache after commit or rollback. Index setup must be scoped to the database instance so one store cannot suppress another store's indexes. Preserve these contracts when changing query translation, caches, or transactions.
 
+Composite keyset continuation includes every sort value and direction plus ID. Never apply LIMIT before residual filtering or unsupported ordering. A configured fallback scan budget raises on exhaustion rather than returning a partial result. Bulk cache entries require confirmed outcomes; ambiguous writes are invalidated. Preserve JSON path locks/atomic durability and streaming handle cleanup on cancellation.
+
 File-backed SQLite closes its prior connection when rebinding to another event loop; dropping it without `close()` leaks the `aiosqlite` worker thread and can keep the process alive.
 
 ---

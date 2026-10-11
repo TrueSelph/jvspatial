@@ -63,17 +63,55 @@ logger = logging.getLogger(__name__)
 _ensured_indexes: WeakKeyDictionary[Any, Set[str]] = WeakKeyDictionary()
 
 
+class _SampleWindow(list):
+    """List-compatible bounded diagnostic samples (statistics cover this window)."""
+
+    def __init__(self, limit: int):
+        super().__init__()
+        self.limit = limit
+        self.total_count = 0
+        self.total_duration = 0.0
+        self.total_bytes_read = 0
+        self.total_bytes_written = 0
+
+    def append(self, value):
+        self.total_count += 1
+        self.total_duration += value.get("duration", 0)
+        self.total_bytes_read += value.get("bytes_read") or 0
+        self.total_bytes_written += value.get("bytes_written") or 0
+        super().append(value)
+        if len(self) > self.limit:
+            del self[: len(self) - self.limit]
+
+    def clear(self):
+        super().clear()
+        self.total_count = 0
+        self.total_duration = 0.0
+        self.total_bytes_read = self.total_bytes_written = 0
+
+    def extend(self, values):
+        for value in values:
+            self.append(value)
+
+
 # Simple performance monitor for tracking operations
 class PerformanceMonitor:
     """Enhanced performance monitoring for database operations and general operations."""
 
-    def __init__(self) -> None:
-        self.db_operations: List[Dict[str, Any]] = []
-        self.hook_executions: List[Dict[str, Any]] = []
-        self.db_errors: List[Dict[str, Any]] = []
-        self.general_operations: List[Dict[str, Any]] = []
-        self.general_errors: List[Dict[str, Any]] = []
-        self.io_operations: List[Dict[str, Any]] = []  # Track file I/O operations
+    def __init__(self, sample_limit: int = 1000) -> None:
+        if (
+            isinstance(sample_limit, bool)
+            or not isinstance(sample_limit, int)
+            or sample_limit < 1
+        ):
+            raise ValueError("sample_limit must be a positive integer")
+        self.sample_limit = sample_limit
+        self.db_operations: _SampleWindow = _SampleWindow(sample_limit)
+        self.hook_executions: _SampleWindow = _SampleWindow(sample_limit)
+        self.db_errors: _SampleWindow = _SampleWindow(sample_limit)
+        self.general_operations: _SampleWindow = _SampleWindow(sample_limit)
+        self.general_errors: _SampleWindow = _SampleWindow(sample_limit)
+        self.io_operations: _SampleWindow = _SampleWindow(sample_limit)
         self.cache_stats: Dict[str, int] = {
             "hits": 0,
             "misses": 0,
@@ -213,10 +251,10 @@ class PerformanceMonitor:
         return self.cache_stats["hits"] / total
 
     async def get_stats(self) -> Dict[str, Any]:
-        """Get comprehensive performance statistics."""
-        total_db_ops = len(self.db_operations)
-        total_general_ops = len(self.general_operations)
-        total_io_ops = len(self.io_operations)
+        """Lifetime counts/means and percentiles over retained sample windows."""
+        total_db_ops = self.db_operations.total_count
+        total_general_ops = self.general_operations.total_count
+        total_io_ops = self.io_operations.total_count
         total_ops = total_db_ops + total_general_ops + total_io_ops
 
         if total_ops == 0:
@@ -231,7 +269,7 @@ class PerformanceMonitor:
         db_stats = {}
         if total_db_ops > 0:
             durations = [op["duration"] for op in self.db_operations]
-            avg_db_duration = sum(durations) / total_db_ops
+            avg_db_duration = self.db_operations.total_duration / total_db_ops
             # Calculate percentiles for database operations
             sorted_durations = sorted(durations)
             p50_idx = int(len(sorted_durations) * 0.5)
@@ -249,35 +287,32 @@ class PerformanceMonitor:
                 "p99_db_duration": (
                     sorted_durations[p99_idx] if sorted_durations else 0.0
                 ),
-                "db_errors": len(self.db_errors),
+                "db_errors": self.db_errors.total_count,
             }
 
         # Calculate general operation statistics
         general_stats = {}
         if total_general_ops > 0:
             avg_general_duration = (
-                sum(op["duration"] for op in self.general_operations)
-                / total_general_ops
+                self.general_operations.total_duration / total_general_ops
             )
             general_stats = {
                 "general_operations": total_general_ops,
                 "avg_general_duration": avg_general_duration,
-                "general_errors": len(self.general_errors),
+                "general_errors": self.general_errors.total_count,
             }
 
         # Calculate I/O operation statistics
         io_stats = {}
         if total_io_ops > 0:
             durations = [op["duration"] for op in self.io_operations]
-            avg_io_duration = sum(durations) / total_io_ops
+            avg_io_duration = self.io_operations.total_duration / total_io_ops
             sorted_io_durations = sorted(durations)
             p50_idx = int(len(sorted_io_durations) * 0.5)
             p95_idx = int(len(sorted_io_durations) * 0.95)
             p99_idx = int(len(sorted_io_durations) * 0.99)
-            total_bytes_read = sum(op.get("bytes_read", 0) for op in self.io_operations)
-            total_bytes_written = sum(
-                op.get("bytes_written", 0) for op in self.io_operations
-            )
+            total_bytes_read = self.io_operations.total_bytes_read
+            total_bytes_written = self.io_operations.total_bytes_written
             io_stats = {
                 "io_operations": total_io_ops,
                 "avg_io_duration": avg_io_duration,
@@ -304,7 +339,7 @@ class PerformanceMonitor:
 
         return {
             "total_operations": total_ops,
-            "hook_executions": len(self.hook_executions),
+            "hook_executions": self.hook_executions.total_count,
             **db_stats,
             **general_stats,
             **io_stats,
@@ -665,7 +700,7 @@ class GraphContext:
                 # Use the overridden create() method
                 entity = await entity_class.create(**kwargs)
                 entity._graph_context = self
-                return entity
+                return cast(T, entity)
 
         # Default behavior: instantiate and save
         entity = entity_class(**kwargs)
@@ -731,6 +766,7 @@ class GraphContext:
                 from .entities.object import Object as _Object
 
                 # Walk up to the appropriate hierarchy root
+                hierarchy_root: Type[_Object]
                 if issubclass(entity_class, _Node):
                     hierarchy_root = _Node
                 elif issubclass(entity_class, _Object):
@@ -762,15 +798,8 @@ class GraphContext:
         if self._cache:
             await self._cache.delete(entity_id)
 
-    async def save(self, entity):
-        """Save an entity to the database.
-
-        Args:
-            entity: Entity instance to save
-
-        Returns:
-            The saved entity instance
-        """
+    async def _prepare_save(self, entity):
+        """Apply the same export/normalization/collection rules to every save."""
         # Export entity - Node, Edge, and Walker return nested format
         if hasattr(entity, "type_code"):
             type_code = getattr(entity, "type_code", "")
@@ -842,17 +871,17 @@ class GraphContext:
             else:
                 collection = type_code.lower()
 
-        db = self.database
         is_node = (
             hasattr(entity, "type_code") and getattr(entity, "type_code", "") == "n"
         )
-
-        # Adjacency lives in the edge collection. Never write a legacy ``edges``
-        # array onto node rows (a leftover in-memory copy must not re-persist it).
         if is_node:
             record.pop("edges", None)
+        return collection, record
 
-        await db.save(collection, record)
+    async def save(self, entity):
+        """Save one entity with shared preparation and cache invalidation."""
+        collection, record = await self._prepare_save(entity)
+        await self.database.save(collection, record)
         await self._add_to_cache(entity.id, entity)
         return entity
 
@@ -998,6 +1027,7 @@ class GraphContext:
         cursor: int = 0,
         after: Optional[str] = None,
         detail_level: str = "full",
+        include_counts: bool = True,
     ) -> Dict[str, Any]:
         """Return a page of incident edges and neighbor summaries for progressive UIs.
 
@@ -1015,6 +1045,7 @@ class GraphContext:
             cursor=cursor,
             after=after,
             detail_level=detail_level,  # type: ignore[arg-type]
+            include_counts=include_counts,
         )
 
     async def subgraph_bfs(
@@ -1025,6 +1056,8 @@ class GraphContext:
         max_nodes: int = 100,
         max_edges_per_node: int = 200,
         detail_level: str = "full",
+        include_counts: bool = True,
+        priority_node_prefixes: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Return a bounded BFS subgraph from ``root_id``.
 
@@ -1041,6 +1074,8 @@ class GraphContext:
             max_nodes=max_nodes,
             max_edges_per_node=max_edges_per_node,
             detail_level=detail_level,  # type: ignore[arg-type]
+            include_counts=include_counts,
+            priority_node_prefixes=priority_node_prefixes,
         )
 
     def _get_collection_name(self, type_code: str) -> str:
@@ -1270,7 +1305,11 @@ class GraphContext:
         page_limit = max(1, int(limit))
         sort_fields = keyset_sort_fields(sort)
         final_query: Dict[str, Any] = dict(query or {})
-        after_cursor = keyset_filter(sort_fields, decode_keyset_cursor(after))
+        after_cursor = keyset_filter(
+            sort_fields,
+            decode_keyset_cursor(after),
+            nulls_first=getattr(self.database, "_keyset_nulls_first", False),
+        )
         if after_cursor is not None:
             final_query = (
                 {"$and": [final_query, after_cursor]} if final_query else after_cursor
@@ -1405,22 +1444,23 @@ class GraphContext:
         if not neighbor_ids:
             return out
 
-        node_docs = await self.database.find(
-            self._get_collection_name(self._get_entity_type_code(Node)),
-            {"id": {"$in": list(neighbor_ids)}},
-        )
+        node_collection = self._get_collection_name(self._get_entity_type_code(Node))
+        if node_entities or node_filter:
+            query = {"id": {"$in": list(neighbor_ids)}}
+            if node_entities:
+                query["entity"] = {"$in": node_entities}
+            query.update({f"context.{k}": v for k, v in (node_filter or {}).items()})
+            node_docs = await self.database.find(node_collection, query)
+        else:
+            node_docs = list(
+                (
+                    await self.database.find_many(node_collection, list(neighbor_ids))
+                ).values()
+            )
         node_by_id: Dict[str, Any] = {}
         for doc in node_docs:
             if node_entities and doc.get("entity") not in node_entities:
                 continue
-            if node_filter:
-                fail = False
-                for k, v in node_filter.items():
-                    if doc.get("context", {}).get(k) != v:
-                        fail = True
-                        break
-                if fail:
-                    continue
             obj = await self._deserialize_entity(Node, doc)
             if obj is not None:
                 node_by_id[doc["id"]] = obj
@@ -1773,104 +1813,51 @@ class GraphContext:
 
     # Batch operations for improved performance
     async def save_batch(self, entities: List[Any]) -> List[Any]:
-        """Save multiple entities in best-effort batch (not an ACID transaction).
+        """Save per-collection batches, returning only confirmed successes.
 
-        Persists each entity via the database adapter's ``save`` (or ``batch_write``
-        where supported). There is no cross-collection atomicity unless the
-        underlying :meth:`Database.begin_transaction` / ``commit_transaction``
-        API is used and wired through callers separately.
-
-        Args:
-            entities: List of entity instances to save
-
-        Returns:
-            List of saved entity instances
+        Uses the same preparation as context.save(), including normalization
+        and stripping legacy adjacency. This context-level operation does not
+        invoke overridden entity.save() methods, matching individual context
+        saves. Batches are best-effort, not cross-collection transactions.
         """
-        if not entities:
-            return []
-
-        # Group entities by type for efficient batch operations
-        entities_by_type: Dict[str, List[Any]] = {}
+        grouped: Dict[str, List[Tuple[Any, Dict[str, Any]]]] = {}
         for entity in entities:
-            collection = self._get_collection_name(entity.type_code)
-            if collection not in entities_by_type:
-                entities_by_type[collection] = []
-            entities_by_type[collection].append(entity)
-
-        saved_entities = []
-
-        # Process each type group
-        for collection, type_entities in entities_by_type.items():
-            is_node_collection = collection == "node"
-            if is_node_collection:
-                for entity in type_entities:
-                    try:
-                        saved = await self.save(entity)
-                        saved_entities.append(saved)
-                    except Exception as e:
-                        logger.error(
-                            "Failed to save entity %s: %s",
-                            getattr(entity, "id", "unknown"),
-                            e,
-                            exc_info=True,
-                        )
-                continue
-
-            # Export all entities of this type
-            records = []
-            for entity in type_entities:
-                record = await entity.export()
-                if getattr(entity, "type_code", "") == "n":
-                    record.pop("edges", None)
-                records.append(record)
-
-            # Save all records of this type
-            db = self.database
-
-            # Use batch_write if available (e.g., DynamoDB), otherwise fall back to sequential saves
-            if hasattr(db, "batch_write"):
+            collection, record = await self._prepare_save(entity)
+            grouped.setdefault(collection, []).append((entity, record))
+        saved = []
+        for collection, items in grouped.items():
+            for offset in range(0, len(items), 500):
+                chunk = items[offset : offset + 500]
+                # Every attempted identity is stale if the batch fails or is
+                # cancelled, including when a backend outcome is uncertain.
                 try:
-                    # Use batch write for efficiency
-                    await db.batch_write(collection, records)
-                    # Update cache with latest versions
-                    for i, record in enumerate(records):
-                        await self._add_to_cache(record["id"], type_entities[i])
-                        saved_entities.append(type_entities[i])
-                except Exception as e:
-                    # If batch write fails, fall back to sequential saves
-                    logger.warning(
-                        f"Batch write failed for collection '{collection}', falling back to sequential saves: {e}"
-                    )
-                    for i, record in enumerate(records):
-                        try:
-                            await db.save(collection, record)
-                            # Update cache with latest version
-                            await self._add_to_cache(record["id"], type_entities[i])
-                            saved_entities.append(type_entities[i])
-                        except Exception as save_error:
-                            # Log error but continue with other entities
-                            logger.error(
-                                f"Failed to save entity {type_entities[i].get('id', 'unknown')}: {save_error}",
-                                exc_info=True,
-                            )
-                            continue
-            else:
-                # Fall back to sequential saves for databases without batch support
-                for i, record in enumerate(records):
-                    try:
-                        await db.save(collection, record)
-                        # Update cache with latest version
-                        await self._add_to_cache(record["id"], type_entities[i])
-                        saved_entities.append(type_entities[i])
-                    except Exception as e:
-                        # Log error but continue with other entities
-                        logger.error(
-                            f"Failed to save entity {type_entities[i].get('id', 'unknown')}: {e}",
-                            exc_info=True,
-                        )
-                        continue
+                    bulk = getattr(self.database, "bulk_save_detailed", None)
+                    if callable(bulk):
+                        result = await bulk(collection, [record for _, record in chunk])
+                    else:
+                        from jvspatial.db.database import BulkSaveResult
 
-        return saved_entities
+                        for _, record in chunk:
+                            await self.database.save(collection, record)
+                        result = BulkSaveResult(len(chunk), len(chunk), [])
+                except BaseException:
+                    for entity, _ in chunk:
+                        await self._evict_from_cache(entity.id)
+                    raise
+                failed = set(result.failed_ids)
+                if result.saved != len(chunk) and not failed:
+                    # Count-only custom adapters cannot identify successful IDs.
+                    for entity, _ in chunk:
+                        await self._evict_from_cache(entity.id)
+                    continue
+                for entity, _ in chunk:
+                    if str(entity.id) in failed:
+                        await self._evict_from_cache(entity.id)
+                    else:
+                        await self._add_to_cache(entity.id, entity)
+                        saved.append(entity)
+        confirmed = {id(entity) for entity in saved}
+        return [entity for entity in entities if id(entity) in confirmed]
 
     async def get_batch(self, entity_class: Type[T], ids: List[str]) -> List[T]:
         """Retrieve multiple entities by ID.

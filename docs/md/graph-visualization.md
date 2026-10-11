@@ -612,3 +612,18 @@ dot = await generate_graph_dot(
 
 **[← Back to README](README.md)** | **[Graph Context →](graph-context.md)**
 
+
+## Progressive expansion costs
+
+`context.expand_node(..., include_counts=False)` and
+`context.subgraph_bfs(..., include_counts=False)` skip exact totals/degrees and
+return None for those values. By default, counts remain exact. Native SQL/Mongo
+adapters group degrees instead of counting separately for every output node.
+
+BFS accepts `priority_node_prefixes=[...]` to give selected endpoint prefixes
+priority within each hub. Pass [] for plain edge-ID order. Omitting the option
+retains the previous policy. Each priority tier and the ordinary incident query
+returns at most `max_edges_per_node+1` records, preserving priority semantics
+while bounding document transfer. Query/index selectivity still determines
+work inside the store. Frontier node reads use `find_many`; the scheduled-node
+set is capped by `max_nodes`.

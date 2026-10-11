@@ -282,7 +282,16 @@ async def test_typed_sorted_find_walks_the_entity_leading_index():
             params,
         )
         names = {p.get("Index Name") for p in plan}
-        assert "node_entity_context_group_id_context_created_at_idx" in names, plan
+        definitions = await _indexes(admin, schema, "node")
+        assert any(
+            name in definitions
+            and "_sort_" in name
+            and "NULLIF" in definitions[name]
+            and "group_id" in definitions[name]
+            and "created_at" in definitions[name]
+            for name in names
+            if name
+        ), plan
         assert not any(p["Node Type"] == "Sort" for p in plan), plan
 
         found = await db.find(

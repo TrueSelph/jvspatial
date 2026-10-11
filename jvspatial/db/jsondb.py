@@ -28,11 +28,19 @@ import json
 import logging
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 from jvspatial.db._atomic import atomic_write_bytes, cleanup_orphan_tmp_files
 from jvspatial.db._path_locks import PathLockManager
-from jvspatial.db.database import Database, InsertIfAbsentResult, finalize_find_results
+from jvspatial.db.database import (
+    BulkSaveResult,
+    Database,
+    InsertIfAbsentResult,
+    _keyset_condition,
+    _keyset_sort_fields,
+    decode_cursor,
+    finalize_find_results,
+)
 from jvspatial.db.query import QueryEngine
 from jvspatial.runtime.serverless import is_serverless_mode
 
@@ -212,11 +220,6 @@ class JsonDB(Database):
 
         Returns None if file doesn't exist or is invalid.
         """
-        # ``Path.exists`` performs a stat() syscall — blocking I/O inside
-        # an async function (audit §3.6 / SPEC §3.3). Offload to the
-        # default executor instead.
-        if not await asyncio.to_thread(path.exists):
-            return None
 
         def _sync_read(path: Path) -> Optional[Dict[str, Any]]:
             try:
@@ -306,120 +309,105 @@ class JsonDB(Database):
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a record by ID."""
-        record_path = self._get_record_path(collection, id)
+        record_path = await asyncio.to_thread(self._get_record_path, collection, id)
         return await self._async_read_json(record_path)
 
     async def delete(self, collection: str, id: str) -> None:
         """Delete a record by ID."""
         await asyncio.to_thread(self._sync_delete_record, collection, id)
 
-    async def count(
-        self,
-        collection: str,
-        query: Optional[Dict[str, Any]] = None,
-    ) -> int:
-        """Count records matching ``query``.
+    async def _scan_records(
+        self, collection: str, *, reverse: bool = False, batch_size: int = 32
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """List paths once and decode at most 32 records concurrently.
 
-        * Empty query: counts files in the collection directory without
-          opening any of them. ``O(N)`` directory entries, no JSON parse.
-        * Filtered query: streams the records through ``QueryEngine`` and
-          returns the count without materializing a result list.
+        Path metadata is O(N); decoded record memory is bounded. The file
+        list is a read-at-start enumeration, not a transactional snapshot.
         """
-        q = query or {}
-        collection_dir = self._get_collection_dir(collection)
-        # Sync ``exists``/``glob`` block the event loop — offload both
-        # (audit §3.6 / SPEC §3.3).
-        if not await asyncio.to_thread(collection_dir.exists):
-            return 0
+        directory = await asyncio.to_thread(self._get_collection_dir, collection)
+        paths = await asyncio.to_thread(self._list_collection_json_files, directory)
+        paths.sort(key=lambda p: p.stem, reverse=reverse)
+        width = min(32, batch_size)
+        for offset in range(0, len(paths), width):
+            records = await asyncio.gather(
+                *(self._async_load_record(p) for p in paths[offset : offset + width]),
+                return_exceptions=True,
+            )
+            for record in records:
+                if isinstance(record, dict):
+                    yield record
 
-        json_files = await asyncio.to_thread(
-            self._list_collection_json_files, collection_dir
-        )
-
-        if not q:
-            return len(json_files)
-
-        # Filtered count: parse + match, but don't accumulate records.
-        tasks = [self._async_load_record(p) for p in json_files]
-        records = await asyncio.gather(*tasks, return_exceptions=True)
-        n = 0
-        for record in records:
-            if isinstance(record, Exception) or record is None:
-                continue
-            if isinstance(record, dict) and QueryEngine.match(record, q):
-                n += 1
-        return n
+    async def count(
+        self, collection: str, query: Optional[Dict[str, Any]] = None
+    ) -> int:
+        """Count dirents for an empty query; stream matches otherwise."""
+        if not query:
+            directory = await asyncio.to_thread(self._get_collection_dir, collection)
+            paths = await asyncio.to_thread(self._list_collection_json_files, directory)
+            return len(paths)
+        count = 0
+        async for record in self._scan_records(collection):
+            if QueryEngine.match(record, query):
+                count += 1
+        return count
 
     async def find_many(
         self, collection: str, ids: List[str]
     ) -> Dict[str, Dict[str, Any]]:
-        """Bulk-fetch via parallel per-file reads.
-
-        N round trips at the OS level (one open() per id), but they
-        run in parallel via ``asyncio.gather``, so wall-clock time is
-        bounded by ``max(io_latency)`` rather than ``sum(io_latency)``.
-        """
-        if not ids:
-            return {}
+        """Fetch only requested IDs with bounded parallel I/O."""
         unique_ids = list(dict.fromkeys(ids))
-        # Build (id, path) pairs first so we can short-circuit when
-        # the collection dir doesn't exist.
-        collection_dir = self._get_collection_dir(collection)
-        # Sync stat blocks the event loop (audit §3.6 / SPEC §3.3).
-        if not await asyncio.to_thread(collection_dir.exists):
-            return {}
-        paths = [
-            (rec_id, self._get_record_path(collection, rec_id)) for rec_id in unique_ids
-        ]
-        records = await asyncio.gather(
-            *[self._async_load_record(p) for _, p in paths],
-            return_exceptions=True,
-        )
         out: Dict[str, Dict[str, Any]] = {}
-        for (rec_id, _path), record in zip(paths, records):
-            if isinstance(record, Exception) or record is None:
-                continue
-            if isinstance(record, dict):
-                out[rec_id] = record
+        for offset in range(0, len(unique_ids), 32):
+            chunk = unique_ids[offset : offset + 32]
+            records = await asyncio.gather(
+                *(self.get(collection, rid) for rid in chunk)
+            )
+            out.update({rid: r for rid, r in zip(chunk, records) if r is not None})
         return out
 
     async def bulk_save(self, collection: str, records: List[Dict[str, Any]]) -> int:
-        """Atomic per-file writes in parallel.
+        """Return the number of durable per-file saves, preserving partial results."""
+        return (await self.bulk_save_detailed(collection, records)).saved
 
-        Each file write is independently atomic (temp + fsync + rename).
-        The set as a whole is **not** atomic -- a process crash mid-bulk
-        can leave a partial set on disk, but each individual record is
-        either fully written or not present at all.
-        """
-        if not records:
-            return 0
-        for r in records:
-            if "id" not in r:
+    async def bulk_save_detailed(
+        self, collection: str, records: List[Dict[str, Any]]
+    ) -> BulkSaveResult:
+        """Bounded per-file atomic writes with ordered duplicate-ID handling."""
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        for index, record in enumerate(records):
+            if "id" not in record:
                 raise ValueError(
-                    "bulk_save requires every record to have an 'id' field"
+                    f"bulk_save: record at index {index} has no 'id' field"
                 )
-        # Run writes via the existing single-record sync helper (which
-        # already takes the per-path lock and uses atomic_write_bytes).
-        # ``asyncio.to_thread`` parallelizes them across the loop's
-        # default executor.
-        results = await asyncio.gather(
-            *[
-                asyncio.to_thread(self._sync_write_record, collection, dict(r))
-                for r in records
-            ],
-            return_exceptions=True,
-        )
+            groups.setdefault(str(record["id"]), []).append(record)
+
+        async def save_group(group: List[Dict[str, Any]]) -> Tuple[int, List[str]]:
+            saved = 0
+            failed = []
+            for record in group:
+                try:
+                    await asyncio.to_thread(
+                        self._sync_write_record, collection, dict(record)
+                    )
+                    saved += 1
+                except Exception as exc:
+                    failed.append(str(record["id"]))
+                    logger.warning(
+                        "JsonDB bulk_save failed for id=%s: %s", record["id"], exc
+                    )
+            return saved, failed
+
         saved = 0
-        for r, result in zip(records, results):
-            if isinstance(result, Exception):
-                logger.warning(
-                    "JsonDB bulk_save failed for id=%s: %s",
-                    r.get("id"),
-                    result,
-                )
-                continue
-            saved += 1
-        return saved
+        failed_ids: List[str] = []
+        batches = list(groups.values())
+        for offset in range(0, len(batches), 32):
+            outcomes = await asyncio.gather(
+                *(save_group(g) for g in batches[offset : offset + 32])
+            )
+            for count, failed in outcomes:
+                saved += count
+                failed_ids.extend(failed)
+        return BulkSaveResult(len(records), saved, failed_ids)
 
     async def find(
         self,
@@ -429,48 +417,52 @@ class JsonDB(Database):
         limit: Optional[int] = None,
         sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
-        """Find records matching a query.
-
-        Uses parallel file reads for improved performance under concurrent load.
-        """
-        collection_dir = self._get_collection_dir(collection)
-
-        # Sync ``exists``/``glob`` block the event loop — offload both
-        # (audit §3.6 / SPEC §3.3).
-        if not await asyncio.to_thread(collection_dir.exists):
+        """Stream matches and stop early when no global ordering is required."""
+        if limit == 0:
             return []
-
-        # Get all JSON files in the collection directory.
-        # Skip ``*.jvtmp`` files left behind by an in-flight write -- they
-        # are not yet part of the published dataset.
-        json_files = await asyncio.to_thread(
-            self._list_collection_json_files, collection_dir
-        )
-
-        if not json_files:
+        if limit == 0:
             return []
-
-        # Parallel file reads using asyncio.gather
-        tasks = [self._async_load_record(json_file) for json_file in json_files]
-        records = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Filter results and handle exceptions
-        results: List[Dict[str, Any]] = []
-        for record in records:
-            if isinstance(record, Exception):
-                # Log but continue processing other files
-                logger.debug(f"Error loading record: {record}")
-                continue
-            if record is None:
-                continue
-            # Type check: record should be Dict[str, Any] at this point
-            # Check if record matches query using QueryEngine for proper operator support
-            if isinstance(record, dict) and (
-                not query or QueryEngine.match(record, query)
-            ):
+        results = []
+        async for record in self._scan_records(collection):
+            if not query or QueryEngine.match(record, query):
                 results.append(record)
-
+                if (
+                    not sort
+                    and limit is not None
+                    and limit > 0
+                    and len(results) >= limit
+                ):
+                    break
         return finalize_find_results(results, sort=sort, limit=limit)
+
+    async def find_iter(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        batch_size: int = 100,
+        cursor: Optional[bytes] = None,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Scan once; ID ordering buffers paths, custom ordering buffers matches."""
+        if (
+            isinstance(batch_size, bool)
+            or not isinstance(batch_size, int)
+            or batch_size < 1
+        ):
+            raise ValueError("batch_size must be a positive integer")
+        fields = _keyset_sort_fields(sort)
+        after = _keyset_condition(fields, decode_cursor(cursor))
+        final_query = ({"$and": [query, after]} if query else after) if after else query
+        if len(fields) == 1 and fields[0][0] == "id":
+            async for record in self._scan_records(
+                collection, reverse=fields[0][1] < 0, batch_size=batch_size
+            ):
+                if QueryEngine.match(record, final_query):
+                    yield record
+        else:
+            for record in await self.find(collection, final_query, sort=fields):
+                yield record
 
     def _get_nested_value(self, data: Dict[str, Any], key: str) -> Any:
         """Get a nested value using dot notation."""

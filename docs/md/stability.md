@@ -24,7 +24,8 @@ are the canonical import path:
 - **Database.** `Database`, `create_database`, `InsertIfAbsentResult`. The
   `Database.supports_transactions` capability flag is part of this
   surface, as are the bulk methods `Database.find_many` and
-  `Database.bulk_save`, and `Database.insert_if_absent` (v1:
+  `Database.bulk_save`, `Database.bulk_save_detailed`, `Database.find_ids`,
+  `Database.count_incident_edges`, and `Database.insert_if_absent` (v1:
   `conflict_target="id"` only). Adapters not overriding the bulk methods
   fall through to the (slower) default serial implementations. Custom
   adapters must implement `insert_if_absent` or callers hit

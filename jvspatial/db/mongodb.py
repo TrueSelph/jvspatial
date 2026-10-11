@@ -16,7 +16,9 @@ Index creation
     startup along with ``GraphContext.ensure_indexes`` for their entity types.
 """
 
+import asyncio
 import contextlib
+import inspect
 import logging
 from typing import (
     Any,
@@ -31,8 +33,10 @@ from typing import (
     Union,
 )
 
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import AsyncMongoClient
 from pymongo.errors import (
+    BulkWriteError,
     ConnectionFailure,
     DuplicateKeyError,
     OperationFailure,
@@ -40,7 +44,7 @@ from pymongo.errors import (
     ServerSelectionTimeoutError,
 )
 
-from jvspatial.db.database import Database, InsertIfAbsentResult
+from jvspatial.db.database import BulkSaveResult, Database, InsertIfAbsentResult
 from jvspatial.exceptions import DatabaseError
 from jvspatial.utils.retry import retry_async
 
@@ -83,6 +87,11 @@ def _native_query(query: Dict[str, Any]) -> Dict[str, Any]:
     return query
 
 
+async def _resolve_driver_result(value):
+    """Bridge only driver methods whose coroutine signature changed."""
+    return await value if inspect.isawaitable(value) else value
+
+
 class MongoDB(Database):
     """Simplified MongoDB-based database implementation."""
 
@@ -96,12 +105,16 @@ class MongoDB(Database):
     supports_transactions: bool = True
     supports_native_graph_paging: bool = True
 
+    # Native BSON ascending sorts place null/missing before scalar values.
+    _keyset_nulls_first = True
+
     def __init__(
         self,
         uri: str = "mongodb://localhost:27017",
         db_name: str = "jvdb",
         max_pool_size: Optional[int] = None,
         min_pool_size: Optional[int] = None,
+        driver: str = "motor",
     ) -> None:
         """Initialize MongoDB database.
 
@@ -111,6 +124,11 @@ class MongoDB(Database):
             max_pool_size: Maximum connections in pool (default: 10, Lambda-friendly)
             min_pool_size: Minimum connections in pool (default: 0, Lambda-friendly)
         """
+        if driver not in ("motor", "pymongo"):
+            raise ValueError("driver must be 'motor' or 'pymongo'")
+        self.driver = driver
+        self._client_event_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._cleanup_tasks: Set[asyncio.Future[Any]] = set()
         self.uri = uri
         self.db_name = db_name
         from jvspatial.env import env
@@ -125,8 +143,8 @@ class MongoDB(Database):
             if min_pool_size is not None
             else (env("JVSPATIAL_MONGODB_MIN_POOL_SIZE", parse=int) or 0)
         )
-        self._client: Optional[AsyncIOMotorClient] = None
-        self._db: Optional[AsyncIOMotorDatabase] = None
+        self._client: Optional[Any] = None
+        self._db: Optional[Any] = None
         self._created_indexes: Dict[str, Set[str]] = (
             {}
         )  # collection -> set of index names
@@ -174,8 +192,15 @@ class MongoDB(Database):
 
                     # Check if the client's event loop is still valid
                     # Motor stores the loop in _io_loop attribute
-                    if hasattr(self._client, "_io_loop"):
-                        client_loop = self._client._io_loop
+                    if (
+                        hasattr(self._client, "_io_loop")
+                        or self._client_event_loop is not None
+                    ):
+                        client_loop = (
+                            self._client._io_loop
+                            if self.driver == "motor"
+                            else self._client_event_loop
+                        )
                         # If loops don't match or client loop is closed, recreate
                         if client_loop is not current_loop:
                             # Different event loop - need to recreate client
@@ -183,7 +208,9 @@ class MongoDB(Database):
                                 "MongoDB client created with different event loop, recreating connection"
                             )
                             with contextlib.suppress(Exception):
-                                self._client.close()  # Ignore errors when closing invalid client
+                                await _resolve_driver_result(
+                                    self._client.close()
+                                )  # Close old driver resources
                             self._client = None
                             self._db = None
                         elif (
@@ -195,7 +222,9 @@ class MongoDB(Database):
                                 "MongoDB client event loop is closed, recreating connection"
                             )
                             with contextlib.suppress(Exception):
-                                self._client.close()  # Ignore errors when closing invalid client
+                                await _resolve_driver_result(
+                                    self._client.close()
+                                )  # Close old driver resources
                             self._client = None
                             self._db = None
                 except RuntimeError:
@@ -207,19 +236,25 @@ class MongoDB(Database):
                         )
                         if self._client:
                             with contextlib.suppress(Exception):
-                                self._client.close()  # Ignore errors when closing invalid client
+                                await _resolve_driver_result(
+                                    self._client.close()
+                                )  # Close old driver resources
                         self._client = None
                         self._db = None
             # If it's a mock, preserve the existing connection
 
         # Create new client if needed (but not if we have a mock)
         if self._client is None:
-            self._client = AsyncIOMotorClient(
+            client_class = (
+                AsyncIOMotorClient if self.driver == "motor" else AsyncMongoClient
+            )
+            self._client = client_class(
                 self.uri,
                 maxPoolSize=self.max_pool_size,
                 minPoolSize=self.min_pool_size,
                 maxIdleTimeMS=60000,  # Close idle connections before DocumentDB timeout
             )
+            self._client_event_loop = asyncio.get_running_loop()
             self._db = self._client[self.db_name]
 
         # Ensure _db is set if client exists but _db is None (shouldn't happen, but be defensive)
@@ -241,8 +276,15 @@ class MongoDB(Database):
             type(exc).__name__,
             sleep_for,
         )
+        if self._client is not None:
+            closing = self._client.close()
+            if inspect.isawaitable(closing):
+                task = asyncio.ensure_future(closing)
+                self._cleanup_tasks.add(task)
+                task.add_done_callback(self._cleanup_tasks.discard)
         self._client = None
         self._db = None
+        self._client_event_loop = None
 
     async def _run_with_reconnect(
         self, op_name: str, coro_factory: Callable[[], Awaitable[Any]]
@@ -254,15 +296,25 @@ class MongoDB(Database):
         per-method implementations: 2 attempts total (one original +
         one retry), connection state reset between them.
         """
+        from .database import _record_io_metric
+
+        async def attempt():
+            _record_io_metric("driver_attempts")
+            return await coro_factory()
+
+        def retrying(*args: Any) -> None:
+            _record_io_metric("retry_count")
+            self._drop_connection_on_retry(*args)
+
         try:
             return await retry_async(
-                coro_factory,
+                attempt,
                 retry_on=_is_retryable_mongo_error,
                 max_attempts=2,
                 base_delay=0.0,
                 max_delay=0.0,
                 jitter=False,
-                on_retry=self._drop_connection_on_retry,
+                on_retry=retrying,
             )
         except (RuntimeError, PyMongoError) as e:
             raise DatabaseError(f"MongoDB {op_name} error: {e}") from e
@@ -514,7 +566,9 @@ class MongoDB(Database):
             await self._ensure_connected()
             if self._db is None:
                 raise DatabaseError("MongoDB database connection not established")
-            cursor = self._db[edge_collection].aggregate(pipeline)
+            cursor = await _resolve_driver_result(
+                self._db[edge_collection].aggregate(pipeline)
+            )
             return await cursor.to_list(length=None)
 
         return await self._run_with_reconnect("find_connected_nodes", _op)
@@ -547,7 +601,10 @@ class MongoDB(Database):
             await self._ensure_connected()
             if self._db is None:
                 raise DatabaseError("MongoDB database connection not established")
-            rows = await self._db[edge_collection].aggregate(pipeline).to_list(1)
+            cursor = await _resolve_driver_result(
+                self._db[edge_collection].aggregate(pipeline)
+            )
+            rows = await cursor.to_list(1)
             return int(rows[0]["n"]) if rows else 0
 
         return int(await self._run_with_reconnect("count_connected_nodes", _op))
@@ -562,6 +619,9 @@ class MongoDB(Database):
     ) -> List[Dict[str, Any]]:
         """Find records matching a query."""
 
+        if limit == 0:
+            return []
+
         async def _find_op() -> List[Dict[str, Any]]:
             await self._ensure_connected()
             if self._db is None:
@@ -575,6 +635,110 @@ class MongoDB(Database):
             return await cursor.to_list(length=None)
 
         return await self._run_with_reconnect("find", _find_op)
+
+    async def count_incident_edges(
+        self, collection: str, node_ids: List[str]
+    ) -> Dict[str, int]:
+        """Count incident edges per requested node, counting self-loops once."""
+        counts = dict.fromkeys(node_ids, 0)
+        if not counts:
+            return counts
+        pipeline = [
+            {
+                "$match": {
+                    "$or": [
+                        {"source": {"$in": list(counts)}},
+                        {"target": {"$in": list(counts)}},
+                    ]
+                }
+            },
+            {"$project": {"endpoints": {"$setUnion": [["$source", "$target"], []]}}},
+            {"$unwind": "$endpoints"},
+            {"$match": {"endpoints": {"$in": list(counts)}}},
+            {"$group": {"_id": "$endpoints", "n": {"$sum": 1}}},
+        ]
+
+        async def operation():
+            await self._ensure_connected()
+            cursor = await _resolve_driver_result(
+                self._db[collection].aggregate(pipeline)
+            )
+            try:
+                return await cursor.to_list(None)
+            finally:
+                await cursor.close()
+
+        counts.update(
+            {
+                row["_id"]: row["n"]
+                for row in await self._run_with_reconnect(
+                    "count_incident_edges", operation
+                )
+            }
+        )
+        return counts
+
+    async def find_iter(
+        self, collection, query, *, sort=None, batch_size=100, cursor=None
+    ):
+        """Stream native cursor records with validated keyset continuation."""
+        from .database import _keyset_condition, _keyset_sort_fields, decode_cursor
+
+        if (
+            isinstance(batch_size, bool)
+            or not isinstance(batch_size, int)
+            or batch_size < 1
+        ):
+            raise ValueError("batch_size must be a positive integer")
+        fields = _keyset_sort_fields(sort)
+        after = _keyset_condition(fields, decode_cursor(cursor), nulls_first=True)
+        predicate = {"$and": [query, after]} if after and query else after or query
+        await self._ensure_connected()
+        wire_cursor = (
+            self._db[collection]
+            .find(_native_query(predicate))
+            .sort(fields)
+            .batch_size(batch_size)
+        )
+        try:
+            async for record in wire_cursor:
+                yield record
+        finally:
+            await wire_cursor.close()
+
+    async def find_ids(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        offset: int = 0,
+    ) -> List[str]:
+        """Native ID projection with server-side skip/limit and sorting."""
+        from .database import _keyset_sort_fields
+
+        if limit == 0:
+            return []
+        if offset < 0 or (limit is not None and limit < 0):
+            raise ValueError("offset and limit must be nonnegative")
+        if limit == 0:
+            return []
+
+        async def find() -> List[str]:
+            await self._ensure_connected()
+            if self._db is None:
+                raise DatabaseError("MongoDB database connection not established")
+            cursor = self._db[collection].find(_native_query(query), {"id": 1})
+            cursor = cursor.sort(_keyset_sort_fields(sort)).skip(offset)
+            if limit is not None:
+                cursor = cursor.limit(limit)
+            return [
+                str(r["id"] if "id" in r else r["_id"])
+                for r in await cursor.to_list(length=None)
+            ]
+
+        return await self._run_with_reconnect("find_ids", find)
 
     async def find_many(
         self, collection: str, ids: List[str]
@@ -616,54 +780,67 @@ class MongoDB(Database):
         return {str(doc["_id"]): doc for doc in docs}
 
     async def bulk_save(self, collection: str, records: List[Dict[str, Any]]) -> int:
-        """Bulk write via ``bulk_write`` with ``ordered=False``.
+        """Native unordered bulk write; use detailed outcomes for partial success."""
+        result = await self.bulk_save_detailed(collection, records)
+        if result.failed_ids:
+            raise DatabaseError(
+                f"MongoDB bulk_save failed for {len(result.failed_ids)} records"
+            )
+        return result.saved
 
-        Partial successes are reported -- a single record's failure
-        does not block the rest of the batch. Returns the number of
-        records the server reported as either upserted or modified.
-        """
+    async def bulk_save_detailed(
+        self, collection: str, records: List[Dict[str, Any]]
+    ) -> BulkSaveResult:
+        """Use one native bulk operation with honest per-record failure IDs."""
         if not records:
-            return 0
-        for r in records:
-            if "id" not in r:
+            return BulkSaveResult(0, 0, [])
+        for index, record in enumerate(records):
+            if "id" not in record:
                 raise ValueError(
-                    "bulk_save requires every record to have an 'id' field"
+                    f"bulk_save: record at index {index} has no 'id' field"
                 )
-        await self._ensure_connected()
-        if self._db is None:
-            raise DatabaseError("MongoDB database connection not established")
-
         from pymongo import ReplaceOne
 
-        ops = []
-        for r in records:
-            doc = dict(r)
-            if "_id" not in doc:
-                doc["_id"] = doc["id"]
-            ops.append(ReplaceOne({"_id": doc["_id"]}, doc, upsert=True))
+        # Ordered writes for duplicate IDs retain input ordering; otherwise
+        # independent records can use the faster unordered native operation.
+        ids = [str(r.get("_id", r["id"])) for r in records]
+        duplicate_ids = len(set(ids)) != len(ids)
+        docs = [dict(r, _id=r.get("_id", r["id"])) for r in records]
+        ops = [ReplaceOne({"_id": doc["_id"]}, doc, upsert=True) for doc in docs]
 
-        try:
-            collection_obj = self._db[collection]
-            result = await collection_obj.bulk_write(ops, ordered=False)
-        except PyMongoError as e:
-            if _is_connection_error(e):
-                self._client = None
-                self._db = None
-                await self._ensure_connected()
-                if self._db is None:
+        async def write() -> BulkSaveResult:
+            await self._ensure_connected()
+            if self._db is None:
+                raise DatabaseError("MongoDB database connection not established")
+            try:
+                result = await self._db[collection].bulk_write(
+                    ops, ordered=duplicate_ids
+                )
+                return BulkSaveResult(
+                    len(records),
+                    int(result.upserted_count) + int(result.matched_count),
+                    [],
+                )
+            except BulkWriteError as exc:
+                details = exc.details
+                errors = {int(e["index"]) for e in details.get("writeErrors", [])}
+                if details.get("writeConcernErrors"):
+                    # Durability is uncertain for every attempted write.
+                    errors = set(range(len(records)))
+                elif duplicate_ids and errors:
+                    # Ordered bulk stops at its first failure.
+                    errors.update(range(min(errors), len(records)))
+                if not errors:
                     raise DatabaseError(
-                        "Failed to establish MongoDB connection after retry"
-                    )
-                collection_obj = self._db[collection]
-                result = await collection_obj.bulk_write(ops, ordered=False)
-            else:
-                raise DatabaseError(f"MongoDB bulk_save error: {e}") from e
-        # ``upserted_count`` covers brand-new docs, ``matched_count``
-        # covers existing docs we replaced (whether the bytes changed
-        # or not). Sum is the total "successfully persisted" count.
-        upserted = int(getattr(result, "upserted_count", 0) or 0)
-        matched = int(getattr(result, "matched_count", 0) or 0)
-        return upserted + matched
+                        "MongoDB bulk result has no identifiable outcome"
+                    ) from exc
+                return BulkSaveResult(
+                    len(records),
+                    len(records) - len(errors),
+                    [str(records[i]["id"]) for i in sorted(errors)],
+                )
+
+        return await self._run_with_reconnect("bulk_save_detailed", write)
 
     async def find_one_and_delete(
         self, collection: str, query: Dict[str, Any]
@@ -1018,8 +1195,8 @@ class MongoDB(Database):
         try:
             import uuid
 
-            session = await self._client.start_session()
-            session.start_transaction()
+            session = await _resolve_driver_result(self._client.start_session())
+            await _resolve_driver_result(session.start_transaction())
             return MongoDBTransaction(str(uuid.uuid4()), session, self._db)
         except Exception:
             logger.debug("Transactions not available on this deployment", exc_info=True)
@@ -1069,8 +1246,11 @@ class MongoDB(Database):
 
     async def close(self) -> None:
         """Close the database connection."""
-        if self._client:
-            self._client.close()
+        if self._client is not None:
+            await _resolve_driver_result(self._client.close())
             self._client = None
             self._db = None
             self._created_indexes.clear()
+        if self._cleanup_tasks:
+            await asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
+        self._client_event_loop = None
