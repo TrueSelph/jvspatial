@@ -57,7 +57,7 @@ Any item in that list should be either (a) in the changelog under
 
 ```bash
 pre-commit run --all-files
-pytest --cov=jvspatial --cov-fail-under=50
+pytest --cov=jvspatial --cov-fail-under=60
 # The configured mypy pre-commit hook is part of pre-commit above.
 ```
 
@@ -132,11 +132,12 @@ Confirm by checking:
 - The Actions tab shows the workflow as ✅.
 - `git fetch --tags` locally shows `v0.X.Y`.
 
-### 8. Cut a GitHub release
+### 8. Verify the GitHub release
 
-After the PyPI upload succeeds, cut a GitHub release from the
-auto-created tag. Paste the changelog block into the release body.
-This is currently a manual step — automating it is on the to-do.
+The stable publish workflow creates a GitHub release with generated notes when
+it creates a new version tag. Verify that the release references the expected
+commit and that package upload succeeds. A GitHub release entry alone does not
+prove successful PyPI publication; inspect the publish job and package page.
 
 ### 9. If something goes wrong
 
@@ -165,15 +166,43 @@ adopters are expected to track the latest minor.
 
 ## Pre-release versions (alpha / beta / rc)
 
-The current workflow does not publish pre-release versions. If we
-need one (e.g. for a 1.0 candidate), the workflow regex in
-`publish.yml` step `Read version from version.py` enforces the
-`MAJOR.MINOR.PATCH` form and rejects suffixes like `0.1.0a1`. We'll
-update the regex and the validation when the first pre-release is
-needed.
+Release candidates publish to TestPyPI through
+`.github/workflows/publish-testpypi.yml`. This lane is separate from
+`publish.yml`, which remains responsible for stable releases to PyPI.
+
+### Publish a candidate
+
+1. Prepare a candidate branch with the normal quality gates green and
+   the candidate changes recorded in `CHANGELOG.md`.
+2. Set `jvspatial/version.py` to a PEP 440 candidate version such as
+   `0.2.0rc1` (or `0.2.0rc2` for the next iteration).
+3. Commit the candidate and create a matching annotated tag, then push
+   the tag:
+
+   ```bash
+   git tag -a v0.2.0rc1 -m "jvspatial 0.2.0rc1"
+   git push origin v0.2.0rc1
+   ```
+
+4. The tag starts the candidate workflow. It verifies that the tag and
+   `version.py` agree, builds and validates the wheel and sdist, then
+   publishes them to TestPyPI. Check the Actions run and the TestPyPI
+   project page before asking consumers to try the candidate.
+
+The workflow accepts only tags matching `vX.Y.ZrcN`. Do not merge a
+candidate version into `main`: the stable PyPI workflow accepts only
+`X.Y.Z`. For the final release, prepare the normal release PR with the
+stable version (for example `0.2.0`) and follow the checklist above.
+
+TestPyPI must have a Trusted Publisher configured for repository
+`TrueSelph/jvspatial` and workflow `publish-testpypi.yml` (with no
+environment unless the publisher is configured to require one). No
+PyPI token secret is needed. Existing TestPyPI versions cannot be
+overwritten; increment the `rcN` suffix for every candidate rebuild.
 
 ## See also
 
 - [`.github/workflows/publish.yml`](.github/workflows/publish.yml) — actual publication automation
+- [`.github/workflows/publish-testpypi.yml`](.github/workflows/publish-testpypi.yml) — release-candidate publication automation
 - [`.github/workflows/VERSIONING.md`](.github/workflows/VERSIONING.md) — workflow's own notes
 - [CHANGELOG.md](CHANGELOG.md) — the artifact this whole flow produces

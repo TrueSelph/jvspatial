@@ -1,5 +1,19 @@
 # GitHub Actions Workflows
 
+## Release candidates on TestPyPI
+
+Push an annotated tag such as `v0.2.0rc1` after committing the matching
+`__version__ = "0.2.0rc1"` to `jvspatial/version.py`. The
+`publish-testpypi.yml` workflow verifies the tag/version match, builds
+and validates the package, and uploads it to TestPyPI. Use a new `rcN`
+for each rebuild because published files cannot be replaced.
+
+Configure TestPyPI Trusted Publishing for owner `TrueSelph`, repository
+`jvspatial`, and workflow `publish-testpypi.yml`. The candidate workflow
+does not create GitHub releases or publish to production PyPI. Stable
+publishing remains in `publish.yml` and requires a stable `X.Y.Z`
+version on `main`.
+
 ## PyPI Publishing Workflow
 
 The `publish.yml` workflow automatically publishes the `jvspatial` package to PyPI when code is merged to the `main` branch.
@@ -90,4 +104,3 @@ The workflow uses the version specified in `jvspatial/version.py`. To release a 
 - **Publishing fails:** Check the workflow logs for specific error messages
 - **Version conflicts:** Ensure the version in `pyproject.toml` is higher than the current PyPI version
 - **Trusted publishing not working:** Verify the publisher configuration on PyPI matches your repository exactly
-

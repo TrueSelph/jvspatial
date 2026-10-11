@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added a tag-triggered TestPyPI workflow for publishing release candidates independently of stable PyPI releases.
+
 - Optional rich graph-context format 2 via `ProjectionContextConfig`,
   `ProjectionField`, `ProjectionEvidence`, and `ProjectionRelation`: per-type
   detail profiles, recorded same-record provenance, qualified relationship rules,
