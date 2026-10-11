@@ -72,9 +72,11 @@ import hashlib
 import json
 import logging
 import re
+import time
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     AsyncIterator,
     Dict,
     List,
@@ -91,7 +93,6 @@ from .database import (
     Database,
     DatabaseError,
     InsertIfAbsentResult,
-    decode_cursor,
     finalize_find_results,
 )
 from .query import QueryEngine
@@ -314,6 +315,7 @@ class PostgresDB(Database):
     # lands, transactional context is offered only via ``UPDATE … RETURNING``
     # at the operation level (atomic single-row update).
     supports_transactions: bool = True
+    supports_native_graph_paging: bool = True
 
     def __init__(
         self,
@@ -325,6 +327,7 @@ class PostgresDB(Database):
         command_timeout: Optional[float] = None,
         schema_name: str = "public",
         gin_index: Optional[str] = None,
+        fallback_scan_limit: Optional[int] = None,
     ) -> None:
         """Initialize the Postgres adapter.
 
@@ -390,6 +393,9 @@ class PostgresDB(Database):
             if command_timeout is not None
             else (env("JVSPATIAL_POSTGRES_COMMAND_TIMEOUT", parse=float) or 60.0)
         )
+        from .database import _validate_scan_limit
+
+        self.fallback_scan_limit = _validate_scan_limit(fallback_scan_limit)
         self.schema_name = schema_name
         self.gin_index = (
             (gin_index or env("JVSPATIAL_PG_GIN_INDEX", default="full")).strip().lower()
@@ -543,7 +549,11 @@ class PostgresDB(Database):
         """
         pool = await self._ensure_pool()
         tenant_id = _active_tenant.get()
+        from .database import _record_io_metric
+
+        waiting = time.monotonic()
         async with pool.acquire() as conn:
+            _record_io_metric("pool_wait_ms", (time.monotonic() - waiting) * 1000)
             if tenant_id is None:
                 yield conn
                 return
@@ -949,6 +959,8 @@ class PostgresDB(Database):
         loading the collection and applying :class:`QueryEngine.match`
         in-Python — same safety net SQLite uses.
         """
+        if limit == 0:
+            return []
         await self._bootstrap_collection(collection)
         col = _safe_collection(collection)
         schema = _safe_collection(self.schema_name)
@@ -963,18 +975,20 @@ class PostgresDB(Database):
 
         translated = translate_query(filtered_query) if filtered_query else ("", [])
         if translated is None:
-            # Translator refused; fall back to in-Python filtering.
-            logger.warning(
-                "PostgresDB.find: untranslatable query on %s.%s — "
-                "full-collection scan fallback (query=%r)",
-                schema,
-                col,
-                query,
-            )
-            async with self._acquire_conn() as conn:
-                rows = await conn.fetch(f"SELECT data FROM {schema}.{col}")
-            records = [self._record_from_row(r) for r in rows]
-            records = [r for r in records if QueryEngine.match(r, query)]
+            records = []
+            candidates = self._fallback_records(collection, query, sort=sort)
+            try:
+                async for record in candidates:
+                    if QueryEngine.match(record, query):
+                        records.append(record)
+                        if (
+                            limit is not None
+                            and len(records) >= limit
+                            and (not sort or translate_sort(sort) is not None)
+                        ):
+                            break
+            finally:
+                await candidates.aclose()
             return finalize_find_results(records, sort=sort, limit=limit)
 
         where_sql, params = translated
@@ -1038,6 +1052,97 @@ class PostgresDB(Database):
             records = finalize_find_results(records, sort=sort, limit=limit)
         return records
 
+    async def _fallback_records(self, collection, query, *, sort=None):
+        from .database import DatabaseError, _pushdown_conjuncts, _query_execution
+
+        pushed = _pushdown_conjuncts(query, translate_query)
+        where, params = translate_query(pushed) or ("", [])
+        col, schema = _safe_collection(collection), _safe_collection(self.schema_name)
+        sql = f"SELECT data FROM {schema}.{col}"
+        if where:
+            sql += f" WHERE {where}"
+        ordering = translate_sort(sort)
+        if ordering:
+            sql += f" ORDER BY {ordering}"
+        plan = {
+            "execution_mode": "residual_scan",
+            "partial_pushdown": bool(pushed),
+            "scanned_rows": 0,
+        }
+        _query_execution.set(plan)
+        async with self._acquire_conn() as conn:
+            async with conn.transaction():
+                async for row in conn.cursor(sql, *params, prefetch=128):
+                    if (
+                        self.fallback_scan_limit is not None
+                        and plan["scanned_rows"] >= self.fallback_scan_limit
+                    ):
+                        raise DatabaseError(
+                            "PostgreSQL fallback scan exceeded fallback_scan_limit"
+                        )
+                    plan["scanned_rows"] += 1
+                    from .database import _record_decoded_bytes
+
+                    _record_decoded_bytes(row["data"])
+                    yield self._record_from_row(row)
+
+    async def count_incident_edges(
+        self, collection: str, node_ids: List[str]
+    ) -> Dict[str, int]:
+        """Count incident edges per requested node, counting self-loops once."""
+        counts = dict.fromkeys(node_ids, 0)
+        if not counts:
+            return counts
+        await self._bootstrap_collection(collection)
+        col, schema = _safe_collection(collection), _safe_collection(self.schema_name)
+        source, target = "(data->>'source')", "(data->>'target')"
+        sql = f"""SELECT nid, COUNT(*) AS n FROM (
+            SELECT {source} AS nid FROM {schema}.{col} WHERE {source}=ANY($1::text[])
+            UNION ALL
+            SELECT {target} AS nid FROM {schema}.{col} WHERE {target}=ANY($1::text[]) AND {target} IS DISTINCT FROM {source}
+        ) AS endpoints GROUP BY nid"""
+        async with self._acquire_conn() as conn:
+            rows = await conn.fetch(sql, list(counts))
+        counts.update({row["nid"]: int(row["n"]) for row in rows})
+        return counts
+
+    async def find_ids(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        offset: int = 0,
+    ) -> List[str]:
+        """Project physical IDs, with filtering/sorting/offset in PostgreSQL."""
+        from .database import _keyset_sort_fields
+
+        if offset < 0 or (limit is not None and limit < 0):
+            raise ValueError("offset and limit must be nonnegative")
+        translated = translate_query(query)
+        ordering = translate_sort(_keyset_sort_fields(sort))
+        if translated is None or ordering is None:
+            return await super().find_ids(
+                collection, query, limit=limit, sort=sort, offset=offset
+            )
+        await self._bootstrap_collection(collection)
+        col, schema = _safe_collection(collection), _safe_collection(self.schema_name)
+        where, values = translated
+        params = list(values)
+        sql = f"SELECT id FROM {schema}.{col}"
+        if where:
+            sql += f" WHERE {where}"
+        sql += f" ORDER BY {ordering}"
+        if limit is not None:
+            params.append(limit)
+            sql += f" LIMIT ${len(params)}"
+        params.append(offset)
+        sql += f" OFFSET ${len(params)}"
+        async with self._acquire_conn() as conn:
+            rows = await conn.fetch(sql, *params)
+        return [row["id"] for row in rows]
+
     async def count(
         self, collection: str, query: Optional[Dict[str, Any]] = None
     ) -> int:
@@ -1045,7 +1150,7 @@ class PostgresDB(Database):
 
         Empty query → SQL ``COUNT(*)`` (single round trip).
         Translatable query → ``SELECT COUNT(*) ... WHERE <translated>``.
-        Untranslatable → falls back to :meth:`find` + ``len``.
+        Untranslatable → streams candidates after safe partial pushdown.
         """
         q = query or {}
         await self._bootstrap_collection(collection)
@@ -1059,8 +1164,14 @@ class PostgresDB(Database):
 
         translated = translate_query(q)
         if translated is None:
-            results = await self.find(collection, q)
-            return len(results)
+            total = 0
+            candidates = self._fallback_records(collection, q)
+            try:
+                async for record in candidates:
+                    total += bool(QueryEngine.match(record, q))
+            finally:
+                await candidates.aclose()
+            return total
         where_sql, params = translated
         clause = f" WHERE {where_sql}" if where_sql else ""
         async with self._acquire_conn() as conn:
@@ -1398,8 +1509,9 @@ class PostgresDB(Database):
         schema = _safe_collection(self.schema_name)
 
         # Build the row tuples once.
+        final_records = {str(r["id"]): r for r in records}
         rows: List[Tuple[str, str, Optional[str], str]] = [
-            self._split_payload(r) for r in records
+            self._split_payload(r) for r in final_records.values()
         ]
 
         attempted = len(records)
@@ -1433,6 +1545,19 @@ class PostgresDB(Database):
                             updated_at = NOW()
                         """
                     )
+                    # Mirror save()'s configured physical vector updates in
+                    # this transaction; JSONB alone does not populate them.
+                    for field_name in self._vector_columns.get(collection, {}):
+                        updates = [
+                            (self._encode_vector(record[field_name]), str(record["id"]))
+                            for record in final_records.values()
+                            if field_name in record and record[field_name] is not None
+                        ]
+                        if updates:
+                            await conn.executemany(
+                                f"UPDATE {schema}.{col} SET {field_name} = $1::vector WHERE id = $2",
+                                updates,
+                            )
             return BulkSaveResult(attempted=attempted, saved=attempted, failed_ids=[])
         except Exception as exc:
             # The fast path failed — fall back to per-record saves so callers
@@ -1500,7 +1625,9 @@ class PostgresDB(Database):
 
         An existing index of the same name defined by the pre-0.0.18 rules
         (JSONB paths for top-level columns, ``DESC`` without ``NULLS LAST``)
-        is rebuilt under a temporary name and swapped in.
+        or a B-tree with different stored key ordering is rebuilt under a
+        temporary name and swapped in. Nullable JSONB sort companions remain
+        separately named by their ordering signature.
         """
         await self._bootstrap_collection(collection)
         col = _safe_collection(collection)
@@ -1581,6 +1708,9 @@ class PostgresDB(Database):
             where_parts.append(f"entity = {_pg_string_literal(str(entity))}")
         where_clause = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
+        # pg_index bits: DESC=1, NULLS FIRST=2. An existing canonical
+        # name can have the wrong ordering after an annotation changes.
+        want_indoption: List[int] = []
         if fulltext:
             expr = tsvector_expression([f for f, _ in fields])
             if expr is None:  # pragma: no cover - paths validated above
@@ -1590,11 +1720,13 @@ class PostgresDB(Database):
             suffix = "fts"
         else:
             keys = ["entity"] if entity_leading else []
+            want_indoption = [0] * len(keys)
             for field_path, direction in fields:
                 extract = _pg_field_extract(field_path)
                 keys.append(
                     f"{extract} {'ASC' if direction == 1 else 'DESC NULLS LAST'}"
                 )
+                want_indoption.append(0 if direction == 1 else 1)
             method = kwargs.get("method", "btree")
             suffix = "uniq" if unique else "idx"
         if method not in ("btree", "hash", "gin", "gist", "brin"):
@@ -1612,29 +1744,66 @@ class PostgresDB(Database):
 
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            existing = await conn.fetchval(
-                "SELECT indexdef FROM pg_indexes WHERE schemaname = $1 AND indexname = $2",
-                schema,
-                index_name,
-            )
-            if existing is not None and _STALE_INDEX_DEF_RE.search(existing):
-                # Build the corrected index first so a unique constraint is
-                # never absent, then swap it in under the canonical name.
-                temp = _postgres_index_name(index_name, "rebuild")
-                await conn.execute(f"DROP INDEX IF EXISTS {schema}.{temp}")
-                await conn.execute(f"CREATE {unique_sql}INDEX {temp} {body}")
-                await conn.execute(f"DROP INDEX {schema}.{index_name}")
+            # Serialize same-name index creation/repair across cold workers.
+            # Transactional DDL also restores the original index on failure.
+            async with conn.transaction():
                 await conn.execute(
-                    f"ALTER INDEX {schema}.{temp} RENAME TO {index_name}"
+                    "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+                    schema,
+                    f"index:{index_name}",
                 )
-            else:
-                await conn.execute(
-                    f"CREATE {unique_sql}INDEX IF NOT EXISTS {index_name} {body}"
+                if not fulltext and method == "btree":
+                    from .database import _keyset_sort_fields
+
+                    sort_keys = translate_sort(_keyset_sort_fields(fields))
+                    if sort_keys is None:
+                        raise ValueError("Invalid sort index fields")
+                    if entity_leading:
+                        sort_keys = f"entity, {sort_keys}"
+                    sort_signature = hashlib.sha256(sort_keys.encode()).hexdigest()[:8]
+                    sort_name = _postgres_index_name(
+                        index_name, f"sort_{sort_signature}"
+                    )
+                    await conn.execute(
+                        f"CREATE INDEX IF NOT EXISTS {sort_name} ON {schema}.{col} ({sort_keys}){where_clause}"
+                    )
+                existing = await conn.fetchval(
+                    "SELECT indexdef FROM pg_indexes WHERE schemaname = $1 AND indexname = $2",
+                    schema,
+                    index_name,
                 )
-            if kwargs.get("drop_legacy") and scope:
-                legacy_suffix = "uniq" if unique else "idx"
-                legacy = _postgres_index_name(f"{col}_{field_names}", legacy_suffix)
-                await conn.execute(f"DROP INDEX IF EXISTS {schema}.{legacy}")
+                stale = existing is not None and bool(
+                    _STALE_INDEX_DEF_RE.search(existing)
+                )
+                if existing is not None and not stale and method == "btree":
+                    stored = await conn.fetchval(
+                        "SELECT i.indoption::int2[] FROM pg_index i "
+                        "JOIN pg_class c ON c.oid = i.indexrelid "
+                        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                        "WHERE n.nspname = $1 AND c.relname = $2",
+                        self.schema_name,
+                        index_name,
+                    )
+                    if stored is not None and list(stored) != want_indoption:
+                        stale = True
+                if stale:
+                    # Build the corrected index first so a unique constraint is
+                    # never absent, then swap it in under the canonical name.
+                    temp = _postgres_index_name(index_name, "rebuild")
+                    await conn.execute(f"DROP INDEX IF EXISTS {schema}.{temp}")
+                    await conn.execute(f"CREATE {unique_sql}INDEX {temp} {body}")
+                    await conn.execute(f"DROP INDEX {schema}.{index_name}")
+                    await conn.execute(
+                        f"ALTER INDEX {schema}.{temp} RENAME TO {index_name}"
+                    )
+                else:
+                    await conn.execute(
+                        f"CREATE {unique_sql}INDEX IF NOT EXISTS {index_name} {body}"
+                    )
+                if kwargs.get("drop_legacy") and scope:
+                    legacy_suffix = "uniq" if unique else "idx"
+                    legacy = _postgres_index_name(f"{col}_{field_names}", legacy_suffix)
+                    await conn.execute(f"DROP INDEX IF EXISTS {schema}.{legacy}")
 
     # ---- atomic compound ops (C4) ------------------------------------------
 
@@ -1903,85 +2072,28 @@ class PostgresDB(Database):
         sort: Optional[List[Tuple[str, int]]] = None,
         batch_size: int = 100,
         cursor: Optional[bytes] = None,
-    ) -> "AsyncIterator[Dict[str, Any]]":
+    ) -> "AsyncGenerator[Dict[str, Any], None]":
         """Native keyset pagination via JSONB predicate composition.
 
-        Holds one pool connection for the duration of the iteration so
-        consecutive page fetches share state cleanly. The keyset clause
-        is composed into the WHERE alongside the user query so the
-        GIN / functional indexes on the JSONB blob still apply.
+        Each page acquires/releases its pool connection before yielding.
+        Every sort value and its direction participate in continuation;
+        this live iterator does not own a snapshot transaction.
 
         Args / yields: see :meth:`Database.find_iter` on the base class.
         """
-        await self._bootstrap_collection(collection)
-        col = _safe_collection(collection)
-        schema = _safe_collection(self.schema_name)
-
-        effective_sort: List[Tuple[str, int]] = list(sort) if sort else [("id", 1)]
-        sort_sql = translate_sort(effective_sort)
-        if sort_sql is None:
-            # Sort can't push down — fall back to base default impl.
-            async for rec in super().find_iter(
-                collection,
-                query,
-                sort=effective_sort,
-                batch_size=batch_size,
-                cursor=cursor,
-            ):
+        # Ordinary resumable iteration does not own a snapshot transaction.
+        # Acquire/release inside find() per page so a paused consumer cannot
+        # monopolize a connection, and share composite-cursor semantics.
+        iterator = super().find_iter(
+            collection, query, sort=sort, batch_size=batch_size, cursor=cursor
+        )
+        try:
+            async for rec in iterator:
                 yield rec
-            return
-
-        last_id: Optional[str] = None
-        if cursor is not None:
-            decoded = decode_cursor(cursor)
-            if decoded is not None:
-                last_id = decoded.get("id")
-
-        translated = translate_query(query) if query else ("", [])
-        if translated is None:
-            async for rec in super().find_iter(
-                collection,
-                query,
-                sort=effective_sort,
-                batch_size=batch_size,
-                cursor=cursor,
-            ):
-                yield rec
-            return
-        base_where, base_params = translated
-
-        # Hold ONE connection for the entire iteration. Avoids the
-        # pool-acquire / release cycle per page and the stale-state
-        # races that come with it under pytest-asyncio (and reduces
-        # round-trip latency for the user).
-        async with self._acquire_conn() as conn:
-            while True:
-                params = list(base_params)
-                clauses: List[str] = []
-                if base_where:
-                    clauses.append(base_where)
-                if last_id is not None:
-                    params.append(last_id)
-                    clauses.append(f"id > ${len(params)}")
-                where_clause = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-                params.append(int(batch_size))
-                limit_clause = f" LIMIT ${len(params)}"
-                # ``id`` is the tiebreaker so the keyset is unique.
-                order_clause = f" ORDER BY {sort_sql}, id ASC"
-
-                sql = (
-                    f"SELECT data FROM {schema}.{col}"
-                    f"{where_clause}{order_clause}{limit_clause}"
-                )
-                rows = await conn.fetch(sql, *params)
-                if not rows:
-                    return
-                for row in rows:
-                    rec = self._record_from_row(row)
-                    yield rec
-                    last_id = rec.get("id") or last_id
-                if len(rows) < batch_size:
-                    return
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if callable(close):
+                await close()
 
     # ---- walker traversal (C5) ---------------------------------------------
 

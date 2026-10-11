@@ -1,0 +1,232 @@
+{
+  "python": "3.12.9",
+  "platform": "macOS-15.4.1-arm64-arm-64bit",
+  "sqlite": {
+    "records": 20000,
+    "find_one": {
+      "median_ms": 100.43,
+      "min_ms": 76.872,
+      "max_ms": 182.29,
+      "samples": 7
+    },
+    "find_limit_1": {
+      "median_ms": 0.298,
+      "min_ms": 0.146,
+      "max_ms": 0.609,
+      "samples": 7
+    },
+    "id_page_50": {
+      "median_ms": 14.854,
+      "min_ms": 13.47,
+      "max_ms": 25.365,
+      "samples": 7
+    },
+    "find_one_calls": [
+      {
+        "limit": null,
+        "returned": 20000
+      }
+    ],
+    "pager_200": {
+      "returned": 50,
+      "find_calls": [
+        {
+          "limit": 9950,
+          "returned": 9950
+        },
+        {
+          "limit": 50,
+          "returned": 50
+        }
+      ]
+    },
+    "save_batch_200": {
+      "median_ms": 37.82,
+      "min_ms": 31.712,
+      "max_ms": 49.167,
+      "samples": 5
+    },
+    "bulk_save_200": {
+      "median_ms": 1.195,
+      "min_ms": 1.081,
+      "max_ms": 1.57,
+      "samples": 5
+    },
+    "bulk_save_detailed_200": {
+      "median_ms": 44.706,
+      "min_ms": 32.519,
+      "max_ms": 46.682,
+      "samples": 5
+    },
+    "custom_sort_iteration": [
+      "c"
+    ],
+    "expected_custom_sort_iteration": [
+      "c",
+      "b",
+      "a"
+    ],
+    "descending_id_iteration": [
+      "c"
+    ],
+    "id_page_sql": "SELECT data FROM records WHERE collection = 'object' AND (json_extract(data, '$.id') > 'audit-00010000') ORDER BY (json_extract(data, '$.id') IS NULL), json_extract(data, '$.id') ASC LIMIT 50",
+    "id_page_plan": [
+      [
+        5,
+        0,
+        62,
+        "SEARCH records USING INDEX idx_records_collection (collection=?)"
+      ],
+      [
+        29,
+        0,
+        0,
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    ],
+    "native_id_plan": [
+      [
+        5,
+        0,
+        51,
+        "SEARCH records USING INDEX sqlite_autoindex_records_1 (collection=? AND id>?)"
+      ]
+    ],
+    "native_id_page_50": {
+      "median_ms": 0.238,
+      "min_ms": 0.204,
+      "max_ms": 0.302,
+      "samples": 7
+    },
+    "write_statements": {
+      "context_save_batch": {
+        "BEGIN": 200,
+        "INSERT": 200,
+        "COMMIT": 200
+      },
+      "bulk_save": {
+        "BEGIN": 1,
+        "INSERT": 200,
+        "COMMIT": 1
+      },
+      "bulk_save_detailed": {
+        "BEGIN": 200,
+        "INSERT": 200,
+        "COMMIT": 200
+      }
+    }
+  },
+  "json": {
+    "records": 500,
+    "file_load_attempts": 5500,
+    "elapsed_ms": 1062.976
+  },
+  "s3_stub": {
+    "first_chunk_bytes": 8192,
+    "body_reads_before_first_yield": 101,
+    "body_closed_before_first_yield": true,
+    "total_content_chunks": 100
+  },
+  "dynamo_stub": {
+    "returned_ids": [
+      "wrong",
+      "good"
+    ],
+    "expected_ids": [
+      "good"
+    ],
+    "query": {
+      "context.category": "alpha",
+      "context.status": "open",
+      "context.score": {
+        "$gt": 50
+      }
+    },
+    "evidence": "adapter execution against stub GSI response"
+  },
+  "cache_wrapper_stub": {
+    "native_iterator_calls": 0,
+    "iteration_results": [],
+    "cached_failed_write": {
+      "id": "failed"
+    },
+    "underlying_failed_write": null
+  },
+  "postgres": {
+    "records": 20000,
+    "find_one": {
+      "median_ms": 354.378,
+      "min_ms": 282.844,
+      "max_ms": 426.066,
+      "samples": 7
+    },
+    "find_limit_1": {
+      "median_ms": 1.76,
+      "min_ms": 1.332,
+      "max_ms": 3.737,
+      "samples": 7
+    },
+    "id_page_50": {
+      "median_ms": 8.676,
+      "min_ms": 7.616,
+      "max_ms": 18.234,
+      "samples": 7
+    },
+    "find_one_calls": [
+      {
+        "limit": null,
+        "returned": 20000
+      }
+    ],
+    "pager_200": {
+      "returned": 50,
+      "find_calls": [
+        {
+          "limit": 9950,
+          "returned": 9950
+        },
+        {
+          "limit": 50,
+          "returned": 50
+        }
+      ]
+    },
+    "save_batch_200": {
+      "median_ms": 492.841,
+      "min_ms": 402.124,
+      "max_ms": 579.594,
+      "samples": 5
+    },
+    "bulk_save_200": {
+      "median_ms": 15.629,
+      "min_ms": 14.201,
+      "max_ms": 56.896,
+      "samples": 5
+    },
+    "bulk_save_detailed_200": {
+      "median_ms": 14.369,
+      "min_ms": 13.682,
+      "max_ms": 18.388,
+      "samples": 5
+    },
+    "custom_sort_iteration": [
+      "c"
+    ],
+    "expected_custom_sort_iteration": [
+      "c",
+      "b",
+      "a"
+    ],
+    "descending_id_iteration": [
+      "c"
+    ],
+    "pool_while_consumer_paused": {
+      "size": 1,
+      "idle": 0
+    },
+    "pool_after_iterator_closed": {
+      "size": 1,
+      "idle": 1
+    }
+  }
+}

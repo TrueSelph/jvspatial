@@ -1,10 +1,93 @@
 # jvspatial — Security Code Review
 
+## 2026-10-11 stalled-worktree integration review
+
+Generic `application/octet-stream` results from libmagic remain authoritative:
+filename extensions and upload hints cannot override them. The proposed unknown
+binary fallback was not incorporated. Complete PNG fixtures and deterministic
+unknown binary fixtures exercise real content detection; tests also drive
+content-result precedence explicitly. CI installs libmagic/python-magic and
+asserts the content detector is active before running the suite. The existing
+optional-dependency fallback remains unchanged and is separately exercised by
+explicit tests; an extension-only fallback is not equivalent security evidence.
+
+Single-field descending indexes retain safe path validation, bounded PostgreSQL
+names and nullable JSONB sort companions. Rebuilds create the replacement before
+swapping the canonical index; unique enforcement remains present throughout.
+Transaction-scoped advisory locks serialize same-name DDL across workers and
+roll back a failed repair. A live concurrent migration test checks both cold
+workers complete and the repaired index still rejects duplicate values.
+Local node `$exists` tests preserve the existing null-as-absent contract rather
+than importing the incompatible presence-semantics proposal. No authentication,
+secret comparison, upload policy or walker protection defaults are changed.
+
+## 2026-10-11 rich graph context review
+
+Detail profiles are host declarations, never grants. Effective fields intersect
+scope, request, profile and current record policy before extraction. Same-record
+provenance copies only already selected, authorized, untruncated auxiliary values;
+unavailable bindings expose a generic unresolved status, not hidden paths.
+Relation selectors likewise inspect only captured authorized facts, require an
+exact edge discriminator, and preserve regex timeouts. Missing or clipped inputs
+cannot resolve a declaration, including predicates on absence. Only definitions
+referenced by emitted edges reach the payload; overlapping rules remain ambiguous.
+
+Configuration and selectors are detached and revalidated before the first await.
+Field/type/rule counts, declaration bytes, detail caps and the final canonical
+byte cap bound new metadata. Byte pruning removes dangling endpoints, paths and
+relation definitions. Format 1 golden captures remain unchanged. The rich
+regressions in `tests/core/test_graph_projection_context.py` cover revocation,
+field denial, schema separation, policy failures, cancellation, wrappers and
+four live backends. Model trials, prompt policy, source verification and physical
+scan limits remain host responsibilities; no auth or secret defaults change.
+
+## I/O and query hardening — 2026-10-10
+
+Residual SQL pushdown retains the complete predicate for verification and never
+extracts pieces of OR/NOT expressions. Scan-budget exhaustion raises; it does
+not silently return a partial result. In-memory regex continues through
+QueryEngine's bounded matcher. Native PostgreSQL reads and grouped counts use
+the tenant-scoped connection accessor. SQL index paths remain validated and
+raw predicates remain rejected. Tests: `test_bounded_query_execution.py`,
+`test_cursor_pagination.py`, PostgreSQL integration/RLS and query parity tests.
+
+Local streaming offloads the existing confined-path resolver and retains it;
+JSON reads/writes retain existing confinement, path locks and atomic durability.
+Stream cancellation waits for the active worker read before closing its handle.
+Cache writes promote only confirmed outcomes; ambiguous partial outcomes are
+invalidated. Tests: streaming backpressure/cancellation, I/O audit regressions,
+transaction identity/cache, atomic writes and storage-path security regressions.
+No authentication, secret-comparison or walker-protection defaults are changed.
+
+
 **Date:** 2026-05-02
 **Reviewer:** Claude Code (primary) + Explore agent (parallel scan)
 **Branch:** `dev`
 **Scope:** Full codebase — `jvspatial/` package, authentication, storage, API middleware, database backends, webhooks, scheduler, serverless
 **Prior reviews:** 2026-05-01 (13 findings, all remediated) → 2026-05-02 reassessment (7 findings, all remediated)
+
+## 2026-10-10 graph projection boundary review
+
+The new read-only projection API requires explicit trusted host scope and field
+allowlists. Batch access decisions apply before node expansion and edge exposure;
+missing grants deny access, and request predicates cannot probe fields denied by
+the scope or per-record policy. Closed edge endpoints prevent inaccessible nodes
+from becoming hidden path bridges. Fresh projection-node batches bypass stale
+record caches, and later expansion requires current authorization again.
+
+Candidate, queue, depth, nested-value, canonical-byte, and cooperative time limits
+protect extraction; native paging limits transferred records without claiming
+bounded physical database scans or raw-record size. Text encodes data as JSON,
+and Mermaid uses generated IDs and escaped labels. Hosts must keep stored content
+in a model data context. Candidate diagnostics remain host-only because they can
+reveal inaccessible cardinalities. Stop status and timing can still reflect work
+on denied candidates; hosts control their exposure. Captures are best-effort data representations,
+not permission caches, atomic revisions, or model-generated conclusions.
+
+Regression evidence is in `tests/core/test_graph_projection.py`, including the
+dummy graph's private supplier/region, denied predicate fields, scope crossings,
+cache freshness, policy failures, revocation between captures, byte/work limits,
+and renderer escaping. No auth or secret-comparison defaults are changed.
 
 ## 2026-09-27 combined gap and security review
 

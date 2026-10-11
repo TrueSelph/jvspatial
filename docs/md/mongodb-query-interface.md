@@ -434,3 +434,41 @@ The MongoDB-style query interface in jvspatial provides a powerful, consistent w
 ---
 
 **[← Back to README](../../README.md)** | **[Entity Reference →](entity-reference.md)**
+
+## Bounded query execution and pagination
+
+`find_one` requests one result. SQL fallback predicates preserve supported AND
+conjuncts and evaluate the complete query on streamed candidates. A limit is
+applied after residual matching; unsupported ordering still sorts all matches.
+SQL adapters accept `fallback_scan_limit=N` through `create_database` to raise
+`DatabaseError` when residual candidate evaluation exceeds N. None keeps the
+compatibility default. This is a candidate-evaluation budget, not an indexed
+query cost limit; driver batches can prefetch 128 rows.
+
+Prefer `GraphContext.find_page` for forward navigation. Composite cursors encode
+all sort fields and directions plus ID. Use scalar, consistently typed sort
+fields; mixed types and mutable sort keys are unsuitable for durable checkpoints.
+SQL/JSON put null and missing last; Mongo retains native BSON null ordering.
+Iteration is live and does not establish a snapshot.
+
+`Database.find_ids(..., sort=, offset=, limit=)` projects raw IDs; SQLite,
+PostgreSQL and Mongo apply the projection natively. Other adapters retain a
+correct fallback that may fetch a prefix. `ObjectPager(..., count_total=False)`
+uses lookahead without an exact count and reports None totals. Only selected
+page records are hydrated. Deep offsets still require the store to examine a
+prefix, so keysets remain preferable. Separate projection/hydration can observe
+concurrent deletes; use an explicit transaction where supported for consistency.
+
+`DynamoDB.scan_page(..., page_size=100, cursor=None)` returns `(records, cursor)`
+in native unordered scan order. Page size (1..1000) limits evaluated items,
+before filters. An empty record page can have a continuation; keep reading until
+the cursor is None. Its cursor is bound to collection and query. It uses native
+LastEvaluatedKey and reports consumed capacity in query metadata; filters do
+not reduce scan capacity. This API is separate from sorted keyset iteration.
+
+`create_database("mongodb", ..., driver="pymongo")` selects PyMongo Async
+(PyMongo >=4.13). Motor remains the compatibility default. Both drivers retain
+async I/O, native cursor cleanup, bulk writes and transaction topology checks.
+See [MongoDB's migration guide](https://www.mongodb.com/docs/languages/python/pymongo-driver/current/reference/migration/).
+Qualify performance on your workload before switching; this option alone is
+not evidence of a throughput improvement.

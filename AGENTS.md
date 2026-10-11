@@ -92,11 +92,32 @@ OAuth hosts in production must set `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` from a s
 
 The in-memory matcher and PostgreSQL pushdown treat both missing and JSON `null` as absent for `$exists`; MongoDB retains its native field-presence semantics. `graph_transaction` isolates request identity state and invalidates touched entities in the parent cache after commit or rollback. Index setup must be scoped to the database instance so one store cannot suppress another store's indexes. Preserve these contracts when changing query translation, caches, or transactions.
 
+Composite keyset continuation includes every sort value and direction plus ID. Never apply LIMIT before residual filtering or unsupported ordering. A configured fallback scan budget raises on exhaustion rather than returning a partial result. Bulk cache entries require confirmed outcomes; ambiguous writes are invalidated. Preserve JSON path locks/atomic durability and streaming handle cleanup on cancellation.
+
 File-backed SQLite closes its prior connection when rebinding to another event loop; dropping it without `close()` leaks the `aiosqlite` worker thread and can keep the process alive.
+
+### 12. Rich graph context
+
+`ProjectionContextConfig` declarations do not grant access. Intersect profile,
+request, scope and current per-record field grants. Relationship selectors and
+same-record evidence use only selected, authorized, untruncated captured values.
+Emit referenced relationship definitions only; denied intermediaries cannot
+bridge a capture. Preserve format 1 defaults and opt-in format 2. Recorded
+provenance and traversal completeness do not certify truth or decision
+sufficiency. Model execution and application policy stay downstream.
 
 ---
 
 ## Common gotchas
+
+Graph projection is an opt-in read-only extraction/rendering operation for
+language-model context. Preserve explicit host scope, field allowlists, access
+before frontier expansion, closed edge endpoints, resource/detail completeness,
+and immutable payloads. `native` paging limits transferred rows, not physical DB
+scan work. Captures use best-effort reads and new expansions require current
+scope/access again; never present request fingerprints as atomic graph revisions
+or captures as permission caches. Raw projection reads bypass record caches.
+See [graph-projection.md](docs/md/graph-projection.md) and SPEC §6.9.
 
 | Symptom | Cause | Fix |
 |---|---|---|

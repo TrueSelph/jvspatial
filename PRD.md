@@ -65,6 +65,7 @@ People building higher-level frameworks that ship a graph model to their own use
 | 6 | **Security defaults that fail closed** | JWT secret required, constant-time secret comparisons, content-based file MIME validation, restrictive CORS, strict CSP on app routes, optional `/docs` gating. | SPEC §15 |
 | 7 | **FastAPI integration without lock-in** | `@endpoint` exposes functions and walkers as routes. The underlying FastAPI app is accessible for middleware, custom routers, and lifecycle hooks. | `jvspatial/api/server.py` |
 | 8 | **Observable by construction** | Structured DB op logs, `MetricsRecorder` protocol, GraphContext `PerformanceMonitor`, OpenTelemetry adapter. | `jvspatial/observability/`, `jvspatial/db/_observable.py` |
+| 9 | **Relationship context for model inference** | Opt-in read-only graph projections render bounded relationship graphs, hierarchies, and captured ontology views with configurable detail profiles, declared relationship meanings, recorded evidence and supporting paths. Applications own inference, scope, and user access. | `jvspatial/core/graph_projection.py` |
 
 ---
 
@@ -152,6 +153,18 @@ The library distinguishes three tiers; [docs/md/stability.md](docs/md/stability.
 | **Experimental** | Public but opt-in. May change or be removed in any minor release. Marked via `@experimental` decorator, emits a once-per-process warning. | `JsonDBTransaction(best_effort=True)`. |
 
 The PRD ratifies this tiering. Promotion of a feature from experimental to stable, or demotion of an internal helper to public, is a product decision and must be reflected here as well as in `docs/md/stability.md`.
+
+The stable graph projection surface includes `GraphContext.project_graph`,
+`ProjectionRequest`, `ProjectionScope`, `ProjectionAccess`, `ProjectionSemantics`,
+`ProjectionContextConfig`, `ProjectionField`, `ProjectionEvidence`,
+`ProjectionRelation`, and `GraphProjection`. Rich format 2 is explicitly opt-in;
+existing callers retain format 1. Evidence is copied as recorded, and selected
+relationship declarations do not establish truth or decision sufficiency.
+It is a bounded extraction/rendering operation, not a
+general graph query language. It invokes no model provider. Snapshot captures
+advertise best-effort reads; retained historical generations and atomic snapshot
+maintenance are not part of this release. Backend-side paging limits transferred
+candidates without promising bounded physical scan work.
 
 ---
 

@@ -692,7 +692,11 @@ class Node(Object):
         edge_entities, edge_query, node_entities, node_query = self._neighbor_spec(
             node, edge, kwargs
         )
-        after = keyset_filter(sort_fields, decode_keyset_cursor(cursor))
+        after = keyset_filter(
+            sort_fields,
+            decode_keyset_cursor(cursor),
+            nulls_first=getattr(context.database, "_keyset_nulls_first", False),
+        )
         if after is not None:
             node_query = after if node_query is None else {"$and": [node_query, after]}
         found = await self._neighbors(
@@ -1122,9 +1126,9 @@ class Node(Object):
                     except re.error:
                         return False
             elif operator == "$exists":
-                # This is handled at the property level, not here
-                # If we reach this point, the property exists
-                if not criterion:  # $exists: False means property shouldn't exist
+                # Match the in-memory query contract: null and missing are
+                # absent; falsy non-null values remain present.
+                if bool(criterion) != (value is not None):
                     return False
             else:
                 # Unknown operator - ignore

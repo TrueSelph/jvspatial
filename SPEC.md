@@ -162,6 +162,19 @@ These are *defaults* — subclasses or callers can override. Disabling protectio
 
 Indexed fields (`@attribute(indexed=True)`) and compound indexes (`@attribute(compound_index=...)`) inform backend index creation (where supported).
 
+Single-field `attribute(index_direction=-1)` declarations reach adapters as
+`[(field, -1)]`; ascending declarations retain the bare field string for name
+compatibility (`jvspatial/core/context.py:1579`). PostgreSQL repairs a canonical
+B-tree whose stored `pg_index.indoption` differs from the requested directions,
+retaining bounded names and the order-matching JSONB sort companions
+(`jvspatial/db/postgres.py:1780`). Same-name index DDL is serialized across
+workers with a transaction-scoped advisory lock, so concurrent creation cannot
+collide and a failed repair rolls back (`jvspatial/db/postgres.py:1749`). SQLite retains its equality index and creates
+direction-specific nullable sort companions. MongoDB single-key B-trees reuse
+the ascending name/spec for annotation-created indexes; direct adapter list
+specifications retain their requested direction/name. DynamoDB single-key GSIs reuse the name and ID range key
+because ordering is selected at query time.
+
 ---
 
 ## 3. Async Contract
@@ -216,11 +229,15 @@ When `DeferredSaveMixin` is mixed into an entity *and* `deferred_saves_globally_
 | `delete(collection, id)` | Yes | Idempotent delete by ID |
 | `find(collection, query, *, limit, sort)` | Yes | Mongo-style query; returns list. Ordering contract below |
 | `count(collection, query=None)` | Default impl | Default counts the result of `find`; adapters should override for efficiency |
-| `find_one(collection, query)` | Default impl | First match or `None` |
+| `find_one(collection, query)` | Default impl | Requests `find(limit=1)`; first match or `None` |
 | `find_many(collection, ids)` | Default impl | Bulk-fetch by ID; default is N sequential `get`s — adapters override for round-trip efficiency |
 | `find_one_and_update` | Default impl | Read-modify-write; **not atomic** except where overridden (MongoDB) |
 | `find_one_and_delete` | Default impl | Read-then-delete; **not atomic** except where overridden (MongoDB) |
 | `bulk_save` | Default impl | Multi-record save; partial-success semantics vary by adapter |
+| `bulk_save_detailed` | Default impl | Structured attempted/saved/failed-ID outcome; built-ins override natively |
+| `find_ids` | Default impl | Raw ID-only ordered projection with offset/limit; native SQL/Mongo, fallback elsewhere |
+| `count_incident_edges` | Default impl | Group degrees, counting a self-loop once; native SQL/Mongo, iterator fallback elsewhere |
+| `find_iter` | Default impl | Composite keyset iteration; every sort key plus ID, positive batch size |
 | `begin_transaction` | Optional | Returns a transaction context manager if `supports_transactions=True` |
 
 #### `find` sort contract
@@ -273,7 +290,7 @@ Callers branching on capabilities should test the flag, not the adapter class.
 |---|---|---|---|
 | JSON | `jvspatial/db/jsondb.py` | No | File-per-record, atomic writes (`_atomic.py`), per-file path locks (`_path_locks.py`) |
 | SQLite | `jvspatial/db/sqlite.py` | No (single-conn fsync) | `aiosqlite`; Mongo→SQL via `SQLiteTranslator` |
-| MongoDB | `jvspatial/db/mongodb.py` | Yes | `motor`; native bulk writes; native compound ops |
+| MongoDB | `jvspatial/db/mongodb.py` | Yes | Motor default; opt-in PyMongo Async; native bulk/cursor/compound ops |
 | DynamoDB | `jvspatial/db/dynamodb.py` | No | `aioboto3`; throttle-retry; `BatchGetItem` chunks of 100 |
 
 For a file-backed SQLite database reused on a different event loop, the adapter closes the old `aiosqlite` connection and its worker thread before opening a connection on the new loop. An in-memory SQLite database retains its existing connection so its contents are not lost (`jvspatial/db/sqlite.py`).
@@ -294,6 +311,89 @@ No built-in migration framework. Adapters do not enforce schemas. Adding optiona
 
 ---
 
+### 4.7 Bounded I/O and query execution
+
+- Composite keysets validate sort fields/directions and append ID when absent.
+  Continuation encodes every field and direction; old ID-only cursors remain
+  supported for ID-only sorts. Missing/null are last for SQL/in-memory ordering;
+  Mongo retains BSON ascending nulls-first behavior. Scalars should use a
+  consistent type. Live pagination can skip/revisit records after sort-key
+  updates and does not imply a snapshot. PostgreSQL releases each page's
+  connection before yielding. Sources: `jvspatial/db/database.py:284`,
+  `jvspatial/db/database.py:595`,
+  `jvspatial/db/postgres.py:2036`.
+- PostgreSQL preserves numeric JSONB sort values, normalizes JSON null to SQL
+  NULL, and uses physical top-level ID/entity/tenant columns. SQL index creation
+  retains equality/uniqueness indexes and adds nullable, direction-matching
+  sort companions with an ID tiebreaker. Companion indexes increase storage
+  and write work. Sources: `jvspatial/db/_postgres_translate.py:647`,
+  `jvspatial/db/_sqlite_translate.py:285`,
+  `jvspatial/db/sqlite.py:354`,
+  `jvspatial/db/postgres.py:1588`.
+- SQL residual scans extract only safe conjunctions; OR/NOT are kept intact and
+  regex flags stay attached. The full predicate runs before a result counts
+  toward a limit. Candidates stream in batches (up to 128 prefetched records);
+  unsupported sorting retains all matching records. `fallback_scan_limit`
+  accepts a nonnegative integer or None, rejecting excess candidate evaluation
+  with `DatabaseError`. It does not bound native indexed scans/server work.
+  Filtered fallback counts keep counters instead of result lists. Sources:
+  `jvspatial/db/database.py:207`,
+  `jvspatial/db/sqlite.py:809`,
+  `jvspatial/db/postgres.py:1055`.
+- JSON streams candidates with at most 32 concurrent record reads. ID-ordered
+  iteration scans once; its path list is O(N), and custom sorting retains
+  matches. Filesystem metadata/read work in these async paths is offloaded.
+  Sources: `jvspatial/db/jsondb.py:319`,
+  `jvspatial/db/jsondb.py:438`.
+- `find_ids(..., offset=, limit=, sort=)` returns raw IDs. SQL/Mongo project and
+  offset natively; the default fetches a prefix. ObjectPager hydrates only page
+  IDs, and `count_total=False` uses lookahead with None totals and no page clamp.
+  Separate projection/hydration can observe concurrent deletes. Sources:
+  `jvspatial/db/database.py:553`,
+  `jvspatial/core/pager.py:95`.
+- `save_batch` performs the same preparation as context `save`, groups by
+  collection in chunks of 500, and invokes native detailed bulk writes. It
+  preserves input order for confirmed successes and invalidates failures or
+  uncertain IDs. Backend exceptions propagate; chunks are not atomic across
+  collections. Entity `save()` overrides are not invoked by context operations.
+  Transaction handles lacking bulk support keep their own per-record saves.
+  PostgreSQL bulk writes also populate configured physical vector columns.
+  Sources: `jvspatial/core/context.py:1815`,
+  `jvspatial/db/postgres.py:1484`,
+  `jvspatial/db/_cache.py:336`.
+- DynamoDB always checks remaining predicates across query/scan pages.
+  `scan_page(page_size=1..1000, cursor=)` is explicitly unordered, with a cursor
+  bound to collection/query and native LastEvaluatedKey. Empty matched pages may
+  still continue. Page size bounds evaluated items before filters. Batch reads
+  use at most eight concurrent requests and retry unprocessed keys; exhausted
+  keys raise rather than becoming missing results. Source:
+  `jvspatial/db/dynamodb.py:684`,
+  `jvspatial/db/dynamodb.py:756`.
+- Mongo `driver="pymongo"` is opt-in (PyMongo >=4.13); Motor remains default.
+  Native cursors close in finally and both drivers retain topology-gated
+  transactions. Sources: `jvspatial/db/mongodb.py:111`,
+  `jvspatial/db/mongodb.py:681`.
+- Graph BFS batches node frontiers, bounds each incident-edge priority tier to
+  cap+1 documents, and groups degrees on SQL/Mongo. `priority_node_prefixes=[]`
+  chooses ID order, a list of up to 32 nonempty prefixes chooses generic tiers,
+  and None retains the legacy policy. `include_counts=False` skips exact counts
+  and sets degree/total values to None; defaults remain exact. Database work
+  still depends on indexes and selectivity. Sources:
+  `jvspatial/core/graph_expansion.py:269`,
+  `jvspatial/core/graph_expansion.py:117`.
+- Local/S3 streaming reads one chunk per advance, waiting for an in-flight
+  worker operation before cancellation closes the handle, including repeated
+  cancellation during opening, reading, or closing. Chunk size must be a
+  positive integer. Sources: `jvspatial/storage/interfaces/_stream.py:29`,
+  `jvspatial/storage/interfaces/local.py:592`,
+  `jvspatial/storage/interfaces/s3.py:489`.
+- Monitoring retains bounded samples and lifetime aggregates, and execution
+  metadata is context-local. Sources:
+  `jvspatial/core/context.py:98`,
+  `jvspatial/db/_observable.py:118`,
+  `jvspatial/db/_observable.py:524`.
+
+
 ## 5. Query Interface
 
 ### 5.1 Mongo-style operators
@@ -310,9 +410,12 @@ No built-in migration framework. Adapters do not enforce schemas. Adding optiona
 | `$regex` | Regex match (string fields). Never index-backed; build patterns from user input with `jvspatial.db.escape_regex`. In-memory matching caps pattern and candidate lengths and applies a 5 ms per-candidate timeout (`jvspatial/db/query.py`). Native database regex execution follows that database's resource limits. |
 | `$text` | Top-level `{"$text": {"$search": "words", "$fields": ["context.a", ...]}}`: every search word (case-insensitive, `\w+` tokens, no stemming) occurs in the concatenated fields; without `$fields` every string value is searched |
 
+Local node property criteria apply the same non-null `$exists` rule as the
+in-memory matcher, including undeclared fields (`jvspatial/core/entities/node.py:1128`).
+
 ### 5.2 Pushdown vs in-memory
 
-- **Postgres**: `translate_query` pushes the whole operator surface into JSONB SQL; `$text` becomes `to_tsvector('simple', …) @@ plainto_tsquery('simple', …)` (requires `$fields`; the GIN from `@fulltext_index` / `attribute(fulltext=True)` serves it when the fields match in order). Per-class indexes are `(entity, <fields>)` (or `WHERE entity = …` with `partial_by_entity`), descending keys `DESC NULLS LAST`, and generated index and tenant-policy names stay within PostgreSQL's 63-byte identifier limit using a stable digest when needed, so typed `find(sort=…, limit=…)` can walk an index; first-use collection table and base-index creation is serialized across database instances using a PostgreSQL transaction-scoped advisory lock; the whole-document GIN is optional (`JVSPATIAL_PG_GIN_INDEX`). Untranslatable queries fall back to a full scan + `QueryEngine.match`.
+- **Postgres**: `translate_query` pushes the whole operator surface into JSONB SQL; `$text` becomes `to_tsvector('simple', …) @@ plainto_tsquery('simple', …)` (requires `$fields`; the GIN from `@fulltext_index` / `attribute(fulltext=True)` serves it when the fields match in order). Per-class indexes are `(entity, <fields>)` (or `WHERE entity = …` with `partial_by_entity`), descending keys `DESC NULLS LAST`, and generated index and tenant-policy names stay within PostgreSQL's 63-byte identifier limit using a stable digest when needed, so typed `find(sort=…, limit=…)` can walk an index; first-use collection table and base-index creation is serialized across database instances using a PostgreSQL transaction-scoped advisory lock; the whole-document GIN is optional (`JVSPATIAL_PG_GIN_INDEX`). Untranslatable queries stream candidates after safe AND-conjunct pushdown, with the full residual predicate checked and an opt-in scan budget (see §4.7).
 - **MongoDB**: native pushdown; queries run server-side (`$text` uses the collection's text index; `$fields` is stripped).
 - **SQLite**: translated to SQL via `SQLiteTranslator` (subset; complex `$or` chains may fall back).
 - **DynamoDB**: limited pushdown via `Select=COUNT` and key conditions; remainder filtered client-side.
@@ -396,6 +499,86 @@ Enabling prefetch may enqueue neighbors before hook-driven `visit()` calls; visi
 When the backend exposes `find_connected_nodes` (Postgres, MongoDB, SQLite) the spec plus `limit` go down in **one** round trip, `direction="both"` included. Each neighbour appears once. Postgres picks a join for one edge type in one direction (duplicate-free under the `(source, target, entity)` unique index, so `LIMIT` streams) and an `id IN (...)` semi-join otherwise. A criterion that does not translate raises `NotImplementedError` in the adapter and `nodes()` takes the Python path — one edge `find` plus a node `find` that still applies every filter; no filter is ever dropped. `count_nodes(...)` is the matching `COUNT` (`count_connected_nodes`; `count_neighbors` is an alias). `nodes_page(sort=, cursor=, limit=)` pages neighbours by keyset with the cursor encoding of `GraphContext.find_page` (`core/pager.py`); the keyset is expressed as a node-side query, so it follows the same pushdown. `nodes_bulk(..., limit_per_source=N)` caps neighbours per source (`ROW_NUMBER() OVER (PARTITION BY source)` on Postgres).
 
 ---
+
+### 6.9 Read-only graph projection for language-model context
+
+`GraphContext.project_graph(request, *, scope, access=None, semantics=None, context_config=None)`
+captures a graph representation without executing Walker hooks or invoking a
+model (`jvspatial/core/context.py:1002`). Public configuration and result types are
+`ProjectionRequest`, `ProjectionScope`, `ProjectionAccess`,
+`ProjectionSemantics`, and `GraphProjection`
+(`jvspatial/core/graph_projection.py:84`, `:136`, `:169`, `:185`, `:221`).
+Rich configuration types `ProjectionEvidence`, `ProjectionField`,
+`ProjectionContextConfig`, and `ProjectionRelation` are also public
+(`jvspatial/core/graph_context_config.py:23`, `:46`, `:68`, `:102`).
+
+- A trusted explicit scope supplies node membership/query restrictions and
+  attribute allowlists. Requests may narrow fields and filter exact stored
+  discriminators or permitted record attributes. Optional batch access decisions
+  deny omitted IDs/fields; rejected intermediate nodes do not expand the frontier.
+  Every emitted edge has both endpoints in the result
+  (`jvspatial/core/graph_projection.py:703`).
+- Extraction follows directed or bidirectional edges with deterministic BFS and
+  edge-ID keyset pages. It bounds emitted nodes/edges, candidate records,
+  per-node incident candidates, frontier, depth, nested detail, and canonical
+  UTF-8 bytes. Candidate limits do not bound physical database scans or the
+  largest raw record. Cooperative deadlines yield valid partial captures;
+  backend/policy errors fail the operation and cancellation propagates
+  (`jvspatial/core/graph_projection.py:1049`).
+- `Database.graph_edge_page` provides incident paging and
+  `graph_node_batch` fetches raw node records with compatibility defaults
+  (`jvspatial/db/database.py:377`, `:373`).
+  `supports_native_graph_paging` is true on SQLite, PostgreSQL, and MongoDB.
+  JSON and DynamoDB use disclosed compatibility scans; native-only requests
+  reject unsupported stores before reads. Wrappers forward adapter paging and
+  bypass stale record caches for projection nodes (`jvspatial/db/_cache.py`,
+  `jvspatial/db/_observable.py`).
+- Relationship, hierarchy, and ontology views share canonical facts and one
+  bounded discovery path per node. Hierarchy references preserve shared children
+  and cycles. Ontology descriptions are application declarations covering only
+  represented types; unknown descriptions remain null. Renderers perform no
+  I/O, encode text values as data, and escape Mermaid labels
+  (`jvspatial/core/graph_projection.py:221`).
+- `meta.complete` describes the permitted traversal within the requested radius,
+  not an induced subgraph or global ontology. `detail_complete` and
+  `truncated_fields` distinguish clipped attributes. Results label best-effort
+  reads, capture/read-finish times, and explicit resource stop reasons. Request
+  fingerprints are not graph revisions. Captures are immutable serialized
+  results; `expansion_requests()` produces new live queries requiring current
+  scope/access. Host-only statistics are excluded from automatic model rendering
+  (`jvspatial/core/graph_projection.py:221`).
+
+- Empty rich configuration and no relation rules preserve format 1. A profile
+  identity/revision, per-type mapping or rule opts into format 2. Profile fields
+  intersect request, scope and per-record grants; configured empty types select
+  no detail, unconfigured types retain legacy defaults. Input declarations are
+  detached/revalidated before the first await. Unsupported payload versions fail
+  rendering (`jvspatial/core/graph_projection.py:1049`, `:703`, `:231`).
+- Rich field states distinguish present/null/missing/truncated for selected,
+  authorized exact paths only. Hints are descriptive; caps can only tighten
+  request caps. Same-record evidence uses already captured, selected, authorized,
+  untruncated auxiliary values and adds no DB operations. Missing bindings expose
+  generic unresolved status, not hidden paths. Recorded timestamps, verification,
+  revision and confidence are copied without certification or coercion
+  (`jvspatial/core/graph_projection.py:502`).
+- Relation rules match exact stored edge types and bounded predicates over
+  captured authorized edge/source/target fields or permitted intrinsic identity.
+  Missing/denied/omitted/clipped inputs never match, including absence predicates.
+  Matching one rule resolves; several are ambiguous; no match is unresolved.
+  Definitions are application declarations, not inferred conclusions. Only
+  referenced definitions are published, with no selector predicates; final byte
+  pruning preserves endpoint/path/definition closure
+  (`jvspatial/core/graph_projection.py:573`, `:605`, `:628`, `:928`).
+- Format 2 adds profile identity, per-record fields/evidence, edge relations,
+  referenced relation definitions and authorized-field coverage. Coverage reports
+  the requested radius and selected field states; decision sufficiency is always
+  `not_assessed`. Canonical bytes include all metadata. Counts and lengths of
+  declaration models are bounded before capture; default topology/work/time
+  limits remain unchanged (`jvspatial/core/graph_projection.py:628`, `:928`,
+  `jvspatial/core/graph_context_config.py:68`, `:102`).
+
+See [graph-projection.md](docs/md/graph-projection.md) for defaults, backend limits,
+the runnable dummy supply-chain and rich operational cases, and evaluation guidance.
 
 ## 7. GraphContext and Dependency Injection
 
@@ -665,11 +848,11 @@ TTL is per-cache-instance; default `None` (cache until eviction). Invalidation i
 
 ### 14.2 Structured DB logging
 
-`jvspatial/db/_observable.py` — wraps a `Database` to emit structured log records per op: `{op, collection, duration_ms, query_size, result_size}`. Configurable slow-query threshold (`slow_query_ms`) emits warnings.
+`jvspatial/db/_observable.py` — wraps a `Database` to emit `{backend, op, collection, duration_ms, success, result_count}`. Configurable `slow_query_ms` emits warnings. Residual scans add execution mode, partial-pushdown status and examined/decoded work; observed PostgreSQL calls add pool wait, and retry helpers add driver attempts/retry count. Iterator active duration is separate from total consumer-inclusive duration. These are driver/candidate metrics, not physical protocol round trips or server rows scanned.
 
 ### 14.3 GraphContext PerformanceMonitor
 
-In-context counters for DB ops, hook execs, cache stats. Read at end-of-request to surface aggregate metrics.
+In-context lifetime operation/error counts, means, byte totals and cache counters. Diagnostic lists retain at most `sample_limit=1000` records per category; percentile latencies cover that retained window. See §4.7 for execution metadata.
 
 ---
 

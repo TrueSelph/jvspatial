@@ -1,0 +1,217 @@
+{
+  "python": "3.12.9",
+  "platform": "macOS-15.4.1-arm64-arm-64bit",
+  "sqlite": {
+    "records": 20000,
+    "find_one": {
+      "median_ms": 0.118,
+      "min_ms": 0.11,
+      "max_ms": 0.135,
+      "samples": 7
+    },
+    "find_limit_1": {
+      "median_ms": 0.103,
+      "min_ms": 0.09,
+      "max_ms": 1.003,
+      "samples": 7
+    },
+    "id_page_50": {
+      "median_ms": 0.675,
+      "min_ms": 0.393,
+      "max_ms": 0.934,
+      "samples": 7
+    },
+    "find_one_calls": [
+      {
+        "limit": 1,
+        "returned": 1
+      }
+    ],
+    "pager_200": {
+      "returned": 50,
+      "find_calls": []
+    },
+    "save_batch_200": {
+      "median_ms": 5.32,
+      "min_ms": 4.968,
+      "max_ms": 5.553,
+      "samples": 5
+    },
+    "bulk_save_200": {
+      "median_ms": 1.037,
+      "min_ms": 1.033,
+      "max_ms": 1.18,
+      "samples": 5
+    },
+    "bulk_save_detailed_200": {
+      "median_ms": 1.011,
+      "min_ms": 0.957,
+      "max_ms": 1.038,
+      "samples": 5
+    },
+    "custom_sort_iteration": [
+      "c",
+      "b",
+      "a"
+    ],
+    "expected_custom_sort_iteration": [
+      "c",
+      "b",
+      "a"
+    ],
+    "descending_id_iteration": [
+      "c",
+      "b",
+      "a"
+    ],
+    "id_page_sql": "SELECT data FROM records WHERE collection = 'object' AND (id > 'audit-00010000') ORDER BY id ASC LIMIT 50",
+    "id_page_plan": [
+      [
+        5,
+        0,
+        51,
+        "SEARCH records USING INDEX sqlite_autoindex_records_1 (collection=? AND id>?)"
+      ]
+    ],
+    "native_id_plan": [
+      [
+        5,
+        0,
+        51,
+        "SEARCH records USING INDEX sqlite_autoindex_records_1 (collection=? AND id>?)"
+      ]
+    ],
+    "native_id_page_50": {
+      "median_ms": 0.272,
+      "min_ms": 0.181,
+      "max_ms": 0.307,
+      "samples": 7
+    },
+    "write_statements": {
+      "context_save_batch": {
+        "BEGIN": 1,
+        "INSERT": 200,
+        "COMMIT": 1
+      },
+      "bulk_save": {
+        "BEGIN": 1,
+        "INSERT": 200,
+        "COMMIT": 1
+      },
+      "bulk_save_detailed": {
+        "BEGIN": 1,
+        "INSERT": 200,
+        "COMMIT": 1
+      }
+    }
+  },
+  "json": {
+    "records": 500,
+    "file_load_attempts": 500,
+    "elapsed_ms": 109.697
+  },
+  "s3_stub": {
+    "first_chunk_bytes": 8192,
+    "body_reads_before_first_yield": 1,
+    "body_closed_before_first_yield": false,
+    "total_content_chunks": 100
+  },
+  "dynamo_stub": {
+    "returned_ids": [
+      "good"
+    ],
+    "expected_ids": [
+      "good"
+    ],
+    "query": {
+      "context.category": "alpha",
+      "context.status": "open",
+      "context.score": {
+        "$gt": 50
+      }
+    },
+    "evidence": "adapter execution against stub GSI response"
+  },
+  "cache_wrapper_stub": {
+    "native_iterator_calls": 1,
+    "iteration_results": [
+      {
+        "id": "native"
+      }
+    ],
+    "cached_failed_write": null,
+    "underlying_failed_write": null
+  },
+  "postgres": {
+    "records": 20000,
+    "find_one": {
+      "median_ms": 1.617,
+      "min_ms": 0.952,
+      "max_ms": 3.107,
+      "samples": 7
+    },
+    "find_limit_1": {
+      "median_ms": 1.396,
+      "min_ms": 1.134,
+      "max_ms": 2.197,
+      "samples": 7
+    },
+    "id_page_50": {
+      "median_ms": 3.179,
+      "min_ms": 2.328,
+      "max_ms": 5.512,
+      "samples": 7
+    },
+    "find_one_calls": [
+      {
+        "limit": 1,
+        "returned": 1
+      }
+    ],
+    "pager_200": {
+      "returned": 50,
+      "find_calls": []
+    },
+    "save_batch_200": {
+      "median_ms": 15.694,
+      "min_ms": 13.97,
+      "max_ms": 21.478,
+      "samples": 5
+    },
+    "bulk_save_200": {
+      "median_ms": 17.553,
+      "min_ms": 11.385,
+      "max_ms": 28.052,
+      "samples": 5
+    },
+    "bulk_save_detailed_200": {
+      "median_ms": 10.807,
+      "min_ms": 7.244,
+      "max_ms": 11.115,
+      "samples": 5
+    },
+    "custom_sort_iteration": [
+      "c",
+      "b",
+      "a"
+    ],
+    "expected_custom_sort_iteration": [
+      "c",
+      "b",
+      "a"
+    ],
+    "descending_id_iteration": [
+      "c",
+      "b",
+      "a"
+    ],
+    "pool_while_consumer_paused": {
+      "size": 1,
+      "idle": 1
+    },
+    "pool_after_iterator_closed": {
+      "size": 1,
+      "idle": 1
+    }
+  }
+}

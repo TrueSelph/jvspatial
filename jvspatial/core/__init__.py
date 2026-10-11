@@ -37,7 +37,20 @@ from .graph import (
     generate_graph_dot,
     generate_graph_mermaid,
 )
+from .graph_context_config import (
+    ProjectionContextConfig,
+    ProjectionEvidence,
+    ProjectionField,
+    ProjectionRelation,
+)
 from .graph_expansion import expand_node, subgraph_bfs
+from .graph_projection import (
+    GraphProjection,
+    ProjectionAccess,
+    ProjectionRequest,
+    ProjectionScope,
+    ProjectionSemantics,
+)
 from .mixins import (
     DeferredSaveMixin,
     deferred_saves_globally_allowed,
@@ -78,6 +91,15 @@ __all__ = [
     "subgraph_bfs",
     # Context (advanced usage)
     "GraphContext",
+    "GraphProjection",
+    "ProjectionRequest",
+    "ProjectionScope",
+    "ProjectionAccess",
+    "ProjectionContextConfig",
+    "ProjectionEvidence",
+    "ProjectionField",
+    "ProjectionRelation",
+    "ProjectionSemantics",
     "get_default_context",
     "set_default_context",
     "reset_default_context",

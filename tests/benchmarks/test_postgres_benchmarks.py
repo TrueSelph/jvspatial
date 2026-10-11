@@ -1,77 +1,70 @@
-"""Postgres performance benchmarks (skipped when no live DSN)."""
+"""Warm PostgreSQL operations on an explicitly created disposable schema."""
 
-from __future__ import annotations
-
+import asyncio
 import os
+import uuid
 
 import pytest
 
 from jvspatial.db.postgres import PostgresDB
 
-from .conftest import run_async
+from .conftest import benchmark_async
 from .graph_fixtures import seed_chain_graph
 
+pytestmark = pytest.mark.benchmark
 _DSN = os.getenv(
     "JVSPATIAL_POSTGRES_TEST_DSN",
     "postgresql://jvspatial:jvspatial@localhost:5432/jvspatial",
 )
 
 
-def _postgres_available() -> bool:
+async def _setup():
     try:
-        import asyncpg  # noqa: F401
+        import asyncpg
     except ImportError:
-        return False
-    return bool(_DSN)
-
-
-pytestmark = [
-    pytest.mark.benchmark,
-    pytest.mark.skipif(
-        not _postgres_available(), reason="Postgres/asyncpg unavailable"
-    ),
-]
-
-
-async def _with_pg(coro):
-    import uuid
-
+        pytest.skip("asyncpg not installed")
+    try:
+        conn = await asyncio.wait_for(asyncpg.connect(_DSN), timeout=2)
+    except Exception:
+        pytest.skip("PostgreSQL benchmark service unavailable")
     schema = f"bench_{uuid.uuid4().hex[:12]}"
+    try:
+        await conn.execute(f'CREATE SCHEMA "{schema}"')
+    finally:
+        await conn.close()
     db = PostgresDB(dsn=_DSN, schema_name=schema)
     try:
-        return await coro(db)
+        await seed_chain_graph(db, length=100)
+        return db
+    except BaseException:
+        await _close(db)
+        raise
+
+
+async def _close(db):
+    import asyncpg
+
+    await db.close()
+    conn = await asyncpg.connect(_DSN)
+    try:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{db.schema_name}" CASCADE')
     finally:
-        await db.close()
+        await conn.close()
 
 
 def test_bench_postgres_traverse_depth(benchmark):
-    """Recursive CTE traversal over a seeded chain."""
-
-    async def _run():
-        async def work(db: PostgresDB):
-            await seed_chain_graph(db, length=40)
-            for _ in range(10):
-                await db.traverse("edge", "n.0", direction="out", max_depth=5)
-
-        await _with_pg(work)
-
-    benchmark(run_async, _run)
+    benchmark_async(
+        benchmark,
+        _setup,
+        lambda db: db.traverse("edge", "n.0", direction="out", max_depth=5),
+        _close,
+    )
 
 
 def test_bench_postgres_find_many_bulk(benchmark):
-    """Bulk fetch by id list."""
-
-    async def _run():
-        async def work(db: PostgresDB):
-            await seed_chain_graph(db, length=100)
-            ids = [f"n.{i}" for i in range(100)]
-
-            async def _fetch():
-                await db.find_many("node", ids)
-
-            for _ in range(20):
-                await _fetch()
-
-        await _with_pg(work)
-
-    benchmark(run_async, _run)
+    benchmark_async(
+        benchmark,
+        _setup,
+        lambda db: db.find_many("node", [f"n.{i}" for i in range(100)]),
+        _close,
+    )

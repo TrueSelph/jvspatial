@@ -9,7 +9,7 @@ than it used to be, we want to know on the PR.
 ## Running benchmarks locally
 
 ```bash
-pip install -e '.[dev,test]'
+pip install -e '.[dev,test,postgres]'
 
 # Run the whole bench suite
 pytest tests/benchmarks --benchmark-only
@@ -49,7 +49,7 @@ The current benches guard the IO hot paths landed in Phases A1 and A2:
   * `test_bench_sqlite_count_fallback_via_regex` -- fallback floor.
   * `test_bench_sqlite_find_pushdown` -- WHERE + LIMIT.
   * `test_bench_sqlite_sort_limit_pushdown` -- ORDER BY + LIMIT.
-  * `test_bench_sqlite_find_fallback_via_regex` -- legacy fallback.
+  * `test_bench_sqlite_find_fallback_via_regex` -- bounded residual scan.
 * **DeferredSaveMixin** (`tests/benchmarks/test_deferred_save_benchmarks.py`)
   * `test_bench_deferred_save_batched_100` -- 100 dirty marks + 1 flush.
   * `test_bench_immediate_save_100` -- comparison case, 100 writes.
@@ -84,7 +84,8 @@ the legacy in-Python filter path got faster or slower.
 `.github/workflows/benchmarks.yml` runs the suite on every PR that
 touches `jvspatial/`, `tests/benchmarks/`, or `pyproject.toml`. A
 **Postgres service container** (`pgvector/pgvector:pg16`) is started for
-the job so Postgres benches run in CI when `asyncpg` is installed.
+the job. The PostgreSQL extra is installed and both PostgreSQL benchmarks
+must execute; a skipped service lane fails this job.
 `JVSPATIAL_POSTGRES_TEST_DSN` defaults to
 `postgresql://jvspatial:jvspatial@localhost:5432/jvspatial`.
 
@@ -108,10 +109,14 @@ Drop a new file in `tests/benchmarks/`. Conventions:
 * Module-level `pytestmark = pytest.mark.benchmark`.
 * Bench functions take `benchmark` as the first arg (provided by
   `pytest-benchmark`) and call `benchmark(callable, *args)`.
-* For async code use the `run_async` helper from
-  `tests/benchmarks/conftest.py` -- it runs the coroutine to
-  completion in a fresh event loop, which keeps timing apples-to-
-  apples between branches.
+* For isolated query latency use `benchmark_async(benchmark, setup, operation,
+  teardown)` from `tests/benchmarks/conftest.py`. Setup/seed/connection creation
+  and cleanup run outside timing on the same event loop. SQLite, PostgreSQL,
+  and JSON read benchmarks use this helper. `run_async` remains for the
+  explicitly setup-inclusive JSON writes and DeferredSaveMixin scenarios.
+* CI stamps `warm-operation-v2` methodology in each result. An older baseline
+  is incompatible and is skipped until a new main baseline is captured.
+  Do not interpret this change in timing boundaries as a library speedup.
 * Aim for individual measurements between 1 ms and 100 ms. Shorter
   benches are dominated by `pytest-benchmark` overhead; longer ones
   blow out CI time.

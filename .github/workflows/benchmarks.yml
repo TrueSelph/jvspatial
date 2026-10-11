@@ -21,6 +21,7 @@ on:
   push:
     branches:
       - main
+      - dev
     paths:
       - 'jvspatial/**'
       - 'tests/benchmarks/**'
@@ -67,18 +68,41 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e '.[dev,test]'
+          pip install -e '.[dev,test,postgres]'
 
-      - name: Run benchmarks (PR or main push)
+      - name: Run benchmarks (PR or main/dev push)
         env:
           JVSPATIAL_POSTGRES_TEST_DSN: postgresql://jvspatial:jvspatial@localhost:5432/jvspatial
         run: |
           mkdir -p .benchmarks/current
           pytest tests/benchmarks \
             --benchmark-only \
+            --junitxml=.benchmarks/current/tests.xml \
             --benchmark-json=.benchmarks/current/result.json \
             --benchmark-min-rounds=5 \
             --benchmark-warmup=on
+
+      - name: Stamp benchmark methodology
+        run: |
+          python - <<'PYTHON'
+          import json
+          from pathlib import Path
+          path = Path('.benchmarks/current/result.json')
+          report = json.loads(path.read_text())
+          report['jvspatial_methodology'] = 'warm-operation-v2'
+          path.write_text(json.dumps(report))
+          PYTHON
+
+      - name: Require executed PostgreSQL benchmark coverage
+        run: |
+          python - <<'PYTHON'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          cases = [case for case in ET.parse(Path('.benchmarks/current/tests.xml')).iter('testcase')
+                   if 'test_postgres_benchmarks' in case.attrib.get('classname', '')]
+          assert len(cases) == 2, 'Expected both PostgreSQL benchmarks'
+          assert all(case.find('skipped') is None for case in cases), 'PostgreSQL benchmarks skipped'
+          PYTHON
 
       - name: Upload current results
         uses: actions/upload-artifact@v7
@@ -113,7 +137,7 @@ jobs:
       - name: Download baseline (best-effort)
         id: baseline
         continue-on-error: true
-        uses: dawidd6/action-download-artifact@v25
+        uses: dawidd6/action-download-artifact@v27
         with:
           workflow: benchmarks.yml
           branch: main
@@ -144,6 +168,11 @@ jobs:
 
           cur = json.loads(Path('.benchmarks/current/result.json').read_text())
           base = json.loads(Path('.benchmarks/baseline/result.json').read_text())
+
+          if cur.get('jvspatial_methodology') != base.get('jvspatial_methodology'):
+              Path('comment.md').write_text('Benchmark methodology changed. Capture a new main baseline before comparing timings.\n')
+              print('::notice::Incompatible benchmark baseline; timing comparison skipped')
+              sys.exit(0)
 
           threshold = float(os.environ.get('REGRESSION_PCT', '25'))
 

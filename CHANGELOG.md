@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added a tag-triggered TestPyPI workflow for publishing release candidates independently of stable PyPI releases.
+
+- Optional rich graph-context format 2 via `ProjectionContextConfig`,
+  `ProjectionField`, `ProjectionEvidence`, and `ProjectionRelation`: per-type
+  detail profiles, recorded same-record provenance, qualified relationship rules,
+  explicit missing/null/truncated states, and authorized coverage metadata.
+  Legacy format 1 defaults are preserved; enrichment adds no database operations
+  versus equivalent selected fields. Includes a rooted operational example and
+  paired capture/rendering performance probes.
+
+- Read-only `GraphContext.project_graph` context for language-model inference,
+  with relationship, hierarchy, and ontology views; application-declared type
+  meanings; deterministic evidence paths; and payload-based text/Mermaid rendering.
+- Public `ProjectionRequest`, `ProjectionScope`, `ProjectionAccess`,
+  `ProjectionSemantics`, and immutable `GraphProjection` capture APIs. Explicit
+  scope and field allowlists, batch access decisions, candidate/frontier/detail/
+  byte/time budgets, completeness markers, and fresh authorized expansion requests
+  preserve visibility and distinguish captured results from historical snapshots.
+- Database projection-node batching and incident-edge keyset paging, with native
+  paging on SQLite/PostgreSQL/MongoDB and disclosed compatibility scans elsewhere.
+  Cache wrappers bypass stale record caches for projection reads. Host diagnostics
+  report work without placing inaccessible cardinalities in model context.
+- A runnable dummy supply-chain graph, realistic cross-backend tests, and a
+  reproducible projection/renderer/CRUD scaling recorder.
+- Added opt-in SQL residual scan limits, ID-only paging, optional pager/graph exact counts, and generic BFS priority prefixes.
+- Added native DynamoDB scan pages with query-bound continuation and an opt-in PyMongo Async driver (`driver="pymongo"`; PyMongo >=4.13).
+
+### Fixed
+
+- Restored descending single-field index declarations through GraphContext,
+  repaired existing PostgreSQL B-tree key ordering with serialized transactional
+  index creation across workers, and retained canonical
+  MongoDB/DynamoDB single-field names and schemas alongside SQL sort companions.
+- Local node `$exists` criteria now match the in-memory null/absence contract.
+- Isolated default contexts in GraphContext tests and replaced incomplete PNG
+  fixtures with real content; CI requires libmagic and exercises content-based
+  MIME rejection for disguised unknown binaries.
+
+- Repeated cancellation during file/S3 stream opening, reading, or closing waits for the worker before releasing the reader.
+
+- Source-tree example imports work under both the `pytest` console entry point
+  and `python -m pytest`, including graph projection tests and benchmarks in CI.
+- PostgreSQL benchmark fixtures create and clean their isolated schemas before
+  graph seeding, allowing the live benchmark lane to run on a fresh database.
+- Composite and descending iterators now retain every sort key and ID, including null/missing runs. PostgreSQL sort values retain numeric types and iteration releases its connection before consumer yields.
+- DynamoDB always evaluates residual predicates, including across pages and limits. Exhausted unprocessed batch reads raise instead of appearing absent; batch writes report accurate failed IDs.
+- Cache wrappers forward native iterators and invalidate unsuccessful or uncertain bulk writes.
+- Local/S3 file streams yield incremental chunks with backpressure and close readers on cancellation or early close.
+- SQLite ID filters/sorts use the physical primary key. SQL annotated indexes gain companion indexes matching nullable compound sort expressions and directions.
+
+### Changed
+
+- `find_one` requests one match. JSON scans read in bounded batches, count incrementally and iterate once in ID order. SQL residual scans preserve safe conjunct pushdown and count without retaining full results.
+- `GraphContext.save_batch` uses bounded per-collection native detailed writes with normal context-save preparation and input-order results. Backend exceptions now propagate after cache invalidation; confirmed partial successes remain reportable. Override entity `save()` hooks explicitly when needed; context operations do not invoke them.
+- Graph expansion bounds transferred incident documents and batches frontier node reads/degrees. Context monitoring retains at most 1000 samples per category; percentiles cover that window, while operation counts, means, byte totals and cache counters remain lifetime totals. Iterator logs add active duration separate from consumer time.
+- Query benchmarks exclude seeding/connection setup, require executed PostgreSQL coverage in CI, and skip incompatible baseline methodologies.
+
 ## [0.1.1] - 2026-10-03
 
 ### Fixed

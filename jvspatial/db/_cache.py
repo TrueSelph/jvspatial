@@ -36,7 +36,7 @@ import logging
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
 
 from jvspatial.db.database import BulkSaveResult, Database, InsertIfAbsentResult
 from jvspatial.runtime.serverless import is_serverless_mode
@@ -90,6 +90,9 @@ class CachingDatabase(Database):
         # Inherit the wrapped backend's transaction capability flag so
         # callers see the right answer.
         self.supports_transactions = getattr(inner, "supports_transactions", False)
+        self.supports_native_graph_paging = getattr(
+            inner, "supports_native_graph_paging", False
+        )
 
     # ----- helpers ----------------------------------------------------
 
@@ -211,6 +214,36 @@ class CachingDatabase(Database):
         # find() is intentionally NOT cached. See module docstring.
         return await self.inner.find(collection, query, limit=limit, sort=sort)
 
+    async def graph_edge_page(
+        self, node_id: str, *, after: Optional[str] = None, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Forward adapter-specific projection paging without caching."""
+        return await self.inner.graph_edge_page(node_id, after=after, limit=limit)
+
+    async def graph_node_batch(self, ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Read current projection records directly from the wrapped store."""
+        return await self.inner.graph_node_batch(ids)
+
+    async def count_incident_edges(
+        self, collection: str, node_ids: List[str]
+    ) -> Dict[str, int]:
+        """Count incident edges per requested node, counting self-loops once."""
+        return await self.inner.count_incident_edges(collection, node_ids)
+
+    async def find_ids(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        offset: int = 0,
+    ) -> List[str]:
+        """Forward native projection; ID result sets are never cached."""
+        return await self.inner.find_ids(
+            collection, query, limit=limit, sort=sort, offset=offset
+        )
+
     async def find_many(
         self, collection: str, ids: List[str]
     ) -> Dict[str, Dict[str, Any]]:
@@ -260,14 +293,45 @@ class CachingDatabase(Database):
         return out
 
     async def bulk_save(self, collection: str, records: List[Dict[str, Any]]) -> int:
-        """Pass through to the backend, then refresh cached entries."""
-        result = await self.inner.bulk_save(collection, records)
-        if self._enabled():
+        """Invalidate attempted IDs even if a bulk call partially fails.
+
+        A success count cannot identify which records persisted. Read back
+        from storage rather than publishing unconfirmed input into the cache.
+        """
+        try:
+            result = await self.inner.bulk_save(collection, records)
+        finally:
             for r in records:
                 rid = r.get("id", r.get("_id"))
                 if rid is not None:
-                    self._cache_put(collection, str(rid), dict(r))
+                    self._invalidate(collection, str(rid))
+        if result == len(records) and self._enabled():
+            for record in records:
+                rid = record.get("id", record.get("_id"))
+                if rid is not None:
+                    self._cache_put(collection, str(rid), dict(record))
         return result
+
+    async def find_iter(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        batch_size: int = 100,
+        cursor: Optional[bytes] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Delegate native streaming without the inherited pager masking it."""
+        iterator = self.inner.find_iter(
+            collection, query, sort=sort, batch_size=batch_size, cursor=cursor
+        )
+        try:
+            async for record in iterator:
+                yield record
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if callable(close):
+                await close()
 
     async def bulk_save_detailed(
         self, collection: str, records: List[Dict[str, Any]]
@@ -277,8 +341,14 @@ class CachingDatabase(Database):
         Defined explicitly: the ``Database`` default is a serial ``save``
         loop that would otherwise shadow ``__getattr__`` forwarding.
         """
-        result = await self.inner.bulk_save_detailed(collection, records)
-        if self._enabled():
+        try:
+            result = await self.inner.bulk_save_detailed(collection, records)
+        finally:
+            for record in records:
+                rid = record.get("id", record.get("_id"))
+                if rid is not None:
+                    self._invalidate(collection, str(rid))
+        if self._enabled() and (result.all_saved or result.failed_ids):
             failed = set(result.failed_ids)
             for r in records:
                 rid = r.get("id", r.get("_id"))
