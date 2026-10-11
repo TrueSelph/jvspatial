@@ -1126,9 +1126,9 @@ class Node(Object):
                     except re.error:
                         return False
             elif operator == "$exists":
-                # This is handled at the property level, not here
-                # If we reach this point, the property exists
-                if not criterion:  # $exists: False means property shouldn't exist
+                # Match the in-memory query contract: null and missing are
+                # absent; falsy non-null values remain present.
+                if bool(criterion) != (value is not None):
                     return False
             else:
                 # Unknown operator - ignore

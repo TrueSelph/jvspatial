@@ -1,5 +1,26 @@
 # jvspatial — Security Code Review
 
+## 2026-10-11 stalled-worktree integration review
+
+Generic `application/octet-stream` results from libmagic remain authoritative:
+filename extensions and upload hints cannot override them. The proposed unknown
+binary fallback was not incorporated. Complete PNG fixtures and deterministic
+unknown binary fixtures exercise real content detection; tests also drive
+content-result precedence explicitly. CI installs libmagic/python-magic and
+asserts the content detector is active before running the suite. The existing
+optional-dependency fallback remains unchanged and is separately exercised by
+explicit tests; an extension-only fallback is not equivalent security evidence.
+
+Single-field descending indexes retain safe path validation, bounded PostgreSQL
+names and nullable JSONB sort companions. Rebuilds create the replacement before
+swapping the canonical index; unique enforcement remains present throughout.
+Transaction-scoped advisory locks serialize same-name DDL across workers and
+roll back a failed repair. A live concurrent migration test checks both cold
+workers complete and the repaired index still rejects duplicate values.
+Local node `$exists` tests preserve the existing null-as-absent contract rather
+than importing the incompatible presence-semantics proposal. No authentication,
+secret comparison, upload policy or walker protection defaults are changed.
+
 ## 2026-10-11 rich graph context review
 
 Detail profiles are host declarations, never grants. Effective fields intersect

@@ -64,6 +64,12 @@ class IdxLink(Edge):
     pass
 
 
+class IdxEvent(Node):
+    """A single attributed timestamp read newest-first."""
+
+    created_at: str = attribute(indexed=True, index_direction=-1, default="")
+
+
 @pytest.fixture(autouse=True)
 def _auto_indexes(monkeypatch):
     monkeypatch.setenv("JVSPATIAL_AUTO_CREATE_INDEXES", "true")
@@ -304,6 +310,107 @@ async def test_typed_sorted_find_walks_the_entity_leading_index():
         assert len(found) == 20 and stamps == sorted(stamps, reverse=True)
 
 
+# ---- descending single-field indexes -------------------------------------------
+
+
+async def test_descending_attribute_builds_a_descending_index():
+    """``index_direction=-1`` must reach the adapter.
+
+    ``ensure_indexes`` used to strip ``direction`` from single-field
+    definitions, so every single-field index came out ascending no matter
+    what the annotation declared.
+    """
+    async with _pg() as (ctx, db, admin, schema):
+        await ctx.ensure_indexes(IdxEvent)
+
+        idx = await _indexes(admin, schema, "node")
+        created = idx["node_entity_context_created_at_idx"]
+        assert "DESC NULLS LAST" in created, created
+
+
+async def test_descending_index_serves_newest_n_without_a_sort():
+    async with _pg(gin_index="off") as (ctx, db, admin, schema):
+        await ctx.ensure_indexes(IdxEvent)
+        records = [
+            {
+                "id": generate_id("n", entity),
+                "entity": entity,
+                "context": {"created_at": f"2026-01-{i:05d}"},
+            }
+            for entity in ("IdxEvent", "Other1", "Other2", "Other3")
+            for i in range(2000)
+        ]
+        await db.bulk_save_detailed("node", records)
+        await admin.execute(f"ANALYZE {schema}.node")
+
+        where, params = translate_query({"entity": "IdxEvent"})
+        order = translate_sort([("context.created_at", -1)])
+        await admin.execute(f"SET search_path TO {schema}")
+        plan = await _explain(
+            admin,
+            f"SELECT data FROM node WHERE {where} ORDER BY {order} LIMIT 20",
+            params,
+        )
+
+        names = {p.get("Index Name") for p in plan}
+        assert any(
+            str(name).startswith("node_entity_context_created_at_idx_sort_")
+            for name in names
+        ), plan
+        assert not any(p["Node Type"] == "Sort" for p in plan), plan
+
+        found = await db.find(
+            "node", {"entity": "IdxEvent"}, sort=[("context.created_at", -1)], limit=20
+        )
+        stamps = [r["context"]["created_at"] for r in found]
+        assert len(found) == 20 and stamps == sorted(stamps, reverse=True)
+
+
+async def test_ascending_index_is_rebuilt_when_the_direction_flips():
+    """Upgrade path for a deployment that already has the ascending index.
+
+    The index name carries no direction, so ``CREATE INDEX IF NOT EXISTS``
+    would leave the ascending index in place and the newly declared
+    direction would silently never take effect.
+    """
+    async with _pg() as (ctx, db, admin, schema):
+        await db._bootstrap_collection("node")
+        await admin.execute(
+            f"CREATE INDEX node_entity_context_created_at_idx ON {schema}.node "
+            "(entity, ((data #>> '{context,created_at}')))"
+        )
+
+        await ctx.ensure_indexes(IdxEvent)
+
+        rebuilt = (await _indexes(admin, schema, "node"))[
+            "node_entity_context_created_at_idx"
+        ]
+        assert "DESC NULLS LAST" in rebuilt, rebuilt
+
+
+async def test_matching_index_is_left_alone():
+    """A second ensure_indexes pass must not churn a correct index."""
+    async with _pg() as (ctx, db, admin, schema):
+        await ctx.ensure_indexes(IdxEvent)
+        first = await admin.fetchval(
+            "SELECT c.oid FROM pg_class c JOIN pg_namespace n "
+            "ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2",
+            schema,
+            "node_entity_context_created_at_idx",
+        )
+
+        context_module._ensured_indexes.clear()
+        await ctx.ensure_indexes(IdxEvent)
+
+        second = await admin.fetchval(
+            "SELECT c.oid FROM pg_class c JOIN pg_namespace n "
+            "ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2",
+            schema,
+            "node_entity_context_created_at_idx",
+        )
+        assert first == second
+
+
 # ---- optional whole-document GIN ----------------------------------------------
 
 
@@ -502,3 +609,72 @@ async def test_find_edges_between_limit(tmp_path):
         )
     finally:
         set_default_context(None)
+
+
+async def test_concurrent_direction_repair_preserves_unique_constraint():
+    """Two cold workers must not collide while repairing the same index."""
+    import asyncpg
+
+    from jvspatial.db.postgres import PostgresDB
+
+    async with _pg() as (_ctx, db, admin, schema):
+        other = PostgresDB(dsn=_PG_DSN, schema_name=schema, min_size=1, max_size=2)
+        try:
+            await other._bootstrap_collection("node")
+            for i in range(3):
+                field = f"context.revision_{i}"
+                await db.create_index("node", field, unique=True)
+                await asyncio.gather(
+                    db.create_index("node", [(field, -1)], unique=True),
+                    other.create_index("node", [(field, -1)], unique=True),
+                )
+                name = f"node_context_revision_{i}_uniq"
+                definition = (await _indexes(admin, schema, "node"))[name]
+                assert "CREATE UNIQUE INDEX" in definition
+                assert "DESC NULLS LAST" in definition
+            await db.save("node", {"id": "n.first", "context": {"revision_0": "same"}})
+            with pytest.raises(asyncpg.UniqueViolationError):
+                await db.save(
+                    "node", {"id": "n.second", "context": {"revision_0": "same"}}
+                )
+        finally:
+            await other.close()
+
+
+async def test_failed_direction_repair_restores_original_index():
+    """A failure after dropping the canonical name must roll back the DDL."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    import asyncpg
+
+    async with _pg() as (_ctx, db, admin, schema):
+        await db.create_index("node", "context.revision", unique=True)
+        await db.save("node", {"id": "n.first", "context": {"revision": "same"}})
+        before = await _indexes(admin, schema, "node")
+        real_pool = await db._ensure_pool()
+
+        class FailBeforeRename:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def __getattr__(self, name):
+                return getattr(self.connection, name)
+
+            async def execute(self, sql, *args):
+                if sql.startswith("ALTER INDEX"):
+                    raise RuntimeError("Injected failure before index rename")
+                return await self.connection.execute(sql, *args)
+
+        @contextlib.asynccontextmanager
+        async def failing_connection():
+            async with real_pool.acquire() as connection:
+                yield FailBeforeRename(connection)
+
+        failing_pool = SimpleNamespace(acquire=failing_connection)
+        with patch.object(db, "_ensure_pool", AsyncMock(return_value=failing_pool)):
+            with pytest.raises(RuntimeError, match="Injected failure"):
+                await db.create_index("node", [("context.revision", -1)], unique=True)
+        assert await _indexes(admin, schema, "node") == before
+        with pytest.raises(asyncpg.UniqueViolationError):
+            await db.save("node", {"id": "n.second", "context": {"revision": "same"}})

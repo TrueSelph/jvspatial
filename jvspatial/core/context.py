@@ -1545,6 +1545,7 @@ class GraphContext:
         # Postgres-only; other adapters receive the plain definition, and
         # full-text definitions are skipped where ``$text`` runs in memory.
         is_postgres = self._is_postgres(self.database)
+        is_mongodb = self._is_mongodb(self.database)
         scope_keys = ("per_class", "entity_leading", "partial_by_entity", "fulltext")
 
         def _scoped(index_def: Dict[str, Any], extra: Dict[str, Any]) -> Dict[str, Any]:
@@ -1570,9 +1571,19 @@ class GraphContext:
                         for k, v in index_def.items()
                         if k not in ("field", "unique", "direction", *scope_keys)
                     }
+                    # Preserve existing ascending names; list form carries a
+                    # descending declaration to adapters that support it.
+                    # Mongo single-key B-trees serve either direction; keep
+                    # annotation-created indexes in their canonical shape.
+                    direction = index_def.get("direction", 1)
+                    field_spec: Union[str, List[Tuple[str, int]]] = (
+                        index_def["field"]
+                        if direction == 1 or is_mongodb
+                        else [(index_def["field"], direction)]
+                    )
                     await self.database.create_index(
                         collection,
-                        index_def["field"],
+                        field_spec,
                         unique=index_def.get("unique", False),
                         **_scoped(index_def, extra),
                     )

@@ -84,7 +84,9 @@ def attribute(
         private: If True, creates a Pydantic private attribute (underscore field)
         indexed: If True, create a single-field index on this field (maps to context.field_name)
         index_unique: If True, create a unique index (requires indexed=True)
-        index_direction: Index direction for sorting (1=ascending, -1=descending, default=1)
+        index_direction: Index direction for sorting (1=ascending, -1=descending,
+            default=1). SQL sort indexes preserve direction; single-key MongoDB
+            and DynamoDB indexes reuse their canonical shape/name.
         index_partial_filter_expression: MongoDB partialFilterExpression dict to scope the
                 index to a subset of documents. Field paths must use the full
                 ``context.<field>`` DB path. Use this with ``index_unique=True`` to avoid

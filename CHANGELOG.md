@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Restored descending single-field index declarations through GraphContext,
+  repaired existing PostgreSQL B-tree key ordering with serialized transactional
+  index creation across workers, and retained canonical
+  MongoDB/DynamoDB single-field names and schemas alongside SQL sort companions.
+- Local node `$exists` criteria now match the in-memory null/absence contract.
+- Isolated default contexts in GraphContext tests and replaced incomplete PNG
+  fixtures with real content; CI requires libmagic and exercises content-based
+  MIME rejection for disguised unknown binaries.
+
 - Repeated cancellation during file/S3 stream opening, reading, or closing waits for the worker before releasing the reader.
 
 - Source-tree example imports work under both the `pytest` console entry point

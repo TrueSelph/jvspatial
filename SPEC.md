@@ -162,6 +162,19 @@ These are *defaults* — subclasses or callers can override. Disabling protectio
 
 Indexed fields (`@attribute(indexed=True)`) and compound indexes (`@attribute(compound_index=...)`) inform backend index creation (where supported).
 
+Single-field `attribute(index_direction=-1)` declarations reach adapters as
+`[(field, -1)]`; ascending declarations retain the bare field string for name
+compatibility (`jvspatial/core/context.py:1579`). PostgreSQL repairs a canonical
+B-tree whose stored `pg_index.indoption` differs from the requested directions,
+retaining bounded names and the order-matching JSONB sort companions
+(`jvspatial/db/postgres.py:1780`). Same-name index DDL is serialized across
+workers with a transaction-scoped advisory lock, so concurrent creation cannot
+collide and a failed repair rolls back (`jvspatial/db/postgres.py:1749`). SQLite retains its equality index and creates
+direction-specific nullable sort companions. MongoDB single-key B-trees reuse
+the ascending name/spec for annotation-created indexes; direct adapter list
+specifications retain their requested direction/name. DynamoDB single-key GSIs reuse the name and ID range key
+because ordering is selected at query time.
+
 ---
 
 ## 3. Async Contract
@@ -396,6 +409,9 @@ No built-in migration framework. Adapters do not enforce schemas. Adding optiona
 | `$and`, `$or` | Logical combinators |
 | `$regex` | Regex match (string fields). Never index-backed; build patterns from user input with `jvspatial.db.escape_regex`. In-memory matching caps pattern and candidate lengths and applies a 5 ms per-candidate timeout (`jvspatial/db/query.py`). Native database regex execution follows that database's resource limits. |
 | `$text` | Top-level `{"$text": {"$search": "words", "$fields": ["context.a", ...]}}`: every search word (case-insensitive, `\w+` tokens, no stemming) occurs in the concatenated fields; without `$fields` every string value is searched |
+
+Local node property criteria apply the same non-null `$exists` rule as the
+in-memory matcher, including undeclared fields (`jvspatial/core/entities/node.py:1128`).
 
 ### 5.2 Pushdown vs in-memory
 

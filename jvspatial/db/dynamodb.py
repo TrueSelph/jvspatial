@@ -1635,6 +1635,10 @@ class DynamoDB(Database):
 
         try:
             client = await self._get_client()
+            # GSI ordering is chosen at query time. Keep the single-field
+            # name and ID range key when an annotation supplies list form.
+            if not isinstance(field_or_fields, str) and len(field_or_fields) == 1:
+                field_or_fields = field_or_fields[0][0]
             if isinstance(field_or_fields, str):
                 # Single-field index
                 field_path = field_or_fields

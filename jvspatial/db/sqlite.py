@@ -371,7 +371,8 @@ class SQLiteDB(Database):
 
         Note:
             SQLite indexes on nested JSON fields use json_extract() function.
-            Direction parameter is ignored for SQLite (always ascending).
+            The equality index remains ascending; nullable sort companions
+            preserve declared direction and an ID tiebreaker.
             When a partial filter is required and an older non-partial
             index of the same name exists, it is dropped and recreated.
         """

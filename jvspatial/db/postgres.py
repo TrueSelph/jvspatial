@@ -1625,7 +1625,9 @@ class PostgresDB(Database):
 
         An existing index of the same name defined by the pre-0.0.18 rules
         (JSONB paths for top-level columns, ``DESC`` without ``NULLS LAST``)
-        is rebuilt under a temporary name and swapped in.
+        or a B-tree with different stored key ordering is rebuilt under a
+        temporary name and swapped in. Nullable JSONB sort companions remain
+        separately named by their ordering signature.
         """
         await self._bootstrap_collection(collection)
         col = _safe_collection(collection)
@@ -1706,6 +1708,9 @@ class PostgresDB(Database):
             where_parts.append(f"entity = {_pg_string_literal(str(entity))}")
         where_clause = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
+        # pg_index bits: DESC=1, NULLS FIRST=2. An existing canonical
+        # name can have the wrong ordering after an annotation changes.
+        want_indoption: List[int] = []
         if fulltext:
             expr = tsvector_expression([f for f, _ in fields])
             if expr is None:  # pragma: no cover - paths validated above
@@ -1715,11 +1720,13 @@ class PostgresDB(Database):
             suffix = "fts"
         else:
             keys = ["entity"] if entity_leading else []
+            want_indoption = [0] * len(keys)
             for field_path, direction in fields:
                 extract = _pg_field_extract(field_path)
                 keys.append(
                     f"{extract} {'ASC' if direction == 1 else 'DESC NULLS LAST'}"
                 )
+                want_indoption.append(0 if direction == 1 else 1)
             method = kwargs.get("method", "btree")
             suffix = "uniq" if unique else "idx"
         if method not in ("btree", "hash", "gin", "gist", "brin"):
@@ -1737,42 +1744,66 @@ class PostgresDB(Database):
 
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            if not fulltext and method == "btree":
-                from .database import _keyset_sort_fields
+            # Serialize same-name index creation/repair across cold workers.
+            # Transactional DDL also restores the original index on failure.
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+                    schema,
+                    f"index:{index_name}",
+                )
+                if not fulltext and method == "btree":
+                    from .database import _keyset_sort_fields
 
-                sort_keys = translate_sort(_keyset_sort_fields(fields))
-                if sort_keys is None:
-                    raise ValueError("Invalid sort index fields")
-                if entity_leading:
-                    sort_keys = f"entity, {sort_keys}"
-                sort_signature = hashlib.sha256(sort_keys.encode()).hexdigest()[:8]
-                sort_name = _postgres_index_name(index_name, f"sort_{sort_signature}")
-                await conn.execute(
-                    f"CREATE INDEX IF NOT EXISTS {sort_name} ON {schema}.{col} ({sort_keys}){where_clause}"
+                    sort_keys = translate_sort(_keyset_sort_fields(fields))
+                    if sort_keys is None:
+                        raise ValueError("Invalid sort index fields")
+                    if entity_leading:
+                        sort_keys = f"entity, {sort_keys}"
+                    sort_signature = hashlib.sha256(sort_keys.encode()).hexdigest()[:8]
+                    sort_name = _postgres_index_name(
+                        index_name, f"sort_{sort_signature}"
+                    )
+                    await conn.execute(
+                        f"CREATE INDEX IF NOT EXISTS {sort_name} ON {schema}.{col} ({sort_keys}){where_clause}"
+                    )
+                existing = await conn.fetchval(
+                    "SELECT indexdef FROM pg_indexes WHERE schemaname = $1 AND indexname = $2",
+                    schema,
+                    index_name,
                 )
-            existing = await conn.fetchval(
-                "SELECT indexdef FROM pg_indexes WHERE schemaname = $1 AND indexname = $2",
-                schema,
-                index_name,
-            )
-            if existing is not None and _STALE_INDEX_DEF_RE.search(existing):
-                # Build the corrected index first so a unique constraint is
-                # never absent, then swap it in under the canonical name.
-                temp = _postgres_index_name(index_name, "rebuild")
-                await conn.execute(f"DROP INDEX IF EXISTS {schema}.{temp}")
-                await conn.execute(f"CREATE {unique_sql}INDEX {temp} {body}")
-                await conn.execute(f"DROP INDEX {schema}.{index_name}")
-                await conn.execute(
-                    f"ALTER INDEX {schema}.{temp} RENAME TO {index_name}"
+                stale = existing is not None and bool(
+                    _STALE_INDEX_DEF_RE.search(existing)
                 )
-            else:
-                await conn.execute(
-                    f"CREATE {unique_sql}INDEX IF NOT EXISTS {index_name} {body}"
-                )
-            if kwargs.get("drop_legacy") and scope:
-                legacy_suffix = "uniq" if unique else "idx"
-                legacy = _postgres_index_name(f"{col}_{field_names}", legacy_suffix)
-                await conn.execute(f"DROP INDEX IF EXISTS {schema}.{legacy}")
+                if existing is not None and not stale and method == "btree":
+                    stored = await conn.fetchval(
+                        "SELECT i.indoption::int2[] FROM pg_index i "
+                        "JOIN pg_class c ON c.oid = i.indexrelid "
+                        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                        "WHERE n.nspname = $1 AND c.relname = $2",
+                        self.schema_name,
+                        index_name,
+                    )
+                    if stored is not None and list(stored) != want_indoption:
+                        stale = True
+                if stale:
+                    # Build the corrected index first so a unique constraint is
+                    # never absent, then swap it in under the canonical name.
+                    temp = _postgres_index_name(index_name, "rebuild")
+                    await conn.execute(f"DROP INDEX IF EXISTS {schema}.{temp}")
+                    await conn.execute(f"CREATE {unique_sql}INDEX {temp} {body}")
+                    await conn.execute(f"DROP INDEX {schema}.{index_name}")
+                    await conn.execute(
+                        f"ALTER INDEX {schema}.{temp} RENAME TO {index_name}"
+                    )
+                else:
+                    await conn.execute(
+                        f"CREATE {unique_sql}INDEX IF NOT EXISTS {index_name} {body}"
+                    )
+                if kwargs.get("drop_legacy") and scope:
+                    legacy_suffix = "uniq" if unique else "idx"
+                    legacy = _postgres_index_name(f"{col}_{field_names}", legacy_suffix)
+                    await conn.execute(f"DROP INDEX IF EXISTS {schema}.{legacy}")
 
     # ---- atomic compound ops (C4) ------------------------------------------
 

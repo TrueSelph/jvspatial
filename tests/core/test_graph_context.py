@@ -11,11 +11,14 @@ Tests GraphContext functionality including:
 import asyncio
 import os
 import tempfile
+import uuid
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import Field
 
+import jvspatial.core.context as context_module
 from jvspatial.core.context import (
     GraphContext,
     async_graph_context,
@@ -26,6 +29,53 @@ from jvspatial.core.context import (
 from jvspatial.core.entities import Edge, Node, Object, Walker
 from jvspatial.db.factory import create_database
 from jvspatial.exceptions import EntityError, ValidationError
+
+
+@pytest.fixture(autouse=True)
+def _isolate_default_context():
+    """Restore the default-context globals around every test in this module.
+
+    ``set_default_context`` writes two pieces of state: the per-task
+    ``ContextVar`` slot and a process-wide fallback consulted whenever the
+    slot is empty. Only the slot is per-task; the fallback outlives the test
+    that set it, so a context bound to an already-deleted
+    ``TemporaryDirectory`` (or one with no database at all) would otherwise
+    stay installed for the rest of the session.
+
+    That leak is what made this module order-dependent: entity ``create()``
+    resolves ``get_default_context()``, so tests silently borrowed whichever
+    context a previously-run test happened to leave behind, and raised
+    ``RuntimeError: Default GraphContext not initialized`` under the shuffle
+    orders where no test had installed one yet.
+
+    Autouse function-scoped fixtures are set up before explicitly requested
+    ones, so this snapshot is taken before ``temp_context`` installs anything
+    and put back after it tears down.
+    """
+    saved_slot = context_module._default_context_var.get()
+    saved_fallback = context_module._module_default_context
+    try:
+        yield
+    finally:
+        context_module._module_default_context = saved_fallback
+        context_module._default_context_var.set(saved_slot)
+
+
+@contextmanager
+def _temp_default_context():
+    """Yield a ``GraphContext`` on a throwaway JSON database, installed as default.
+
+    Entity-level ``create()``/``save()`` resolve the default context rather
+    than the context they were invoked through, so tests that exercise those
+    paths need this context installed, not merely constructed. Teardown is
+    handled by the autouse ``_isolate_default_context`` fixture.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        unique_path = f"{tmpdir}/test_{uuid.uuid4().hex}"
+        database = create_database("json", base_path=unique_path)
+        context = GraphContext(database=database)
+        set_default_context(context)
+        yield context
 
 
 class ContextTestNode(Node):
@@ -67,13 +117,7 @@ class TestGraphContextInitialization:
     @pytest.fixture
     def temp_context(self):
         """Create temporary context for testing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            import uuid
-
-            unique_path = f"{tmpdir}/test_{uuid.uuid4().hex}"
-            config = {"db_type": "json", "db_config": {"base_path": unique_path}}
-            database = create_database(config["db_type"], **config["db_config"])
-            context = GraphContext(database=database)
+        with _temp_default_context() as context:
             yield context
 
     @pytest.mark.asyncio
@@ -141,14 +185,7 @@ class TestGraphContextDatabaseOperations:
     @pytest.fixture
     def temp_context(self):
         """Create temporary context for testing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            import uuid
-
-            unique_path = f"{tmpdir}/test_{uuid.uuid4().hex}"
-            config = {"db_type": "json", "db_config": {"base_path": unique_path}}
-            database = create_database(config["db_type"], **config["db_config"])
-            context = GraphContext(database=database)
-            set_default_context(context)
+        with _temp_default_context() as context:
             yield context
 
     @pytest.mark.asyncio
@@ -303,14 +340,7 @@ class TestGraphContextQueryOperations:
     @pytest.fixture
     def temp_context(self):
         """Create temporary context for testing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            import uuid
-
-            unique_path = f"{tmpdir}/test_{uuid.uuid4().hex}"
-            config = {"db_type": "json", "db_config": {"base_path": unique_path}}
-            database = create_database(config["db_type"], **config["db_config"])
-            context = GraphContext(database=database)
-            set_default_context(context)
+        with _temp_default_context() as context:
             yield context
 
     @pytest.mark.asyncio
@@ -412,20 +442,8 @@ class TestGraphContextCaching:
 
     @pytest.fixture
     def temp_context(self):
-        """Create temporary context with caching for testing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            import uuid
-
-            unique_path = f"{tmpdir}/test_{uuid.uuid4().hex}"
-            config = {
-                "db_type": "json",
-                "db_config": {"base_path": unique_path},
-                "cache_type": "memory",
-                "cache_config": {"max_size": 1000},
-            }
-            database = create_database(config["db_type"], **config["db_config"])
-            context = GraphContext(database=database)
-            set_default_context(context)
+        """Create temporary context for testing."""
+        with _temp_default_context() as context:
             yield context
 
     @pytest.mark.asyncio
@@ -490,6 +508,19 @@ class TestGraphContextCaching:
 
 class TestGraphContextErrorHandling:
     """Test GraphContext error handling."""
+
+    @pytest.fixture(autouse=True)
+    def _installed_default_context(self):
+        """Install a default context for the whole class.
+
+        These tests construct bare ``GraphContext()`` instances and then call
+        ``create()``, which delegates to the entity classmethod and therefore
+        resolves ``get_default_context()`` rather than the context it was
+        invoked on. Without a default installed those calls raise
+        ``RuntimeError: Default GraphContext not initialized``.
+        """
+        with _temp_default_context():
+            yield
 
     async def test_context_creation_with_invalid_config(self):
         """Test context creation with invalid configuration."""
@@ -564,14 +595,7 @@ class TestGraphContextPerformance:
     @pytest.fixture
     def temp_context(self):
         """Create temporary context for testing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            import uuid
-
-            unique_path = f"{tmpdir}/test_{uuid.uuid4().hex}"
-            config = {"db_type": "json", "db_config": {"base_path": unique_path}}
-            database = create_database(config["db_type"], **config["db_config"])
-            context = GraphContext(database=database)
-            set_default_context(context)
+        with _temp_default_context() as context:
             yield context
 
     @pytest.mark.asyncio
@@ -643,13 +667,7 @@ class TestGraphContextIntegration:
     @pytest.fixture
     def temp_context(self):
         """Create temporary context for testing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            import uuid
-
-            unique_path = f"{tmpdir}/test_{uuid.uuid4().hex}"
-            config = {"db_type": "json", "db_config": {"base_path": unique_path}}
-            database = create_database(config["db_type"], **config["db_config"])
-            context = GraphContext(database=database)
+        with _temp_default_context() as context:
             yield context
 
     @pytest.mark.asyncio
@@ -745,6 +763,18 @@ class TestGraphContextIntegration:
 class TestGraphContextUtilities:
     """Test GraphContext utility functions."""
 
+    @pytest.fixture(autouse=True)
+    def _installed_default_context(self):
+        """Install a default context so ``get_default_context()`` has one to return.
+
+        ``get_default_context()`` raises when nothing has been configured and
+        the ``DatabaseManager`` was auto-created rather than initialized by
+        the Server, so these tests need a context installed rather than
+        inheriting one from whichever test ran before them.
+        """
+        with _temp_default_context():
+            yield
+
     async def test_get_default_context(self):
         """Test getting default context."""
         context = get_default_context()
@@ -793,14 +823,7 @@ class TestGraphContextPerformanceMonitoring:
     @pytest.fixture
     def temp_context(self):
         """Create temporary context for testing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            import uuid
-
-            unique_path = f"{tmpdir}/test_{uuid.uuid4().hex}"
-            config = {"db_type": "json", "db_config": {"base_path": unique_path}}
-            database = create_database(config["db_type"], **config["db_config"])
-            context = GraphContext(database=database)
-            set_default_context(context)
+        with _temp_default_context() as context:
             yield context
 
     @pytest.mark.asyncio
@@ -860,13 +883,8 @@ class TestGraphContextPerformanceMonitoring:
 class TestGraphContextFindPage:
     @pytest.fixture
     def temp_context(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            import uuid
-
-            unique_path = f"{tmpdir}/test_{uuid.uuid4().hex}"
-            database = create_database("json", base_path=unique_path)
-            context = GraphContext(database=database)
-            set_default_context(context)
+        """Create temporary context for testing."""
+        with _temp_default_context() as context:
             yield context
 
     @pytest.mark.asyncio

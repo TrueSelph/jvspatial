@@ -19,6 +19,16 @@ from jvspatial.storage.exceptions import (
 )
 from jvspatial.storage.security import FileValidator, PathSanitizer
 
+# Complete 1x1 RGBA PNG, including IHDR/IDAT/IEND, for real libmagic.
+MINIMAL_PNG = bytes.fromhex(
+    "89504e470d0a1a0a"
+    "0000000d49484452000000010000000108060000001f15c489"
+    "0000000b49444154789c6360000200000500017a5eab3f"
+    "0000000049454e44ae426082"
+)
+UNKNOWN_BINARY = bytes((i * 97 + 13) % 256 for i in range(256))
+
+
 # ============================================================================
 # PathSanitizer Tests
 # ============================================================================
@@ -404,12 +414,9 @@ class TestMimeTypeDetection:
         mime = validator.detect_mime_type(jpeg_content, "image.jpg")
         assert "image" in mime.lower()
 
-    async def test_png_detection(self, monkeypatch):
+    async def test_png_detection(self):
         """Test PNG MIME type detection."""
-        # PNG header
-        png_content = b"\x89PNG\r\n\x1a\n"
-        # Header-only fixture is not a complete PNG for libmagic.
-        monkeypatch.setattr("jvspatial.storage.security.validator.HAS_MAGIC", False)
+        png_content = MINIMAL_PNG
         validator = FileValidator()
         mime = validator.detect_mime_type(png_content, "image.png")
         assert "image" in mime.lower()
@@ -543,11 +550,10 @@ class TestAllowedMimeTypes:
         result = validator.validate_file(content, "photo.jpg")
         assert result["valid"] is True
 
-    async def test_allowed_image_png(self, monkeypatch):
+    async def test_allowed_image_png(self):
         """Test that PNG images are allowed."""
         validator = FileValidator()
-        content = b"\x89PNG\r\n\x1a\n"
-        monkeypatch.setattr("jvspatial.storage.security.validator.HAS_MAGIC", False)
+        content = MINIMAL_PNG
         result = validator.validate_file(content, "graphic.png")
         assert result["valid"] is True
 
@@ -1024,3 +1030,61 @@ class TestHintMime:
             validator.validate_file(
                 content, filename="upload", hint_mime="application/x-custom-unknown"
             )
+
+
+class TestContentDetectionBoundary:
+    @pytest.mark.parametrize("filename", ["photo.jpg", "upload"])
+    def test_generic_magic_result_does_not_trust_extension_or_hint(
+        self, monkeypatch, filename
+    ):
+        from types import SimpleNamespace
+
+        from jvspatial.storage.security import validator as module
+
+        monkeypatch.setattr(module, "HAS_MAGIC", True)
+        monkeypatch.setattr(
+            module,
+            "magic",
+            SimpleNamespace(from_buffer=lambda *a, **k: "application/octet-stream"),
+            raising=False,
+        )
+        validator = FileValidator()
+        assert (
+            validator.detect_mime_type(UNKNOWN_BINARY, filename, hint_mime="image/jpeg")
+            == "application/octet-stream"
+        )
+        with pytest.raises(InvalidMimeTypeError):
+            validator.validate_file(UNKNOWN_BINARY, filename, hint_mime="image/jpeg")
+
+    def test_positive_magic_result_outranks_metadata(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from jvspatial.storage.security import validator as module
+
+        monkeypatch.setattr(module, "HAS_MAGIC", True)
+        monkeypatch.setattr(
+            module,
+            "magic",
+            SimpleNamespace(from_buffer=lambda *a, **k: "image/png"),
+            raising=False,
+        )
+        assert (
+            FileValidator().detect_mime_type(
+                MINIMAL_PNG, "photo.jpg", hint_mime="application/pdf"
+            )
+            == "image/png"
+        )
+
+    def test_real_magic_recognizes_complete_png_and_rejects_disguised_binary(self):
+        from jvspatial.storage.security import validator as module
+
+        if not module.HAS_MAGIC:
+            pytest.skip("Requires python-magic and system libmagic")
+        validator = FileValidator()
+        assert (
+            validator.validate_file(MINIMAL_PNG, "graphic.png")["mime_type"]
+            == "image/png"
+        )
+        for content in (UNKNOWN_BINARY, b"\x89PNG\r\n\x1a\n"):
+            with pytest.raises(InvalidMimeTypeError):
+                validator.validate_file(content, "graphic.png", hint_mime="image/png")
