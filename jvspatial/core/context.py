@@ -1,13 +1,9 @@
 """GraphContext for managing database dependencies."""
 
-import asyncio
-import base64
 import contextvars
-import inspect
-import json
 import logging
 import time
-from contextlib import asynccontextmanager, contextmanager, suppress
+from contextlib import asynccontextmanager, contextmanager
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -22,10 +18,31 @@ from typing import (
     Union,
     cast,
 )
+from weakref import WeakKeyDictionary
 
 from jvspatial.db.database import Database
 from jvspatial.db.factory import create_database, get_current_database
 from jvspatial.db.manager import get_database_manager
+
+# Request-scoped identity map — shadows the process-wide entity cache for the
+# duration of one HTTP request / unit of work. Cleared at request end so
+# mutations within a request are visible without stale cross-request reads.
+_request_identity_map: contextvars.ContextVar[Optional[Dict[str, Any]]] = (
+    contextvars.ContextVar("jvspatial_request_identity_map", default=None)
+)
+
+
+def begin_request_identity_map() -> contextvars.Token[Optional[Dict[str, Any]]]:
+    """Start a request-scoped identity map; returns a reset token."""
+    return _request_identity_map.set({})
+
+
+def end_request_identity_map(
+    token: contextvars.Token[Optional[Dict[str, Any]]],
+) -> None:
+    """Clear the request-scoped identity map."""
+    _request_identity_map.reset(token)
+
 
 if TYPE_CHECKING:
     from .entities import Object
@@ -34,32 +51,9 @@ T = TypeVar("T", bound="Object")
 
 logger = logging.getLogger(__name__)
 
-# Global registry to track which collections have had indexes ensured
-_ensured_indexes: Set[str] = set()
-
-
-def _coerce_edge_id_list(value: Any) -> List[str]:
-    """Normalize *value* to a list of edge ID strings for persistence merge logic."""
-    if value is None:
-        return []
-    if isinstance(value, (list, tuple)):
-        return [str(x) for x in value]
-    return []
-
-
-async def _unwrap_db_get_result(raw: Any) -> Optional[Dict[str, Any]]:
-    """Resolve ``await db.get(...)`` to a dict or None (handles nested AsyncMock / awaitables)."""
-    cur: Any = raw
-    for _ in range(5):
-        if cur is None:
-            return None
-        if isinstance(cur, dict):
-            return cur
-        if inspect.isawaitable(cur):
-            cur = await cur  # type: ignore[func-returns-value]
-            continue
-        return None
-    return None
+# Cache index setup per database instance. A process may host multiple stores or
+# schemas; a class ensured on one must not suppress indexes on another.
+_ensured_indexes: WeakKeyDictionary[Any, Set[str]] = WeakKeyDictionary()
 
 
 # Simple performance monitor for tracking operations
@@ -382,6 +376,8 @@ class GraphContext:
             PerformanceMonitor() if enable_performance_monitoring else None
         )
         self.auto_persist_migrations = auto_persist_migrations
+        # Populated only by graph_transaction to invalidate parent cache entries.
+        self._transaction_cache_keys: Optional[Set[str]] = None
 
         # Initialize cache backend
         if cache_backend is None:
@@ -390,21 +386,6 @@ class GraphContext:
             self._cache = create_cache()
         else:
             self._cache = cache_backend
-
-        # Serialize node edge list persistence for a given id so merge+save does not
-        # interleave with atomic_add_edge_id / atomic_remove_edge_id (lost updates).
-        self._node_edge_write_locks: Dict[str, asyncio.Lock] = {}
-        self._node_edge_locks_creation_lock = asyncio.Lock()
-
-    @asynccontextmanager
-    async def _node_edge_write_guard(self, node_id: str):
-        async with self._node_edge_locks_creation_lock:
-            lock = self._node_edge_write_locks.get(node_id)
-            if lock is None:
-                lock = asyncio.Lock()
-                self._node_edge_write_locks[node_id] = lock
-        async with lock:
-            yield
 
     @property
     def database(self) -> Database:
@@ -518,12 +499,54 @@ class GraphContext:
         try:
             from jvspatial.db.mongodb import MongoDB
 
-            return isinstance(db, MongoDB)
+            candidate: Any = db
+            for _ in range(6):
+                if isinstance(candidate, MongoDB):
+                    return True
+                candidate = getattr(candidate, "inner", None)
+                if candidate is None:
+                    break
+            return False
         except ImportError:
             return False
 
+    @staticmethod
+    def _is_postgres(db: Database) -> bool:
+        """Check if the database is a PostgresDB instance (unwraps decorators)."""
+        try:
+            from jvspatial.db.postgres import PostgresDB
+
+            candidate: Any = db
+            for _ in range(6):
+                if isinstance(candidate, PostgresDB):
+                    return True
+                candidate = getattr(candidate, "inner", None)
+                if candidate is None:
+                    break
+            return False
+        except ImportError:
+            return False
+
+    @staticmethod
+    def _fast_deserialize_enabled() -> bool:
+        from jvspatial.env import env, parse_bool_basic
+
+        return bool(
+            env(
+                "JVSPATIAL_FAST_DESERIALIZE",
+                default=False,
+                parse=parse_bool_basic,
+            )
+        )
+
     async def _get_from_cache(self, entity_id: str) -> Optional[Any]:
         """Get entity from cache if available."""
+        imap = _request_identity_map.get()
+        if imap is not None and entity_id in imap:
+            result = imap[entity_id]
+            if self._perf_monitoring_enabled and self._perf_monitor:
+                self._perf_monitor.record_cache_hit()
+            return result
         result = await self._cache.get(entity_id)
         # Track cache hit/miss
         if self._perf_monitoring_enabled and self._perf_monitor:
@@ -535,7 +558,21 @@ class GraphContext:
 
     async def _add_to_cache(self, entity_id: str, entity: Any) -> None:
         """Add entity to cache."""
+        if self._transaction_cache_keys is not None:
+            self._transaction_cache_keys.add(entity_id)
+        imap = _request_identity_map.get()
+        if imap is not None:
+            imap[entity_id] = entity
         await self._cache.set(entity_id, entity)
+
+    async def _evict_from_cache(self, entity_id: str) -> None:
+        """Remove an entity from request and process caches."""
+        if self._transaction_cache_keys is not None:
+            self._transaction_cache_keys.add(entity_id)
+        imap = _request_identity_map.get()
+        if imap is not None:
+            imap.pop(entity_id, None)
+        await self._cache.delete(entity_id)
 
     async def clear_cache(self) -> None:
         """Clear the entity cache."""
@@ -718,23 +755,11 @@ class GraphContext:
         if self._cache:
             await self._cache.delete(entity_id)
 
-    async def save(
-        self,
-        entity,
-        *,
-        merge_node_edges: bool = True,
-        _holding_node_edge_lock: bool = False,
-    ):
+    async def save(self, entity):
         """Save an entity to the database.
 
         Args:
             entity: Entity instance to save
-            merge_node_edges: For nodes, whether to union persisted ``edges`` with the
-                on-disk copy so concurrent ``atomic_add_edge_id`` updates are not lost.
-                Set to False when persisting an authoritative edge list (e.g. after
-                ``atomic_remove_edge_id``) so removals are not undone by a stale read.
-            _holding_node_edge_lock: Internal: caller already holds
-                ``_node_edge_write_guard`` for this node (avoids deadlock).
 
         Returns:
             The saved entity instance
@@ -742,12 +767,7 @@ class GraphContext:
         # Export entity - Node, Edge, and Walker return nested format
         if hasattr(entity, "type_code"):
             type_code = getattr(entity, "type_code", "")
-            if type_code == "n":  # Node - include edges for database persistence
-                record = await entity.export(include_edges=True)
-                # Ensure entity field is set
-                if "entity" not in record:
-                    record["entity"] = entity.entity
-            elif type_code in ("e", "w"):  # Edge or Walker
+            if type_code in ("n", "e", "w"):
                 record = await entity.export()
                 # Ensure entity field is set
                 if "entity" not in record:
@@ -820,31 +840,12 @@ class GraphContext:
             hasattr(entity, "type_code") and getattr(entity, "type_code", "") == "n"
         )
 
-        async def _merge_edges_and_write() -> None:
-            # Merge node edge lists with the DB so full-document saves do not clobber
-            # edge IDs added concurrently via atomic_add_edge_id (or another writer).
-            if merge_node_edges and is_node:
-                fresh = await _unwrap_db_get_result(await db.get(collection, entity.id))
-                e_mem = set(_coerce_edge_id_list(record.get("edges")))
-                e_db = set(_coerce_edge_id_list((fresh or {}).get("edges")))
-                merged = sorted(e_mem | e_db)
-                record["edges"] = merged
-                if hasattr(entity, "edge_ids"):
-                    object.__setattr__(entity, "edge_ids", list(merged))
-            elif is_node:
-                # Authoritative save: keep exported edges and mirror them onto the entity.
-                merged = _coerce_edge_id_list(record.get("edges"))
-                record["edges"] = merged
-                if hasattr(entity, "edge_ids"):
-                    object.__setattr__(entity, "edge_ids", list(merged))
-            await db.save(collection, record)
+        # Adjacency lives in the edge collection. Never write a legacy ``edges``
+        # array onto node rows (a leftover in-memory copy must not re-persist it).
+        if is_node:
+            record.pop("edges", None)
 
-        if is_node and not _holding_node_edge_lock:
-            async with self._node_edge_write_guard(entity.id):
-                await _merge_edges_and_write()
-        else:
-            await _merge_edges_and_write()
-        # Update cache with latest version
+        await db.save(collection, record)
         await self._add_to_cache(entity.id, entity)
         return entity
 
@@ -867,8 +868,9 @@ class GraphContext:
 
         if isinstance(entity, Node):
             # Check if this is a recursive call from Node.delete() by checking
-            # if cascade=False and the node has no edges (cleaned up by Node.delete())
-            if not cascade and len(entity.edge_ids) == 0:
+            # if cascade=False and the node has no remaining incident edges
+            # (cleaned up by Node.delete()).
+            if not cascade and await entity.connection_count() == 0:
                 # Node.delete() has cleaned up edges, just delete the entity
                 collection = self._get_collection_name("n")
                 await self.database.delete(collection, entity.id)
@@ -878,29 +880,10 @@ class GraphContext:
             await entity.delete(cascade=cascade)
             return
 
-        # For Edge entities, clean up edge_ids on source/target nodes before deletion
-        from .entities.edge import Edge
-
-        if isinstance(entity, Edge):
-            source_id = getattr(entity, "source", None)
-            target_id = getattr(entity, "target", None)
-            for node_id in (source_id, target_id):
-                if not node_id:
-                    continue
-                try:
-                    await self.atomic_remove_edge_id(node_id, entity.id)
-                except Exception:
-                    logger.warning(
-                        "Failed to remove edge %s from node %s edge_ids",
-                        entity.id,
-                        node_id,
-                        exc_info=True,
-                    )
-
         collection = self._get_collection_name(entity.type_code)
         db = self.database
         await db.delete(collection, entity.id)
-        await self._cache.delete(entity.id)
+        await self._evict_from_cache(entity.id)
 
     async def find(
         self, entity_class, query: Dict[str, Any], limit: Optional[int] = None
@@ -987,6 +970,7 @@ class GraphContext:
         direction: str = "both",
         limit: int = 50,
         cursor: int = 0,
+        after: Optional[str] = None,
         detail_level: str = "full",
     ) -> Dict[str, Any]:
         """Return a page of incident edges and neighbor summaries for progressive UIs.
@@ -1003,6 +987,7 @@ class GraphContext:
             direction=direction,
             limit=limit,
             cursor=cursor,
+            after=after,
             detail_level=detail_level,  # type: ignore[arg-type]
         )
 
@@ -1137,91 +1122,6 @@ class GraphContext:
         except Exception:
             return False
 
-    async def atomic_add_edge_id(self, node_id: str, edge_id: str) -> bool:
-        """Atomically add *edge_id* to a node's ``edges`` list using $addToSet.
-
-        Falls back to read-modify-write when the database does not support
-        atomic updates or when the document is not found.
-
-        Returns True on success, False on failure.
-        """
-        db = self.database
-        if self._is_mongodb(db):
-            try:
-                result = await db.find_one_and_update(
-                    "node",
-                    {"_id": node_id},
-                    {"$addToSet": {"edges": edge_id}},
-                )
-                if result is not None:
-                    cached = await self._get_from_cache(node_id)
-                    if (
-                        cached
-                        and hasattr(cached, "edge_ids")
-                        and edge_id not in cached.edge_ids
-                    ):
-                        cached.edge_ids.append(edge_id)
-                    return True
-            except Exception:
-                logger.warning(
-                    "atomic_add_edge_id failed for node %s edge %s, falling back",
-                    node_id,
-                    edge_id,
-                    exc_info=True,
-                )
-
-        # Fallback: read-modify-write (used for JsonDB, SQLite, etc.)
-        from .entities.node import Node
-
-        async with self._node_edge_write_guard(node_id):
-            node = await self.get(Node, node_id)
-            if node and edge_id not in node.edge_ids:
-                node.edge_ids.append(edge_id)
-                await self.save(node, _holding_node_edge_lock=True)
-        return node is not None
-
-    async def atomic_remove_edge_id(self, node_id: str, edge_id: str) -> bool:
-        """Atomically remove *edge_id* from a node's ``edges`` list using $pull.
-
-        Falls back to read-modify-write when the database does not support
-        atomic updates or when the document is not found.
-
-        Returns True on success, False on failure.
-        """
-        db = self.database
-        if self._is_mongodb(db):
-            try:
-                result = await db.find_one_and_update(
-                    "node",
-                    {"_id": node_id},
-                    {"$pull": {"edges": edge_id}},
-                )
-                if result is not None:
-                    cached = await self._get_from_cache(node_id)
-                    if cached and hasattr(cached, "edge_ids"):
-                        with suppress(ValueError):
-                            cached.edge_ids.remove(edge_id)
-                    return True
-            except Exception:
-                logger.warning(
-                    "atomic_remove_edge_id failed for node %s edge %s, falling back",
-                    node_id,
-                    edge_id,
-                    exc_info=True,
-                )
-
-        # Fallback: read-modify-write
-        from .entities.node import Node
-
-        async with self._node_edge_write_guard(node_id):
-            node = await self.get(Node, node_id)
-            if node and edge_id in node.edge_ids:
-                node.edge_ids.remove(edge_id)
-                await self.save(
-                    node, merge_node_edges=False, _holding_node_edge_lock=True
-                )
-        return node is not None
-
     async def atomic_increment(self, node_id: str, field: str, amount: int = 1) -> bool:
         """Atomically increment a numeric field on a node using $inc.
 
@@ -1235,6 +1135,20 @@ class GraphContext:
 
         Returns True on success, False on failure.
         """
+        from .annotations import is_protected
+        from .entities.node import Node
+
+        if not field.isidentifier() or field.startswith("_"):
+            raise ValueError("Invalid increment field")
+        node = await self.get(Node, node_id)
+        if node is None or not hasattr(node, field):
+            return False
+        if is_protected(type(node), field):
+            raise ValueError("Cannot increment a protected field")
+        current = getattr(node, field)
+        if not isinstance(current, (int, float)) or isinstance(current, bool):
+            raise TypeError("Increment field must be numeric")
+
         db = self.database
         if self._is_mongodb(db):
             try:
@@ -1246,8 +1160,7 @@ class GraphContext:
                 if result is not None:
                     cached = await self._get_from_cache(node_id)
                     if cached and hasattr(cached, field):
-                        current = getattr(cached, field, 0) or 0
-                        object.__setattr__(cached, field, current + amount)
+                        setattr(cached, field, current + amount)
                     return True
             except Exception:
                 logger.warning(
@@ -1258,14 +1171,9 @@ class GraphContext:
                 )
 
         # Fallback: read-modify-write
-        from .entities.node import Node
-
-        node = await self.get(Node, node_id)
-        if node and hasattr(node, field):
-            current = getattr(node, field, 0) or 0
-            setattr(node, field, current + amount)
-            await self.save(node)
-        return node is not None
+        setattr(node, field, current + amount)
+        await self.save(node)
+        return True
 
     # Advanced query operations for performance optimization
     async def find_nodes(
@@ -1326,43 +1234,20 @@ class GraphContext:
         ``sort`` is expected to include at least one field; ``id`` is appended as
         a deterministic tiebreaker when missing.
         """
+        from .pager import (
+            decode_keyset_cursor,
+            encode_keyset_cursor,
+            keyset_filter,
+            keyset_sort_fields,
+        )
+
         page_limit = max(1, int(limit))
-        if not sort:
-            sort = [("id", 1)]
-        sort_fields: List[Tuple[str, int]] = list(sort)
-        if not any(field == "id" for field, _ in sort_fields):
-            sort_fields.append(("id", sort_fields[0][1]))
-
+        sort_fields = keyset_sort_fields(sort)
         final_query: Dict[str, Any] = dict(query or {})
-        cursor_payload: Optional[Dict[str, Any]] = None
-        if isinstance(after, str) and after:
-            try:
-                cursor_payload = json.loads(
-                    base64.urlsafe_b64decode(after.encode()).decode()
-                )
-            except Exception:
-                cursor_payload = None
-        elif isinstance(after, dict):
-            cursor_payload = after
-
-        primary_field, primary_dir = sort_fields[0]
-        id_dir = sort_fields[-1][1]
-        if cursor_payload and "id" in cursor_payload and "sort" in cursor_payload:
-            sort_op = "$lt" if primary_dir < 0 else "$gt"
-            id_op = "$lt" if id_dir < 0 else "$gt"
-            keyset_filter = {
-                "$or": [
-                    {primary_field: {sort_op: cursor_payload["sort"]}},
-                    {
-                        "$and": [
-                            {primary_field: cursor_payload["sort"]},
-                            {"id": {id_op: cursor_payload["id"]}},
-                        ]
-                    },
-                ]
-            }
+        after_cursor = keyset_filter(sort_fields, decode_keyset_cursor(after))
+        if after_cursor is not None:
             final_query = (
-                {"$and": [final_query, keyset_filter]} if final_query else keyset_filter
+                {"$and": [final_query, after_cursor]} if final_query else after_cursor
             )
 
         rows = await self.database.find(
@@ -1370,15 +1255,11 @@ class GraphContext:
         )
         has_more = len(rows) > page_limit
         page_rows = rows[:page_limit]
-
-        next_cursor: Optional[str] = None
-        if has_more and page_rows:
-            last = page_rows[-1]
-            payload = {"id": last.get("id"), "sort": last.get(primary_field)}
-            next_cursor = base64.urlsafe_b64encode(
-                json.dumps(payload, separators=(",", ":")).encode()
-            ).decode()
-
+        next_cursor = (
+            encode_keyset_cursor(page_rows[-1], sort_fields)
+            if has_more and page_rows
+            else None
+        )
         return page_rows, next_cursor
 
     async def nodes_bulk(
@@ -1391,8 +1272,15 @@ class GraphContext:
         edge_filter: Optional[Dict[str, Any]] = None,
         node_filter: Optional[Dict[str, Any]] = None,
         limit: Optional[int] = None,
+        limit_per_source: Optional[int] = None,
     ) -> Dict[str, List[Any]]:
-        """Batch traversal for many source IDs in one edge-query pass."""
+        """Batch traversal for many source IDs in one edge-query pass.
+
+        ``limit_per_source`` caps the neighbours returned per source id. On
+        backends with ``find_connected_nodes_bulk`` (Postgres) an ``out`` /
+        ``in`` traversal without the legacy global ``limit`` is one round trip
+        (``ROW_NUMBER() OVER (PARTITION BY source)``).
+        """
         from .entities.edge import Edge
         from .entities.node import Node
 
@@ -1414,6 +1302,36 @@ class GraphContext:
 
         if direction not in ("out", "in", "both"):
             direction = "out"
+
+        bulk = getattr(self.database, "find_connected_nodes_bulk", None)
+        if callable(bulk) and limit is None and direction in ("out", "in"):
+            try:
+                rows_by_source = await bulk(
+                    self._get_collection_name("n"),
+                    self._get_collection_name("e"),
+                    unique_ids,
+                    direction=direction,
+                    edge_entities=edge_entities or None,
+                    node_entities=node_entities or None,
+                    edge_query={
+                        f"context.{k}": v for k, v in (edge_filter or {}).items()
+                    }
+                    or None,
+                    node_query={
+                        f"context.{k}": v for k, v in (node_filter or {}).items()
+                    }
+                    or None,
+                    limit_per_source=limit_per_source,
+                )
+            except NotImplementedError:
+                rows_by_source = None
+            if rows_by_source is not None:
+                for src_id, rows in rows_by_source.items():
+                    for row in rows:
+                        obj = await self._deserialize_entity(Node, row)
+                        if obj is not None:
+                            out.setdefault(src_id, []).append(obj)
+                return out
 
         edge_query: Dict[str, Any] = {}
         if direction == "out":
@@ -1481,6 +1399,8 @@ class GraphContext:
             if obj is not None:
                 node_by_id[doc["id"]] = obj
 
+        caps = [c for c in (limit, limit_per_source) if c is not None]
+        cap = max(1, min(caps)) if caps else None
         for src_id, target_ids in links.items():
             matched: List[Any] = []
             for tid in target_ids:
@@ -1488,7 +1408,7 @@ class GraphContext:
                 if obj is None:
                     continue
                 matched.append(obj)
-                if limit is not None and len(matched) >= max(1, limit):
+                if cap is not None and len(matched) >= cap:
                     break
             out[src_id] = matched
         return out
@@ -1531,43 +1451,68 @@ class GraphContext:
 
         # Check if we've already ensured indexes for this collection
         collection_key = f"{collection}:{entity_class._entity_name()}"
-        if collection_key in _ensured_indexes:
+        ensured = _ensured_indexes.setdefault(self.database, set())
+        if collection_key in ensured:
             return  # Already ensured
 
         # Get index definitions from the class
         indexes = entity_class.get_indexes()
         if not indexes:
-            _ensured_indexes.add(collection_key)
+            ensured.add(collection_key)
             return  # No indexes defined
 
         # Check if database supports indexing
         if not hasattr(self.database, "create_index"):
-            _ensured_indexes.add(collection_key)
+            ensured.add(collection_key)
             return  # Database doesn't support indexing
+
+        # Per-class (annotation-declared) indexes are scoped to the class's
+        # entity on Postgres: entity-leading or entity-partial, replacing the
+        # unscoped pre-0.0.18 index of the same fields. The scoping keys are
+        # Postgres-only; other adapters receive the plain definition, and
+        # full-text definitions are skipped where ``$text`` runs in memory.
+        is_postgres = self._is_postgres(self.database)
+        scope_keys = ("per_class", "entity_leading", "partial_by_entity", "fulltext")
+
+        def _scoped(index_def: Dict[str, Any], extra: Dict[str, Any]) -> Dict[str, Any]:
+            if is_postgres and index_def.get("per_class"):
+                extra.update(
+                    entity=entity_class._entity_name(),
+                    drop_legacy=True,
+                    entity_leading=index_def.get("entity_leading", True),
+                    partial_by_entity=index_def.get("partial_by_entity", False),
+                    fulltext=index_def.get("fulltext", False),
+                )
+            return extra
 
         # Create each index
         for index_def in indexes:
+            if index_def.get("fulltext") and not is_postgres:
+                continue
             try:
                 if "field" in index_def:
                     # Single-field index; pass through name and extra kwargs
                     extra = {
                         k: v
                         for k, v in index_def.items()
-                        if k not in ("field", "unique", "direction")
+                        if k not in ("field", "unique", "direction", *scope_keys)
                     }
                     await self.database.create_index(
                         collection,
                         index_def["field"],
                         unique=index_def.get("unique", False),
-                        **extra,
+                        **_scoped(index_def, extra),
                     )
                 elif "fields" in index_def:
                     # Compound index; pass through name and other create_index kwargs
-                    extra = {
-                        k: v
-                        for k, v in index_def.items()
-                        if k not in ("fields", "unique")
-                    }
+                    extra = _scoped(
+                        index_def,
+                        {
+                            k: v
+                            for k, v in index_def.items()
+                            if k not in ("fields", "unique", *scope_keys)
+                        },
+                    )
                     await self.database.create_index(
                         collection,
                         index_def["fields"],
@@ -1582,10 +1527,15 @@ class GraphContext:
                 )
 
         # Mark as ensured
-        _ensured_indexes.add(collection_key)
+        ensured.add(collection_key)
 
     async def find_edges_between(
-        self, source_id: str, target_id: Optional[str] = None, edge_class=None, **kwargs
+        self,
+        source_id: str,
+        target_id: Optional[str] = None,
+        edge_class=None,
+        limit: Optional[int] = None,
+        **kwargs,
     ) -> List:
         """Find edges between nodes using database queries.
 
@@ -1593,6 +1543,7 @@ class GraphContext:
             source_id: Source node ID
             target_id: Target node ID (optional)
             edge_class: Edge class to filter by
+            limit: Maximum number of edges to return (pushed to the database)
             **kwargs: Additional edge properties to match
 
         Returns:
@@ -1626,7 +1577,7 @@ class GraphContext:
 
         collection = self._get_collection_name(self._get_entity_type_code(edge_cls))
         db = self.database
-        results = await db.find(collection, query)
+        results = await db.find(collection, query, limit=limit)
 
         edges = []
         for data in results:
@@ -1722,18 +1673,40 @@ class GraphContext:
 
             # entity_type_code already computed above
 
-            if entity_type_code == "n":
-                # Handle Node-specific logic
-                # Extract edge_ids from data (stored as "edges" at top level)
-                # Edges are included in database exports but excluded from default exports
-                edge_ids = data.get("edges", [])
+            if self._fast_deserialize_enabled():
+                if entity_type_code == "n":
+                    context_data.pop("edge_ids", None)
+                    context_data.pop("id", None)
+                    context_data.pop("type_code", None)
+                    entity = target_class.model_construct(id=data["id"], **context_data)
+                elif entity_type_code == "e":
+                    context_data.pop("source", None)
+                    context_data.pop("target", None)
+                    context_data.pop("bidirectional", None)
+                    context_data.pop("id", None)
+                    context_data.pop("type_code", None)
+                    entity = target_class.model_construct(
+                        id=data["id"],
+                        source=data["source"],
+                        target=data["target"],
+                        bidirectional=data.get("bidirectional", True),
+                        **context_data,
+                    )
+                else:
+                    context_data.pop("id", None)
+                    context_data.pop("type_code", None)
+                    entity = target_class.model_construct(id=data["id"], **context_data)
+                object.__setattr__(entity, "_initializing", False)
+                entity._graph_context = self
+                return entity
 
-                # Remove edge_ids, id, and type_code from context_data as they're handled separately
+            if entity_type_code == "n":
+                # Remove legacy adjacency keys and system fields from context
                 context_data.pop("edge_ids", None)
                 context_data.pop("id", None)
                 context_data.pop("type_code", None)
 
-                entity = target_class(id=data["id"], edge_ids=edge_ids, **context_data)
+                entity = target_class(id=data["id"], **context_data)
 
             elif entity_type_code == "e":
                 # Handle Edge-specific logic with source/target at top level
@@ -1802,13 +1775,27 @@ class GraphContext:
 
         # Process each type group
         for collection, type_entities in entities_by_type.items():
+            is_node_collection = collection == "node"
+            if is_node_collection:
+                for entity in type_entities:
+                    try:
+                        saved = await self.save(entity)
+                        saved_entities.append(saved)
+                    except Exception as e:
+                        logger.error(
+                            "Failed to save entity %s: %s",
+                            getattr(entity, "id", "unknown"),
+                            e,
+                            exc_info=True,
+                        )
+                continue
+
             # Export all entities of this type
             records = []
             for entity in type_entities:
+                record = await entity.export()
                 if getattr(entity, "type_code", "") == "n":
-                    record = await entity.export(include_edges=True)
-                else:
-                    record = await entity.export()
+                    record.pop("edges", None)
                 records.append(record)
 
             # Save all records of this type
@@ -1883,25 +1870,41 @@ class GraphContext:
             else:
                 uncached_ids.append(entity_id)
 
+        chunk_size = 500
+
         # Fetch uncached entities from database
         if uncached_ids:
             type_code = self._get_entity_type_code(entity_class)
             collection = self._get_collection_name(type_code)
             db = self.database
 
-            # Use database batch query if available
-            query = {"id": {"$in": uncached_ids}}
-            results = await db.find(collection, query)
-
-            # Deserialize results
-            for data in results:
-                try:
-                    entity = await self._deserialize_entity(entity_class, data)
-                    if entity:
-                        await self._add_to_cache(entity.id, entity)
-                        cached_entities.append(entity)
-                except Exception:
-                    continue
+            find_many = getattr(db, "find_many", None)
+            for offset in range(0, len(uncached_ids), chunk_size):
+                chunk = uncached_ids[offset : offset + chunk_size]
+                if callable(find_many):
+                    results_map = await find_many(collection, chunk)
+                    for entity_id in chunk:
+                        data = results_map.get(entity_id)
+                        if not data:
+                            continue
+                        try:
+                            entity = await self._deserialize_entity(entity_class, data)
+                            if entity:
+                                await self._add_to_cache(entity.id, entity)
+                                cached_entities.append(entity)
+                        except Exception:
+                            continue
+                else:
+                    query = {"id": {"$in": chunk}}
+                    results = await db.find(collection, query)
+                    for data in results:
+                        try:
+                            entity = await self._deserialize_entity(entity_class, data)
+                            if entity:
+                                await self._add_to_cache(entity.id, entity)
+                                cached_entities.append(entity)
+                        except Exception:
+                            continue
 
         return cached_entities
 
@@ -2212,39 +2215,81 @@ async def async_graph_context(database: Optional[Database] = None):
     yield ctx
 
 
-@asynccontextmanager
-async def async_transaction_context(database: Optional[Database] = None):
-    """Async context manager for database transactions.
+class TransactionUnavailable(RuntimeError):
+    """The configured store cannot host a graph transaction."""
 
-    Captures the transaction object returned by ``begin_transaction()`` and
-    passes it to ``commit_transaction``/``rollback_transaction`` so that the
-    MongoDB session handle is not lost between calls.
+
+def _transaction_database(database: Optional[Any]) -> Any:
+    """Unwrap observable/cache wrappers to the adapter that owns connections."""
+    current = database
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if callable(getattr(current, "begin_transaction", None)):
+            return current
+        nested = getattr(current, "inner", None)
+        if nested is None:
+            break
+        current = nested
+    return database
+
+
+@asynccontextmanager
+async def graph_transaction(database: Optional[Any] = None):
+    """Run Node and Edge writes in one ACID transaction.
+
+    Opens the backend transaction, binds a :class:`GraphContext` to that
+    handle, and makes it the task-local default so ``Node.create`` and
+    ``Node.connect`` participate. Success commits; any exception rolls
+    back every write in the block.
+
+    Requires a backend that exposes ``begin_transaction``,
+    ``commit_transaction``, and ``rollback_transaction`` (Postgres today).
 
     Usage:
-        async with async_transaction_context(my_db) as ctx:
-            node = await ctx.create_node(name="Test")
-            # All operations are automatically committed
+        async with graph_transaction(db) as ctx:
+            parent = await Folder.create(name="inbox")
+            child = await Note.create(title="hello")
+            await parent.connect(child, edge=Contains)
     """
-    ctx = GraphContext(database)
-    txn = None
+    db = _transaction_database(database)
+    if db is None:
+        probe = GraphContext()
+        db = _transaction_database(probe.database)
+    required = ("begin_transaction", "commit_transaction", "rollback_transaction")
+    if not all(callable(getattr(db, name, None)) for name in required):
+        raise TransactionUnavailable(
+            "graph_transaction requires a database with begin/commit/rollback"
+        )
+    txn = await db.begin_transaction()
+    ctx = GraphContext(txn)
+    parent_ctx = _default_context_var.get() or _module_default_context
+    ctx._transaction_cache_keys = set()
+    identity_token = begin_request_identity_map()
     try:
-        if hasattr(ctx.database, "begin_transaction"):
-            txn = await ctx.database.begin_transaction()
-        yield ctx
-        if txn is not None and hasattr(ctx.database, "commit_transaction"):
-            await ctx.database.commit_transaction(txn)
-        elif txn is None and hasattr(ctx.database, "commit_transaction"):
-            # Backend's commit_transaction accepts no txn argument (non-Mongo)
-            try:
-                await ctx.database.commit_transaction()
-            except TypeError:
-                await ctx.database.commit_transaction(None)
-    except Exception:
-        if txn is not None and hasattr(ctx.database, "rollback_transaction"):
-            await ctx.database.rollback_transaction(txn)
-        elif txn is None and hasattr(ctx.database, "rollback_transaction"):
-            try:
-                await ctx.database.rollback_transaction()
-            except TypeError:
-                await ctx.database.rollback_transaction(None)
+        async with scoped_default_context_async(ctx):
+            yield ctx
+        await db.commit_transaction(txn)
+    except BaseException:
+        await db.rollback_transaction(txn)
         raise
+    finally:
+        end_request_identity_map(identity_token)
+        touched = ctx._transaction_cache_keys
+        ctx._transaction_cache_keys = None
+        for entity_id in touched or ():
+            await ctx._evict_from_cache(entity_id)
+            if parent_ctx is not None:
+                await parent_ctx._evict_from_cache(entity_id)
+
+
+@asynccontextmanager
+async def async_transaction_context(database: Optional[Any] = None):
+    """Alias for :func:`graph_transaction`.
+
+    The previous implementation opened a transaction but kept writing
+    through the pool connection, so ``Node.create`` never joined the
+    commit. Callers should use :func:`graph_transaction`.
+    """
+    async with graph_transaction(database) as ctx:
+        yield ctx

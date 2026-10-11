@@ -82,13 +82,13 @@ async def test_edge_removal_from_both_nodes(context):
     node2 = await Node.create()
     await node1.connect(node2)
 
-    initial_edges_node1 = len(node1.edge_ids)
-    initial_edges_node2 = len(node2.edge_ids)
+    assert await node1.connection_count() == 1
+    assert await node2.connection_count() == 1
 
     await node1.disconnect(node2)
 
-    assert len(node1.edge_ids) == initial_edges_node1 - 1
-    assert len(node2.edge_ids) == initial_edges_node2 - 1
+    assert await node1.connection_count() == 0
+    assert await node2.connection_count() == 0
 
 
 # Define custom node types for node() method testing

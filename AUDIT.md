@@ -1,6 +1,6 @@
 # jvspatial — Foundation Audit
 
-> **Purpose**: First retrospective audit of the jvspatial foundation against the contracts now codified in [SPEC.md](SPEC.md), [PRD.md](PRD.md), and [CLAUDE.md](CLAUDE.md). Findings are the backlog for the next phase of hardening.
+> **Purpose**: First retrospective audit of the jvspatial foundation against the contracts now codified in [SPEC.md](SPEC.md), [PRD.md](PRD.md), and [AGENTS.md](AGENTS.md). Findings are the backlog for the next phase of hardening.
 >
 > **Method**: Five parallel reviewers, one per dimension: async contract, security boundaries, database adapter parity, walker/identity invariants, serverless/config/stability. Each returned a severity-tagged finding table with file:line citations.
 >
@@ -21,7 +21,7 @@ Top themes:
 3. **Async contract has real holes, mostly in JsonDB.** Five CRITs: webhook walker `enhanced_init` is `async def __init__` (Python ignores; coroutine leaks every construction), webhook `endpoint_func(**kwargs)` is unawaited, storage `delete_file` unawaited, two `Path.write_text` calls inside `async def` graph exporters. Plus a string of `path.exists()` / `path.glob()` sync stats inside JsonDB `async` methods that block the event loop.
 4. **Storage path traversal in `LocalFileInterface` versioning methods.** Primary save/read/delete go through `PathSanitizer`; the versioning subpaths (`create_version`, `get_version`, `list_versions`, `delete_version`, `get_latest_version`) compute `root_dir / f"{file_path}.versions"` without sanitization — user-controlled `file_path` like `../../etc/passwd` escapes the storage root.
 5. **Webhook HMAC verification is broken.** A 7-character slice bug in `webhook_auth.utils.verify_signature` makes `hmac.compare_digest` always compare a 64-char hex digest to a 57-char prefix → always False. Webhook signature auth currently rejects every request.
-6. **SHA-256 fallback uses `==`, not `compare_digest`.** `AuthenticationService._verify_refresh_token` falls back to `hashlib.sha256(token) == hashed` when bcrypt/argon2 fail to import; this path covers refresh tokens AND password-reset tokens. CLAUDE.md §2 non-negotiable.
+6. **SHA-256 fallback uses `==`, not `compare_digest`.** `AuthenticationService._verify_refresh_token` falls back to `hashlib.sha256(token) == hashed` when bcrypt/argon2 fail to import; this path covers refresh tokens AND password-reset tokens. AGENTS.md §2 non-negotiable.
 7. **DynamoDB throttle-retry is partial.** Only `save`/`get`/`delete` are wrapped. `find` / `count` / `batch_get` / `batch_write` surface `ProvisionedThroughputExceededException` directly to callers, even though the adapter claims throttle retry (SPEC §4.3).
 8. **Env-var allowlist is not enforced.** SPEC §10.2 promises "Unknown `JVSPATIAL_*` keys are rejected at startup to catch typos." `env_adapter.py` only *reads* enumerated keys; it never *scans* the environment for stray `JVSPATIAL_*` and rejects. Plus three divergent `parse_bool` implementations across `env.py` / `env_adapter.py` / `runtime/serverless.py`.
 
@@ -33,7 +33,7 @@ These are listed below with file:line citations and one-line fixes. The audit wa
 
 - **Sections** are by dimension (async, security, database, walker, serverless).
 - **Within a section**, findings sorted by severity then file.
-- **`Cite`** column references SPEC §, CLAUDE.md §, or ROADMAP §.
+- **`Cite`** column references SPEC §, AGENTS.md §, or ROADMAP §.
 - **`Fix`** is the smallest change that closes the gap, not necessarily the best long-term fix.
 
 When the same root cause shows up in multiple dimensions, it is listed once (under the most specific dimension) and cross-referenced.
@@ -62,7 +62,7 @@ The most important class of findings. SPEC §1.2: `__entity_name__` is per-subcl
 
 ## 2. Walker Protection Gaps
 
-SPEC §6.3 / CLAUDE.md §9. Promised limits are partially unenforced.
+SPEC §6.3 / AGENTS.md §9. Promised limits are partially unenforced.
 
 | # | Sev | File:Line | Problem | Fix | Cite |
 |---|---|---|---|---|---|
@@ -81,7 +81,7 @@ SPEC §6.3 / CLAUDE.md §9. Promised limits are partially unenforced.
 
 ## 3. Async Contract Violations
 
-CLAUDE.md §1 / SPEC §3. Five real bugs, plus a long tail of `path.glob`/`path.exists` sync stats blocking the event loop in JsonDB.
+AGENTS.md §1 / SPEC §3. Five real bugs, plus a long tail of `path.glob`/`path.exists` sync stats blocking the event loop in JsonDB.
 
 | # | Sev | File:Line | Problem | Fix | Cite |
 |---|---|---|---|---|---|
@@ -103,25 +103,25 @@ CLAUDE.md §1 / SPEC §3. Five real bugs, plus a long tail of `path.glob`/`path.
 
 ## 4. Security Boundaries
 
-SPEC §15 / CLAUDE.md §2.
+SPEC §15 / AGENTS.md §2.
 
 | # | Sev | File:Line | Problem | Fix | Cite |
 |---|---|---|---|---|---|
-| 4.1 | CRIT | `api/auth/service.py:367` | `hashlib.sha256(token).hexdigest() == hashed` — refresh-token / password-reset-token hash compared with `==`. | `hmac.compare_digest(...)`. | SPEC §15.2, CLAUDE §2 |
+| 4.1 | CRIT | `api/auth/service.py:367` | `hashlib.sha256(token).hexdigest() == hashed` — refresh-token / password-reset-token hash compared with `==`. | `hmac.compare_digest(...)`. | SPEC §15.2, AGENTS §2 |
 | 4.2 | CRIT | `storage/interfaces/local.py:207, 220, 252, 260, 288, 327, 332, 333, 356` | All file-versioning methods compute `root_dir / f"{file_path}.versions"` without `PathSanitizer`; user-controlled `file_path` escapes the storage root. | Sanitize `file_path` through `_get_full_path()` before building versioned paths; resolve and `.relative_to(self.root_dir)` the result. | SPEC §15.1 |
 | 4.3 | CRIT | `api/integrations/webhooks/utils.py:176` | `hmac.compare_digest(signature, expected_signature[len(prefix):])` — `expected_signature` is the bare hex digest; slicing 7 chars produces 57-char string vs 64-char signature → always False. Webhook HMAC always rejects. | Drop the slice: `compare_digest(signature, expected_signature)`. | SPEC §15.2 |
-| 4.4 | HIGH | `api/auth/api_key_service.py:30` | `self.context = context or get_default_context()` — auth state can land on non-prime DB when a caller forgets to pass `context`. | `context or GraphContext(database=get_prime_database())`. | SPEC §9, CLAUDE §1 |
+| 4.4 | HIGH | `api/auth/api_key_service.py:30` | `self.context = context or get_default_context()` — auth state can land on non-prime DB when a caller forgets to pass `context`. | `context or GraphContext(database=get_prime_database())`. | SPEC §9, AGENTS §1 |
 | 4.5 | HIGH | `api/auth/api_key_service.py:213-246` + `api/integrations/webhooks/webhook_auth.py:19-21, 180-183` | `revoke_key` flips `is_active=False` in DB but does not invalidate the 300s in-memory `_API_KEY_CACHE`. Revoked key authenticates for up to 5 minutes after revocation. | Add `webhook_auth.invalidate_cache(...)` hook called from `revoke_key`; or re-check `is_active` on cache hit. | SPEC §15.2 |
 | 4.6 | HIGH | `api/components/auth_configurator.py:175-391` | `/auth/register`, `/auth/login`, `/auth/forgot-password`, `/auth/reset-password`, `/auth/change-password` registered without endpoint rate-limit configs; fallback is global `default_limit=60/60s` if rate limiting is enabled at all. | Hard-code rate-limit configs during `_register_auth_endpoints`; document rate-limit middleware as required when auth enabled. | SPEC §15 |
-| 4.7 | HIGH | `api/integrations/webhooks/webhook_auth.py:19, 147-183` | `_API_KEY_CACHE` mutated across `await` without lock; eviction at size cap races with reads (`KeyError`). | Wrap in `asyncio.Lock`, or use bounded LRU with single-lock guard. | CLAUDE.md "race conditions in auth state" |
-| 4.8 | HIGH | `api/auth/enhanced.py:235-389` | `SessionManager._sessions` / `_user_sessions` mutated across `await` without lock; concurrent logout-vs-login → `RuntimeError: dictionary changed size during iteration`; `max_sessions_per_user` enforcement is racy. | `asyncio.Lock` around session create/invalidate/cleanup. | CLAUDE.md races |
+| 4.7 | HIGH | `api/integrations/webhooks/webhook_auth.py:19, 147-183` | `_API_KEY_CACHE` mutated across `await` without lock; eviction at size cap races with reads (`KeyError`). | Wrap in `asyncio.Lock`, or use bounded LRU with single-lock guard. | AGENTS.md "race conditions in auth state" |
+| 4.8 | HIGH | `api/auth/enhanced.py:235-389` | `SessionManager._sessions` / `_user_sessions` mutated across `await` without lock; concurrent logout-vs-login → `RuntimeError: dictionary changed size during iteration`; `max_sessions_per_user` enforcement is racy. | `asyncio.Lock` around session create/invalidate/cleanup. | AGENTS.md races |
 | 4.9 | HIGH | `storage/interfaces/local.py:657-659` | `get_metadata` MIME detection passes `content=b""` — falls back to extension-based `mimetypes.guess_type`; mislabels served `Content-Type`. | Read first 4 KiB of file, pass as content; or store validated MIME in sidecar at save. | SPEC §15.1 |
 | 4.10 | HIGH | `api/components/error_handler.py:763, 769-770` | If operator sets `JVSPATIAL_EXPOSE_ERROR_DETAILS=true` in production, raw exception messages leak in 500 responses; safe default exists but no guard. | Refuse to honor the flag when `get_environment_mode() == "production"`. | SPEC §15.5 |
 | 4.11 | MED | `api/auth/service.py:427` | Debug log discloses JWT secret length. | Log `secret_configured=bool(secret)` only. | SPEC §15.5 |
 | 4.12 | MED | `api/middleware/manager.py:194-197` + `api/config_groups.py:66-75` | `CORSConfig` accepts wildcard origins; no startup validator. SPEC says wildcards must trigger startup warning. | Add validator on `CORSConfig` to warn on `"*"`; fail loudly if `allow_credentials=True` + wildcard. | SPEC §15.4 |
 | 4.13 | MED | `api/auth/service.py:1052-1059` | `validate_token` warning logs the DB `base_path` — discloses internal filesystem path. | Log `db_type=type(database).__name__`. | SPEC §15.5 |
 | 4.14 | MED | `api/auth/service.py:1038-1049` | DB-error fallback in `validate_token` trusts JWT-payload roles when DB lookup fails — fails open on DB outage, within JWT-expiry window. | Fail closed: return `None` on DB error. | SPEC §9 |
-| 4.15 | MED | `api/auth/service.py:469-531` | `_blacklist_cache` dict mutated across `await` without lock; unbounded growth (per-entry TTL only). | Add `asyncio.Lock` + size cap with LRU eviction. | CLAUDE.md races |
+| 4.15 | MED | `api/auth/service.py:469-531` | `_blacklist_cache` dict mutated across `await` without lock; unbounded growth (per-entry TTL only). | Add `asyncio.Lock` + size cap with LRU eviction. | AGENTS.md races |
 | 4.16 | LOW | `api/deferred_invoke_route.py:28-37` | Empty `JVSPATIAL_DEFERRED_INVOKE_SECRET` returns `True` from `_deferred_invoke_secret_ok` — misconfigured deployment exposes internal endpoint. | Treat empty secret as "deny all". | SPEC §15.2 |
 | 4.17 | LOW | `api/auth/service.py:331, 243-244` | `JVSPATIAL_AUTH_STRICT_HASHING` defaults True for passwords, False for tokens — asymmetry surprising. | Apply strict to both; document rationale. | SPEC §15.5 |
 | 4.18 | LOW | `storage/interfaces/local.py:194-196` | Windows reserved names (CON, AUX, NUL) pass `SAFE_FILENAME_PATTERN`. | Add Windows-reserved-name check. | SPEC §15.1 |
@@ -162,9 +162,9 @@ SPEC §4-5 / ROADMAP §2.2, §2.4.
 | 6.2 | HIGH | `core/entities/edge.py:66-123` | Same: `Edge.__init_subclass__` skips `super()`. | Same fix. | SPEC §2.5 |
 | 6.3 | HIGH | `core/entities/walker.py:366-396` | Same: `Walker.__init_subclass__` skips `super()`. | Same fix. | SPEC §2.5 |
 | 6.4 | HIGH | `core/entities/root.py:19` | `_lock = asyncio.Lock()` is `ClassVar` — single global lock across all GraphContexts and event loops; "different loop" errors under per-test loop fixtures; SPEC §1.3 implies per-context. | Lock per `GraphContext` (e.g. lazy-init dict keyed by `id(context)`). | SPEC §1.3, §7.2 |
-| 6.5 | HIGH | `core/entities/root.py:100` | `object.__setattr__(self, "id", "n.Root.root")` — library bypasses its own `protected=True`. | `_unsafe_set_id` helper, or check/clear `_initializing` and route through normal setter. | CLAUDE §5 |
-| 6.6 | HIGH | `core/context.py:761, 812, 818, 1229` | Six `object.__setattr__` call sites bypass protected-attribute enforcement (id, edge_ids, atomic_increment). | Route through `AttributeMixin.__setattr__` with explicit override flag. | CLAUDE §5 |
-| 6.7 | MED | `core/mixins/deferred_save.py:119+` | No runtime check of MRO order — wrong order silently disables batching (CLAUDE.md warns but library doesn't detect). | In `__init_subclass__`, assert mixin precedes persistable base; warn or raise. | CLAUDE §6 |
+| 6.5 | HIGH | `core/entities/root.py:100` | `object.__setattr__(self, "id", "n.Root.root")` — library bypasses its own `protected=True`. | `_unsafe_set_id` helper, or check/clear `_initializing` and route through normal setter. | AGENTS §5 |
+| 6.6 | HIGH | `core/context.py:761, 812, 818, 1229` | Six `object.__setattr__` call sites bypass protected-attribute enforcement (id, edge_ids, atomic_increment). | Route through `AttributeMixin.__setattr__` with explicit override flag. | AGENTS §5 |
+| 6.7 | MED | `core/mixins/deferred_save.py:119+` | No runtime check of MRO order — wrong order silently disables batching (AGENTS.md warns but library doesn't detect). | In `__init_subclass__`, assert mixin precedes persistable base; warn or raise. | AGENTS §6 |
 | 6.8 | MED | `core/entities/object.py:112-140` | `__setattr__` allows ANY `name.startswith("_")` — callers can attach arbitrary `_foo` attributes, bypassing schema validation (SPEC promises rejection). | Restrict private bypass to declared `__private_attributes__` + `_initializing`. | SPEC §2.1 |
 | 6.9 | MED | `core/events.py:36, 119`, `core/context.py:1818-1843` | `EventBus._lock` and `event_bus` module global bound to import-time loop; tests with new loops fail. Also `get_default_context()` has check-and-set race. | Lazy-init locks per first-async-use; use `ContextVar.get` + token for default context init. | SPEC §6.x, §7.1 |
 | 6.10 | MED | `core/events.py:38-45` | `register_entity` on `walker.spawn()` has no symmetric `unregister_entity` — events keep firing to done walkers; weakref GC only. | Call `event_bus.unregister_entity(self.id)` in `disengage()` and end-of-`spawn`. | SPEC §6.x |
@@ -174,7 +174,7 @@ SPEC §4-5 / ROADMAP §2.2, §2.4.
 
 ## 7. Serverless / Config / Stability Discipline
 
-SPEC §10-11, §18 / CLAUDE.md §4, §7, §8.
+SPEC §10-11, §18 / AGENTS.md §4, §7, §8.
 
 | # | Sev | File:Line | Problem | Fix | Cite |
 |---|---|---|---|---|---|
@@ -182,12 +182,12 @@ SPEC §10-11, §18 / CLAUDE.md §4, §7, §8.
 | 7.2 | HIGH | `env_adapter.py:11` vs `env.py:36-43` vs `runtime/serverless.py:11` | Three divergent `parse_bool` implementations. `JVSPATIAL_DEBUG=on` parses different ways in different code paths. | Consolidate on `env.parse_bool`; have others import. | SPEC §10.2 |
 | 7.3 | MED | `env_adapter.py:11`, `runtime/serverless.py:11` | `_parse_bool` non-strict; `JVSPATIAL_DEBUG=garbage` silently maps to False with no validation error. Hides typos. | Raise `ValueError` on unrecognized non-empty. | SPEC §10.2 |
 | 7.4 | MED | `serverless/deferred_invoke.py:52-73` | `normalize_deferred_envelope` covers flat Lambda invoke + SQS scheduler shapes only. Direct Lambda SQS-batch trigger (`{"Records": [...]}`) raises. | Accept `Records[...]` and dispatch per-record, OR document the unwrap requirement. | SPEC §11.3 |
-| 7.5 | MED | `.env.example:94-106` vs `api/config_groups.py:66-81` | `.env.example` documents `JVSPATIAL_CORS_ORIGINS=*` with "Default: *" — actual default is localhost whitelist. Following docs degrades security. | Update `.env.example`; add production-only note. | CLAUDE §8 |
+| 7.5 | MED | `.env.example:94-106` vs `api/config_groups.py:66-81` | `.env.example` documents `JVSPATIAL_CORS_ORIGINS=*` with "Default: *" — actual default is localhost whitelist. Following docs degrades security. | Update `.env.example`; add production-only note. | AGENTS §8 |
 | 7.6 | MED | `runtime/lwa.py:107-110` (called from `server.py:137`) | LWA env defaults applied inside `Server.__init__`; LWA reads them before Python starts. The docstring acknowledges this; the practical effect is zero for the actual LWA bootstrap. | Downgrade to operator warning, or remove and document IaC-only. | SPEC §11.4 |
 | 7.7 | MED | `db/transaction.py:243-249` | `JsonDBTransaction(best_effort=True)` imports private `_emit_once` from `jvspatial.utils.stability` — internal symbol crossed module boundary. | Expose public `emit_experimental_once(...)`. | SPEC §18 |
 | 7.8 | MED | `serverless/deferred_invoke.py:1-88` | Handlers registered post-import → race: request arriving before user modules import returns 404 `UnknownDeferredTaskError`. Not silently dropped (good); but no startup-readiness log. | Log registered handlers on startup, or log debug on empty-registry first-dispatch. | SPEC §11.3 |
 | 7.9 | LOW | `env_adapter.py:39-49` | `deep_merge` silently skips `None` in override; `Server(host=None, ...)` does NOT override env. Surprising. | Document; or sentinel-based override. | SPEC §10.2 |
-| 7.10 | LOW | `api/auth/service.py:164-170` | `AuthenticationService` captures `is_serverless_mode()` and `_bcrypt_rounds` at construction; per-test mode flips require service rebuild + `reset_serverless_mode_cache()`. | Note in CLAUDE.md §4 (test guidance). | CLAUDE §4 |
+| 7.10 | LOW | `api/auth/service.py:164-170` | `AuthenticationService` captures `is_serverless_mode()` and `_bcrypt_rounds` at construction; per-test mode flips require service rebuild + `reset_serverless_mode_cache()`. | Note in AGENTS.md §4 (test guidance). | AGENTS §4 |
 | 7.11 | LOW | `runtime/lwa.py:18-23` | `_deferred_invoke_pass_through_path` reads `JVSPATIAL_API_PREFIX` directly, bypassing `resolve_api_prefix()`. Two divergent reads. | Use `resolve_api_prefix()`. | SPEC §10.4 |
 | 7.12 | LOW | `api/components/app_builder.py:58-65` | `JVSPATIAL_DOCS_DISABLED` parses with ad-hoc inline set `{"1","true","yes","on"}` — fourth divergent bool parser. | Use `env.parse_bool`. | SPEC §10.5 |
 | 7.13 | LOW | `api/middleware/manager.py:54-59` | `_DOCS_PATH_PREFIXES = ("/docs", "/redoc", "/openapi.json")` hardcoded — customizing `docs_url` breaks Swagger UI via strict CSP. | Derive from `config.docs_url`/`redoc_url`/`openapi_url`. | SPEC §10.5 |

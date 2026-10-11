@@ -65,6 +65,7 @@ Mongo connection string and database name are **`ServerConfig.database`** fields
 | `JVSPATIAL_REDIS_URL` | string | — | Redis URL for `redis` / `layered`. If backend is `memory` **and** this is set, `create_default_cache()` upgrades to **layered** (L1 memory + L2 Redis). |
 | `JVSPATIAL_REDIS_TTL` | integer | `3600` | Default TTL (seconds) for Redis entries. |
 | `JVSPATIAL_REDIS_SERIALIZATION` | string | `json` | `json` (default) writes JSON-safe cache values and avoids pickle RCE if Redis is ever writable by an attacker. `pickle` restores the legacy format. In `json` mode, existing pickle blobs are still read. Only JSON-serializable values can be stored when using `json`. |
+| `JVSPATIAL_FAST_DESERIALIZE` | boolean | `false` | When `true`, `GraphContext` hydrates DB rows via `model_construct` (skips Pydantic validation on load). Migrations still run first. Default off — enable only when persisted shape is trusted. |
 
 See the [Caching Documentation](caching.md) for detailed information about cache backends and configuration.
 
@@ -80,7 +81,7 @@ See the [Caching Documentation](caching.md) for detailed information about cache
 |----------|------|---------|-------------|
 | `SERVERLESS_MODE` | boolean | auto | Force serverless-safe runtime behavior. When unset, auto-detects AWS Lambda (`AWS_LAMBDA_RUNTIME_API` / `AWS_LAMBDA_FUNCTION_NAME`) and other common serverless runtimes. |
 | `JVSPATIAL_DEFERRED_INVOKE_DISABLED` | boolean | `false` | When true, `register_deferred_invoke_route` does not mount `POST …/_internal/deferred`. |
-| `JVSPATIAL_DEFERRED_INVOKE_SECRET` | string | _(empty)_ | When set, deferred-invoke HTTP requests must send this value via `X-JVSPATIAL-Deferred-Authorize` or `Authorization: Bearer …`. |
+| `JVSPATIAL_DEFERRED_INVOKE_SECRET` | string | _(empty)_ | Required for non-loopback callers of `POST …/_internal/deferred` (`X-JVSPATIAL-Deferred-Authorize` or `Authorization: Bearer …`). Loopback (LWA self-invoke) is always allowed without this secret. |
 | `JVSPATIAL_WORK_CLAIM_STALE_SECONDS` | float | `600` | Default TTL for work-claim leases (`claim_record`). After this many seconds another worker can re-claim the document. |
 
 Use `is_serverless_mode()` from `jvspatial` or `jvspatial.runtime.serverless` to check at runtime. With no argument, `is_serverless_mode()` uses `get_current_server().config` when the server context is set (see serverless-mode docs):
@@ -134,7 +135,7 @@ export JVSPATIAL_TEXT_NORMALIZATION_ENABLED=false
 
 Removed JWT env names (do not use): `JVSPATIAL_JWT_EXPIRATION_HOURS`, `JVSPATIAL_JWT_REFRESH_EXPIRATION_DAYS`.
 | `ADMIN_EMAIL` | string | — | Admin email for bootstrap. When set with `ADMIN_PASSWORD`, creates an admin user on first run. Pass to `auth.bootstrap_admin_email`. |
-| `ADMIN_PASSWORD` | string | — | Admin password for bootstrap (min 6 chars). Pass to `auth.bootstrap_admin_password`. |
+| `ADMIN_PASSWORD` | string | — | Admin password for bootstrap (min 12 chars). Pass to `auth.bootstrap_admin_password`. |
 | `ADMIN_NAME` | string | — | Admin display name for bootstrap. Defaults to email. Pass to `auth.bootstrap_admin_name`. |
 
 Example usage in Server config:

@@ -419,6 +419,47 @@ class MissingConfigurationError(ConfigurationError):
 
 
 # =============================================================================
+# SERVERLESS / DEFERRED TASK EXCEPTIONS
+# =============================================================================
+
+
+class DeferredTaskError(JVSpatialError, RuntimeError):
+    """Base exception for deferred task dispatch.
+
+    Also inherits :class:`RuntimeError` so existing ``except RuntimeError``
+    handlers around ``dispatch_deferred_task`` keep working — the strict
+    no-op guard raised a bare ``RuntimeError`` before this hierarchy existed.
+    """
+
+
+class TaskDispatchError(DeferredTaskError):
+    """Raised when a task was handed to the provider and the provider failed.
+
+    Distinguishable from :class:`TaskSchedulerNotConfiguredError` so a strict
+    caller can tell "retry may succeed" from "this deployment will never
+    dispatch". Only raised when the caller passed ``strict=True``; the
+    default fire-and-forget contract logs and returns a synthetic reference.
+    """
+
+    def __init__(
+        self, task_type: str, reason: str, details: Optional[Dict[str, Any]] = None
+    ):
+        message = f"Deferred task {task_type!r} was not dispatched: {reason}"
+        super().__init__(message, details)
+        self.task_type = task_type
+        self.reason = reason
+
+
+class TaskSchedulerNotConfiguredError(TaskDispatchError):
+    """Raised when the resolved scheduler cannot dispatch at all.
+
+    A missing ``AWS_LAMBDA_FUNCTION_NAME``, an unconfigured SQS client or
+    queue URL, or a logging no-op scheduler resolved while serverless mode is
+    on. Retrying will not help; the deployment needs configuration.
+    """
+
+
+# =============================================================================
 # EXPORTS
 # =============================================================================
 
@@ -472,4 +513,8 @@ __all__ = [
     # Configuration exceptions
     "InvalidConfigurationError",
     "MissingConfigurationError",
+    # Serverless / deferred task exceptions
+    "DeferredTaskError",
+    "TaskDispatchError",
+    "TaskSchedulerNotConfiguredError",
 ]

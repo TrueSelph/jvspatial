@@ -123,16 +123,16 @@ class RedisSessionStore:
         return f"{self._prefix}{key}"
 
     async def get(self, key: str) -> Optional[Any]:
-        """Return value for ``key`` from Redis or ``None`` on miss/error."""
+        """Return value for ``key`` from Redis or ``None`` on miss."""
         try:
             raw = await self._cache.get(self._k(key))
         except Exception as exc:  # pragma: no cover - depends on live Redis
             logger.warning(
-                "RedisSessionStore.get(%s) failed (%s); treating as miss",
+                "RedisSessionStore.get(%s) failed (%s)",
                 key,
                 exc,
             )
-            return None
+            raise
         if raw is None:
             return None
         # The RedisCache layer already JSON-encodes values on set; on
@@ -159,12 +159,18 @@ class RedisSessionStore:
                 json.dumps(value, default=str),
                 ttl=effective_ttl if effective_ttl > 0 else None,
             )
+            # RedisCache currently logs and swallows transport errors. Verify
+            # the write so revocation cannot report success on that path.
+            stored = await self.get(key)
+            if stored != value:
+                raise RuntimeError("Session state write was not confirmed")
         except Exception as exc:  # pragma: no cover - depends on live Redis
             logger.warning(
                 "RedisSessionStore.set(%s) failed (%s); state will diverge",
                 key,
                 exc,
             )
+            raise
 
     async def delete(self, key: str) -> None:
         """Remove ``key`` from Redis if present."""

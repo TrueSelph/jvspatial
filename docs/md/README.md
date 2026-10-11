@@ -6,7 +6,7 @@ This directory holds detailed how-to and reference documentation. For higher-lev
 - [PRD.md](../../PRD.md) — *why* the library exists, target users, non-goals
 - [SPEC.md](../../SPEC.md) — *what* the library guarantees (technical contract)
 - [ROADMAP.md](../../ROADMAP.md) — forward direction and known gaps
-- [CLAUDE.md](../../CLAUDE.md) — agent maintenance guide
+- [AGENTS.md](../../AGENTS.md) — agent maintenance guide
 - [CHANGELOG.md](../../CHANGELOG.md) — release history
 
 The documents below answer *how* to use each subsystem. Every link resolves; entries marked **NEW** were added since the previous index revision.
@@ -27,7 +27,7 @@ The documents below answer *how* to use each subsystem. Every link resolves; ent
 
 | Document | What's in it |
 |---|---|
-| [Entity Reference](entity-reference.md) | `Object`, `Node`, `Edge`, `Walker`, `Root` — fields, lifecycle, persistence shape. |
+| [Entity Reference](entity-reference.md) | `Object`, `Node`, `Edge`, `Walker`, `Root` — fields, protected assignment, lifecycle, persistence shape. |
 | [Attribute Annotations](attribute-annotations.md) | `@attribute(protected, transient, private, indexed, …)` semantics. |
 | [Graph Context](graph-context.md) | Database + cache + monitor binding; multi-database setup. |
 | [Context Management Guide](context-management-guide.md) | When and how to scope `GraphContext` / `ServerContext`. |
@@ -48,7 +48,7 @@ The documents below answer *how* to use each subsystem. Every link resolves; ent
 | [API Architecture](api-architecture.md) | Mixin composition, request lifecycle, middleware stack. |
 | [Decorator Reference](decorator-reference.md) | Every decorator the library ships: `@endpoint`, `@attribute`, `@on_visit`, etc. |
 | [Pagination](pagination.md) | `ObjectPager` usage. |
-| [Rate Limiting](rate-limiting.md) | **NEW** Token-bucket rate limit configuration. |
+| [Rate Limiting](rate-limiting.md) | Global and endpoint limits, including the independent auth-entrypoint cap. |
 | [Error Handling](error-handling.md) | Exception taxonomy and propagation. |
 
 ## Authentication and Security
@@ -97,7 +97,7 @@ The documents below answer *how* to use each subsystem. Every link resolves; ent
 | [Module Responsibility Matrix](module-responsibility-matrix.md) | Which package owns which concern. |
 | [Import Patterns](import-patterns.md) | Stable vs internal imports. |
 | [Stability](stability.md) | **NEW** Public / internal / experimental tiers + deprecation policy. |
-| [Optimization](optimization.md) | Performance tuning playbook. |
+| [Optimization](optimization.md) | Performance tuning: `neighborhood`, walker prefetch, Postgres paths, fast deserialize. |
 
 ## Configuration
 

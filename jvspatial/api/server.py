@@ -212,9 +212,9 @@ class Server(
         password = self.config.auth.bootstrap_admin_password
         if not email or not password:
             return
-        if len(password) < 6:
+        if len(password) < 12:
             self._logger.warning(
-                "bootstrap_admin_password must be at least 6 characters; skipping bootstrap"
+                "bootstrap_admin_password must be at least 12 characters; skipping bootstrap"
             )
             return
         try:

@@ -166,7 +166,7 @@ def endpoint(
         }
         config = {
             "path": path,
-            "methods": methods or ["GET"],
+            "methods": methods or (["POST"] if webhook else ["GET"]),
             "auth_required": config_auth,
             "permissions": config_permissions,
             "roles": config_roles,

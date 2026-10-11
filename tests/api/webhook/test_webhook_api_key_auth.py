@@ -45,7 +45,7 @@ class TestWebhookAPIKeyAuthentication:
         test_id = uuid.uuid4().hex[:8]
         return f"test_{test_name}_{test_id}@example.com"
 
-    def _register_and_login(self, client, email, password="password123"):
+    def _register_and_login(self, client, email, password="password12345"):
         """Helper to register and login a user."""
         # Try to register, ignore if already exists
         register_response = client.post(
@@ -199,8 +199,7 @@ class TestWebhookAPIKeyAuthentication:
             json={"event": "test"},
         )
 
-        # Should return 200 with error (webhooks always return 200)
-        assert response.status_code == 200
+        assert response.status_code == 401
         data = response.json()
         assert "error" in data or "status" in data
 
@@ -225,8 +224,7 @@ class TestWebhookAPIKeyAuthentication:
             json={"event": "test"},
         )
 
-        # Should return 200 with error (webhooks always return 200)
-        assert response.status_code == 200
+        assert response.status_code == 401
         data = response.json()
         assert "error" in data or "status" in data
 

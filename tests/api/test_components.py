@@ -20,8 +20,9 @@ from jvspatial.api.components import (
 )
 from jvspatial.api.components.error_handler import APIErrorHandler
 from jvspatial.api.config import ServerConfig
-from jvspatial.core.context import GraphContext
+from jvspatial.core.context import GraphContext, scoped_default_context_async
 from jvspatial.core.entities import Walker
+from jvspatial.db.jsondb import JsonDB
 
 
 class TestAppBuilder:
@@ -78,7 +79,7 @@ class TestAppBuilder:
         assert isinstance(app, FastAPI)
         # Note: lifespan testing would require actually starting the app
 
-    async def test_register_core_routes(self, app_builder):
+    async def test_register_core_routes(self, app_builder, tmp_path):
         """Test core route registration."""
         app = app_builder.create_app()
 
@@ -89,7 +90,9 @@ class TestAppBuilder:
         client = TestClient(app)
 
         # Test health endpoint
-        response = client.get("/health")
+        context = GraphContext(JsonDB(base_path=str(tmp_path / "health")))
+        async with scoped_default_context_async(context):
+            response = client.get("/health")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "healthy"

@@ -38,7 +38,7 @@ import time
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from jvspatial.db.database import Database
+from jvspatial.db.database import BulkSaveResult, Database, InsertIfAbsentResult
 from jvspatial.runtime.serverless import is_serverless_mode
 
 logger = logging.getLogger(__name__)
@@ -158,6 +158,22 @@ class CachingDatabase(Database):
             self._cache_put(collection, str(rec_id), dict(result))
         return result
 
+    async def insert_if_absent(
+        self,
+        collection: str,
+        data: Dict[str, Any],
+        *,
+        conflict_target: str = "id",
+    ) -> InsertIfAbsentResult:
+        """Forward insert-if-absent and cache the stored winner."""
+        result = await self.inner.insert_if_absent(
+            collection, data, conflict_target=conflict_target
+        )
+        rec_id = result.record.get("id", result.record.get("_id"))
+        if rec_id is not None and self._enabled():
+            self._cache_put(collection, str(rec_id), dict(result.record))
+        return result
+
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Read with cache: hit on the in-memory map, else fetch + cache."""
         if not self._enabled():
@@ -250,6 +266,27 @@ class CachingDatabase(Database):
             for r in records:
                 rid = r.get("id", r.get("_id"))
                 if rid is not None:
+                    self._cache_put(collection, str(rid), dict(r))
+        return result
+
+    async def bulk_save_detailed(
+        self, collection: str, records: List[Dict[str, Any]]
+    ) -> BulkSaveResult:
+        """Backend bulk path, then refresh cached entries (failed ids dropped).
+
+        Defined explicitly: the ``Database`` default is a serial ``save``
+        loop that would otherwise shadow ``__getattr__`` forwarding.
+        """
+        result = await self.inner.bulk_save_detailed(collection, records)
+        if self._enabled():
+            failed = set(result.failed_ids)
+            for r in records:
+                rid = r.get("id", r.get("_id"))
+                if rid is None:
+                    continue
+                if str(rid) in failed:
+                    self._invalidate(collection, str(rid))
+                else:
                     self._cache_put(collection, str(rid), dict(r))
         return result
 

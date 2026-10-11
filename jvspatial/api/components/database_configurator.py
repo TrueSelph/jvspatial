@@ -79,6 +79,25 @@ class DatabaseConfigurator:
         db_name = (db.db_database_name or "").strip() or "jvdb"
         return uri, db_name
 
+    def _resolve_postgres_kwargs(self) -> Dict[str, Any]:
+        """Resolve PostgresDB connection kwargs from server configuration.
+
+        Only settings the operator actually supplied are returned, so
+        anything left unset falls through to ``PostgresDB``'s own env
+        defaults rather than being pinned to a value here.
+        """
+        db = self.config.database
+        kwargs: Dict[str, Any] = {}
+        if db.postgres_dsn:
+            kwargs["dsn"] = db.postgres_dsn
+        if db.postgres_min_pool_size is not None:
+            kwargs["min_size"] = db.postgres_min_pool_size
+        if db.postgres_max_pool_size is not None:
+            kwargs["max_size"] = db.postgres_max_pool_size
+        if db.postgres_pooler_mode:
+            kwargs["pooler_mode"] = db.postgres_pooler_mode
+        return kwargs
+
     def _resolve_observability_kwargs(self) -> Dict[str, Any]:
         """Resolve optional DB observability wrapper kwargs from env."""
         raw_enabled = str(os.environ.get("JVSPATIAL_OBSERVABILITY_ENABLED", "")).lower()
@@ -171,6 +190,12 @@ class DatabaseConfigurator:
                     endpoint_url=self.config.database.dynamodb_endpoint_url,
                     aws_access_key_id=self.config.database.dynamodb_access_key_id,
                     aws_secret_access_key=self.config.database.dynamodb_secret_access_key,
+                    **observability_kwargs,
+                )
+            elif db_type in ("postgres", "postgresql"):
+                prime_db = create_database(
+                    db_type="postgres",
+                    **self._resolve_postgres_kwargs(),
                     **observability_kwargs,
                 )
             else:

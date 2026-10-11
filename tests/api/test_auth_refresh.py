@@ -99,7 +99,7 @@ class TestRefreshTokenGeneration:
         mock_user.name = "Test User"
         mock_user.is_active = True
         mock_user.created_at = datetime.now(timezone.utc)
-        mock_user.password_hash = auth_service._hash_password("password123")
+        mock_user.password_hash = auth_service._hash_password("password12345")
         mock_user.save = AsyncMock()
 
         # Mock context methods
@@ -108,7 +108,7 @@ class TestRefreshTokenGeneration:
         auth_service._find_user_by_email = AsyncMock(return_value=mock_user)
         auth_service.context.save = AsyncMock()
 
-        login_data = UserLogin(email="test@example.com", password="password123")
+        login_data = UserLogin(email="test@example.com", password="password12345")
         token_response = await auth_service.login_user(login_data)
 
         assert token_response.refresh_token is not None
@@ -399,13 +399,13 @@ class TestRefreshTokenEndpoint:
         email = f"test_{test_id}@example.com"
         register_response = client.post(
             "/api/auth/register",
-            json={"email": email, "password": "password123"},
+            json={"email": email, "password": "password12345"},
         )
         assert register_response.status_code == 200, register_response.text
 
         login_response = client.post(
             "/api/auth/login",
-            json={"email": email, "password": "password123"},
+            json={"email": email, "password": "password12345"},
         )
         assert login_response.status_code == 200
         login_data = login_response.json()
@@ -466,7 +466,7 @@ class TestRefreshTokenEndpoint:
         email = f"test_{test_id}@example.com"
         register_response = client.post(
             "/api/auth/register",
-            json={"email": email, "password": "password123"},
+            json={"email": email, "password": "password12345"},
         )
         assert (
             register_response.status_code == 200
@@ -474,7 +474,7 @@ class TestRefreshTokenEndpoint:
 
         login_response = client.post(
             "/api/auth/login",
-            json={"email": email, "password": "password123"},
+            json={"email": email, "password": "password12345"},
         )
         assert login_response.status_code == 200, f"Login failed: {login_response.text}"
         login_data = login_response.json()
@@ -508,7 +508,7 @@ class TestResilientRefreshTokenGeneration:
         mock_user.name = "Test User"
         mock_user.is_active = True
         mock_user.created_at = datetime.now(timezone.utc)
-        mock_user.password_hash = auth_service._hash_password("password123")
+        mock_user.password_hash = auth_service._hash_password("password12345")
         mock_user.save = AsyncMock()
         mock_user._graph_context = auth_service.context
 
@@ -530,7 +530,7 @@ class TestResilientRefreshTokenGeneration:
         auth_service._logger.warning = log_warning
 
         # Attempt login
-        login_data = UserLogin(email="test@example.com", password="password123")
+        login_data = UserLogin(email="test@example.com", password="password12345")
         token_response = await auth_service.login_user(login_data)
 
         # Verify login succeeded despite refresh token failure
@@ -554,7 +554,7 @@ class TestResilientRefreshTokenGeneration:
         mock_user.name = "Test User"
         mock_user.is_active = True
         mock_user.created_at = datetime.now(timezone.utc)
-        mock_user.password_hash = auth_service._hash_password("password123")
+        mock_user.password_hash = auth_service._hash_password("password12345")
         mock_user.save = AsyncMock()
         mock_user._graph_context = auth_service.context
 
@@ -567,7 +567,7 @@ class TestResilientRefreshTokenGeneration:
         )
 
         # Attempt login
-        login_data = UserLogin(email="test@example.com", password="password123")
+        login_data = UserLogin(email="test@example.com", password="password12345")
         token_response = await auth_service.login_user(login_data)
 
         # Verify refresh_token is None
@@ -586,7 +586,7 @@ class TestResilientRefreshTokenGeneration:
         mock_user.name = "Test User"
         mock_user.is_active = True
         mock_user.created_at = datetime.now(timezone.utc)
-        mock_user.password_hash = auth_service._hash_password("password123")
+        mock_user.password_hash = auth_service._hash_password("password12345")
         mock_user.save = AsyncMock()
         mock_user._graph_context = auth_service.context
 
@@ -607,7 +607,7 @@ class TestResilientRefreshTokenGeneration:
         auth_service._logger.warning = log_warning
 
         # Attempt login
-        login_data = UserLogin(email="test@example.com", password="password123")
+        login_data = UserLogin(email="test@example.com", password="password12345")
         await auth_service.login_user(login_data)
 
         # Verify warning was logged

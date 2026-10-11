@@ -152,10 +152,19 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         # RBAC: check roles and permissions if endpoint requires them
         rbac_enabled = getattr(self.auth_config, "rbac_enabled", True)
         if rbac_enabled:
-            endpoint_config = self._auth_resolver.get_endpoint_config(request)
+            try:
+                endpoint_config = self._auth_resolver.get_endpoint_config(request)
+            except Exception:
+                self._logger.exception("Endpoint auth configuration unavailable")
+                return JSONResponse(status_code=403, content={"message": "Forbidden"})
             endpoint_config = self._merge_admin_only_roles(
                 request.url.path, endpoint_config
             )
+            # A successful lookup can legitimately find no jvspatial endpoint
+            # metadata on a mounted ASGI app or a raw FastAPI route. The user
+            # has still been authenticated above. Admin-only paths acquire a
+            # mandatory role from _merge_admin_only_roles even in that case.
+            # Lookup failures themselves remain fail-closed in the except arm.
             rbac_error = self._check_rbac(user, endpoint_config)
             if rbac_error:
                 return rbac_error
@@ -234,21 +243,25 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         if isinstance(user, dict):
             user_id = user.get("user_id") or user.get("id")
             if user_id and ("roles" not in user or "permissions" not in user):
-                # API key auth - fetch full user
-                from jvspatial.api.auth.service import AuthenticationService
-                from jvspatial.core.context import GraphContext
-                from jvspatial.db import get_prime_database
+                # API key auth - fetch full user (reuse cached auth service when set)
+                auth_service = getattr(self._server, "_auth_service", None)
+                if auth_service is None:
+                    from jvspatial.api.auth.service import AuthenticationService
+                    from jvspatial.core.context import GraphContext
+                    from jvspatial.db import get_prime_database
 
-                prime_ctx = GraphContext(database=get_prime_database())
-                auth_service = AuthenticationService(
-                    prime_ctx,
-                    jwt_secret=self.auth_config.jwt_secret,
-                    jwt_algorithm=self.auth_config.jwt_algorithm,
-                    jwt_expire_minutes=self.auth_config.jwt_expire_minutes,
-                    role_permission_mapping=getattr(
-                        self.auth_config, "role_permission_mapping", None
-                    ),
-                )
+                    prime_ctx = getattr(self._server, "_prime_graph_context", None)
+                    if prime_ctx is None:
+                        prime_ctx = GraphContext(database=get_prime_database())
+                    auth_service = AuthenticationService(
+                        prime_ctx,
+                        jwt_secret=self.auth_config.jwt_secret,
+                        jwt_algorithm=self.auth_config.jwt_algorithm,
+                        jwt_expire_minutes=self.auth_config.jwt_expire_minutes,
+                        role_permission_mapping=getattr(
+                            self.auth_config, "role_permission_mapping", None
+                        ),
+                    )
                 full_user = await auth_service.get_user_by_id(user_id)
                 if full_user:
                     # Apply API key permission restriction if non-empty
@@ -423,14 +436,17 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             if not api_key:
                 return None
 
-            # Use API key service for validation
+            # Use API key service for validation (reuse server singleton when available)
             from jvspatial.api.auth.api_key_service import APIKeyService
             from jvspatial.core.context import GraphContext
             from jvspatial.db import get_prime_database
 
-            # API key service should use prime database, not server's graph context
-            prime_ctx = GraphContext(database=get_prime_database())
-            service = APIKeyService(prime_ctx)
+            service = getattr(self._server, "_api_key_service", None)
+            if service is None:
+                prime_ctx = getattr(self._server, "_prime_graph_context", None)
+                if prime_ctx is None:
+                    prime_ctx = GraphContext(database=get_prime_database())
+                service = APIKeyService(prime_ctx)
 
             # Validate the API key
             api_key_entity = await service.validate_key(api_key)
@@ -454,11 +470,13 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 request_path = request.url.path
 
                 def _endpoint_allowed(ep: str) -> bool:
-                    # Support wildcard: /api/webhook/* matches /api/webhook/xyz
+                    # A wildcard must cover complete path segments.
                     if ep.endswith("*"):
-                        prefix = ep[:-1]
-                        return request_path.startswith(prefix)
-                    return request_path.startswith(ep)
+                        prefix = ep[:-1].rstrip("/")
+                        return request_path == prefix or request_path.startswith(
+                            prefix + "/"
+                        )
+                    return request_path == ep
 
                 if not any(
                     _endpoint_allowed(ep) for ep in api_key_entity.allowed_endpoints

@@ -57,6 +57,7 @@ api/
 - **CSP is strict on app routes, relaxed only on `/docs`, `/redoc`, `/openapi.json`.** (`components/app_builder.py`)
 - **`JVSPATIAL_DOCS_DISABLED` removes the entire docs surface.** No spec leak when truthy. (`components/app_builder.py`)
 - **Sessions and rate-limit counters are per-process.** Multi-worker deployments multiply configured limits by worker count.
+- **Auth entrypoint limits are independent of the global limiter.** Register, login, forgot-password, and reset-password retain a 5/60s per-IP cap when auth is enabled. `RateLimitConfig(auth_entrypoint_rate_limit_enabled=False)` is for tests or a trusted replacement limiter.
 - **Endpoint registration is deferred.** `@endpoint` collects targets at import; `Server` resolves them at app build time.
 
 ## Modification patterns

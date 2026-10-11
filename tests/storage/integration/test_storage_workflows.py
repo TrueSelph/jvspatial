@@ -754,8 +754,8 @@ class TestPerformanceIntegration:
             root_dir=temp_storage_dir, validator=validator
         )
 
-        large_file = b"x" * (10 * 1024 * 1024)  # 10 MB
-        file_path = "large/bigfile.dat"
+        large_file = b"ordinary text\n" * (10 * 1024 * 1024 // 14)
+        file_path = "large/bigfile.txt"
 
         # Upload
         result = await storage_interface.save_file(file_path, large_file)

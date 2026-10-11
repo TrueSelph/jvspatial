@@ -248,3 +248,87 @@ class TestVectorClausePeeling:
         filtered, field, _, _, _ = db._pop_vector_clause("doc", q)
         assert filtered == q  # untouched
         assert field is None
+
+
+class TestPoolLoopAffinity:
+    """A pool belongs to the loop that created it.
+
+    Hosts that bootstrap in one ``asyncio.run()`` and then serve from a
+    second loop (the CLI-then-uvicorn pattern) would otherwise reuse a
+    pool bound to a dead loop, and every query fails with
+    ``cannot perform operation: another operation is in progress``.
+    """
+
+    @staticmethod
+    def _fake_pool() -> object:
+        class _Pool:
+            pass
+
+        return _Pool()
+
+    def test_pool_reused_within_one_loop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        db = PostgresDB(dsn="postgresql://nope/none")
+        created = []
+
+        async def fake_create_pool(**_kwargs: object) -> object:
+            pool = self._fake_pool()
+            created.append(pool)
+            return pool
+
+        monkeypatch.setattr("asyncpg.create_pool", fake_create_pool)
+
+        async def scenario() -> None:
+            first = await db._ensure_pool()
+            second = await db._ensure_pool()
+            assert first is second
+
+        asyncio.run(scenario())
+        assert len(created) == 1
+
+    def test_pool_rebuilt_after_loop_change(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db = PostgresDB(dsn="postgresql://nope/none")
+        created = []
+
+        async def fake_create_pool(**_kwargs: object) -> object:
+            pool = self._fake_pool()
+            created.append(pool)
+            return pool
+
+        monkeypatch.setattr("asyncpg.create_pool", fake_create_pool)
+
+        pools: list = []
+        # Two separate asyncio.run() calls == two distinct event loops.
+        asyncio.run(_collect_pool(db, pools))
+        asyncio.run(_collect_pool(db, pools))
+
+        assert len(created) == 2
+        assert pools[0] is not pools[1]
+
+    def test_lock_is_not_bound_to_the_dead_loop(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The rebuild must replace ``_pool_lock`` too.
+
+        ``asyncio.Lock`` binds to the loop it is first awaited on, so
+        carrying the old lock across would trade one cross-loop failure
+        for another.
+        """
+        db = PostgresDB(dsn="postgresql://nope/none")
+
+        async def fake_create_pool(**_kwargs: object) -> object:
+            return self._fake_pool()
+
+        monkeypatch.setattr("asyncpg.create_pool", fake_create_pool)
+
+        pools: list = []
+        asyncio.run(_collect_pool(db, pools))
+        first_lock = db._pool_lock
+
+        asyncio.run(_collect_pool(db, pools))
+        assert db._pool_lock is not first_lock
+
+
+async def _collect_pool(db: PostgresDB, sink: list) -> None:
+    sink.append(await db._ensure_pool())

@@ -21,6 +21,8 @@ class Object(BaseModel):
     @classmethod
     async def create(cls, **kwargs) -> "Object"
     @classmethod
+    async def create_if_absent(cls, **kwargs) -> tuple["Object", bool]
+    @classmethod
     async def find(cls, query: Optional[dict] = None, **filters) -> List["Object"]
     @classmethod
     async def find_one(cls, query: Optional[dict] = None, **filters) -> Optional["Object"]
@@ -30,6 +32,12 @@ class Object(BaseModel):
     async def export() -> dict
 ```
 
+**`create_if_absent`** — persist only when no row exists for the given `id`.
+Returns `(entity, created)`. On conflict, rehydrates the **stored** winner
+(never merges proposed fields). Does not call through upsert `save()`.
+Requires a deterministic `id` for idempotency; auto-generated ids always
+create. See `Database.insert_if_absent` / `InsertIfAbsentResult`.
+
 **Convenience Methods**
 
 - `await Object.count()` → count all objects of that type
@@ -37,6 +45,8 @@ class Object(BaseModel):
 - `await Object.count(active=True)` → count filtered objects using keyword arguments
 - `await Object.find_one({"context.email": "alice@example.com"})` → find single object matching query (returns None if not found)
 - `await Object.find_one(email="alice@example.com")` → find single object using keyword arguments
+
+**Attribute assignment:** `Object` rejects names absent from its class hierarchy, including new underscore-prefixed names. Persisted fields should be declared with `@attribute(...)`; runtime-only state should use Pydantic `PrivateAttr`. A private method or descriptor already declared on the class may be replaced on an instance (for example, by a test double), but assigning an undeclared `_helper` still raises `AttributeError`. See [SPEC §2.1](../../SPEC.md#21-object--base-persistable-entity).
 
 #### `Node(Object)`
 Represents graph nodes with connection capabilities.
@@ -47,11 +57,10 @@ dependent nodes (nodes that are solely connected to the node being deleted).
 
 ```python
 class Node(Object):
-    edge_ids: List[str] = Field(default_factory=list)
-
     async def connect(other: "Node", edge: Type["Edge"] = Edge,
                      direction: str = "out", **kwargs) -> "Edge"
-    async def edges(direction: str = "") -> List["Edge"]
+    async def edges(direction: str = "", limit: Optional[int] = None) -> List["Edge"]
+    async def connection_count() -> int  # degree; one COUNT over the edge collection
     async def nodes(direction: str = "both", node: Optional[...] = None,
                    edge: Optional[...] = None, **kwargs) -> List["Node"]
     async def node(direction: str = "out", node: Optional[...] = None,
@@ -63,10 +72,18 @@ class Node(Object):
     async def count(cls, query: Optional[dict] = None, **kwargs) -> int  # Inherited from Object
 ```
 
+**Adjacency:** the edge collection is the only source of truth — node rows
+carry no `edges` array. Use `edges()`, `connection_count()` and `nodes()`
+rather than inspecting node documents for links. See [graph-context.md](graph-context.md).
+
 **Key Methods:**
 
-- **`nodes()`**: Returns a list of connected nodes with filtering options
+- **`nodes()`**: Returns a list of connected nodes with filtering options — one database round trip on Postgres, MongoDB and SQLite for every filter shape, `limit` included
 - **`node()`**: Returns a single connected node (first match) or None - convenience method when you expect only one result
+- **`count_nodes()`**: Counts connected nodes with the same filters as `nodes()` (one `COUNT`; prefer it to `len(await n.nodes())`)
+- **`nodes_page(sort=, cursor=, limit=)`**: Keyset-paginated neighbours, returns `(nodes, next_cursor)`
+- **`neighborhood(depth)`**: Multi-hop neighbor fetch (Postgres `traverse` fast path or BFS fallback)
+- **`nodes_bulk(node_ids)`**: Batch neighbor fetch for many source IDs in two queries
 - **`delete(cascade=True)`**: Deletes the node and cascades deletion of all connected edges and dependent nodes
 
 #### Class-Aware Retrieval and Ghost Node Fallback

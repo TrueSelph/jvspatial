@@ -1,6 +1,6 @@
 # JVspatial Webhooks Quickstart
 
-JVspatial provides powerful webhook functionality through the `@endpoint` decorator with `webhook=True`, enabling secure, reliable webhook processing with features like HMAC verification, idempotency handling, and asynchronous processing.
+JVspatial provides webhook functionality through the `@endpoint` decorator with `webhook=True`, including HMAC verification and durable idempotency claims. Handlers run within the request. Use an external queue for durable asynchronous work.
 
 ## Simplified Response Handling
 
@@ -165,7 +165,7 @@ async def stripe_webhook(raw_body: bytes, content_type: str, endpoint):
 )
 async def order_webhook(payload: dict, endpoint):
     """Webhook with idempotency protection against duplicate requests."""
-    # Duplicate requests (same idempotency key) return cached response
+    # A completed retry with the same key and payload replays the original response.
 
     order_id = payload.get("order_id")
     # Process order...
@@ -176,24 +176,23 @@ async def order_webhook(payload: dict, endpoint):
     )
 ```
 
+Provide an `X-Idempotency-Key` (or `Idempotency-Key`) header to use this protection. A second request while the first is unfinished receives HTTP 409; the handler is not run again. Reusing a key with a different method, path, or body also receives 409. If the process fails after claiming a key, the claim remains pending because external effects may already have happened. Reconcile the operation before clearing the claim or retrying with a new key. Keep the shared database available; claim and outcome writes fail closed when it is unavailable. The response cache is limited to the configured maximum payload size.
+
 ### Asynchronous Processing
 
 ```python
 @endpoint(
     "/webhook/bulk-process",
     webhook=True,
-    async_processing=True,
     permissions=["process_bulk_data"]
 )
 async def bulk_processing_webhook(payload: dict, endpoint):
-    """Webhook that processes data asynchronously."""
-    # This returns immediately with HTTP 200
-    # Actual processing happens in background
+    """Enqueue durable work before acknowledging the webhook."""
 
     batch_id = payload.get("batch_id")
     records = payload.get("records", [])
 
-    # Process large batch of records...
+    # Await an external queue's durable enqueue operation here.
     return endpoint.success(
         message="Batch processing initiated",
         data={
@@ -475,4 +474,3 @@ async def modern_webhook(payload: dict, endpoint):
         data={"status": "processed"}
     )
 ```
-

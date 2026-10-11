@@ -1,5 +1,7 @@
 # JVspatial Webhook Architecture Specification
 
+> Historical design proposal. The sections below contain proposed behavior and are not the current runtime contract. See `SPEC.md` §9.5 and `jvspatial/api/integrations/webhooks/middleware.py` for implemented behavior. Current behavior: `@endpoint(webhook=True)` defaults to POST; `signature_required=True` checks HMAC on every method, including GET; idempotency database errors return 503; and handlers run within the request. The `async_processing` setting no longer starts an in-process background task. Enqueue durable work in an external queue from the handler.
+
 ## Overview
 
 This document outlines the architecture for the webhook endpoint system in jvspatial built around the unified `@endpoint` decorator with `webhook=True`. This decorator automatically detects whether it's decorating a function or Walker class, extending the existing `@endpoint` pattern to support webhook-specific functionality while maintaining consistency in registration, metadata-driven authentication, and server integration.

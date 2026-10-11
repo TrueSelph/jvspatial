@@ -121,8 +121,43 @@ premium_city = await state.node(
 )
 ```
 
-**When to Use:**
+**When to Use (`node()`):**
 - When you expect exactly one connected node
 - When you want the first matching node from multiple results
 - When you need cleaner, more readable code without list indexing
 - When you want to avoid potential IndexError exceptions
+
+### neighborhood()
+`async neighborhood(depth: int = 1, direction: str = "out", node: Optional[...] = None, edge: Optional[...] = None, limit: Optional[int] = None, **kwargs) -> List[Node]`
+
+Return all nodes reachable within `depth` hops from this node (excluding self).
+
+**Backend behavior:**
+- When `Database.traverse` exists (Postgres): single recursive CTE, then `get_batch` hydration.
+- Otherwise: Python BFS using `nodes()` per hop.
+
+**Parameters:** Same filtering surface as `nodes()` for `direction`, `node`, `edge`, `limit`, and `**kwargs`. The Postgres fast path requires `node is None` and no complex `edge` list — use BFS fallback when type filters are needed.
+
+**Example:**
+```python
+# All nodes within 3 hops outbound
+hood = await root.neighborhood(depth=3, direction="out")
+```
+
+See also [graph-traversal.md](graph-traversal.md) § Multi-hop subgraph load.
+
+### nodes_bulk()
+`async nodes_bulk(node_ids: List[str], direction: str = "out", edge: Optional[...] = None, node: Optional[...] = None, ...) -> Dict[str, List[Node]]`
+
+Batch version of `nodes()` for many source IDs — one edge-query pass plus one node hydration query. Used internally by walker prefetch; callable directly for custom batch traversals.
+
+**When to Use (`nodes_bulk()`):**
+- Many source nodes need outbound/inbound neighbors in one round trip
+- Walker-style batch expansion (see `prefetch_neighbors=True` on `Walker`)
+- Custom analytics that fan out from a frontier set
+
+**Example:**
+```python
+bulk = await Node.nodes_bulk(["n.a", "n.b"], direction="out")
+neighbors_of_a = bulk["n.a"]
+```

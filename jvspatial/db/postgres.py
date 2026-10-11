@@ -68,6 +68,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import hashlib
 import json
 import logging
 import re
@@ -78,15 +79,18 @@ from typing import (
     Dict,
     List,
     Optional,
+    Sequence,
     Set,
     Tuple,
     Union,
 )
 
-from ._postgres_translate import translate_query, translate_sort
+from ._postgres_translate import translate_query, translate_sort, tsvector_expression
 from .database import (
     BulkSaveResult,
     Database,
+    DatabaseError,
+    InsertIfAbsentResult,
     decode_cursor,
     finalize_find_results,
 )
@@ -127,6 +131,25 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 # max 63 bytes (Postgres limit). We do NOT support quoted identifiers; pin to
 # the safe ASCII subset so we never need to worry about escape edge cases.
 _SAFE_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+_POSTGRES_MAX_IDENTIFIER_BYTES = 63
+
+
+def _postgres_index_name(base: str, suffix: str) -> str:
+    """Build a stable index name within PostgreSQL's 63-byte identifier limit.
+
+    Keep existing names unchanged when possible. Long compound field paths are
+    shortened with a digest of the complete name, preserving collision
+    resistance and the ``idx`` / ``uniq`` / ``fts`` suffix.
+    """
+    full_name = f"{base}_{suffix}"
+    if len(full_name.encode("utf-8")) <= _POSTGRES_MAX_IDENTIFIER_BYTES:
+        return full_name
+
+    digest = hashlib.sha256(full_name.encode("utf-8")).hexdigest()[:10]
+    fixed_bytes = len(digest) + len(suffix) + 2  # two underscores
+    prefix_bytes = _POSTGRES_MAX_IDENTIFIER_BYTES - fixed_bytes
+    shortened = f"{base[:prefix_bytes]}_{digest}_{suffix}"
+    return shortened
 
 
 _PARAM_RE = re.compile(r"\$(\d+)")
@@ -163,6 +186,27 @@ def _safe_collection(name: str) -> str:
 def _pg_string_literal(value: str) -> str:
     """Quote a Python string as a PG string literal (single-quote escape)."""
     return "'" + value.replace("'", "''") + "'"
+
+
+# An index definition written before 0.0.18: top-level columns indexed as JSONB
+# paths (``data #>> '{entity}'``, which the translator never compares against)
+# or a descending key without ``NULLS LAST`` (which ``find(sort=...)`` cannot
+# walk). ``create_index`` rebuilds such an index in place.
+_STALE_INDEX_DEF_RE = re.compile(
+    r"'\{(?:entity|id|tenant_id)\}'|\bDESC\b(?! NULLS LAST)"
+)
+
+
+def _uses_containment_ops(query: Any) -> bool:
+    """Whether a Mongo-style query uses operators the whole-document GIN serves."""
+    if isinstance(query, dict):
+        return any(
+            key in ("$all", "$elemMatch") or _uses_containment_ops(value)
+            for key, value in query.items()
+        )
+    if isinstance(query, list):
+        return any(_uses_containment_ops(item) for item in query)
+    return False
 
 
 def _pg_field_extract(field_path: str) -> Optional[str]:
@@ -278,8 +322,9 @@ class PostgresDB(Database):
         min_size: Optional[int] = None,
         max_size: Optional[int] = None,
         pooler_mode: str = "session",
-        command_timeout: float = 60.0,
+        command_timeout: Optional[float] = None,
         schema_name: str = "public",
+        gin_index: Optional[str] = None,
     ) -> None:
         """Initialize the Postgres adapter.
 
@@ -296,13 +341,21 @@ class PostgresDB(Database):
                 direct or session-pooled connection) or ``"transaction"``
                 (compatible with PgBouncer / RDS Proxy in transaction-pool
                 mode — disables statement cache, uses simple-query protocol).
-            command_timeout: Per-statement timeout in seconds.
+            command_timeout: Per-statement timeout in seconds. Also read from
+                ``JVSPATIAL_POSTGRES_COMMAND_TIMEOUT``; default 60.
             schema_name: Postgres schema to host the collection tables in.
                 Defaults to ``public``. Must be an existing schema.
+            gin_index: ``"full"`` (default) creates the whole-document
+                ``GIN (data jsonb_path_ops)`` index on each new collection;
+                ``"off"`` skips it. Also read from ``JVSPATIAL_PG_GIN_INDEX``.
+                The GIN only serves containment-shaped predicates (``$all``);
+                typed ``find()`` equality / range / sort use functional
+                B-trees, so large deployments should turn it off.
 
         Raises:
             ImportError: ``asyncpg`` is not installed.
-            ValueError: ``pooler_mode`` is not ``"session"`` or ``"transaction"``.
+            ValueError: ``pooler_mode`` is not ``"session"`` or ``"transaction"``,
+                or ``gin_index`` is not ``"full"`` or ``"off"``.
         """
         if asyncpg is None:  # pragma: no cover
             raise ImportError(
@@ -332,15 +385,32 @@ class PostgresDB(Database):
         self.max_size = max_size if max_size is not None else (env_max or default_max)
 
         self.pooler_mode = pooler_mode
-        self.command_timeout = command_timeout
+        self.command_timeout = (
+            command_timeout
+            if command_timeout is not None
+            else (env("JVSPATIAL_POSTGRES_COMMAND_TIMEOUT", parse=float) or 60.0)
+        )
         self.schema_name = schema_name
+        self.gin_index = (
+            (gin_index or env("JVSPATIAL_PG_GIN_INDEX", default="full")).strip().lower()
+        )
+        if self.gin_index not in ("full", "off"):
+            raise ValueError(
+                f"gin_index must be 'full' or 'off', got {self.gin_index!r}"
+            )
+        self._gin_off_warned = False
 
         self._pool: Optional["Pool"] = None
         self._pool_lock = asyncio.Lock()
+        # The loop ``_pool`` (and ``_pool_lock``) belong to. asyncpg pools
+        # and asyncio primitives bind to the loop they were created on, so
+        # a pool carried into a second loop is unusable.
+        self._pool_loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Collections we've already created the table + base indexes for.
         # Avoids running CREATE TABLE IF NOT EXISTS on the hot path.
         self._collections_bootstrapped: Set[str] = set()
+        self._collection_bootstrap_locks: Dict[str, asyncio.Lock] = {}
 
         # Vector columns configured per collection. Map collection ->
         # {field_name: dim}. Populated by :meth:`enable_vector_column`;
@@ -350,8 +420,40 @@ class PostgresDB(Database):
 
     # ---- pool lifecycle ----------------------------------------------------
 
+    def _discard_pool_from_dead_loop(self) -> None:
+        """Drop a pool that belongs to a different event loop.
+
+        Hosts that bootstrap inside one ``asyncio.run()`` and then serve
+        from a second loop (the CLI-then-ASGI-server pattern) would
+        otherwise reuse a pool bound to the first, now-closed loop, and
+        every query fails with ``cannot perform operation: another
+        operation is in progress``. The stale pool's connections are
+        abandoned rather than closed — ``close()`` would have to await on
+        the dead loop — and Postgres reaps them when the sockets drop.
+        """
+        if self._pool is None:
+            return
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover - callers are async
+            return
+        if self._pool_loop is running:
+            return
+
+        logger.debug(
+            "PostgresDB: event loop changed; rebuilding pool (was %r, now %r)",
+            self._pool_loop,
+            running,
+        )
+        self._pool = None
+        # ``asyncio.Lock`` binds to its loop too, so it has to go as well.
+        self._pool_lock = asyncio.Lock()
+        self._collections_bootstrapped.clear()
+        self._collection_bootstrap_locks.clear()
+
     async def _ensure_pool(self) -> "Pool":
         """Lazily create the asyncpg pool. Idempotent + concurrency-safe."""
+        self._discard_pool_from_dead_loop()
         if self._pool is not None:
             return self._pool
         async with self._pool_lock:
@@ -377,6 +479,7 @@ class PostgresDB(Database):
                 self.pooler_mode,
             )
             self._pool = await asyncpg.create_pool(**create_kwargs)
+            self._pool_loop = asyncio.get_running_loop()
             return self._pool
 
     async def close(self) -> None:
@@ -384,7 +487,9 @@ class PostgresDB(Database):
         if self._pool is not None:
             await self._pool.close()
             self._pool = None
+            self._pool_loop = None
             self._collections_bootstrapped.clear()
+            self._collection_bootstrap_locks.clear()
 
     # ---- tenant scope (C6) -------------------------------------------------
 
@@ -501,7 +606,7 @@ class PostgresDB(Database):
                 "tenant_id = NULLIF(current_setting('app.tenant_id', true), '')"
             )
 
-        policy_name = f"{col}_tenant_isolation"
+        policy_name = _postgres_index_name(col, "tenant_isolation")
         # ALTER + CREATE POLICY both error if duplicated; check + drop +
         # recreate so re-runs are idempotent. ``DROP POLICY IF EXISTS``
         # is supported on PG 9.5+.
@@ -531,14 +636,39 @@ class PostgresDB(Database):
         """
         if collection in self._collections_bootstrapped:
             return
+        lock = self._collection_bootstrap_locks.setdefault(collection, asyncio.Lock())
+        async with lock:
+            if collection in self._collections_bootstrapped:
+                return
+            await self._create_collection_schema(collection)
+
+    async def _create_collection_schema(self, collection: str) -> None:
         col = _safe_collection(collection)
         schema = _safe_collection(self.schema_name)
+        gin_name = _postgres_index_name(col, "data_gin")
+        entity_name = _postgres_index_name(col, "entity_idx")
+        tenant_name = _postgres_index_name(col, "tenant_idx")
+        gin_sql = (
+            f"CREATE INDEX IF NOT EXISTS {gin_name} "
+            f"ON {schema}.{col} USING GIN (data jsonb_path_ops);"
+            if self.gin_index == "full"
+            else ""
+        )
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            # Single round trip — CREATE IF NOT EXISTS is cheap when the
-            # table already exists.
-            await conn.execute(
-                f"""
+            # An asyncio lock only coordinates callers sharing this instance.
+            # PostgreSQL must also serialize first use across workers and
+            # independently constructed PostgresDB instances. Keep the
+            # advisory lock and DDL in one transaction so the lock survives
+            # until the table and all base indexes have been created.
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+                    schema,
+                    col,
+                )
+                await conn.execute(
+                    f"""
                 CREATE TABLE IF NOT EXISTS {schema}.{col} (
                     id         TEXT PRIMARY KEY,
                     entity     TEXT NOT NULL,
@@ -548,15 +678,14 @@ class PostgresDB(Database):
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
-                CREATE INDEX IF NOT EXISTS {col}_data_gin
-                    ON {schema}.{col} USING GIN (data jsonb_path_ops);
-                CREATE INDEX IF NOT EXISTS {col}_entity_idx
+                {gin_sql}
+                CREATE INDEX IF NOT EXISTS {entity_name}
                     ON {schema}.{col} (entity);
-                CREATE INDEX IF NOT EXISTS {col}_tenant_idx
+                CREATE INDEX IF NOT EXISTS {tenant_name}
                     ON {schema}.{col} (tenant_id)
                     WHERE tenant_id IS NOT NULL;
                 """
-            )
+                )
         self._collections_bootstrapped.add(collection)
 
     # ---- payload helpers ---------------------------------------------------
@@ -681,6 +810,110 @@ class PostgresDB(Database):
                 )
         return data
 
+    async def insert_if_absent(
+        self,
+        collection: str,
+        data: Dict[str, Any],
+        *,
+        conflict_target: str = "id",
+    ) -> InsertIfAbsentResult:
+        """Insert only when ``id`` is absent; never ``ON CONFLICT DO UPDATE``.
+
+        Uses ``INSERT ... ON CONFLICT (id) DO NOTHING RETURNING data``. When
+        no row is returned, ``SELECT`` loads the existing stored record.
+        Honors tenant scoping via :meth:`_acquire_conn`.
+        """
+        self._validate_insert_if_absent(data, conflict_target)
+        await self._bootstrap_collection(collection)
+        rec_id, entity, tenant, data_json = self._split_payload(data)
+        col = _safe_collection(collection)
+        schema = _safe_collection(self.schema_name)
+
+        async with self._acquire_conn() as conn:
+            row = await conn.fetchrow(
+                f"""
+                INSERT INTO {schema}.{col} (id, entity, tenant_id, data, updated_at)
+                VALUES ($1, $2, $3, $4::jsonb, NOW())
+                ON CONFLICT (id) DO NOTHING
+                RETURNING data
+                """,
+                rec_id,
+                entity,
+                tenant,
+                data_json,
+            )
+            if row is not None:
+                return InsertIfAbsentResult(
+                    record=self._record_from_row(row), created=True
+                )
+            existing = await conn.fetchrow(
+                f"SELECT data FROM {schema}.{col} WHERE id = $1", rec_id
+            )
+            if existing is None:
+                raise DatabaseError(
+                    "insert_if_absent conflicted but no row with "
+                    f"id={rec_id!r} exists in collection {collection!r}"
+                )
+            return InsertIfAbsentResult(
+                record=self._record_from_row(existing), created=False
+            )
+
+    async def strip_node_edges(
+        self,
+        collection: str = "node",
+        *,
+        batch_size: int = 5000,
+        dry_run: bool = False,
+    ) -> int:
+        """Remove the legacy ``edges`` array from node rows.
+
+        One keyset pass over the primary key, stripping ``edges`` from each
+        batch with ``UPDATE … SET data = data - 'edges'`` — idempotent and safe
+        to run while the application serves traffic (saves never write the
+        array back). Tables with ``FORCE ROW LEVEL SECURITY`` must be
+        migrated by a role that bypasses RLS.
+
+        Afterwards run ``VACUUM (ANALYZE) <collection>`` and
+        ``REINDEX INDEX CONCURRENTLY <collection>_data_gin`` to reclaim the
+        space; neither is run automatically.
+
+        Returns:
+            Rows stripped, or — with ``dry_run`` — rows that still carry
+            the array.
+        """
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+        await self._bootstrap_collection(collection)
+        col = _safe_collection(collection)
+        schema = _safe_collection(self.schema_name)
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            if dry_run:
+                return int(
+                    await conn.fetchval(
+                        f"SELECT COUNT(*) FROM {schema}.{col} WHERE data ? 'edges'"
+                    )
+                )
+            stripped = 0
+            last_id = ""
+            while True:
+                rows = await conn.fetch(
+                    f"SELECT id FROM {schema}.{col} WHERE id > $1 ORDER BY id LIMIT $2",
+                    last_id,
+                    batch_size,
+                )
+                if not rows:
+                    return stripped
+                ids = [r["id"] for r in rows]
+                last_id = ids[-1]
+                status = await conn.execute(
+                    f"UPDATE {schema}.{col} SET data = data - 'edges', "
+                    f"updated_at = NOW() "
+                    f"WHERE id = ANY($1::text[]) AND data ? 'edges'",
+                    ids,
+                )
+                stripped += int(status.rsplit(" ", 1)[1])
+
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Fetch a single record by id."""
         await self._bootstrap_collection(collection)
@@ -731,6 +964,13 @@ class PostgresDB(Database):
         translated = translate_query(filtered_query) if filtered_query else ("", [])
         if translated is None:
             # Translator refused; fall back to in-Python filtering.
+            logger.warning(
+                "PostgresDB.find: untranslatable query on %s.%s — "
+                "full-collection scan fallback (query=%r)",
+                schema,
+                col,
+                query,
+            )
             async with self._acquire_conn() as conn:
                 rows = await conn.fetch(f"SELECT data FROM {schema}.{col}")
             records = [self._record_from_row(r) for r in rows]
@@ -739,6 +979,19 @@ class PostgresDB(Database):
 
         where_sql, params = translated
         sort_sql = translate_sort(sort) if vec_field is None else None
+        if (
+            self.gin_index == "off"
+            and not self._gin_off_warned
+            and _uses_containment_ops(query)
+        ):
+            self._gin_off_warned = True
+            logger.warning(
+                "PostgresDB: $all / $elemMatch query on %s.%s with gin_index='off' "
+                "— no whole-document GIN serves it; add a targeted index if it is "
+                "hot (logged once per adapter)",
+                schema,
+                col,
+            )
 
         clauses: List[str] = []
         if where_sql:
@@ -755,11 +1008,19 @@ class PostgresDB(Database):
         else:
             order_clause = ""
 
+        # The sort pushdown may have failed (``translate_sort`` returns None
+        # for an unsafe field path). The ordering then has to happen in
+        # memory — which means the LIMIT must NOT be pushed down: the
+        # database would return an arbitrary N rows and we would order that
+        # arbitrary subset instead of the true top N. SQLite
+        # (``sqlite.py``) and DynamoDB withhold it for the same reason.
+        sort_in_memory = bool(sort) and sort_sql is None and vec_field is None
+
         effective_limit = limit
         if vec_limit is not None and (limit is None or vec_limit < limit):
             effective_limit = vec_limit
         limit_clause = ""
-        if effective_limit is not None:
+        if effective_limit is not None and not sort_in_memory:
             params = list(params) + [int(effective_limit)]
             limit_clause = f" LIMIT ${len(params)}"
 
@@ -770,10 +1031,11 @@ class PostgresDB(Database):
             rows = await conn.fetch(sql, *params)
         records = [self._record_from_row(r) for r in rows]
 
-        # Sort pushdown may have failed (translate_sort returned None);
-        # honor it in-memory in that case so the contract still holds.
-        if sort and sort_sql is None:
-            records = finalize_find_results(records, sort=sort, limit=None)
+        # Vector queries keep their distance ordering: re-sorting by the
+        # user's ``sort`` here would discard the ORDER BY the comment above
+        # says wins.
+        if sort_in_memory:
+            records = finalize_find_results(records, sort=sort, limit=limit)
         return records
 
     async def count(
@@ -827,6 +1089,287 @@ class PostgresDB(Database):
             out[row["id"]] = self._record_from_row(row)
         return out
 
+    def _connected_nodes_sql(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        start_id: str,
+        *,
+        direction: str = "out",
+        edge_entities: Optional[Sequence[str]] = None,
+        node_entities: Optional[Sequence[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        limit: Optional[int] = None,
+        count: bool = False,
+        with_edges: bool = False,
+    ) -> Tuple[str, List[Any]]:
+        """Build the single-hop neighbour query shared by find / count.
+
+        Two shapes, both one round trip:
+
+        * **join** — ``edge ⋈ node`` driven by the ``source`` / ``target``
+          index. Used for one edge type in one direction (duplicate-free under
+          the ``(source, target, entity)`` unique index, so ``LIMIT`` stops
+          after N rows whatever the node's degree) and whenever edge rows are
+          requested.
+        * **semi-join** — ``node WHERE id IN (<far endpoints>)``. Used for
+          several / no edge types or ``direction="both"``, where one neighbour
+          can be reached through several edges and must appear once.
+
+        Raises:
+            ValueError: ``direction`` not in ``{"out", "in", "both"}``.
+            NotImplementedError: ``edge_query`` / ``node_query`` / ``sort``
+                cannot be translated — callers fall back to the Python path
+                rather than drop the filter.
+        """
+        if direction not in ("out", "in", "both"):
+            raise ValueError(
+                f"direction must be 'out', 'in' or 'both', got {direction!r}"
+            )
+        edge_col = _safe_collection(edge_collection)
+        node_col = _safe_collection(node_collection)
+        schema = _safe_collection(self.schema_name)
+        params: List[Any] = [str(start_id)]
+
+        def bind(value: Any) -> str:
+            params.append(value)
+            return f"${len(params)}"
+
+        def fragment(query: Optional[Dict[str, Any]], table: str) -> str:
+            if not query:
+                return ""
+            translated = translate_query(query, table=table)
+            if translated is None:
+                raise NotImplementedError(
+                    f"find_connected_nodes: {table}-side filter does not "
+                    f"translate to SQL: {query!r}"
+                )
+            sql, sub_params = translated
+            if not sql:
+                return ""
+            shifted = _shift_placeholders(sql, shift=len(params))
+            params.extend(sub_params)
+            return f" AND ({shifted})"
+
+        edge_pred = ""
+        if edge_entities is not None:
+            edge_pred += f" AND e.entity = ANY({bind(list(edge_entities))}::text[])"
+        edge_pred += fragment(edge_query, "e")
+        node_pred = ""
+        if node_entities is not None:
+            node_pred += f" AND n.entity = ANY({bind(list(node_entities))}::text[])"
+        node_pred += fragment(node_query, "n")
+
+        # (near endpoint = start_id, far endpoint = neighbour) per branch.
+        ends = {
+            "out": [("source", "target")],
+            "in": [("target", "source")],
+            "both": [("source", "target"), ("target", "source")],
+        }[direction]
+        join_form = with_edges or (
+            direction != "both"
+            and edge_entities is not None
+            and len(edge_entities) == 1
+        )
+        if join_form:
+            edge_col_sql = ", e.data AS edge" if with_edges else ""
+            inner = " UNION ALL ".join(
+                f"SELECT n.id AS id, n.data AS data{edge_col_sql} "
+                f"FROM {schema}.{edge_col} e "
+                f"JOIN {schema}.{node_col} n ON n.id = (e.data #>> '{{{far}}}') "
+                f"WHERE (e.data #>> '{{{near}}}') = $1{edge_pred}{node_pred}"
+                for near, far in ends
+            )
+        else:
+            far_ids = " UNION ALL ".join(
+                f"SELECT (e.data #>> '{{{far}}}') FROM {schema}.{edge_col} e "
+                f"WHERE (e.data #>> '{{{near}}}') = $1{edge_pred}"
+                for near, far in ends
+            )
+            inner = (
+                f"SELECT n.id AS id, n.data AS data FROM {schema}.{node_col} n "
+                f"WHERE n.id IN ({far_ids}){node_pred}"
+            )
+
+        if count:
+            return f"SELECT COUNT(*) FROM ({inner}) sub", params
+
+        order_sql = ""
+        if sort:
+            sort_sql = translate_sort(sort, table="sub")
+            if sort_sql is None:
+                raise NotImplementedError(
+                    f"find_connected_nodes: sort does not translate: {sort!r}"
+                )
+            order_sql = f" ORDER BY {sort_sql}, sub.id ASC"
+        limit_sql = f" LIMIT {bind(int(limit))}" if limit is not None else ""
+        columns = "sub.data, sub.edge" if with_edges else "sub.data"
+        return f"SELECT {columns} FROM ({inner}) sub{order_sql}{limit_sql}", params
+
+    async def find_connected_nodes(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        start_id: str,
+        *,
+        direction: str = "out",
+        edge_entity: Optional[str] = None,
+        edge_entities: Optional[Sequence[str]] = None,
+        node_entities: Optional[Sequence[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        limit: Optional[int] = None,
+        with_edges: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Single-hop neighbours of ``start_id`` in one round trip.
+
+        Every filter is pushed into SQL: ``edge_entities`` / ``node_entities``
+        become ``entity = ANY(...)``, ``edge_query`` / ``node_query`` (record
+        paths, same dialect as :meth:`find`) are translated against the edge /
+        node side of the join, and ``sort`` / ``limit`` apply to neighbours.
+        ``edge_entity`` is the pre-0.0.18 single-type spelling.
+
+        Returns node records — or, with ``with_edges=True``, one
+        ``{"node": ..., "edge": ...}`` dict per connecting edge.
+
+        Raises:
+            NotImplementedError: a filter or the sort cannot be translated;
+                fall back to the Python traversal path.
+        """
+        if edge_entities is None and edge_entity is not None:
+            edge_entities = [edge_entity]
+        await self._bootstrap_collection(edge_collection)
+        await self._bootstrap_collection(node_collection)
+        sql, params = self._connected_nodes_sql(
+            node_collection,
+            edge_collection,
+            start_id,
+            direction=direction,
+            edge_entities=edge_entities,
+            node_entities=node_entities,
+            edge_query=edge_query,
+            node_query=node_query,
+            sort=sort,
+            limit=limit,
+            with_edges=with_edges,
+        )
+        async with self._acquire_conn() as conn:
+            rows = await conn.fetch(sql, *params)
+        if with_edges:
+            return [
+                {
+                    "node": self._record_from_row(r),
+                    "edge": self._record_from_row({"data": r["edge"]}),
+                }
+                for r in rows
+            ]
+        return [self._record_from_row(r) for r in rows]
+
+    async def count_connected_nodes(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        start_id: str,
+        *,
+        direction: str = "out",
+        edge_entities: Optional[Sequence[str]] = None,
+        node_entities: Optional[Sequence[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """``COUNT`` of the neighbours :meth:`find_connected_nodes` would return."""
+        await self._bootstrap_collection(edge_collection)
+        await self._bootstrap_collection(node_collection)
+        sql, params = self._connected_nodes_sql(
+            node_collection,
+            edge_collection,
+            start_id,
+            direction=direction,
+            edge_entities=edge_entities,
+            node_entities=node_entities,
+            edge_query=edge_query,
+            node_query=node_query,
+            count=True,
+        )
+        async with self._acquire_conn() as conn:
+            return int(await conn.fetchval(sql, *params))
+
+    async def find_connected_nodes_bulk(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        start_ids: Sequence[str],
+        *,
+        direction: str = "out",
+        edge_entities: Optional[Sequence[str]] = None,
+        node_entities: Optional[Sequence[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+        limit_per_source: Optional[int] = None,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Neighbours of many sources in one round trip, capped per source.
+
+        ``ROW_NUMBER() OVER (PARTITION BY source ORDER BY neighbour id)`` keeps
+        at most ``limit_per_source`` distinct neighbours per start id.
+        ``direction`` is ``"out"`` or ``"in"``.
+
+        Raises:
+            NotImplementedError: a filter cannot be translated.
+        """
+        if direction not in ("out", "in"):
+            raise ValueError(f"direction must be 'out' or 'in', got {direction!r}")
+        out: Dict[str, List[Dict[str, Any]]] = {str(s): [] for s in start_ids}
+        if not out:
+            return out
+        await self._bootstrap_collection(edge_collection)
+        await self._bootstrap_collection(node_collection)
+        edge_col = _safe_collection(edge_collection)
+        node_col = _safe_collection(node_collection)
+        schema = _safe_collection(self.schema_name)
+        near, far = ("source", "target") if direction == "out" else ("target", "source")
+        params: List[Any] = [list(out)]
+        preds = ""
+        for entities, table in ((edge_entities, "e"), (node_entities, "n")):
+            if entities is not None:
+                params.append(list(entities))
+                preds += f" AND {table}.entity = ANY(${len(params)}::text[])"
+        for query, table in ((edge_query, "e"), (node_query, "n")):
+            if not query:
+                continue
+            translated = translate_query(query, table=table)
+            if translated is None:
+                raise NotImplementedError(
+                    f"find_connected_nodes_bulk: filter does not translate: {query!r}"
+                )
+            sql, sub_params = translated
+            if sql:
+                preds += f" AND ({_shift_placeholders(sql, shift=len(params))})"
+                params.extend(sub_params)
+        cap = ""
+        if limit_per_source is not None:
+            params.append(int(limit_per_source))
+            cap = f" WHERE r.rn <= ${len(params)}"
+        sql = (
+            f"WITH pairs AS ("
+            f"SELECT DISTINCT (e.data #>> '{{{near}}}') AS src, n.id AS nid "
+            f"FROM {schema}.{edge_col} e "
+            f"JOIN {schema}.{node_col} n ON n.id = (e.data #>> '{{{far}}}') "
+            f"WHERE (e.data #>> '{{{near}}}') = ANY($1::text[]){preds}"
+            f"), ranked AS ("
+            f"SELECT src, nid, ROW_NUMBER() OVER (PARTITION BY src ORDER BY nid) AS rn "
+            f"FROM pairs) "
+            f"SELECT r.src AS src, n.data AS data FROM ranked r "
+            f"JOIN {schema}.{node_col} n ON n.id = r.nid{cap} ORDER BY r.src, r.rn"
+        )
+        async with self._acquire_conn() as conn:
+            rows = await conn.fetch(sql, *params)
+        for row in rows:
+            out[row["src"]].append(self._record_from_row(row))
+        return out
+
     async def bulk_save_detailed(
         self, collection: str, records: List[Dict[str, Any]]
     ) -> BulkSaveResult:
@@ -859,10 +1402,10 @@ class PostgresDB(Database):
             self._split_payload(r) for r in records
         ]
 
-        pool = await self._ensure_pool()
         attempted = len(records)
         try:
-            async with pool.acquire() as conn:
+            # Tenant-scoped like every other write (RLS ``WITH CHECK``).
+            async with self._acquire_conn() as conn:
                 async with conn.transaction():
                     await conn.execute(
                         f"""
@@ -924,13 +1467,40 @@ class PostgresDB(Database):
         unique: bool = False,
         **kwargs: Any,
     ) -> None:
-        """Create a functional B-tree index on a JSONB field path.
+        """Create a functional index on JSONB field paths or top-level columns.
 
-        Field paths use dot notation (``"context.user.id"``) and translate
-        to ``json_extract`` style ``(data #>> '{context,user,id}')``. Compound
-        index inputs (``[(field, dir)]``) are honored; ``unique=True`` adds
-        ``CREATE UNIQUE INDEX``. Postgres-specific kwargs (``where``,
-        ``method``) are accepted via ``**kwargs``.
+        Field paths use dot notation (``"context.user.id"``) and index
+        ``(data #>> '{context,user,id}')``; ``entity`` / ``id`` /
+        ``tenant_id`` index the real columns the query translator compares
+        against. A descending key is ``DESC NULLS LAST`` — the order
+        ``find(sort=...)`` emits — so sort + limit can walk the index.
+        ``unique=True`` adds ``CREATE UNIQUE INDEX``.
+
+        Keyword options:
+
+        * ``entity`` — the entity a per-class index serves (passed by
+          ``GraphContext.ensure_indexes``). The real ``entity`` column then
+          leads the key (``entity_leading=True``, default): every typed
+          ``find()`` filters on it, in a table shared by every class. Such an
+          index is named ``<col>_entity_<fields>_idx`` so sibling classes
+          declaring the same fields share it. ``partial_by_entity=True``
+          instead restricts it to ``WHERE entity = '<entity>'``
+          (``<col>_<entity>_<fields>_idx``; smaller, one per class).
+          ``drop_legacy=True`` also drops the unscoped pre-0.0.18
+          ``<col>_<fields>_idx`` / ``_uniq`` index it replaces.
+          Generated names stay within PostgreSQL's 63-byte identifier limit;
+          overlong compound names retain a stable digest and index suffix.
+        * ``fulltext=True`` — a GIN index over ``to_tsvector('simple', ...)``
+          of the fields in order (``<col>_<entity>_<fields>_fts``, scoped to
+          ``entity`` when given), matching
+          ``{"$text": {"$search": ..., "$fields": [<same fields>]}}``.
+        * ``index_partial_filter_expression`` — partial index predicate in
+          the supported Mongo-style dialect. Raw ``where=`` SQL is rejected.
+        * ``method`` — ``btree`` (default), ``hash``, ``gin``, ``gist``, ``brin``.
+
+        An existing index of the same name defined by the pre-0.0.18 rules
+        (JSONB paths for top-level columns, ``DESC`` without ``NULLS LAST``)
+        is rebuilt under a temporary name and swapped in.
         """
         await self._bootstrap_collection(collection)
         col = _safe_collection(collection)
@@ -941,34 +1511,39 @@ class PostgresDB(Database):
             fields: List[Tuple[str, int]] = [(field_or_fields, 1)]
         else:
             fields = list(field_or_fields)
-
-        # Build the column expression list.
-        col_exprs: List[str] = []
-        name_parts: List[str] = []
-        for field_path, direction in fields:
+        for field_path, _direction in fields:
             for seg in field_path.split("."):
                 if not _SAFE_IDENT_RE.match(seg):
                     raise ValueError(
                         f"PostgresDB.create_index rejects field path {field_path!r}: "
                         f"segment {seg!r} must be a safe identifier"
                     )
-            path_literal = "{" + ",".join(field_path.split(".")) + "}"
-            direction_sql = "ASC" if direction == 1 else "DESC"
-            col_exprs.append(f"(data #>> '{path_literal}') {direction_sql}")
-            name_parts.append(field_path.replace(".", "_"))
+        field_names = "_".join(f.replace(".", "_") for f, _ in fields)
 
-        unique_sql = "UNIQUE " if unique else ""
-        index_name = f"{col}_{'_'.join(name_parts)}_idx"
-        if unique:
-            index_name = f"{col}_{'_'.join(name_parts)}_uniq"
+        entity = kwargs.get("entity")
+        if entity is not None and not _SAFE_IDENT_RE.match(str(entity)):
+            logger.warning(
+                "PostgresDB.create_index: entity %r is not a safe identifier; "
+                "index left unscoped",
+                entity,
+            )
+            entity = None
+        fulltext = bool(kwargs.get("fulltext"))
+        partial_by_entity = bool(entity) and (
+            fulltext or bool(kwargs.get("partial_by_entity"))
+        )
+        entity_leading = (
+            bool(entity)
+            and not partial_by_entity
+            and bool(kwargs.get("entity_leading", True))
+            and all(f != "entity" for f, _ in fields)
+        )
 
-        where_clause = ""
-        partial = kwargs.get("where")
-        if partial:
-            # We don't try to parse the partial expression — caller is
-            # responsible for getting it right. We do require it to be a
-            # simple Postgres predicate string.
-            where_clause = f" WHERE {partial}"
+        where_parts: List[str] = []
+        if kwargs.get("where"):
+            raise ValueError(
+                "Raw index predicates are unsupported; use a partial filter expression"
+            )
         else:
             # Translate Mongo-style ``index_partial_filter_expression``
             # (the cross-backend kwarg used by ``attribute(index_unique=...,
@@ -997,24 +1572,69 @@ class PostgresDB(Database):
                     raise ValueError(
                         "PostgresDB.create_index: cannot translate "
                         f"index_partial_filter_expression {pfe!r} to a "
-                        "PG WHERE clause. Pass an explicit ``where=`` "
-                        "argument or use a supported filter shape "
+                        "PG WHERE clause. Use a supported filter shape "
                         "(equality / $gt / $exists on safe field paths "
                         "with scalar values)."
                     )
-                where_clause = f" WHERE {translated}"
+                where_parts.append(translated)
+        if partial_by_entity:
+            where_parts.append(f"entity = {_pg_string_literal(str(entity))}")
+        where_clause = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
-        method = kwargs.get("method", "btree")
+        if fulltext:
+            expr = tsvector_expression([f for f, _ in fields])
+            if expr is None:  # pragma: no cover - paths validated above
+                raise ValueError(f"unsafe full-text fields: {fields!r}")
+            keys = [expr]
+            method = "gin"
+            suffix = "fts"
+        else:
+            keys = ["entity"] if entity_leading else []
+            for field_path, direction in fields:
+                extract = _pg_field_extract(field_path)
+                keys.append(
+                    f"{extract} {'ASC' if direction == 1 else 'DESC NULLS LAST'}"
+                )
+            method = kwargs.get("method", "btree")
+            suffix = "uniq" if unique else "idx"
         if method not in ("btree", "hash", "gin", "gist", "brin"):
             raise ValueError(f"Unsupported index method: {method!r}")
 
+        if partial_by_entity:
+            scope = f"{str(entity).lower()}_"
+        elif entity_leading:
+            scope = "entity_"
+        else:
+            scope = ""
+        index_name = _postgres_index_name(f"{col}_{scope}{field_names}", suffix)
+        unique_sql = "UNIQUE " if unique and not fulltext else ""
+        body = f"ON {schema}.{col} USING {method} ({', '.join(keys)}){where_clause}"
+
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            await conn.execute(
-                f"CREATE {unique_sql}INDEX IF NOT EXISTS {index_name} "
-                f"ON {schema}.{col} USING {method} ({', '.join(col_exprs)})"
-                f"{where_clause}"
+            existing = await conn.fetchval(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = $1 AND indexname = $2",
+                schema,
+                index_name,
             )
+            if existing is not None and _STALE_INDEX_DEF_RE.search(existing):
+                # Build the corrected index first so a unique constraint is
+                # never absent, then swap it in under the canonical name.
+                temp = _postgres_index_name(index_name, "rebuild")
+                await conn.execute(f"DROP INDEX IF EXISTS {schema}.{temp}")
+                await conn.execute(f"CREATE {unique_sql}INDEX {temp} {body}")
+                await conn.execute(f"DROP INDEX {schema}.{index_name}")
+                await conn.execute(
+                    f"ALTER INDEX {schema}.{temp} RENAME TO {index_name}"
+                )
+            else:
+                await conn.execute(
+                    f"CREATE {unique_sql}INDEX IF NOT EXISTS {index_name} {body}"
+                )
+            if kwargs.get("drop_legacy") and scope:
+                legacy_suffix = "uniq" if unique else "idx"
+                legacy = _postgres_index_name(f"{col}_{field_names}", legacy_suffix)
+                await conn.execute(f"DROP INDEX IF EXISTS {schema}.{legacy}")
 
     # ---- atomic compound ops (C4) ------------------------------------------
 
@@ -1051,8 +1671,7 @@ class PostgresDB(Database):
             f"WHERE ctid = (SELECT ctid FROM {schema}.{col}{clause} LIMIT 1) "
             f"RETURNING data"
         )
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
+        async with self._acquire_conn() as conn:
             row = await conn.fetchrow(sql, *params)
         return self._record_from_row(row) if row is not None else None
 
@@ -1090,9 +1709,10 @@ class PostgresDB(Database):
 
         where_sql, params = translated
         clause = f" WHERE {where_sql}" if where_sql else ""
-        pool = await self._ensure_pool()
 
-        async with pool.acquire() as conn:
+        # ``_acquire_conn`` applies the tenant scope; under it this
+        # transaction is a savepoint inside the tenant-scoped one.
+        async with self._acquire_conn() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
                     f"SELECT ctid, data FROM {schema}.{col}{clause} "
@@ -1243,7 +1863,7 @@ class PostgresDB(Database):
         await self._bootstrap_collection(collection)
         col = _safe_collection(collection)
         schema = _safe_collection(self.schema_name)
-        index_name = f"{col}_{field_name}_{index}_idx"
+        index_name = _postgres_index_name(f"{col}_{field_name}_{index}", "idx")
 
         async with self._pool_lock:
             pool = await self._ensure_pool()
@@ -1512,8 +2132,7 @@ class PostgresDB(Database):
         ORDER BY node_id, depth ASC{limit_clause}
         """
 
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
+        async with self._acquire_conn() as conn:
             rows = await conn.fetch(sql, *params)
         return [
             {
@@ -1643,6 +2262,47 @@ class PostgresTransaction:
         )
         return data
 
+    async def insert_if_absent(
+        self,
+        collection: str,
+        data: Dict[str, Any],
+        *,
+        conflict_target: str = "id",
+    ) -> InsertIfAbsentResult:
+        """Insert-if-absent within this transaction (same SQL as PostgresDB)."""
+        self._db._validate_insert_if_absent(data, conflict_target)
+        col = _safe_collection(collection)
+        schema = _safe_collection(self._db.schema_name)
+        await self._db._bootstrap_collection(collection)
+        rec_id, entity, tenant, data_json = self._db._split_payload(data)
+        row = await self._connection.fetchrow(
+            f"""
+            INSERT INTO {schema}.{col} (id, entity, tenant_id, data, updated_at)
+            VALUES ($1, $2, $3, $4::jsonb, NOW())
+            ON CONFLICT (id) DO NOTHING
+            RETURNING data
+            """,
+            rec_id,
+            entity,
+            tenant,
+            data_json,
+        )
+        if row is not None:
+            return InsertIfAbsentResult(
+                record=self._db._record_from_row(row), created=True
+            )
+        existing = await self._connection.fetchrow(
+            f"SELECT data FROM {schema}.{col} WHERE id = $1", rec_id
+        )
+        if existing is None:
+            raise DatabaseError(
+                "insert_if_absent conflicted but no row with "
+                f"id={rec_id!r} exists in collection {collection!r}"
+            )
+        return InsertIfAbsentResult(
+            record=self._db._record_from_row(existing), created=False
+        )
+
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Fetch a single record by ``id`` from ``collection`` in this transaction."""
         col = _safe_collection(collection)
@@ -1691,8 +2351,12 @@ class PostgresTransaction:
         clauses = [where_sql] if where_sql else []
         where_clause = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         order_clause = f" ORDER BY {sort_sql}" if sort_sql else ""
+        # Withhold the LIMIT when the sort has to happen in memory, so we
+        # order the full match set rather than an arbitrary N rows. Mirrors
+        # ``PostgresDB.find``.
+        sort_in_memory = bool(sort) and sort_sql is None
         limit_clause = ""
-        if limit is not None:
+        if limit is not None and not sort_in_memory:
             params = list(params) + [int(limit)]
             limit_clause = f" LIMIT ${len(params)}"
         rows = await self._connection.fetch(
@@ -1700,9 +2364,97 @@ class PostgresTransaction:
             *params,
         )
         records = [self._db._record_from_row(r) for r in rows]
-        if sort and sort_sql is None:
-            records = finalize_find_results(records, sort=sort, limit=None)
+        if sort_in_memory:
+            records = finalize_find_results(records, sort=sort, limit=limit)
         return records
+
+    async def find_one_and_update(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        update: Dict[str, Any],
+        upsert: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically find + update the first match on this transaction's connection.
+
+        Uses ``SELECT ... FOR UPDATE`` on the held connection so the row lock
+        participates in the outer transaction. Callers that also
+        ``insert_if_absent`` on the same handle get one atomic unit of work
+        on commit/rollback. Does not open a nested pool transaction.
+        """
+        from .database import _normalize_id_query
+
+        await self._db._bootstrap_collection(collection)
+        col = _safe_collection(collection)
+        schema = _safe_collection(self._db.schema_name)
+
+        q = _normalize_id_query(query)
+        translated = translate_query(q) if q else ("", [])
+        if translated is None:
+            # Fall back to in-transaction find + match (still on held conn).
+            candidates = await self.find(collection, q, limit=None)
+            matched = next(
+                (r for r in candidates if QueryEngine.match(r, q)),
+                None,
+            )
+            if matched is None:
+                if not upsert:
+                    return None
+                doc: Dict[str, Any] = {}
+                doc_id = query.get("_id", query.get("id"))
+                if doc_id is not None:
+                    doc["_id"] = doc_id
+                    doc["id"] = str(doc_id)
+                QueryEngine.apply_update(doc, update, apply_set_on_insert=True)
+            else:
+                doc = dict(matched)
+                QueryEngine.apply_update(doc, update, apply_set_on_insert=False)
+            record_id = doc.get("id", doc.get("_id"))
+            if record_id is not None:
+                doc["id"] = str(record_id)
+            await self.save(collection, doc)
+            return doc
+
+        where_sql, params = translated
+        clause = f" WHERE {where_sql}" if where_sql else ""
+        row = await self._connection.fetchrow(
+            f"SELECT ctid, data FROM {schema}.{col}{clause} " f"LIMIT 1 FOR UPDATE",
+            *params,
+        )
+        if row is None:
+            if not upsert:
+                return None
+            doc = {}
+            doc_id = query.get("_id", query.get("id"))
+            if doc_id is not None:
+                doc["_id"] = doc_id
+                doc["id"] = str(doc_id)
+            QueryEngine.apply_update(doc, update, apply_set_on_insert=True)
+        else:
+            doc = self._db._record_from_row(row)
+            QueryEngine.apply_update(doc, update, apply_set_on_insert=False)
+
+        record_id = doc.get("id", doc.get("_id"))
+        if record_id is not None:
+            doc["id"] = str(record_id)
+
+        rec_id, entity, tenant, data_json = self._db._split_payload(doc)
+        await self._connection.execute(
+            f"""
+            INSERT INTO {schema}.{col} (id, entity, tenant_id, data, updated_at)
+            VALUES ($1, $2, $3, $4::jsonb, NOW())
+            ON CONFLICT (id) DO UPDATE SET
+                entity     = EXCLUDED.entity,
+                tenant_id  = EXCLUDED.tenant_id,
+                data       = EXCLUDED.data,
+                updated_at = NOW()
+            """,
+            rec_id,
+            entity,
+            tenant,
+            data_json,
+        )
+        return doc
 
     async def commit(self) -> None:
         """Commit the wrapped asyncpg transaction. Idempotent."""

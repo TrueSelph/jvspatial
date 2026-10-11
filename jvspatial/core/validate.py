@@ -1,6 +1,6 @@
 """Graph-structure validators.
 
-CLAUDE.md spells out the modeling convention every jvspatial application
+AGENTS.md spells out the modeling convention every jvspatial application
 should follow:
 
 1. Every ``Node`` is reachable from ``Root``.

@@ -31,7 +31,7 @@ The jvspatial file storage system provides secure, scalable file management with
 
 - **HTTP paths** are **`{JVSPATIAL_API_PREFIX}/files/...`** (default **`/api/files/...`**): upload is **`POST /api/files/upload`**, direct file access is **`GET /api/files/{file_path}`**, proxy admin is under **`/api/files/proxy`**. There is no separate storage prefix env var.
 - **OpenAPI** groups these operations under the **`Files`** tag.
-- **Authentication**: When `auth` middleware is enabled, **`POST /api/files/upload`**, **`DELETE /api/files/{path}`**, and proxy admin routes require a JWT or API key. **`GET /api/files/{path}`** is **public by default**; set **`JVSPATIAL_FILES_PUBLIC_READ=false`** to require auth for direct reads. **`GET {JVSPATIAL_PROXY_PREFIX}/{code}`** (default `/p/{code}`) stays public: the opaque code and expiry act as the credential. For anonymous third-party fetch when public read is off, use **proxy URLs** or add a **narrow** `auth.exempt_paths` entry (path-only patterns cannot distinguish GET vs POST; review security before exempting broad prefixes).
+- **Authentication**: When `auth` middleware is enabled, **`POST /api/files/upload`**, **`DELETE /api/files/{path}`**, proxy admin routes, and **`GET /api/files/{path}`** require a JWT or API key by default. Set **`JVSPATIAL_FILES_PUBLIC_READ=true`** only when direct public reads are intentional. **`GET {JVSPATIAL_PROXY_PREFIX}/{code}`** (default `/p/{code}`) stays public: the opaque code and expiry act as the credential. For anonymous third-party fetch, use **proxy URLs** or add a **narrow** `auth.exempt_paths` entry (path-only patterns cannot distinguish GET vs POST; review security before exempting broad prefixes).
 
 ### Key Features
 

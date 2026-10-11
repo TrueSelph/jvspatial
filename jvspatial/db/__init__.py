@@ -5,7 +5,12 @@ and essential CRUD operations. Includes multi-database management with
 a prime default database for core persistence operations.
 """
 
-from .database import Database, DatabaseError, VersionConflictError
+from .database import (
+    Database,
+    DatabaseError,
+    InsertIfAbsentResult,
+    VersionConflictError,
+)
 from .factory import (
     create_database,
     create_default_database,
@@ -19,6 +24,7 @@ from .factory import (
 )
 from .jsondb import JsonDB
 from .manager import DatabaseManager, get_database_manager, set_database_manager
+from .query import escape_regex
 
 try:  # Optional dependency (requires aiosqlite)
     from .sqlite import SQLiteDB  # noqa: F401
@@ -56,6 +62,7 @@ __all__ = [
     "Database",
     "DatabaseError",
     "VersionConflictError",
+    "InsertIfAbsentResult",
     "create_database",
     "create_default_database",
     "get_prime_database",
@@ -69,6 +76,7 @@ __all__ = [
     "get_database_manager",
     "set_database_manager",
     "JsonDB",
+    "escape_regex",
 ]
 
 if _SQLITE_AVAILABLE:

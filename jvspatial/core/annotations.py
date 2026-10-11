@@ -57,6 +57,9 @@ def attribute(
     index_unique: bool = False,
     index_direction: int = 1,
     index_partial_filter_expression: Optional[Dict[str, Any]] = None,
+    index_entity_leading: bool = True,
+    index_partial_by_entity: bool = False,
+    fulltext: bool = False,
     # Standard Pydantic Field parameters
     description: Optional[str] = None,
     title: Optional[str] = None,
@@ -87,6 +90,17 @@ def attribute(
                 ``context.<field>`` DB path. Use this with ``index_unique=True`` to avoid
                 null/empty-value conflicts in shared collections (e.g.
                 ``{"context.name": {"$gt": ""}}``). Supersedes sparse behavior.
+        index_entity_leading: Postgres: lead the index key with the real
+                ``entity`` column (default) — every typed ``find()`` filters on
+                it in the collection shared by every class.
+        index_partial_by_entity: Postgres: scope the index to
+                ``WHERE entity = '<Class>'`` instead of leading with the
+                column (smaller; one index per class).
+        fulltext: Include this field in the class's full-text index (a
+                Postgres GIN over ``to_tsvector('simple', ...)`` of every
+                ``fulltext=True`` field, in declaration order), matched by
+                ``{"$text": {"$search": ..., "$fields": [...]}}`` with the
+                fields in that same order.
         description: Description for the attribute
         title: Title for the attribute
         examples: Example values for documentation
@@ -147,7 +161,7 @@ def attribute(
         field_kwargs["default"] = default
 
     # Add protection/transient/index metadata to json_schema_extra
-    if protected or transient or indexed:
+    if protected or transient or indexed or fulltext:
         json_extra = field_kwargs.get("json_schema_extra", {})
         if protected:
             json_extra["protected"] = True
@@ -163,6 +177,12 @@ def attribute(
                 json_extra["index_partial_filter_expression"] = (
                     index_partial_filter_expression
                 )
+            if not index_entity_leading:
+                json_extra["index_entity_leading"] = False
+            if index_partial_by_entity:
+                json_extra["index_partial_by_entity"] = True
+        if fulltext:
+            json_extra["fulltext"] = True
         field_kwargs["json_schema_extra"] = json_extra
 
     return Field(**field_kwargs)
@@ -312,9 +332,31 @@ def get_indexed_fields(cls: Type) -> Dict[str, Dict[str, Any]]:
                         field_config["partial_filter_expression"] = json_extra[
                             "index_partial_filter_expression"
                         ]
+                    if "index_entity_leading" in json_extra:
+                        field_config["entity_leading"] = json_extra[
+                            "index_entity_leading"
+                        ]
+                    if "index_partial_by_entity" in json_extra:
+                        field_config["partial_by_entity"] = json_extra[
+                            "index_partial_by_entity"
+                        ]
                     indexed_fields[field_name] = field_config
 
     return indexed_fields
+
+
+def get_fulltext_fields(cls: Type) -> List[str]:
+    """Fields declared with ``attribute(fulltext=True)``, in declaration order."""
+    names: List[str] = []
+    for field_name, field_info in getattr(cls, "model_fields", {}).items():
+        json_extra = getattr(field_info, "json_schema_extra", None)
+        if callable(json_extra):
+            schema: Dict[str, Any] = {}
+            json_extra(schema, cls)
+            json_extra = schema
+        if json_extra and json_extra.get("fulltext", False):
+            names.append(field_name)
+    return names
 
 
 def compound_index(
@@ -323,6 +365,8 @@ def compound_index(
     unique: bool = False,
     sparse: bool = False,
     partial_filter_expression: Optional[Dict[str, Any]] = None,
+    entity_leading: bool = True,
+    partial_by_entity: bool = False,
 ):
     """Class decorator for declaring compound indexes.
 
@@ -344,6 +388,11 @@ def compound_index(
                 a unique index to a specific document sub-type within a shared
                 collection. Field paths in the expression must use the full
                 ``context.<field>`` DB path (they are NOT auto-prefixed).
+        entity_leading: Postgres: lead the key with the real ``entity``
+                column (default), so typed finds on a shared collection
+                seek straight to this class's rows.
+        partial_by_entity: Postgres: scope the index to
+                ``WHERE entity = '<Class>'`` instead (smaller; one per class).
 
     Returns:
         Class decorator function
@@ -368,10 +417,50 @@ def compound_index(
         }
         if partial_filter_expression is not None:
             index_def["partialFilterExpression"] = partial_filter_expression
+        if not entity_leading:
+            index_def["entity_leading"] = False
+        if partial_by_entity:
+            index_def["partial_by_entity"] = True
         _COMPOUND_INDEXES[cls].append(index_def)
         return cls
 
     return decorator
+
+
+_FULLTEXT_INDEXES: Dict[Type, List[Dict[str, Any]]] = {}
+
+
+def fulltext_index(fields: List[str], name: Optional[str] = None):
+    """Class decorator declaring a full-text index over ``fields``.
+
+    On Postgres this is a GIN index over ``to_tsvector('simple', ...)`` of the
+    concatenated field values, scoped to the class's rows. Queries use it via
+    ``{"$text": {"$search": "words", "$fields": ["context.title", ...]}}``
+    with the same fields in the same order. Other backends evaluate ``$text``
+    in memory (MongoDB searches its own text index).
+
+    Example:
+        @fulltext_index(["title", "body"])
+        class Article(Node):
+            title: str = ""
+            body: str = ""
+    """
+
+    def decorator(cls: Type) -> Type:
+        _FULLTEXT_INDEXES.setdefault(cls, []).append(
+            {"fields": list(fields), "name": name or f"fts_{'_'.join(fields)}"}
+        )
+        return cls
+
+    return decorator
+
+
+def get_fulltext_indexes(cls: Type) -> List[Dict[str, Any]]:
+    """Full-text indexes declared with :func:`fulltext_index` across the MRO."""
+    indexes: List[Dict[str, Any]] = []
+    for klass in cls.__mro__:
+        indexes.extend(_FULLTEXT_INDEXES.get(klass, []))
+    return indexes
 
 
 def get_compound_indexes(cls: Type) -> List[Dict[str, Any]]:

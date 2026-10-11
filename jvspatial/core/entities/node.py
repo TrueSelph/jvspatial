@@ -1,7 +1,6 @@
 """Node class for jvspatial graph entities."""
 
 import logging
-import re
 import weakref
 from typing import (
     TYPE_CHECKING,
@@ -11,9 +10,12 @@ from typing import (
     Dict,
     List,
     Optional,
+    Tuple,
     Type,
     Union,
 )
+
+from jvspatial.db.database import finalize_find_results
 
 from ..annotations import attribute
 from .edge import Edge
@@ -27,6 +29,124 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Record paths at the top level of node / edge documents. Any other bare
+# property name in a neighbour filter refers to ``context.<name>`` — the same
+# attribute ``_matches_property_filter`` reads.
+_NODE_TOP_LEVEL_KEYS = frozenset({"id", "entity"})
+_EDGE_TOP_LEVEL_KEYS = frozenset({"id", "entity", "source", "target", "bidirectional"})
+
+# (edge_entities, edge_query, node_entities, node_query) — ``None`` entities
+# mean "any type", ``None`` queries mean "no property filter".
+NeighborSpec = Tuple[
+    Optional[List[str]],
+    Optional[Dict[str, Any]],
+    Optional[List[str]],
+    Optional[Dict[str, Any]],
+]
+
+
+def _record_query(criteria: Dict[str, Any], top_level: frozenset) -> Dict[str, Any]:
+    """Map attribute-style criteria (``population``) to record paths (``context.population``)."""
+    return {
+        (
+            key
+            if key.startswith(("context.", "$")) or key in top_level
+            else f"context.{key}"
+        ): value
+        for key, value in criteria.items()
+    }
+
+
+def _entity_name_of(cls: type) -> str:
+    resolver = getattr(cls, "_entity_name", None)
+    return resolver() if callable(resolver) else cls.__name__
+
+
+def _node_class_entities(cls: type) -> Optional[List[str]]:
+    """Entity names ``isinstance(x, cls)`` accepts: ``cls`` and every loaded subclass.
+
+    ``None`` for the ``Node`` base itself, which every node matches.
+    """
+    if cls is Node:
+        return None
+    names = set()
+    stack: List[type] = [cls]
+    seen: set = set()
+    while stack:
+        klass = stack.pop()
+        if klass in seen:
+            continue
+        seen.add(klass)
+        names.add(_entity_name_of(klass))
+        stack.extend(klass.__subclasses__())
+    return sorted(names)
+
+
+def _neighbor_filter_spec(
+    flt: Any, *, node_side: bool
+) -> Tuple[Optional[List[str]], Optional[Dict[str, Any]]]:
+    """Normalise a ``nodes()`` node / edge filter to ``(entities, query)``.
+
+    Accepts a name, a class, or a list of names, classes and
+    ``{name: criteria}`` dicts. Node classes match subclasses (``isinstance``
+    semantics); edge classes, names and dict keys match exactly. Criteria
+    dicts become an ``$or`` of ``{"entity": name, <record-path criteria>}``
+    branches, alongside ``{"entity": {"$in": [...]}}`` for plain items.
+    """
+    if flt is None:
+        return None, None
+    items = list(flt) if isinstance(flt, (list, tuple)) else [flt]
+    if not items and not node_side:
+        return None, None  # ``edge=[]`` has always meant "any edge type"
+    top_level = _NODE_TOP_LEVEL_KEYS if node_side else _EDGE_TOP_LEVEL_KEYS
+    entities: List[str] = []
+    branches: List[Dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, str):
+            entities.append(item)
+        elif isinstance(item, type):
+            if not node_side:
+                entities.append(_entity_name_of(item))
+                continue
+            names = _node_class_entities(item)
+            if names is None:
+                return None, None
+            entities.extend(names)
+        elif isinstance(item, dict):
+            for name, criteria in item.items():
+                entity = name if isinstance(name, str) else _entity_name_of(name)
+                branches.append(
+                    {"entity": entity, **_record_query(dict(criteria or {}), top_level)}
+                )
+        else:
+            side = "node" if node_side else "edge"
+            raise TypeError(f"unsupported {side} filter item: {item!r}")
+    entities = sorted(set(entities))
+    if not branches:
+        return entities, None
+    if entities:
+        branches.append({"entity": {"$in": entities}})
+    return None, {"$or": branches}
+
+
+def _deserialize_hint(node_filter: Any) -> type:
+    """Class to hydrate neighbours as when the filter names exactly one class.
+
+    ``_deserialize_entity`` resolves the stored ``entity`` against this
+    class's subtree first, so when two Node subclasses share an entity name
+    (an app ``User`` and an embedded-agent ``User``) the row hydrates as the
+    class the caller asked for rather than the first global name match.
+    """
+    if isinstance(node_filter, type):
+        return node_filter
+    if (
+        isinstance(node_filter, (list, tuple))
+        and len(node_filter) == 1
+        and isinstance(node_filter[0], type)
+    ):
+        return node_filter[0]
+    return Node
+
 
 class Node(Object):
     """Graph node with visitor tracking and connection capabilities.
@@ -34,15 +154,11 @@ class Node(Object):
     Attributes:
         id: Unique identifier for the node (protected - inherited from Object)
         visitor: Current walker visiting the node (transient - not persisted)
-        edge_ids: List of connected edge IDs
     """
 
     type_code: str = attribute(transient=True, default="n")
     _visitor_ref: Optional[weakref.ReferenceType] = attribute(
         private=True, default=None
-    )
-    edge_ids: List[str] = attribute(
-        transient=True, default_factory=list, description="List of connected edge IDs"
     )
     _visit_hooks: ClassVar[
         Dict[Union[Optional[Type["Walker"]], str], List[Callable]]
@@ -51,10 +167,7 @@ class Node(Object):
     @classmethod
     def _get_top_level_fields(cls: Type["Node"]) -> set:
         """Get top-level fields for Node persistence format."""
-        return {
-            "edges",
-            "id",
-        }  # edge_ids is stored as "edges" at top level; id is top-level on node docs
+        return {"id"}
 
     @classmethod
     def get_indexes(cls: Type["Node"]) -> List[Dict[str, Any]]:
@@ -196,17 +309,8 @@ class Node(Object):
                 matching_edge = existing_edge
                 break
 
-        # If an existing edge is found, return it instead of creating a duplicate
+        # The edge row is the adjacency — node rows are never rewritten.
         if matching_edge:
-            # Ensure edge IDs are in both nodes' edge_ids lists (in case they're missing)
-            if matching_edge.id not in self.edge_ids:
-                await context.atomic_add_edge_id(self.id, matching_edge.id)
-                if matching_edge.id not in self.edge_ids:
-                    self.edge_ids.append(matching_edge.id)
-            if matching_edge.id not in other.edge_ids:
-                await context.atomic_add_edge_id(other.id, matching_edge.id)
-                if matching_edge.id not in other.edge_ids:
-                    other.edge_ids.append(matching_edge.id)
             return matching_edge
 
         # No existing edge found, create a new one
@@ -226,56 +330,50 @@ class Node(Object):
                     return retry_edges[0]
             raise
 
-        # Atomically update both nodes' edge_ids
-        await context.atomic_add_edge_id(self.id, connection.id)
-        if connection.id not in self.edge_ids:
-            self.edge_ids.append(connection.id)
-
-        await context.atomic_add_edge_id(other.id, connection.id)
-        if connection.id not in other.edge_ids:
-            other.edge_ids.append(connection.id)
-
         return connection
 
-    async def edges(self: "Node", direction: str = "") -> List["Edge"]:
+    async def edges(
+        self: "Node", direction: str = "", limit: Optional[int] = None
+    ) -> List["Edge"]:
         """Get edges connected to this node.
+
+        Queries the edge collection by ``source`` / ``target`` — index-backed
+        on SQL backends, one round trip.
 
         Args:
             direction: Filter edges by direction ('in', 'out', 'both')
+            limit: Maximum number of edges to return (default: all)
 
         Returns:
             List of edge instances
         """
-        if not self.edge_ids:
-            return []
+        context = await self.get_context()
 
-        from ..context import get_default_context
-
-        context = get_default_context()
-
-        # Use batch query for efficiency (N+1 -> 1 query)
-        edge_results = await context.database.find(
-            "edge", {"id": {"$in": self.edge_ids}}
-        )
-
-        edges = []
-        for result in edge_results:
-            try:
-                edge_obj = await context._deserialize_entity(Edge, result)
-                if edge_obj:
-                    edges.append(edge_obj)
-            except Exception as e:
-                # Log at debug level and skip invalid edges
-                logger.debug(f"Skipping invalid edge during deserialization: {e}")
-                continue
-
-        # Filter by direction if specified
+        query: Dict[str, Any]
         if direction == "out":
-            return [e for e in edges if e.source == self.id]
+            query = {"source": self.id}
         elif direction == "in":
-            return [e for e in edges if e.target == self.id]
+            query = {"target": self.id}
         else:
-            return edges
+            query = {"$or": [{"source": self.id}, {"target": self.id}]}
+        rows = await context.database.find("edge", query, limit=limit)
+        if limit is None and len(rows) > 10_000:
+            logger.debug(
+                "Node.edges(%s) loaded %d edges; pass limit= or use "
+                "connection_count() for hub nodes",
+                self.id,
+                len(rows),
+            )
+        derived: List["Edge"] = []
+        for row in rows:
+            edge_obj = await context._deserialize_entity(Edge, row)
+            if edge_obj:
+                derived.append(edge_obj)
+        return derived
+
+    async def _incident_edges(self: "Node", context: "GraphContext") -> List["Edge"]:
+        """Every edge touching this node, either endpoint (used by cascade delete)."""
+        return await self.edges()
 
     async def nodes(
         self,
@@ -369,11 +467,13 @@ class Node(Object):
         edge_filter: Optional[Dict[str, Any]] = None,
         node_filter: Optional[Dict[str, Any]] = None,
         limit: Optional[int] = None,
+        limit_per_source: Optional[int] = None,
     ) -> Dict[str, List["Node"]]:
         """Batch version of ``nodes()`` for many source IDs.
 
         Returns a mapping of ``source_id -> connected nodes`` using a single
-        edge-query pass in the active GraphContext.
+        edge-query pass in the active GraphContext. ``limit_per_source`` caps
+        the neighbours per source (one windowed query on Postgres).
         """
         from ..context import get_default_context
 
@@ -386,7 +486,96 @@ class Node(Object):
             edge_filter=edge_filter,
             node_filter=node_filter,
             limit=limit,
+            limit_per_source=limit_per_source,
         )
+
+    async def neighborhood(
+        self,
+        depth: int = 1,
+        *,
+        direction: str = "out",
+        node: Optional[
+            Union[str, type, List[Union[str, type, Dict[str, Dict[str, Any]]]]]
+        ] = None,
+        edge: Optional[
+            Union[
+                str,
+                Type["Edge"],
+                List[Union[str, Type["Edge"], Dict[str, Dict[str, Any]]]],
+            ]
+        ] = None,
+        limit: Optional[int] = None,
+        **kwargs: Any,
+    ) -> List["Node"]:
+        """Return all nodes reachable within ``depth`` hops from this node.
+
+        Uses the backend ``traverse`` implementation when available (single
+        round trip on Postgres); otherwise falls back to a Python BFS using
+        :meth:`nodes` per hop.
+        """
+        from ..context import get_default_context
+        from .edge import Edge
+
+        if depth < 1:
+            return []
+
+        context = get_default_context()
+        db = context.database
+        traverse = getattr(db, "traverse", None)
+
+        use_traverse = (
+            callable(traverse)
+            and not kwargs
+            and node is None
+            and direction in ("out", "in", "both")
+            and not isinstance(edge, list)
+        )
+
+        if use_traverse:
+            edge_coll = context._get_collection_name(
+                context._get_entity_type_code(Edge)
+            )
+
+            try:
+                rows = await traverse(
+                    edge_coll,
+                    self.id,
+                    direction=direction,
+                    max_depth=depth,
+                    limit=limit,
+                )
+            except NotImplementedError:
+                use_traverse = False
+            else:
+                node_ids = [row["node_id"] for row in rows]
+                if not node_ids:
+                    return []
+                return await context.get_batch(Node, node_ids)
+
+        # Python BFS fallback (all backends).
+        seen: set = {self.id}
+        frontier: List["Node"] = [self]
+        collected: List["Node"] = []
+        for _ in range(depth):
+            next_frontier: List["Node"] = []
+            for current in frontier:
+                neighbors = await current.nodes(
+                    direction=direction,
+                    node=node,
+                    edge=edge,
+                    limit=limit,
+                    **kwargs,
+                )
+                for nb in neighbors:
+                    if nb.id in seen:
+                        continue
+                    seen.add(nb.id)
+                    collected.append(nb)
+                    next_frontier.append(nb)
+            frontier = next_frontier
+            if not frontier:
+                break
+        return collected
 
     async def count_neighbors(
         self,
@@ -403,72 +592,122 @@ class Node(Object):
         ] = None,
         **kwargs: Any,
     ) -> int:
-        """Count neighbors (same filters as :meth:`nodes`).
+        """Count neighbors (same filters as :meth:`nodes`) — alias of :meth:`count_nodes`.
 
         Named ``count_neighbors`` so this does not shadow :meth:`Object.count` on
         Node subclasses (e.g. ``User.count(query)`` remains the DB count API).
 
-        Fast path: when ``node`` is a single entity name/class and no ``edge``
-        filter or extra ``kwargs`` are provided, this issues ``count`` queries on
-        the ``edge`` collection using ``source`` / ``target`` plus a regex on the
-        peer node id (pattern ``^n.<ClassName>.``). Persisted edges do not store
-        separate ``target_entity`` / ``source_entity`` fields.
-
         Returns:
             Number of matching connected nodes.
         """
-        # Fast-path: single entity type filter, no edge filter or property kwargs.
-        if (
-            not kwargs
-            and edge is None
-            and node is not None
-            and not isinstance(node, list)
-        ):
-            entity_name: Optional[str] = None
-            if isinstance(node, str):
-                entity_name = node
-            elif isinstance(node, type):
-                # Honor ``__entity_name__`` so subclasses with custom
-                # discriminators match their persisted ID prefix.
-                resolver = getattr(node, "_entity_name", None)
-                entity_name = resolver() if callable(resolver) else node.__name__
-            if entity_name is not None:
-                try:
-                    from ..context import get_default_context
-
-                    ctx = get_default_context()
-                    db = ctx.database
-                    node_type_re = {
-                        "$regex": {"pattern": rf"^n\.{re.escape(entity_name)}\."}
-                    }
-                    if direction in ("out", "both"):
-                        q_out: Dict[str, Any] = {
-                            "source": self.id,
-                            "target": node_type_re,
-                        }
-                        out_count = await db.count("edge", q_out)
-                    else:
-                        out_count = 0
-                    if direction in ("in", "both"):
-                        q_in: Dict[str, Any] = {
-                            "target": self.id,
-                            "source": node_type_re,
-                        }
-                        in_count = await db.count("edge", q_in)
-                    else:
-                        in_count = 0
-                    return out_count + in_count
-                except Exception:
-                    pass  # Fall through to full hydration on any error.
-
-        return len(
-            await self.nodes(
-                direction=direction,
-                node=node,
-                edge=edge,
-                **kwargs,
-            )
+        return await self.count_nodes(
+            direction=direction, node=node, edge=edge, **kwargs
         )
+
+    async def count_nodes(
+        self,
+        direction: str = "out",
+        node: Optional[
+            Union[str, type, List[Union[str, type, Dict[str, Dict[str, Any]]]]]
+        ] = None,
+        edge: Optional[
+            Union[
+                str,
+                Type["Edge"],
+                List[Union[str, Type["Edge"], Dict[str, Dict[str, Any]]]],
+            ]
+        ] = None,
+        **kwargs: Any,
+    ) -> int:
+        """Count neighbours matching the same filters as :meth:`nodes`.
+
+        One ``COUNT`` round trip on backends with ``count_connected_nodes``
+        (Postgres, MongoDB, SQLite); elsewhere the neighbours are listed and
+        counted. Use this instead of ``len(await node.nodes(...))``, which
+        hydrates every neighbour.
+
+        Returns:
+            Number of distinct matching neighbours.
+        """
+        context = await self.get_context()
+        spec = self._neighbor_spec(node, edge, kwargs)
+        counter = getattr(context.database, "count_connected_nodes", None)
+        if callable(counter):
+            edge_entities, edge_query, node_entities, node_query = spec
+            try:
+                return int(
+                    await counter(
+                        context._get_collection_name("n"),
+                        context._get_collection_name("e"),
+                        self.id,
+                        direction=direction,
+                        edge_entities=edge_entities,
+                        node_entities=node_entities,
+                        edge_query=edge_query,
+                        node_query=node_query,
+                    )
+                )
+            except NotImplementedError as exc:
+                logger.debug("count_nodes(): no pushdown (%s); listing instead", exc)
+        return len(await self._neighbors(context, direction=direction, spec=spec))
+
+    async def nodes_page(
+        self,
+        *,
+        direction: str = "out",
+        node: Optional[
+            Union[str, type, List[Union[str, type, Dict[str, Dict[str, Any]]]]]
+        ] = None,
+        edge: Optional[
+            Union[
+                str,
+                Type["Edge"],
+                List[Union[str, Type["Edge"], Dict[str, Dict[str, Any]]]],
+            ]
+        ] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        cursor: Optional[str] = None,
+        limit: int = 20,
+        **kwargs: Any,
+    ) -> Tuple[List["Node"], Optional[str]]:
+        """One keyset-paginated page of neighbours: ``(nodes, next_cursor)``.
+
+        Same filters as :meth:`nodes`. ``sort`` takes record paths
+        (``[("context.created_at", -1)]``; default ``[("id", 1)]``, with ``id``
+        appended as tiebreaker). Pass ``next_cursor`` back as ``cursor`` for
+        the next page; ``None`` means there are no more. Neighbours inserted
+        before the cursor never shift later pages. Cursors use the same
+        opaque encoding as :meth:`GraphContext.find_page`.
+        """
+        from ..pager import (
+            decode_keyset_cursor,
+            encode_keyset_cursor,
+            keyset_filter,
+            keyset_sort_fields,
+        )
+
+        context = await self.get_context()
+        page_limit = max(1, int(limit))
+        sort_fields = keyset_sort_fields(sort)
+        edge_entities, edge_query, node_entities, node_query = self._neighbor_spec(
+            node, edge, kwargs
+        )
+        after = keyset_filter(sort_fields, decode_keyset_cursor(cursor))
+        if after is not None:
+            node_query = after if node_query is None else {"$and": [node_query, after]}
+        found = await self._neighbors(
+            context,
+            direction=direction,
+            spec=(edge_entities, edge_query, node_entities, node_query),
+            deserialize_as=_deserialize_hint(node),
+            sort=sort_fields,
+            limit=page_limit + 1,
+        )
+        page = found[:page_limit]
+        next_cursor = None
+        if len(found) > page_limit and page:
+            next_cursor = encode_keyset_cursor(await page[-1].export(), sort_fields)
+        return page, next_cursor
 
     async def node(
         self,
@@ -540,7 +779,13 @@ class Node(Object):
         limit: Optional[int] = None,
         **kwargs: Any,
     ) -> List["Node"]:
-        """Execute optimized database query to find connected nodes.
+        """Find connected nodes matching the node / edge filters.
+
+        Every filter shape is normalised to entity lists plus record-path
+        queries (:func:`_neighbor_filter_spec`) and pushed to the backend's
+        ``find_connected_nodes`` in one round trip — ``limit`` included — when
+        it has one. Otherwise (or when a criterion does not translate) the
+        Python path still applies every filter; nothing is dropped.
 
         Args:
             context: GraphContext instance for database operations
@@ -551,113 +796,162 @@ class Node(Object):
             **kwargs: Simple property filters for connected nodes
 
         Returns:
-            List of connected nodes matching the criteria
+            List of connected nodes matching the criteria (each at most once)
         """
-        # Find edges connected to this node
-        from .edge import Edge as EdgeClass
+        return await self._neighbors(
+            context,
+            direction=direction,
+            spec=self._neighbor_spec(node_filter, edge_filter, kwargs),
+            deserialize_as=_deserialize_hint(node_filter),
+            limit=limit,
+        )
 
-        edges = []
-        edge_cls = edge_filter if isinstance(edge_filter, type) else EdgeClass
+    @staticmethod
+    def _neighbor_spec(
+        node_filter: Any, edge_filter: Any, properties: Dict[str, Any]
+    ) -> NeighborSpec:
+        """Normalise ``nodes()``-style filters plus property kwargs to a spec."""
+        edge_entities, edge_query = _neighbor_filter_spec(edge_filter, node_side=False)
+        node_entities, node_query = _neighbor_filter_spec(node_filter, node_side=True)
+        if properties:
+            props = _record_query(properties, _NODE_TOP_LEVEL_KEYS)
+            node_query = props if node_query is None else {"$and": [node_query, props]}
+        return edge_entities, edge_query, node_entities, node_query
 
-        # Optimization: Use single combined query for bidirectional traversal
-        if direction == "both":
-            # Build combined query for both directions
-            edge_query: Dict[str, Any] = {
-                "$or": [{"source": self.id}, {"target": self.id}]
-            }
-            if isinstance(edge_filter, type):
-                # Persisted discriminator field is ``entity``; honor
-                # ``__entity_name__`` override (SPEC §1.2).
-                resolver = getattr(edge_filter, "_entity_name", None)
-                edge_query["entity"] = (
-                    resolver() if callable(resolver) else edge_filter.__name__
-                )
-
-            # Cap edge fan-out so hub nodes don't accidentally load unbounded sets.
-            edge_results = await context.database.find(
-                "edge", edge_query, limit=limit if limit is not None else 10000
+    async def _neighbors(
+        self,
+        context: "GraphContext",
+        *,
+        direction: str,
+        spec: NeighborSpec,
+        deserialize_as: Optional[type] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        limit: Optional[int] = None,
+    ) -> List["Node"]:
+        """Neighbours for a normalised spec — pushed down when the backend can."""
+        if direction not in ("out", "in", "both"):
+            raise ValueError(
+                f"direction must be 'out', 'in' or 'both', got {direction!r}"
             )
-            for edge_data in edge_results:
-                try:
-                    edge_obj: Optional["Edge"] = await context._deserialize_entity(
-                        edge_cls, edge_data
-                    )
-                    if edge_obj:
-                        edges.append(edge_obj)
-                except Exception as e:
-                    logger.debug(
-                        f"Skipping invalid edge during bidirectional traversal: {e}"
-                    )
-                    continue
-        else:
-            # Single direction queries
-            if direction == "out":
-                # Find outgoing edges
-                outgoing_edges = await context.find_edges_between(
-                    source_id=self.id,
-                    edge_class=edge_filter if isinstance(edge_filter, type) else None,
+        hint = deserialize_as or Node
+        edge_entities, edge_query, node_entities, node_query = spec
+        records: Optional[List[Dict[str, Any]]] = None
+        find_connected = getattr(context.database, "find_connected_nodes", None)
+        if callable(find_connected):
+            try:
+                records = await find_connected(
+                    context._get_collection_name("n"),
+                    context._get_collection_name("e"),
+                    self.id,
+                    direction=direction,
+                    edge_entities=edge_entities,
+                    node_entities=node_entities,
+                    edge_query=edge_query,
+                    node_query=node_query,
+                    sort=sort,
+                    limit=limit,
                 )
-                edges.extend(outgoing_edges)
+            except NotImplementedError as exc:
+                logger.debug("nodes(): no pushdown (%s); Python path", exc)
+        if records is None:
+            return await self._neighbors_fallback(
+                context,
+                direction=direction,
+                spec=spec,
+                deserialize_as=hint,
+                sort=sort,
+                limit=limit,
+            )
+        return await self._hydrate_neighbors(context, records, hint)
 
-            elif direction == "in":
-                # Find incoming edges (where this node is the target)
-                query: Dict[str, Any] = {"target": self.id}
-                if isinstance(edge_filter, type):
-                    resolver = getattr(edge_filter, "_entity_name", None)
-                    query["entity"] = (
-                        resolver() if callable(resolver) else edge_filter.__name__
-                    )
+    async def _hydrate_neighbors(
+        self,
+        context: "GraphContext",
+        records: List[Dict[str, Any]],
+        deserialize_as: type,
+    ) -> List["Node"]:
+        found: List["Node"] = []
+        for data in records:
+            try:
+                node_obj: Optional["Node"] = await context._deserialize_entity(
+                    deserialize_as, data
+                )
+            except Exception as e:
+                logger.debug("Skipping invalid neighbour record: %s", e)
+                continue
+            if node_obj:
+                found.append(node_obj)
+                await context._add_to_cache(node_obj.id, node_obj)
+        return found
 
-                edge_results = await context.database.find("edge", query)
-                for edge_data in edge_results:
-                    try:
-                        edge_obj = await context._deserialize_entity(
-                            edge_cls, edge_data
-                        )
-                        if edge_obj:
-                            edges.append(edge_obj)
-                    except Exception as e:
-                        logger.debug(
-                            f"Skipping invalid incoming edge during traversal: {e}"
-                        )
-                        continue
+    async def _neighbors_fallback(
+        self,
+        context: "GraphContext",
+        *,
+        direction: str,
+        spec: NeighborSpec,
+        deserialize_as: type,
+        sort: Optional[List[Tuple[str, int]]],
+        limit: Optional[int],
+    ) -> List["Node"]:
+        """Python traversal for backends without ``find_connected_nodes``.
 
-        # Get unique connected node IDs
-        connected_node_ids = set()
-        for edge in edges:
-            if direction in ["out", "both"] and hasattr(edge, "target"):
-                connected_node_ids.add(edge.target)
-            if direction in ["in", "both"] and hasattr(edge, "source"):
-                connected_node_ids.add(edge.source)
+        One edge ``find`` (endpoint + entity ``$in`` + edge criteria), then the
+        neighbours — filtered by entity and criteria in the node ``find``
+        before hydration.
+        """
+        edge_entities, edge_query, node_entities, node_query = spec
+        db = context.database
+        endpoints: Dict[str, Dict[str, Any]] = {
+            "out": {"source": self.id},
+            "in": {"target": self.id},
+            "both": {"$or": [{"source": self.id}, {"target": self.id}]},
+        }
+        edge_parts: List[Dict[str, Any]] = [endpoints[direction]]
+        if edge_entities is not None:
+            edge_parts.append({"entity": {"$in": edge_entities}})
+        if edge_query:
+            edge_parts.append(edge_query)
+        edge_docs = await db.find(
+            context._get_collection_name("e"),
+            edge_parts[0] if len(edge_parts) == 1 else {"$and": edge_parts},
+        )
+        neighbor_ids: List[str] = []
+        for doc in edge_docs:
+            src, tgt = doc.get("source"), doc.get("target")
+            if direction in ("out", "both") and src == self.id and tgt:
+                neighbor_ids.append(tgt)
+            if direction in ("in", "both") and tgt == self.id and src:
+                neighbor_ids.append(src)
+        neighbor_ids = list(dict.fromkeys(neighbor_ids))
+        if not neighbor_ids:
+            return []
 
-        # Find the actual nodes using batch retrieval for efficiency
-        # This uses context.get_batch() which handles caching and batch queries
-        if connected_node_ids:
-            connected_nodes = await context.get_batch(Node, list(connected_node_ids))
+        if node_entities is None and node_query is None and not sort:
+            # Unfiltered: the cache-aware batch fetch (identity-map friendly).
+            found = await context.get_batch(Node, neighbor_ids)
+            return found if limit is None else found[:limit]
+
+        records: List[Dict[str, Any]] = []
+        for off in range(0, len(neighbor_ids), 500):
+            node_parts: List[Dict[str, Any]] = [
+                {"id": {"$in": neighbor_ids[off : off + 500]}}
+            ]
+            if node_entities is not None:
+                node_parts.append({"entity": {"$in": node_entities}})
+            if node_query:
+                node_parts.append(node_query)
+            records.extend(
+                await db.find(context._get_collection_name("n"), {"$and": node_parts})
+            )
+        if sort:
+            records = finalize_find_results(records, sort=sort, limit=limit)
         else:
-            connected_nodes = []
-
-        # Apply node type filtering
-        if node_filter is not None:
-            filtered_nodes = []
-            for node_obj in connected_nodes:
-                if self._matches_node_filter(node_obj, node_filter):
-                    filtered_nodes.append(node_obj)
-            connected_nodes = filtered_nodes
-
-        # Apply property filtering from kwargs
-        if kwargs:
-            filtered_nodes = []
-            for node_obj in connected_nodes:
-                if self._matches_property_filter(node_obj, kwargs):
-                    filtered_nodes.append(node_obj)
-            connected_nodes = filtered_nodes
-
-        # Apply limit
-        if limit is not None:
-            connected_nodes = connected_nodes[:limit]
-
-        return connected_nodes
+            order = {nid: i for i, nid in enumerate(neighbor_ids)}
+            records.sort(key=lambda r: order.get(str(r.get("id")), 0))
+            if limit is not None:
+                records = records[:limit]
+        return await self._hydrate_neighbors(context, records, deserialize_as)
 
     def _matches_node_filter(
         self,
@@ -952,18 +1246,6 @@ class Node(Object):
             edges = await context.find_edges_between(self.id, other.id, edge_type)
 
             for found_edge in edges:
-                # Atomically remove edge_id from both nodes, then delete the edge
-                await context.atomic_remove_edge_id(self.id, found_edge.id)
-                if found_edge.id in self.edge_ids:
-                    self.edge_ids.remove(found_edge.id)
-
-                await context.atomic_remove_edge_id(other.id, found_edge.id)
-                if found_edge.id in other.edge_ids:
-                    other.edge_ids.remove(found_edge.id)
-
-                # Delete the edge document (context.delete already handles
-                # edge_ids cleanup, but we already did it atomically above,
-                # so use a direct DB delete to avoid double work).
                 db = context.database
                 await db.delete("edge", found_edge.id)
                 await context._cache.delete(found_edge.id)
@@ -1000,10 +1282,16 @@ class Node(Object):
     async def connection_count(self) -> int:
         """Get the number of connections (edges) for this node.
 
+        One ``COUNT`` over the edge collection's ``source`` / ``target``
+        indexes — the canonical degree query.
+
         Returns:
             Number of connected edges
         """
-        return len(self.edge_ids)
+        context = await self.get_context()
+        return await context.database.count(
+            "edge", {"$or": [{"source": self.id}, {"target": self.id}]}
+        )
 
     async def delete(self: "Node", cascade: bool = True) -> None:
         """Delete this node and cascade deletion of all related edges and dependent nodes.
@@ -1053,17 +1341,8 @@ class Node(Object):
                 if edge_obj:
                     incoming_edges.append(edge_obj)
             except Exception:
-                continue
-
-        # Also check edges from edge_ids where this node is the target
-        for edge_id in self.edge_ids:
-            try:
-                edge = await Edge.get(edge_id)
-                # Only include edges where this node is the target (incoming)
-                if edge and edge.target == self.id and edge not in incoming_edges:
-                    incoming_edges.append(edge)
-            except Exception:
-                continue
+                logger.exception("Failed to inspect incoming edge during node deletion")
+                raise
 
         # Remove duplicates
         seen_edge_ids = set()
@@ -1125,16 +1404,15 @@ class Node(Object):
                         if not node:
                             continue
                         # Only follow outgoing edges (where this node is the source)
-                        for edge_id in node.edge_ids:  # type: ignore[attr-defined]
-                            try:
-                                edge = await Edge.get(edge_id)
-                                if edge and edge.source == node_id:
-                                    # Only add nodes reachable via outgoing edges
-                                    nodes_to_check.add(edge.target)
-                            except Exception:
-                                continue
+                        for edge in await node._incident_edges(context):  # type: ignore[attr-defined]
+                            if edge.source == node_id:
+                                # Only add nodes reachable via outgoing edges
+                                nodes_to_check.add(edge.target)
                     except Exception:
-                        continue
+                        logger.exception(
+                            "Failed to inspect outgoing edges during node deletion"
+                        )
+                        raise
 
                 # For each candidate node, check if it should be deleted
                 for candidate_id in nodes_to_check:
@@ -1147,14 +1425,9 @@ class Node(Object):
                             continue
 
                         # Get all edges of the candidate node
-                        candidate_edges = []
-                        for edge_id in candidate_node.edge_ids:  # type: ignore[attr-defined]
-                            try:
-                                edge = await Edge.get(edge_id)
-                                if edge:
-                                    candidate_edges.append(edge)
-                            except Exception:
-                                continue
+                        candidate_edges = await candidate_node._incident_edges(  # type: ignore[attr-defined]
+                            context
+                        )
 
                         # If the node has no edges, it's orphaned and should be deleted
                         if not candidate_edges:
@@ -1193,14 +1466,9 @@ class Node(Object):
                                 if not node:
                                     return True
 
-                                node_edges = []
-                                for edge_id in node.edge_ids:  # type: ignore[attr-defined]
-                                    try:
-                                        edge = await Edge.get(edge_id)
-                                        if edge:
-                                            node_edges.append(edge)
-                                    except Exception:
-                                        continue
+                                node_edges = await node._incident_edges(  # type: ignore[attr-defined]
+                                    context
+                                )
 
                                 # If no edges, it's orphaned and should be deleted
                                 if not node_edges:
@@ -1240,7 +1508,10 @@ class Node(Object):
 
                                 return True
                             except Exception:
-                                return False
+                                logger.exception(
+                                    "Failed to inspect connected node during cascade deletion"
+                                )
+                                raise
 
                         # Check if candidate is only connected to deletion set
                         if await is_node_only_connected_to_deletion_set(
@@ -1249,8 +1520,10 @@ class Node(Object):
                             nodes_to_delete.add(candidate_id)
                             changed = True
                     except Exception:
-                        # Continue even if check fails
-                        continue
+                        logger.exception(
+                            "Failed to inspect cascade candidate during node deletion"
+                        )
+                        raise
 
             # Remove self from nodes_to_delete (we'll delete it separately at the end)
             nodes_to_delete.discard(self.id)
@@ -1258,31 +1531,20 @@ class Node(Object):
         # Delete incoming edges to this node
         for edge in incoming_edges:
             try:
-                if edge.source != self.id:
-                    await context.atomic_remove_edge_id(edge.source, edge.id)
-
-                if edge.id in self.edge_ids:
-                    self.edge_ids.remove(edge.id)
-
-                # Direct DB delete (edge_ids already handled atomically above)
                 await context.database.delete("edge", edge.id)
                 await context._cache.delete(edge.id)
             except Exception:
-                continue
+                logger.exception("Failed to delete incoming edge during node deletion")
+                raise
 
         # Clean up outgoing edges from this node
         for edge in outgoing_edges:
             try:
-                if edge.target != self.id:
-                    await context.atomic_remove_edge_id(edge.target, edge.id)
-
-                if edge.id in self.edge_ids:
-                    self.edge_ids.remove(edge.id)
-
                 await context.database.delete("edge", edge.id)
                 await context._cache.delete(edge.id)
             except Exception:
-                continue
+                logger.exception("Failed to delete outgoing edge during node deletion")
+                raise
 
         # If cascade is enabled, delete all dependent nodes
         if cascade and nodes_to_delete:
@@ -1294,7 +1556,10 @@ class Node(Object):
                     if node:
                         dependent_nodes.append(node)
                 except Exception:
-                    continue
+                    logger.exception(
+                        "Failed to load dependent node during cascade deletion"
+                    )
+                    raise
 
             # Delete dependent nodes recursively
             # Each node will delete its own incoming edges and any further dependent nodes
@@ -1303,15 +1568,16 @@ class Node(Object):
                     # Recursively delete with cascade=True to handle nested dependencies
                     await dependent_node.delete(cascade=True)
                 except Exception:
-                    # Continue even if dependent node deletion fails
-                    continue
+                    logger.exception(
+                        "Failed to delete dependent node during cascade deletion"
+                    )
+                    raise
 
-        # Clear edge_ids before final deletion to avoid recursion in context.delete()
-        # All edges have already been deleted from the database
-        self.edge_ids = []
-
-        # Finally, delete this node itself (no cascade needed, we've already handled it)
-        await context.delete(self, cascade=False)
+        # Finally, delete this node itself. Direct delete rather than
+        # ``context.delete`` — its "no edges left?" check would cost a COUNT,
+        # and the edges are already gone.
+        await context.database.delete(context._get_collection_name("n"), self.id)
+        await context._remove_from_cache(self.id)
 
     @classmethod
     async def create_and_connect(
@@ -1341,28 +1607,25 @@ class Node(Object):
         exclude_transient: bool = True,
         exclude: Optional[Union[set, Dict[str, Any]]] = None,
         flat: bool = False,
-        include_edges: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Export node to a dictionary.
 
         Returns a nested persistence format with id, entity, context for database storage.
         Includes all fields from the class hierarchy (class and parent classes, not child classes).
-        Edges are excluded by default but can be included for database persistence.
 
         Args:
             exclude_transient: Whether to automatically exclude transient fields (default: True)
             exclude: Additional fields to exclude (can be a set of field names or a dict)
             flat: If True, return attributes at top level instead of nested under context (for API responses)
-            include_edges: Whether to include edges in export (default: False, set to True for database persistence)
             **kwargs: Additional arguments passed to base export/model_dump()
 
         Returns:
-            Nested format dictionary with id, entity, context (and optionally edges) for database storage,
+            Nested format dictionary with id, entity, context for database storage,
             or flat format {id, entity, **context} when flat=True
         """
         # Nested persistence format - structure for database storage
-        # Exclude _visitor_ref from context (id, edge_ids, and type_code are transient and auto-excluded)
+        # Exclude _visitor_ref from context (id and type_code are transient and auto-excluded)
         # Object.export() returns nested format, extract the context
         parent_export = await super().export(
             exclude={"_visitor_ref"},
@@ -1387,9 +1650,5 @@ class Node(Object):
                 "entity": self.entity,
                 "context": context_data,
             }
-
-        # Include edges only when explicitly requested (e.g., for database persistence)
-        if include_edges:
-            result["edges"] = self.edge_ids
 
         return result

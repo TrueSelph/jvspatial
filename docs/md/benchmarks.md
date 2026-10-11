@@ -53,6 +53,27 @@ The current benches guard the IO hot paths landed in Phases A1 and A2:
 * **DeferredSaveMixin** (`tests/benchmarks/test_deferred_save_benchmarks.py`)
   * `test_bench_deferred_save_batched_100` -- 100 dirty marks + 1 flush.
   * `test_bench_immediate_save_100` -- comparison case, 100 writes.
+* **Postgres** (`tests/benchmarks/test_postgres_benchmarks.py`) — skipped when
+  `asyncpg` is unavailable or `JVSPATIAL_POSTGRES_TEST_DSN` is unreachable.
+  * `test_bench_postgres_traverse_depth` -- recursive CTE traversal on a
+    seeded chain graph.
+  * `test_bench_postgres_find_many_bulk` -- bulk fetch by id list.
+
+* **Hub-node scale recorder** (`tests/benchmarks/test_hub_node_bench.py`) —
+  not a pytest-benchmark bench. Seeds a hub with 1k / 10k / 100k edges and
+  records p50/p95 latency, DB round trips (`db_op_counter`) and on-disk
+  sizes for `connect()`, `save()`, neighbour listings, the `len(nodes())`
+  count pattern and 32-way concurrent `connect()`. Marked `bench` (100k tier
+  `bench_slow`), so it runs only when selected:
+
+  ```bash
+  JVSPATIAL_POSTGRES_TEST_DSN=postgresql://... \
+  JVSPATIAL_BENCH_RESULTS=run.jsonl \
+    pytest tests/benchmarks/test_hub_node_bench.py -m "bench or bench_slow" -s
+  python tests/benchmarks/hub_bench_report.py run.jsonl   # markdown tables
+  ```
+
+  Recorded results live in `docs/bench/2026-09-hub-node-baseline.md`.
 
 The `_fallback_*` benches deliberately exercise the *slow* path so
 that future contributors who refactor the translator can see whether
@@ -61,7 +82,13 @@ the legacy in-Python filter path got faster or slower.
 ## How CI uses these
 
 `.github/workflows/benchmarks.yml` runs the suite on every PR that
-touches `jvspatial/`, `tests/benchmarks/`, or `pyproject.toml`. It:
+touches `jvspatial/`, `tests/benchmarks/`, or `pyproject.toml`. A
+**Postgres service container** (`pgvector/pgvector:pg16`) is started for
+the job so Postgres benches run in CI when `asyncpg` is installed.
+`JVSPATIAL_POSTGRES_TEST_DSN` defaults to
+`postgresql://jvspatial:jvspatial@localhost:5432/jvspatial`.
+
+The workflow:
 
 1. Captures the PR's benchmark results.
 2. Downloads the most recent `bench-baseline` artifact (produced by

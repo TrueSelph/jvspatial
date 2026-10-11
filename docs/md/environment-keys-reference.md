@@ -31,7 +31,7 @@ For full examples and default values, see:
 - `JVSPATIAL_API_HEALTH` - Health route path.
 - `JVSPATIAL_API_ROOT` - Root route path.
 - `JVSPATIAL_GRAPH_ENDPOINT_ENABLED` - Enables graph REST endpoint.
-- `JVSPATIAL_DOCS_DISABLED` - When truthy (`1`/`true`/`yes`/`on`), unpublishes the documentation surface entirely: `/docs`, `/redoc`, `/openapi.json`, and `/docs/oauth2-redirect` are not registered (return 404). Recommended for production.
+- `JVSPATIAL_DOCS_DISABLED` - When truthy (`1`/`true`/`yes`/`on`), unpublishes `/docs`, `/redoc`, `/openapi.json`, and `/docs/oauth2-redirect`. Defaults to true when `JVSPATIAL_ENVIRONMENT=production`; explicit false overrides it.
 
 ### CORS
 - `JVSPATIAL_CORS_ENABLED` - Enables CORS middleware.
@@ -50,14 +50,18 @@ For full examples and default values, see:
 - `JVSPATIAL_DYNAMODB_REGION` - DynamoDB region.
 - `JVSPATIAL_DYNAMODB_ENDPOINT_URL` - DynamoDB endpoint (e.g. LocalStack).
 - `JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX` - Wait-for-index toggle.
+- `JVSPATIAL_POSTGRES_COMMAND_TIMEOUT` - Postgres per-statement timeout in seconds (default 60).
+- `JVSPATIAL_PG_GIN_INDEX` - Postgres whole-document `GIN (data jsonb_path_ops)` index on new collections: `full` (default) or `off`.
 
 ### Auth and rate limit
 - `JVSPATIAL_AUTH_ENABLED` - Enables auth.
 - `JVSPATIAL_JWT_SECRET_KEY` - JWT signing secret.
+- `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` - Fernet key for OAuth RSA private keys at rest. Supply from a secret manager in production; retain the same key across workers and restarts.
 - `JVSPATIAL_JWT_ALGORITHM` - JWT algorithm.
 - `JVSPATIAL_JWT_EXPIRE_MINUTES` - Access token expiry (minutes).
 - `JVSPATIAL_JWT_REFRESH_EXPIRE_DAYS` - Refresh token expiry (days).
-- `JVSPATIAL_AUTH_STRICT_HASHING` - Disables weak hashing fallback.
+- `JVSPATIAL_AUTH_STRICT_HASHING` - Disables weak hashing fallback for passwords and refresh tokens; true by default.
+- `JVSPATIAL_AUTH_BLACKLIST_FAIL_CLOSED` - Rejects tokens when blacklist lookup fails; true by default.
 - `JVSPATIAL_BCRYPT_ROUNDS` - Bcrypt rounds.
 - `JVSPATIAL_BCRYPT_ROUNDS_SERVERLESS` - Bcrypt rounds in serverless.
 - `JVSPATIAL_ARGON2_TIME_COST` - Argon2 tuning.
@@ -83,7 +87,7 @@ For full examples and default values, see:
 - `JVSPATIAL_FILE_STORAGE_BASE_URL` - Public base URL for files.
 - `JVSPATIAL_FILE_STORAGE_MAX_SIZE` - Max upload size (bytes).
 - `JVSPATIAL_FILE_STORAGE_SERVERLESS_SHARED` - Marks local path as durable shared storage.
-- `JVSPATIAL_FILES_PUBLIC_READ` - Public `GET` access for file routes.
+- `JVSPATIAL_FILES_PUBLIC_READ` - Public `GET` access for file routes; false by default when auth is enabled.
 - `JVSPATIAL_FILE_INTERFACE` - Default storage interface selection.
 - `JVSPATIAL_S3_BUCKET_NAME` - S3 bucket.
 - `JVSPATIAL_S3_REGION` - S3 region.
@@ -125,6 +129,7 @@ For full examples and default values, see:
 - `JVSPATIAL_WEBHOOK_MAX_PAYLOAD_SIZE` - Max payload bytes.
 - `JVSPATIAL_WEBHOOK_IDEMPOTENCY_TTL` - Idempotency TTL.
 - `JVSPATIAL_WEBHOOK_HTTPS_REQUIRED` - HTTPS-only webhook policy.
+- `JVSPATIAL_WEBHOOK_API_KEY_REQUIRE_HTTPS` - Require HTTPS when the webhook API key is supplied via query parameter (default `true`). Set `false` for local plain-HTTP tunnels (e.g. ngrok → `http://127.0.0.1`).
 
 ### Walker safety and deferred execution
 - `JVSPATIAL_WALKER_PROTECTION_ENABLED` - Enables walker safety guards.
@@ -138,6 +143,7 @@ For full examples and default values, see:
 - `JVSPATIAL_AWS_SQS_QUEUE_URL` - SQS queue URL when SQS transport is used.
 - `JVSPATIAL_DEFERRED_INVOKE_DISABLED` - Disable deferred invoke route mount.
 - `JVSPATIAL_DEFERRED_INVOKE_SECRET` - Authorization secret for deferred invoke route.
+- `JVSPATIAL_DEFERRED_INVOKE_ALLOW_LOOPBACK` - Explicitly allows Lambda Web Adapter loopback self-invoke without a secret; false by default.
 - `JVSPATIAL_WORK_CLAIM_STALE_SECONDS` - Claim lease TTL in seconds.
 
 ### EventBridge scheduler

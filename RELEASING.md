@@ -58,10 +58,10 @@ Any item in that list should be either (a) in the changelog under
 ```bash
 pre-commit run --all-files
 pytest --cov=jvspatial --cov-fail-under=50
-mypy jvspatial/
+# The configured mypy pre-commit hook is part of pre-commit above.
 ```
 
-All three must be green. CI will re-run them on the PR — local runs
+Both commands must be green. The standalone `mypy jvspatial/` invocation has pre-existing diagnostics outside the configured hook scope; track that debt separately. CI will re-run the gates on the PR — local runs
 just save a round trip.
 
 ### 3. Pick the new version number

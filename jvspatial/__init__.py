@@ -61,7 +61,7 @@ from .cache import create_cache
 
 # Simplified decorators
 from .core.annotations import attribute
-from .core.context import GraphContext
+from .core.context import GraphContext, TransactionUnavailable, graph_transaction
 
 # Unified entity system
 from .core.entities import Edge, Node, Object, Root, Walker
@@ -74,7 +74,7 @@ from .core.mixins import (
 )
 
 # Simplified database and cache
-from .db import Database, create_database
+from .db import Database, InsertIfAbsentResult, create_database
 from .db.work_claim import claim_record, delete_claimed_record, release_claim
 
 # Observability primitives
@@ -129,6 +129,8 @@ __all__ = [
     "Walker",
     "Root",
     "GraphContext",
+    "graph_transaction",
+    "TransactionUnavailable",
     # Mixins
     "DeferredSaveMixin",
     "deferred_saves_globally_allowed",
@@ -140,6 +142,7 @@ __all__ = [
     "Server",
     # Database & Cache
     "Database",
+    "InsertIfAbsentResult",
     "create_database",
     "create_cache",
     # Observability

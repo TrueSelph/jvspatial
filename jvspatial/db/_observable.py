@@ -35,9 +35,19 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
-from jvspatial.db.database import Database
+from jvspatial.db.database import BulkSaveResult, Database, InsertIfAbsentResult
 from jvspatial.observability import db_op_counter
 from jvspatial.observability.metrics import (
     MetricsRecorder,
@@ -202,6 +212,23 @@ class ObservableDatabase(Database):
             "save", collection, lambda: self.inner.save(collection, data)
         )
 
+    async def insert_if_absent(
+        self,
+        collection: str,
+        data: Dict[str, Any],
+        *,
+        conflict_target: str = "id",
+    ) -> InsertIfAbsentResult:
+        """Instrumented ``insert_if_absent`` (emits structured log + metric)."""
+        return await self._instrument(
+            "insert_if_absent",
+            collection,
+            lambda: self.inner.insert_if_absent(
+                collection, data, conflict_target=conflict_target
+            ),
+            result_count_extractor=lambda r: (1 if getattr(r, "created", False) else 0),
+        )
+
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Instrumented ``get`` (emits structured log + metric)."""
         return await self._instrument(
@@ -279,6 +306,22 @@ class ObservableDatabase(Database):
             result_count_extractor=lambda r: int(r) if r is not None else 0,
         )
 
+    async def bulk_save_detailed(
+        self, collection: str, records: List[Dict[str, Any]]
+    ) -> BulkSaveResult:
+        """Instrumented ``bulk_save_detailed`` — the backend's native bulk path.
+
+        Must be defined here: the ``Database`` default is a serial ``save``
+        loop, which would otherwise shadow ``__getattr__`` forwarding and turn
+        one ``COPY`` into a round trip per record.
+        """
+        return await self._instrument(
+            "bulk_save_detailed",
+            collection,
+            lambda: self.inner.bulk_save_detailed(collection, records),
+            result_count_extractor=lambda r: int(getattr(r, "saved", 0) or 0),
+        )
+
     async def find_one_and_delete(
         self, collection: str, query: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
@@ -324,6 +367,97 @@ class ObservableDatabase(Database):
     async def drop_deprecated_indexes(self, deprecated: Dict[str, List[str]]) -> None:
         """Pass through deprecated-index cleanup to the wrapped backend."""
         await self.inner.drop_deprecated_indexes(deprecated)
+
+    # Optional graph ops exist on the wrapper only when the wrapped backend
+    # implements them: the properties raise ``AttributeError`` otherwise, so
+    # ``getattr(db, "find_connected_nodes", None)`` stays ``None`` for
+    # adapters without a pushdown and callers take their fallback path.
+
+    def _optional_op(
+        self, name: str, result_count: Callable[[Any], int]
+    ) -> Callable[..., Awaitable[Any]]:
+        inner = getattr(self.inner, name, None)
+        if not callable(inner):
+            raise AttributeError(name)
+
+        async def _call(collection: str, *args: Any, **kwargs: Any) -> Any:
+            return await self._instrument(
+                name,
+                collection,
+                lambda: inner(collection, *args, **kwargs),
+                result_count_extractor=result_count,
+            )
+
+        return _call
+
+    @property
+    def find_connected_nodes(self) -> Callable[..., Awaitable[Any]]:
+        """Instrumented single-hop neighbour query (backend permitting)."""
+        return self._optional_op(
+            "find_connected_nodes", lambda r: len(r) if isinstance(r, list) else 0
+        )
+
+    @property
+    def count_connected_nodes(self) -> Callable[..., Awaitable[Any]]:
+        """Instrumented single-hop neighbour count (backend permitting)."""
+        return self._optional_op("count_connected_nodes", lambda r: int(r or 0))
+
+    @property
+    def find_connected_nodes_bulk(self) -> Callable[..., Awaitable[Any]]:
+        """Instrumented multi-source neighbour query (backend permitting)."""
+        return self._optional_op(
+            "find_connected_nodes_bulk",
+            lambda r: sum(len(v) for v in r.values()) if isinstance(r, dict) else 0,
+        )
+
+    @property
+    def traverse(self) -> Callable[..., Awaitable[Any]]:
+        """Instrumented multi-hop graph walk (backend permitting)."""
+        return self._optional_op(
+            "traverse", lambda r: len(r) if isinstance(r, list) else 0
+        )
+
+    async def find_iter(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        batch_size: int = 100,
+        cursor: Optional[bytes] = None,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Instrumented streaming find when the backend supports it."""
+        inner = getattr(self.inner, "find_iter", None)
+        if not callable(inner):
+            raise AttributeError("find_iter")
+
+        start = time.monotonic()
+        success = True
+        result_count = 0
+        try:
+            async for row in inner(
+                collection,
+                query,
+                sort=sort,
+                batch_size=batch_size,
+                cursor=cursor,
+            ):
+                result_count += 1
+                yield row
+        except BaseException:
+            success = False
+            raise
+        finally:
+            db_op_counter.set(db_op_counter.get() + 1)
+            duration_s = time.monotonic() - start
+            self._emit(
+                op="find_iter",
+                collection=collection,
+                duration_ms=duration_s * 1000.0,
+                duration_s=duration_s,
+                success=success,
+                result_count=result_count,
+            )
 
     def __getattr__(self, name: str) -> Any:
         """Forward unknown attribute access to the wrapped database."""

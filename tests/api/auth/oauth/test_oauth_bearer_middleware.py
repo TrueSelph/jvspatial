@@ -106,11 +106,11 @@ async def test_oauth_bearer_authorizes_protected_route():
             email = f"s{uuid.uuid4().hex[:20]}@example.com"
             client.post(
                 "/api/auth/register",
-                json={"email": email, "password": "password123"},
+                json={"email": email, "password": "password12345"},
             )
             login = client.post(
                 "/api/auth/login",
-                json={"email": email, "password": "password123"},
+                json={"email": email, "password": "password12345"},
             )
             assert login.status_code == 200, login.text
             session_token = login.json()["access_token"]

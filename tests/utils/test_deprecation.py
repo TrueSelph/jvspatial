@@ -12,7 +12,8 @@ from jvspatial.utils.deprecation import (
 
 
 @pytest.fixture(autouse=True)
-def reset_state():
+def reset_state(monkeypatch):
+    monkeypatch.setattr("jvspatial.utils.deprecation.is_serverless_mode", lambda: False)
     reset_deprecation_warnings()
     yield
     reset_deprecation_warnings()

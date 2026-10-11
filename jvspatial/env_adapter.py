@@ -124,9 +124,17 @@ def server_config_overrides_from_env() -> Dict[str, Any]:
         ("JVSPATIAL_DYNAMODB_TABLE_NAME", "dynamodb_table_name"),
         ("JVSPATIAL_DYNAMODB_REGION", "dynamodb_region"),
         ("JVSPATIAL_DYNAMODB_ENDPOINT_URL", "dynamodb_endpoint_url"),
+        ("JVSPATIAL_POSTGRES_DSN", "postgres_dsn"),
+        ("JVSPATIAL_POSTGRES_POOLER_MODE", "postgres_pooler_mode"),
     ):
         if (t := _opt_str(ek)) is not None:
             db[dk] = t
+    for ek, dk in (
+        ("JVSPATIAL_POSTGRES_MIN_POOL_SIZE", "postgres_min_pool_size"),
+        ("JVSPATIAL_POSTGRES_MAX_POOL_SIZE", "postgres_max_pool_size"),
+    ):
+        if (n := _opt_int(ek)) is not None:
+            db[dk] = n
     if db:
         o["database"] = db
 
@@ -209,6 +217,18 @@ def server_config_overrides_from_env() -> Dict[str, Any]:
     if proxy:
         o["proxy"] = proxy
 
+    webhook: Dict[str, Any] = {}
+    if "JVSPATIAL_WEBHOOK_API_KEY_REQUIRE_HTTPS" in os.environ:
+        webhook["webhook_api_key_require_https"] = _parse_bool(
+            os.environ["JVSPATIAL_WEBHOOK_API_KEY_REQUIRE_HTTPS"]
+        )
+    if "JVSPATIAL_WEBHOOK_HTTPS_REQUIRED" in os.environ:
+        webhook["webhook_https_required"] = _parse_bool(
+            os.environ["JVSPATIAL_WEBHOOK_HTTPS_REQUIRED"]
+        )
+    if webhook:
+        o["webhook"] = webhook
+
     return o
 
 
@@ -248,11 +268,13 @@ ALLOWED_ENV_KEYS: frozenset[str] = frozenset(
         "JVSPATIAL_POSTGRES_MIN_POOL_SIZE",
         "JVSPATIAL_POSTGRES_MAX_POOL_SIZE",
         "JVSPATIAL_POSTGRES_POOLER_MODE",
+        "JVSPATIAL_POSTGRES_COMMAND_TIMEOUT",
         "JVSPATIAL_DYNAMODB_TABLE_NAME",
         "JVSPATIAL_DYNAMODB_REGION",
         "JVSPATIAL_DYNAMODB_ENDPOINT_URL",
         "JVSPATIAL_DYNAMODB_WAIT_FOR_INDEX",
         "JVSPATIAL_AUTO_CREATE_INDEXES",
+        "JVSPATIAL_PG_GIN_INDEX",
         # Auth
         "JVSPATIAL_AUTH_ENABLED",
         "JVSPATIAL_AUTH_STRICT_HASHING",
@@ -298,12 +320,14 @@ ALLOWED_ENV_KEYS: frozenset[str] = frozenset(
         "JVSPATIAL_REDIS_URL",
         "JVSPATIAL_REDIS_TTL",
         "JVSPATIAL_REDIS_SERIALIZATION",
+        "JVSPATIAL_FAST_DESERIALIZE",
         # Scheduler / deferred / serverless
         "JVSPATIAL_SCHEDULER_ENABLED",
         "JVSPATIAL_SCHEDULER_INTERVAL",
         "JVSPATIAL_DEFERRED_TASK_PROVIDER",
         "JVSPATIAL_DEFERRED_INVOKE_DISABLED",
         "JVSPATIAL_DEFERRED_INVOKE_SECRET",
+        "JVSPATIAL_DEFERRED_INVOKE_ALLOW_LOOPBACK",
         "JVSPATIAL_ENABLE_DEFERRED_SAVES",
         "JVSPATIAL_AWS_DEFERRED_TRANSPORT",
         "JVSPATIAL_AWS_SQS_QUEUE_URL",
@@ -313,6 +337,7 @@ ALLOWED_ENV_KEYS: frozenset[str] = frozenset(
         "JVSPATIAL_EVENTBRIDGE_SCHEDULER_GROUP",
         "JVSPATIAL_LWA_ENV_DEFAULTS",
         # Webhooks
+        "JVSPATIAL_WEBHOOK_API_KEY_REQUIRE_HTTPS",
         "JVSPATIAL_WEBHOOK_HMAC_ALGORITHM",
         "JVSPATIAL_WEBHOOK_HMAC_SECRET",
         "JVSPATIAL_WEBHOOK_HTTPS_REQUIRED",
@@ -325,6 +350,10 @@ ALLOWED_ENV_KEYS: frozenset[str] = frozenset(
         "JVSPATIAL_WALKER_MAX_QUEUE_SIZE",
         "JVSPATIAL_WALKER_MAX_TRAIL_LENGTH",
         "JVSPATIAL_WALKER_PROTECTION_ENABLED",
+        # Observability (ObservableDatabase wrapper — db/_observable.py,
+        # read directly via os.environ in api/components/database_configurator.py)
+        "JVSPATIAL_OBSERVABILITY_ENABLED",
+        "JVSPATIAL_SLOW_QUERY_MS",
         # Logging
         "JVSPATIAL_DB_LOGGING_ENABLED",
         "JVSPATIAL_DB_LOGGING_API_ENABLED",

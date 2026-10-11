@@ -21,6 +21,8 @@ from ..annotations import (
     AttributeMixin,
     attribute,
     get_compound_indexes,
+    get_fulltext_fields,
+    get_fulltext_indexes,
     get_indexed_fields,
 )
 from ..utils import generate_id
@@ -151,8 +153,12 @@ class Object(AttributeMixin, BaseModel):
         if valid_fields is None:
             valid_fields = self._get_class_hierarchy_fields()
 
-        # Check if this is a valid field in the class hierarchy or private attribute
-        if (name in valid_fields) or (name.startswith("_")):
+        # Private names must also be declared on the class hierarchy. Include
+        # methods and descriptors so a declared private helper can be replaced
+        # on an instance (for example by a test double), without admitting a
+        # new, undeclared underscore attribute.
+        private_fields = type(self)._declared_private_fields()
+        if name in valid_fields or name in private_fields:
             # Use normal Pydantic setattr for model fields or private attributes
             super().__setattr__(name, value)
         else:
@@ -188,6 +194,109 @@ class Object(AttributeMixin, BaseModel):
         ):
             await flush_fn()
         return obj
+
+    @classmethod
+    async def create_if_absent(
+        cls: Type["Object"], **kwargs: Any
+    ) -> tuple["Object", bool]:
+        """Create and persist only if absent for the given ``id``.
+
+        Idempotent when the caller supplies a deterministic ``id``.
+        Unlike :meth:`create` / :meth:`save`, never updates an existing row.
+        Returns ``(entity, created)`` where ``entity`` is the stored winner
+        (rehydrated from the database when ``created`` is ``False``).
+
+        Does not call through :meth:`save`. For
+        :class:`~jvspatial.core.mixins.DeferredSaveMixin` types, ``flush()``
+        runs only when ``created`` is ``True`` (mirrors :meth:`create`'s
+        end-of-batch clear when the insert won).
+        """
+        obj = cls(**kwargs)
+        context = await obj.get_context()
+        await context.ensure_indexes(cls)
+
+        # Build the persistence record the same way GraphContext.save does,
+        # but route through insert_if_absent instead of save.
+        if hasattr(obj, "type_code"):
+            type_code = getattr(obj, "type_code", "")
+            if type_code in ("n", "e", "w"):
+                record = await obj.export()
+                if "entity" not in record:
+                    record["entity"] = obj.entity
+            else:
+                record = await obj.export()
+                entity_id = getattr(obj, "id", None)
+                if entity_id:
+                    id_parts = entity_id.split(".")
+                    entity_name_resolver = getattr(cls, "_entity_name", None)
+                    expected_entity_name = (
+                        entity_name_resolver()
+                        if callable(entity_name_resolver)
+                        else cls.__name__
+                    )
+                    if (
+                        len(id_parts) != 3
+                        or id_parts[0] != obj.type_code
+                        or id_parts[1] != expected_entity_name
+                    ):
+                        new_id = generate_id(obj.type_code, expected_entity_name)
+                        object.__setattr__(obj, "id", new_id)
+                        record["id"] = new_id
+        else:
+            record = await obj.export()
+            from jvspatial.utils.serialization import serialize_datetime
+
+            record = serialize_datetime(record)
+            if "entity" not in record and hasattr(obj, "entity"):
+                record["entity"] = obj.entity
+
+        from jvspatial.utils.normalization import (
+            is_text_normalization_enabled,
+            normalize_data,
+        )
+
+        if is_text_normalization_enabled():
+            record = normalize_data(record)
+
+        if hasattr(obj, "get_collection_name"):
+            collection = obj.get_collection_name()
+        else:
+            type_code = obj.type_code
+            if type_code == "n":
+                collection = "node"
+            elif type_code == "e":
+                collection = "edge"
+            else:
+                collection = type_code.lower()
+
+        is_node = hasattr(obj, "type_code") and getattr(obj, "type_code", "") == "n"
+        if is_node:
+            record.pop("edges", None)
+
+        result = await context.database.insert_if_absent(collection, record)
+
+        if result.created:
+            entity: Object = obj
+            await context._add_to_cache(entity.id, entity)
+            flush_fn = getattr(entity, "flush", None)
+            if (
+                flush_fn is not None
+                and callable(flush_fn)
+                and inspect.iscoroutinefunction(flush_fn)
+            ):
+                await flush_fn()
+            return entity, True
+
+        entity_opt = await context._deserialize_entity(cls, result.record)
+        if entity_opt is None:
+            raise RuntimeError(
+                f"create_if_absent could not rehydrate {cls.__name__} "
+                f"from stored record id={result.record.get('id')!r}"
+            )
+        entity = entity_opt
+        entity._graph_context = context
+        await context._add_to_cache(entity.id, entity)
+        return entity, False
 
     async def update(
         self: "Object",
@@ -399,6 +508,31 @@ class Object(AttributeMixin, BaseModel):
     # an MRO walk per assignment (audit hot-path fix: dropped per-instance
     # cost from ~16us to <5us).
     __hierarchy_fields__: ClassVar[frozenset] = frozenset()
+
+    @classmethod
+    def _declared_private_fields(cls) -> frozenset[str]:
+        """Cache the class declaration scan used by every attribute write."""
+        cached = cls.__dict__.get("__private_fields_cache__")
+        if cached is None:
+            cached = frozenset(
+                key
+                for base in cls.__mro__
+                for key in (
+                    set(getattr(base, "__private_attributes__", {}) or {})
+                    | {
+                        field
+                        for field in vars(base)
+                        if field.startswith("_") and not field.startswith("__")
+                    }
+                    | {
+                        field
+                        for field in getattr(base, "__annotations__", {})
+                        if field.startswith("_") and not field.startswith("__")
+                    }
+                )
+            )
+            type.__setattr__(cls, "__private_fields_cache__", cached)
+        return cached
 
     @classmethod
     def _get_class_hierarchy_fields(cls: Type["Object"]) -> Set[str]:
@@ -784,8 +918,14 @@ class Object(AttributeMixin, BaseModel):
             List of index definitions, each containing:
             - For single-field: {"field": "context.field_name", "unique": bool, "direction": int}
             - For compound: {"fields": [("context.field_name", direction), ...], "unique": bool, "name": str}
+            - For full-text: {"fields": [...], "fulltext": True, "name": str}
+            Annotation-declared definitions carry ``"per_class": True`` (plus
+            any ``entity_leading`` / ``partial_by_entity`` option) so
+            ``GraphContext.ensure_indexes`` can scope them to the class's
+            entity on Postgres.
         """
         indexes: List[Dict[str, Any]] = []
+        scope_options = ("entity_leading", "partial_by_entity")
 
         # Get single-field indexes from field annotations
         indexed_fields = get_indexed_fields(cls)
@@ -796,11 +936,15 @@ class Object(AttributeMixin, BaseModel):
                 "field": db_field,
                 "unique": index_config.get("unique", False),
                 "direction": index_config.get("direction", 1),
+                "per_class": True,
             }
             if "partial_filter_expression" in index_config:
                 single_entry["partialFilterExpression"] = index_config[
                     "partial_filter_expression"
                 ]
+            for option in scope_options:
+                if option in index_config:
+                    single_entry[option] = index_config[option]
             indexes.append(single_entry)
 
         # Get compound indexes from class decorators
@@ -816,10 +960,33 @@ class Object(AttributeMixin, BaseModel):
                 "unique": comp_index.get("unique", False),
                 "sparse": comp_index.get("sparse", False),
                 "name": comp_index.get("name"),
+                "per_class": True,
             }
             if "partialFilterExpression" in comp_index:
                 entry["partialFilterExpression"] = comp_index["partialFilterExpression"]
+            for option in scope_options:
+                if option in comp_index:
+                    entry[option] = comp_index[option]
             indexes.append(entry)
+
+        # Full-text indexes: every ``attribute(fulltext=True)`` field in
+        # declaration order, plus each ``@fulltext_index([...])``.
+        fulltext_sets = []
+        fulltext_fields = get_fulltext_fields(cls)
+        if fulltext_fields:
+            fulltext_sets.append(
+                {"fields": fulltext_fields, "name": f"fts_{'_'.join(fulltext_fields)}"}
+            )
+        fulltext_sets.extend(get_fulltext_indexes(cls))
+        for ft in fulltext_sets:
+            indexes.append(
+                {
+                    "fields": [(f"context.{f}", 1) for f in ft["fields"]],
+                    "fulltext": True,
+                    "per_class": True,
+                    "name": ft["name"],
+                }
+            )
 
         return indexes
 

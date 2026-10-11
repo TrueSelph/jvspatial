@@ -179,7 +179,11 @@ class FileValidator:
         self.strict_mime_check = strict_mime_check
 
     def validate_file(
-        self, content: bytes, filename: str, expected_mime_type: Optional[str] = None
+        self,
+        content: bytes,
+        filename: str,
+        expected_mime_type: Optional[str] = None,
+        hint_mime: Optional[str] = None,
     ) -> ValidationResult:
         """Validate file content and metadata.
 
@@ -193,6 +197,10 @@ class FileValidator:
             content: File content as bytes
             filename: Original filename
             expected_mime_type: Expected MIME type (optional)
+            hint_mime: Known MIME type to use when detection falls back to
+                octet-stream (optional). Useful when the caller already knows
+                the type (e.g. from upload metadata) but the file content or
+                filename alone isn't enough for detection.
 
         Returns:
             Dict with validation results:
@@ -228,7 +236,7 @@ class FileValidator:
             )
 
         # Stage 2: MIME type detection
-        detected_mime = self.detect_mime_type(content, filename)
+        detected_mime = self.detect_mime_type(content, filename, hint_mime=hint_mime)
 
         # Stage 3: Extension validation
         extension = Path(filename).suffix.lower()
@@ -287,15 +295,25 @@ class FileValidator:
             "filename": filename,
         }
 
-    def detect_mime_type(self, content: bytes, filename: Optional[str] = None) -> str:
+    def detect_mime_type(
+        self,
+        content: bytes,
+        filename: Optional[str] = None,
+        *,
+        hint_mime: Optional[str] = None,
+    ) -> str:
         """Detect MIME type of file content.
 
         Uses python-magic if available for content-based detection,
         falls back to mimetypes module for extension-based detection.
+        When both fail, uses *hint_mime* if provided (e.g. from upload
+        metadata) instead of defaulting to octet-stream.
 
         Args:
             content: File content as bytes
             filename: Filename for extension-based fallback
+            hint_mime: Known MIME type to use when detection falls back
+                to octet-stream (optional)
 
         Returns:
             Detected MIME type string
@@ -320,6 +338,11 @@ class FileValidator:
             if mime_type:
                 logger.debug(f"MIME type guessed from extension: {mime_type}")
                 return mime_type
+
+        # Use hint if detection failed
+        if hint_mime and hint_mime != "application/octet-stream":
+            logger.debug(f"MIME type from hint: {hint_mime}")
+            return hint_mime
 
         # Ultimate fallback
         logger.warning("Could not detect MIME type, defaulting to octet-stream")

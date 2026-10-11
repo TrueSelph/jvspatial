@@ -77,6 +77,37 @@ alice = await User.create(name="Alice", email="alice@example.com")
 loaded = await User.get(alice.id)
 ```
 
+### Using Postgres with `Server`
+
+`Server` selects the prime database from `db_type`, so Postgres is available
+to the API layer the same way JSON or MongoDB is:
+
+```python
+from jvspatial.api.server import Server
+
+server = Server(
+    db_type="postgres",
+    postgres_dsn="postgresql://user:pw@localhost:5432/mydb",
+)
+```
+
+`postgresql` is accepted as an alias for `postgres`. Every connection setting
+also resolves from the environment through `ServerConfig`:
+
+```bash
+JVSPATIAL_DB_TYPE=postgres
+JVSPATIAL_POSTGRES_DSN=postgresql://user:pw@localhost:5432/mydb
+```
+
+Settings you leave unset fall through to `PostgresDB`'s own defaults, so the
+DSN is the only value most deployments need. `JVSPATIAL_DB_PATH` does not
+apply — it is a file-backend setting.
+
+Note that the logging database is a separate store and has no Postgres
+backend; if `JVSPATIAL_LOG_DB_TYPE` is unset it inherits `JVSPATIAL_DB_TYPE`
+and falls back to a JSON file log. Set it explicitly when the graph runs on
+Postgres.
+
 ## Schema
 
 Each collection becomes one table. The shape:
@@ -100,8 +131,60 @@ CREATE INDEX <collection>_tenant_idx
 ```
 
 The full record lives in the `data` JSONB blob. `id`, `entity`, and `tenant_id`
-are denormalized for indexing. The default GIN index on `data` accelerates
-arbitrary JSONB containment / path queries.
+are denormalized for indexing. The whole-document GIN index on `data` only
+accelerates containment-shaped predicates (`$all`); see
+[Index policy](#index-policy) for when to turn it off.
+
+### Index policy
+
+- **Per-class indexes lead with `entity`.** Every typed `find()` filters on
+  the `entity` column of a table shared by every class, so an index declared
+  with `attribute(indexed=True)` or `@compound_index(...)` is created as
+  `(entity, <fields>)` and named `<col>_entity_<fields>_idx`. Sibling classes
+  that declare the same fields share it. Pass `index_partial_by_entity=True`
+  (or `@compound_index(..., partial_by_entity=True)`) for a smaller
+  `WHERE entity = '<Class>'` index per class instead, or
+  `entity_leading=False` to keep the key unscoped. The pre-0.0.18 unscoped
+  index of the same fields is dropped when its replacement is created.
+- **Descending keys are `DESC NULLS LAST`**, the order `find(sort=...)`
+  emits, so `sort=[("context.created_at", -1)], limit=20` walks the index
+  with no sort step. Indexes created by 0.0.17 and earlier (descending keys
+  without `NULLS LAST`, or `entity` / `id` indexed as JSONB paths — e.g. the
+  edge `(source, target, entity)` unique index) are rebuilt in place the next
+  time `ensure_indexes` runs.
+- **The whole-document GIN is optional.** `JVSPATIAL_PG_GIN_INDEX=off` (or
+  `create_database("postgres", ..., gin_index="off")`) stops new
+  collections from creating `<col>_data_gin`. Every node rewrite re-indexes
+  the whole document into that GIN, while equality / range / sort use the
+  functional B-trees above. Large deployments should turn it off, then drop
+  an existing one with `DROP INDEX CONCURRENTLY node_data_gin;` —
+  `find()` logs a one-time warning if an `$all` / `$elemMatch` query then
+  runs without it.
+
+### Full-text search
+
+```python
+from jvspatial.core.annotations import attribute, fulltext_index
+
+@fulltext_index(["title", "body"])          # one GIN over both fields
+class Article(Node):
+    title: str = ""
+    body: str = ""
+    summary: str = attribute(fulltext=True, default="")  # or per-attribute
+
+await Article.find({"$text": {"$search": "graph database",
+                              "$fields": ["context.title", "context.body"]}})
+```
+
+`$text` becomes `to_tsvector('simple', …) @@ plainto_tsquery('simple', …)`:
+every search word must appear (case-insensitive, no stemming — "database"
+does not match "databases"). The index is used when `$fields` lists the same
+fields in the same order as the declaration. Other backends evaluate the same
+semantics in memory; MongoDB searches its own text index.
+
+`$regex` is never index-backed. When a pattern has to include user input, pass
+the input through `jvspatial.db.escape_regex` so metacharacters match
+literally (and a crafted pattern cannot make every scan slow).
 
 ### Custom indexes
 
@@ -128,6 +211,30 @@ await db.enable_vector_column("doc", "embedding", dim=1536)
 
 See [vector-store.md](vector-store.md) for details.
 
+### Node adjacency lives in the `edge` table
+
+Node rows carry no `edges` array. Adjacency is read from the `edge` table
+through the `source` / `target` functional indexes that `Edge.get_indexes()`
+declares, so `connect()`, `disconnect()` and `save()` cost the same on a node
+with ten edges as on one with a hundred thousand, and concurrent writers never
+queue on a hub's row lock. Keep index auto-creation on
+(`JVSPATIAL_AUTO_CREATE_INDEXES`, default on outside serverless) or run
+`ensure_indexes(Edge)` at deploy time — without those indexes every adjacency
+read scans the `edge` table.
+
+Rows written by 0.0.17 and earlier may still carry the array. Reads ignore it
+and the next save of each node drops it; to reclaim the space in one pass:
+
+```bash
+jvspatial migrate strip-node-edges --dsn "$JVSPATIAL_POSTGRES_DSN"          # dry run: count rows
+jvspatial migrate strip-node-edges --dsn "$JVSPATIAL_POSTGRES_DSN" --apply  # strip, batched
+```
+
+It is idempotent and safe while the application serves traffic (saves never
+write the array back). Tables with `FORCE ROW LEVEL SECURITY` must be
+migrated by a role that bypasses RLS. Afterwards run `VACUUM (ANALYZE) node`
+and `REINDEX INDEX CONCURRENTLY node_data_gin` to return the space.
+
 ## Pool tuning
 
 `PostgresDB` runs on a single `asyncpg.Pool` per instance, created lazily on
@@ -150,7 +257,31 @@ Or via env (see [environment-keys-reference.md](environment-keys-reference.md)):
 ```bash
 JVSPATIAL_POSTGRES_MIN_POOL_SIZE=5
 JVSPATIAL_POSTGRES_MAX_POOL_SIZE=25
+JVSPATIAL_POSTGRES_COMMAND_TIMEOUT=30   # per-statement timeout, seconds (default 60)
 ```
+
+**Sizing rule of thumb.** Postgres does useful work on roughly two active
+connections per database CPU core, and every open connection costs server
+memory. Size the pools so their sum stays near that budget:
+
+```text
+max_size ≈ (2 × DB host cores) ÷ number of app processes
+```
+
+Four app workers against an 8-core database: `max_size ≈ 16 ÷ 4 = 4`. A
+bigger pool mostly moves the queue from the pool into Postgres. Keep
+`max_size × processes` well below `max_connections`. For many short-lived
+processes (Lambda, autoscaled containers) put PgBouncer / RDS Proxy in front
+and size the pooler, not each process — see below.
+
+### Event loops
+
+The pool belongs to the event loop that created it. If a host bootstraps
+inside one `asyncio.run()` and then serves from a second loop — the common
+CLI-then-ASGI-server startup — `PostgresDB` notices the loop change and
+rebuilds the pool on first use in the new loop. The abandoned pool's
+connections are dropped rather than closed, since closing them would mean
+awaiting on a loop that no longer runs.
 
 ### Pooler compatibility (PgBouncer / RDS Proxy)
 
@@ -166,6 +297,12 @@ This disables asyncpg's statement cache (`statement_cache_size=0`) and binds
 parameters with the simple-query path, at the cost of some per-query overhead.
 Use it only when you're behind a transaction-pooling layer; direct or
 session-pooled connections should keep the default `pooler_mode="session"`.
+Set it by environment with `JVSPATIAL_POSTGRES_POOLER_MODE=transaction`.
+
+Tenant scoping (`db.tenant(...)`) is transaction-pooler safe: every scoped
+operation runs inside one transaction that begins with
+`SELECT set_config('app.tenant_id', $1, true)` (a `SET LOCAL`), so the GUC
+never leaks to the next client of a pooled server connection.
 
 ## Transactions
 
@@ -216,6 +353,8 @@ precedence):
 | `JVSPATIAL_POSTGRES_MIN_POOL_SIZE`      | Pool min size override                             |
 | `JVSPATIAL_POSTGRES_MAX_POOL_SIZE`      | Pool max size override                             |
 | `JVSPATIAL_POSTGRES_POOLER_MODE`        | `"session"` (default) or `"transaction"`           |
+| `JVSPATIAL_POSTGRES_COMMAND_TIMEOUT`    | Per-statement timeout in seconds (default 60)      |
+| `JVSPATIAL_PG_GIN_INDEX`                | `"full"` (default) or `"off"` — whole-document GIN |
 
 ## Operational tips
 

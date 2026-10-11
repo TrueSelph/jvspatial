@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from jvspatial.core.context import GraphContext
+from jvspatial.core.context import GraphContext, scoped_default_context_async
 from jvspatial.storage.exceptions import (
     AccessDeniedError,
     FileNotFoundError,
@@ -155,13 +155,14 @@ class TestURLProxyManagerInitialization:
         assert manager._context == mock_context
         assert await manager.context == mock_context
 
-    async def test_init_without_context(self):
+    async def test_init_without_context(self, mock_context):
         """Test initialization without context uses default."""
         manager = URLProxyManager()
         assert manager._context is None
         # Context will be created on first access
-        context = await manager.context
-        assert context is not None
+        async with scoped_default_context_async(mock_context):
+            context = await manager.context
+        assert context is mock_context
 
     async def test_get_proxy_manager_function(self, mock_context):
         """Test get_proxy_manager convenience function."""

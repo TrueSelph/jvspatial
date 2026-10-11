@@ -101,3 +101,10 @@ def test_optimizer_markers_do_not_break_match():
     # With $hint mixed in, the match still passes on the actual condition.
     assert QueryEngine.match(doc, {"name": "alice", "$hint": "name_idx"})
     assert QueryEngine.match(doc, {"$select": ["name"]})
+
+
+def test_regex_backtracking_has_a_runtime_limit():
+    # A 30-byte candidate was enough to stall the standard re engine.
+    assert not QueryEngine.match(
+        {"name": "a" * 29 + "!"}, {"name": {"$regex": "^(a+)+$"}}
+    )

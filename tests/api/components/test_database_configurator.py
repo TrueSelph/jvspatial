@@ -250,6 +250,90 @@ class TestDatabaseConfigurator:
                             )
 
     @pytest.mark.asyncio
+    async def test_initialize_graph_context_postgres(self):
+        """Test GraphContext initialization with PostgreSQL."""
+        config = ServerConfig()
+        config.database.db_type = "postgres"
+        config.database.postgres_dsn = "postgresql://u:p@localhost:5432/testdb"
+        config.database.postgres_min_pool_size = 3
+        config.database.postgres_max_pool_size = 7
+        config.database.postgres_pooler_mode = "transaction"
+        configurator = DatabaseConfigurator(config)
+
+        with patch(
+            "jvspatial.api.components.database_configurator.create_database"
+        ) as mock_create:
+            mock_db = MagicMock()
+            mock_create.return_value = mock_db
+
+            with patch(
+                "jvspatial.api.components.database_configurator.get_database_manager"
+            ) as mock_get_manager:
+                mock_manager = MagicMock()
+                mock_manager.get_current_database.return_value = mock_db
+                mock_get_manager.side_effect = RuntimeError()
+
+                with patch(
+                    "jvspatial.api.components.database_configurator.set_database_manager"
+                ):
+                    with patch(
+                        "jvspatial.api.components.database_configurator.GraphContext"
+                    ) as mock_context:
+                        mock_ctx_instance = MagicMock()
+                        mock_context.return_value = mock_ctx_instance
+
+                        with patch(
+                            "jvspatial.api.components.database_configurator.set_default_context"
+                        ):
+                            result = configurator.initialize_graph_context()
+
+                            assert result == mock_ctx_instance
+                            mock_create.assert_called_once_with(
+                                db_type="postgres",
+                                dsn="postgresql://u:p@localhost:5432/testdb",
+                                min_size=3,
+                                max_size=7,
+                                pooler_mode="transaction",
+                                observe=False,
+                                slow_query_ms=100.0,
+                            )
+
+    @pytest.mark.asyncio
+    async def test_initialize_graph_context_postgresql_alias(self):
+        """``postgresql`` is accepted as an alias for ``postgres``."""
+        config = ServerConfig()
+        config.database.db_type = "postgresql"
+        configurator = DatabaseConfigurator(config)
+
+        with patch(
+            "jvspatial.api.components.database_configurator.create_database"
+        ) as mock_create:
+            mock_create.return_value = MagicMock()
+            with patch(
+                "jvspatial.api.components.database_configurator.get_database_manager",
+                side_effect=RuntimeError(),
+            ):
+                with patch(
+                    "jvspatial.api.components.database_configurator.set_database_manager"
+                ):
+                    with patch(
+                        "jvspatial.api.components.database_configurator.GraphContext",
+                        return_value=MagicMock(),
+                    ):
+                        with patch(
+                            "jvspatial.api.components.database_configurator.set_default_context"
+                        ):
+                            configurator.initialize_graph_context()
+
+        # Unset connection settings are omitted so PostgresDB's own env
+        # defaults still apply.
+        mock_create.assert_called_once_with(
+            db_type="postgres",
+            observe=False,
+            slow_query_ms=100.0,
+        )
+
+    @pytest.mark.asyncio
     async def test_initialize_graph_context_no_db_type(self, configurator):
         """Test that None is returned when db_type is not set."""
         configurator.config.database.db_type = None

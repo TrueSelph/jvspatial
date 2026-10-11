@@ -79,8 +79,8 @@ async def test_dispatch_malformed_task_type(body: dict):
 
 
 def test_deferred_invoke_http_route(monkeypatch):
-    # Audit §4.16: route is now fail-closed when the secret is unset.
-    # Set a secret + send matching header for the happy-path test.
+    # TestClient peers as host "testclient" (not loopback), so a secret +
+    # matching header is required for the happy path — same as API Gateway.
     monkeypatch.setenv("JVSPATIAL_DEFERRED_INVOKE_SECRET", "test-secret-value")
     app = FastAPI()
 
@@ -104,6 +104,21 @@ def test_deferred_invoke_http_route(monkeypatch):
     )
     assert r.status_code == 200
     assert r.json() == {"ok": True, "sender": "u1"}
+
+
+def test_deferred_invoke_http_rejects_unset_secret_for_non_loopback(monkeypatch):
+    monkeypatch.delenv("JVSPATIAL_DEFERRED_INVOKE_SECRET", raising=False)
+    app = FastAPI()
+
+    async def handler(event: dict) -> dict:
+        return {"ok": True}
+
+    register_deferred_invoke_handler("app.task", handler)
+    register_deferred_invoke_route(app)
+    path = APIRoutes.deferred_invoke_full_path()
+    client = TestClient(app)
+    r = client.post(path, json={"task_type": "app.task"})
+    assert r.status_code == 401
 
 
 def test_deferred_invoke_http_unknown_returns_404(monkeypatch):

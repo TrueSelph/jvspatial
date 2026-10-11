@@ -94,10 +94,7 @@ def node_record_to_payload(
     """Build a JSON-serializable node dict for graph APIs (summary or full detail)."""
     node_id = str(record.get("id", ""))
     entity = str(record.get("entity") or entity_type_from_node_id(node_id))
-    edges = record.get("edges") or []
-    if not isinstance(edges, list):
-        edges = []
-    resolved_degree = degree if degree is not None else len(edges)
+    resolved_degree = degree if degree is not None else 0
     ctx = record.get("context") if isinstance(record.get("context"), dict) else {}
     label = truncate_entity_label(entity)
     payload: Dict[str, Any] = {

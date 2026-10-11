@@ -32,6 +32,8 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional
 
 import pytest
 
+from jvspatial.core.entities import Edge, Node
+
 try:
     import asyncpg
 except ImportError:  # pragma: no cover - dependency gated below
@@ -127,6 +129,44 @@ class TestPostgresCRUD:
         loaded = await pg_db.get("node", "n.x.upsert")
         assert loaded["context"]["v"] == 2
 
+    async def test_insert_if_absent_creates_then_preserves(
+        self, pg_db: "PostgresDB"
+    ) -> None:
+        from jvspatial.db.database import InsertIfAbsentResult
+
+        first = {"id": "n.x.iia", "entity": "x", "context": {"v": 1}}
+        r1 = await pg_db.insert_if_absent("node", first)
+        assert isinstance(r1, InsertIfAbsentResult)
+        assert r1.created is True
+        assert r1.record["context"]["v"] == 1
+
+        r2 = await pg_db.insert_if_absent(
+            "node", {"id": "n.x.iia", "entity": "x", "context": {"v": 99}}
+        )
+        assert r2.created is False
+        assert r2.record["context"]["v"] == 1
+        loaded = await pg_db.get("node", "n.x.iia")
+        assert loaded is not None
+        assert loaded["context"]["v"] == 1
+
+    async def test_insert_if_absent_concurrent_same_id(
+        self, pg_db: "PostgresDB"
+    ) -> None:
+        rec_id = "n.x.iia.conc"
+        results = await asyncio.gather(
+            *[
+                pg_db.insert_if_absent(
+                    "node",
+                    {"id": rec_id, "entity": "x", "context": {"n": i}},
+                )
+                for i in range(12)
+            ]
+        )
+        assert sum(1 for r in results if r.created) == 1
+        winner = next(r.record for r in results if r.created)
+        for r in results:
+            assert r.record == winner
+
     async def test_delete_removes(self, pg_db: "PostgresDB") -> None:
         await pg_db.save("node", {"id": "n.x.del", "entity": "x", "context": {}})
         await pg_db.delete("node", "n.x.del")
@@ -149,6 +189,20 @@ class TestPostgresCRUD:
         out = await pg_db.find("node", {"context.tag": "even"})
         ids = sorted(r["id"] for r in out)
         assert ids == ["n.x.0", "n.x.2", "n.x.4"]
+
+    async def test_exists_treats_json_null_as_absent(self, pg_db: "PostgresDB") -> None:
+        for suffix, context in (
+            ("missing", {}),
+            ("null", {"nested": {"value": None}}),
+            ("set", {"nested": {"value": "present"}}),
+        ):
+            await pg_db.save(
+                "node", {"id": f"n.x.{suffix}", "entity": "x", "context": context}
+            )
+        absent = await pg_db.find("node", {"context.nested.value": {"$exists": False}})
+        present = await pg_db.find("node", {"context.nested.value": {"$exists": True}})
+        assert {row["id"] for row in absent} == {"n.x.missing", "n.x.null"}
+        assert {row["id"] for row in present} == {"n.x.set"}
 
     async def test_count_with_filter(self, pg_db: "PostgresDB") -> None:
         for i in range(10):
@@ -243,6 +297,41 @@ class TestPostgresOperators:
         out = await pg_db.find("node", {}, sort=[("context.score", 1)])
         assert [r["id"] for r in out] == ["n.1", "n.2", "n.5", "n.7", "n.8"]
 
+    async def test_untranslatable_sort_with_limit_returns_true_top_n(
+        self, pg_db: "PostgresDB"
+    ) -> None:
+        """LIMIT must not be pushed when the sort falls back to memory.
+
+        ``my-score`` has a hyphen, so ``translate_sort`` refuses it and the
+        ordering happens in Python. Pushing the LIMIT would order an
+        arbitrary N rows instead of the true top N.
+        """
+        for score in (5, 2, 8, 1, 7):
+            await pg_db.save(
+                "node",
+                {
+                    "id": f"n.{score}",
+                    "entity": "n",
+                    "context": {"my-score": score},
+                },
+            )
+        out = await pg_db.find("node", {}, sort=[("context.my-score", -1)], limit=2)
+        assert [r["id"] for r in out] == ["n.8", "n.7"]
+
+    async def test_sort_places_missing_values_last(self, pg_db: "PostgresDB") -> None:
+        """NULLS LAST in both directions — SPEC §4.1 find sort contract."""
+        for score in (5, 2):
+            await pg_db.save(
+                "node",
+                {"id": f"n.{score}", "entity": "n", "context": {"score": score}},
+            )
+        await pg_db.save("node", {"id": "n.hole", "entity": "n", "context": {}})
+
+        asc = await pg_db.find("node", {}, sort=[("context.score", 1)])
+        desc = await pg_db.find("node", {}, sort=[("context.score", -1)])
+        assert asc[-1]["id"] == "n.hole"
+        assert desc[-1]["id"] == "n.hole"
+
 
 # ---- Atomic find_one_and_update --------------------------------------------
 
@@ -280,6 +369,160 @@ class TestPostgresAtomicOps:
         loaded = await pg_db.get("node", "n.upsert")
         assert loaded is not None
         assert loaded["context"]["created"] is True
+
+
+class TestPostgresTransactionAtomicOps:
+    """CAS + insert_if_absent must share one public transaction handle."""
+
+    async def test_transaction_find_one_and_update_inc(
+        self, pg_db: "PostgresDB"
+    ) -> None:
+        """Lease-style CAS on the transaction handle persists after commit."""
+        await pg_db.save(
+            "o",
+            {
+                "id": "o.WorkItem.1",
+                "entity": "WorkItem",
+                "context": {"status": "queued", "lease_fence": 0},
+            },
+        )
+        txn = await pg_db.begin_transaction()
+        try:
+            updated = await txn.find_one_and_update(
+                "o",
+                {
+                    "id": "o.WorkItem.1",
+                    "context.status": "queued",
+                    "context.lease_fence": 0,
+                },
+                {
+                    "$set": {
+                        "context.status": "running",
+                        "context.lease_fence": 1,
+                        "context.lease_token": "tok-a",
+                    }
+                },
+            )
+            assert updated is not None
+            assert updated["context"]["status"] == "running"
+            assert updated["context"]["lease_fence"] == 1
+            await pg_db.commit_transaction(txn)
+        except Exception:
+            await pg_db.rollback_transaction(txn)
+            raise
+
+        loaded = await pg_db.get("o", "o.WorkItem.1")
+        assert loaded["context"]["status"] == "running"
+        assert loaded["context"]["lease_token"] == "tok-a"
+
+    async def test_transaction_cas_and_insert_commit_together(
+        self, pg_db: "PostgresDB"
+    ) -> None:
+        """CAS + outbox insert commit as one unit."""
+        await pg_db.save(
+            "o",
+            {
+                "id": "o.WorkItem.2",
+                "entity": "WorkItem",
+                "context": {"status": "queued", "lease_fence": 0},
+            },
+        )
+        txn = await pg_db.begin_transaction()
+        try:
+            updated = await txn.find_one_and_update(
+                "o",
+                {"id": "o.WorkItem.2", "context.status": "queued"},
+                {"$set": {"context.status": "running", "context.lease_fence": 1}},
+            )
+            assert updated is not None
+            outbox = await txn.insert_if_absent(
+                "o",
+                {
+                    "id": "o.WorkOutbox.2",
+                    "entity": "WorkOutboxEntry",
+                    "context": {
+                        "work_item_id": "o.WorkItem.2",
+                        "topic": "work.transitioned",
+                        "status": "pending",
+                    },
+                },
+            )
+            assert outbox.created is True
+            await pg_db.commit_transaction(txn)
+        except Exception:
+            await pg_db.rollback_transaction(txn)
+            raise
+
+        assert (await pg_db.get("o", "o.WorkItem.2"))["context"]["status"] == "running"
+        assert await pg_db.get("o", "o.WorkOutbox.2") is not None
+
+    async def test_transaction_cas_and_insert_rollback_together(
+        self, pg_db: "PostgresDB"
+    ) -> None:
+        """CAS + outbox insert roll back together."""
+        await pg_db.save(
+            "o",
+            {
+                "id": "o.WorkItem.3",
+                "entity": "WorkItem",
+                "context": {"status": "queued", "lease_fence": 0},
+            },
+        )
+        txn = await pg_db.begin_transaction()
+        updated = await txn.find_one_and_update(
+            "o",
+            {"id": "o.WorkItem.3", "context.status": "queued"},
+            {"$set": {"context.status": "running", "context.lease_fence": 1}},
+        )
+        assert updated is not None
+        outbox = await txn.insert_if_absent(
+            "o",
+            {
+                "id": "o.WorkOutbox.3",
+                "entity": "WorkOutboxEntry",
+                "context": {"work_item_id": "o.WorkItem.3", "status": "pending"},
+            },
+        )
+        assert outbox.created is True
+        await pg_db.rollback_transaction(txn)
+
+        loaded = await pg_db.get("o", "o.WorkItem.3")
+        assert loaded["context"]["status"] == "queued"
+        assert loaded["context"]["lease_fence"] == 0
+        assert await pg_db.get("o", "o.WorkOutbox.3") is None
+
+    async def test_transaction_stale_cas_returns_none(
+        self, pg_db: "PostgresDB"
+    ) -> None:
+        """Mismatched fence must leave the row unchanged."""
+        await pg_db.save(
+            "o",
+            {
+                "id": "o.WorkItem.4",
+                "entity": "WorkItem",
+                "context": {"status": "running", "lease_fence": 2},
+            },
+        )
+        txn = await pg_db.begin_transaction()
+        try:
+            updated = await txn.find_one_and_update(
+                "o",
+                {
+                    "id": "o.WorkItem.4",
+                    "context.status": "running",
+                    "context.lease_fence": 1,
+                },
+                {"$set": {"context.status": "succeeded"}},
+            )
+            assert updated is None
+            await pg_db.commit_transaction(txn)
+        except Exception:
+            await pg_db.rollback_transaction(txn)
+            raise
+
+        loaded = await pg_db.get("o", "o.WorkItem.4")
+        assert loaded["context"]["status"] == "running"
+        assert loaded["context"]["lease_fence"] == 2
 
 
 # ---- Walker traversal via recursive CTE ------------------------------------
@@ -555,3 +798,43 @@ class TestPostgresPgvector:
             },
         )
         assert [r["id"] for r in out] == ["d.x", "d.y"]
+
+
+class _TxnFolder(Node):
+    name: str = ""
+
+
+class _TxnNote(Node):
+    title: str = ""
+
+
+class _TxnContains(Edge):
+    pass
+
+
+class TestGraphTransaction:
+    async def test_node_and_edge_roll_back_together(self, pg_db: "PostgresDB") -> None:
+        from jvspatial.core.context import graph_transaction
+
+        with pytest.raises(RuntimeError, match="abort"):
+            async with graph_transaction(pg_db):
+                folder = await _TxnFolder.create(name="inbox")
+                note = await _TxnNote.create(title="hello")
+                await folder.connect(note, edge=_TxnContains)
+                raise RuntimeError("abort")
+        assert await pg_db.find("node", {}) == []
+        assert await pg_db.find("edge", {}) == []
+
+    async def test_node_and_edge_commit_together(self, pg_db: "PostgresDB") -> None:
+        from jvspatial.core.context import graph_transaction
+
+        async with graph_transaction(pg_db):
+            folder = await _TxnFolder.create(name="inbox")
+            note = await _TxnNote.create(title="hello")
+            await folder.connect(note, edge=_TxnContains)
+            folder_id, note_id = folder.id, note.id
+        nodes = {row["id"] for row in await pg_db.find("node", {})}
+        assert folder_id in nodes
+        assert note_id in nodes
+        edges = await pg_db.find("edge", {})
+        assert len(edges) == 1

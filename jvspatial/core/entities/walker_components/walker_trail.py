@@ -10,11 +10,14 @@ process boundaries (Lambda cold starts, deferred-invoke resumes).
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import deque
 from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .trail_store import TrailStore
+
+logger = logging.getLogger(__name__)
 
 
 class WalkerTrail:
@@ -66,6 +69,7 @@ class WalkerTrail:
             )
         self._store: Optional["TrailStore"] = store
         self._walker_id: Optional[str] = walker_id
+        self._pending_tasks: set[asyncio.Task] = set()
 
     def record_step(
         self, node_id: Any, edge_id: Optional[Any] = None, **metadata: Any
@@ -93,8 +97,16 @@ class WalkerTrail:
                 # from sync code. Skip the durable write; durability is a
                 # best-effort guarantee for sync callers.
                 return
-            # Fire and forget; the store handles its own errors.
-            loop.create_task(self._store.append(self._walker_id, step))
+            task = loop.create_task(self._store.append(self._walker_id, step))
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._on_append_done)
+
+    def _on_append_done(self, task: asyncio.Task) -> None:
+        self._pending_tasks.discard(task)
+        try:
+            task.result()
+        except Exception:
+            logger.exception("Walker trail persistence failed")
 
     async def arecord_step(
         self, node_id: Any, edge_id: Optional[Any] = None, **metadata: Any

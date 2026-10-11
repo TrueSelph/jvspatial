@@ -44,7 +44,7 @@ class TestForgotPasswordEndpoint:
         email = f"test_{test_id}@example.com"
         client.post(
             "/api/auth/register",
-            json={"email": email, "password": "password123"},
+            json={"email": email, "password": "password12345"},
         )
 
         # Existing email - same message (no enumeration)
@@ -82,7 +82,7 @@ class TestForgotPasswordEndpoint:
         email = f"test_{test_id}@example.com"
         client.post(
             "/api/auth/register",
-            json={"email": email, "password": "password123"},
+            json={"email": email, "password": "password12345"},
         )
 
         client.post(
@@ -118,7 +118,7 @@ class TestForgotPasswordEndpoint:
         email = f"test_{test_id}@example.com"
         client.post(
             "/api/auth/register",
-            json={"email": email, "password": "password123"},
+            json={"email": email, "password": "password12345"},
         )
 
         # Deactivate user via auth service
@@ -177,7 +177,7 @@ class TestResetPasswordEndpoint:
         email = f"test_{test_id}@example.com"
         client.post(
             "/api/auth/register",
-            json={"email": email, "password": "password123"},
+            json={"email": email, "password": "password12345"},
         )
 
         # Request reset to get token via callback
@@ -204,7 +204,7 @@ class TestResetPasswordEndpoint:
         # Reset password
         reset_response = client2.post(
             "/api/auth/reset-password",
-            json={"token": token, "new_password": "newpass789"},
+            json={"token": token, "new_password": "newpass789123"},
         )
         assert reset_response.status_code == 200
         assert reset_response.json()["message"] == "Password reset successfully"
@@ -212,14 +212,14 @@ class TestResetPasswordEndpoint:
         # New password works
         login_response = client2.post(
             "/api/auth/login",
-            json={"email": email, "password": "newpass789"},
+            json={"email": email, "password": "newpass789123"},
         )
         assert login_response.status_code == 200
 
         # Old password fails
         old_login = client2.post(
             "/api/auth/login",
-            json={"email": email, "password": "password123"},
+            json={"email": email, "password": "password12345"},
         )
         assert old_login.status_code == 401
 
@@ -237,7 +237,7 @@ class TestResetPasswordEndpoint:
 
         r = client.post(
             "/api/auth/reset-password",
-            json={"token": "invalid-token-xyz", "new_password": "newpass789"},
+            json={"token": "invalid-token-xyz", "new_password": "newpass789123"},
         )
         assert r.status_code == 400
         body = r.json()
@@ -262,6 +262,6 @@ class TestResetPasswordEndpoint:
 
         r = client.post(
             "/api/auth/reset-password",
-            json={"token": "any-token", "new_password": "newpass789"},
+            json={"token": "any-token", "new_password": "newpass789123"},
         )
         assert r.status_code == 404

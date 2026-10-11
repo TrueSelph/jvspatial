@@ -239,13 +239,13 @@ class TestAPIKeyIntegration:
         # First, register and login a user
         register_response = client.post(
             "/api/auth/register",
-            json={"email": unique_email, "password": "password123"},
+            json={"email": unique_email, "password": "password12345"},
         )
         assert register_response.status_code == 200
 
         login_response = client.post(
             "/api/auth/login",
-            json={"email": unique_email, "password": "password123"},
+            json={"email": unique_email, "password": "password12345"},
         )
         assert login_response.status_code == 200
         token = login_response.json()["access_token"]
@@ -270,11 +270,11 @@ class TestAPIKeyIntegration:
         # Register, login, and create a key
         client.post(
             "/api/auth/register",
-            json={"email": unique_email, "password": "password123"},
+            json={"email": unique_email, "password": "password12345"},
         )
         login_response = client.post(
             "/api/auth/login",
-            json={"email": unique_email, "password": "password123"},
+            json={"email": unique_email, "password": "password12345"},
         )
         token = login_response.json()["access_token"]
 
@@ -302,11 +302,11 @@ class TestAPIKeyIntegration:
         # Register, login, and create a key
         client.post(
             "/api/auth/register",
-            json={"email": unique_email, "password": "password123"},
+            json={"email": unique_email, "password": "password12345"},
         )
         login_response = client.post(
             "/api/auth/login",
-            json={"email": unique_email, "password": "password123"},
+            json={"email": unique_email, "password": "password12345"},
         )
         token = login_response.json()["access_token"]
 
@@ -344,11 +344,11 @@ class TestAPIKeyIntegration:
         # Register, login, and create a key
         client.post(
             "/api/auth/register",
-            json={"email": unique_email, "password": "password123"},
+            json={"email": unique_email, "password": "password12345"},
         )
         login_response = client.post(
             "/api/auth/login",
-            json={"email": unique_email, "password": "password123"},
+            json={"email": unique_email, "password": "password12345"},
         )
         token = login_response.json()["access_token"]
 
@@ -418,7 +418,7 @@ class TestAPIKeyIntegration:
         # Register, login, and create a key
         register_response = client.post(
             "/api/auth/register",
-            json={"email": unique_email, "password": "password123"},
+            json={"email": unique_email, "password": "password12345"},
         )
         assert (
             register_response.status_code == 200
@@ -426,7 +426,7 @@ class TestAPIKeyIntegration:
 
         login_response = client.post(
             "/api/auth/login",
-            json={"email": unique_email, "password": "password123"},
+            json={"email": unique_email, "password": "password12345"},
         )
         assert (
             login_response.status_code == 200

@@ -6,7 +6,11 @@ connection. End-to-end behavior against SQLite is covered by
 ``test_sqlite_pushdown.py``.
 """
 
-from jvspatial.db._sqlite_translate import translate_query, translate_sort
+from jvspatial.db._sqlite_translate import (
+    translate_partial_filter_expression,
+    translate_query,
+    translate_sort,
+)
 
 
 class TestEqualityPushdown:
@@ -193,3 +197,58 @@ class TestSortPushdown:
     def test_empty_sort_returns_none(self):
         assert translate_sort(None) is None
         assert translate_sort([]) is None
+
+
+class TestPartialFilterExpression:
+    def test_conversation_session_id_shape(self):
+        sql = translate_partial_filter_expression(
+            {
+                "context.session_id": {"$gt": ""},
+                "context.status": {"$gt": ""},
+            }
+        )
+        assert sql == (
+            "json_extract(data, '$.context.session_id') > '' AND "
+            "json_extract(data, '$.context.status') > ''"
+        )
+
+    def test_eq_and_exists(self):
+        sql = translate_partial_filter_expression(
+            {
+                "context.entity": {"$eq": "Agent"},
+                "context.name": {"$exists": True},
+            }
+        )
+        assert sql == (
+            "json_extract(data, '$.context.entity') = 'Agent' AND "
+            "json_extract(data, '$.context.name') IS NOT NULL"
+        )
+
+    def test_plain_equality_and_bool(self):
+        sql = translate_partial_filter_expression(
+            {"context.active": True, "context.kind": "session"}
+        )
+        assert sql == (
+            "json_extract(data, '$.context.active') = 1 AND "
+            "json_extract(data, '$.context.kind') = 'session'"
+        )
+
+    def test_string_literal_escapes_quotes(self):
+        sql = translate_partial_filter_expression({"context.label": {"$eq": "O'Brien"}})
+        assert sql == "json_extract(data, '$.context.label') = 'O''Brien'"
+
+    def test_unsupported_op_returns_none(self):
+        assert (
+            translate_partial_filter_expression({"context.name": {"$regex": "^a"}})
+            is None
+        )
+
+    def test_unsafe_path_returns_none(self):
+        assert (
+            translate_partial_filter_expression({"context.bad-name": {"$gt": ""}})
+            is None
+        )
+
+    def test_empty_or_non_dict_returns_none(self):
+        assert translate_partial_filter_expression({}) is None
+        assert translate_partial_filter_expression(None) is None  # type: ignore[arg-type]

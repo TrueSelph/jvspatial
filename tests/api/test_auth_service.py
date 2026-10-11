@@ -285,6 +285,8 @@ class TestTokenValidation:
         # Mock methods
         auth_service._is_token_blacklisted_by_jti = AsyncMock(return_value=False)
         auth_service._get_user_by_id = AsyncMock(return_value=None)
+        auth_service._find_user_by_email = AsyncMock(return_value=None)
+        auth_service.context.database.find = AsyncMock(return_value=[])
 
         # Track logger calls (service uses warning for user not found)
         logger_calls = []

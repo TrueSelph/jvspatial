@@ -252,10 +252,8 @@ class Edge(Object):
     async def create(cls: Type["Edge"], **kwargs: Any) -> "Edge":
         """Create and save a new edge instance.
 
-        Node ``edge_ids`` updates are handled by ``Node.connect()``, which is
-        the canonical entry-point for creating edges between nodes.  Callers
-        that create edges directly must update ``edge_ids`` themselves (or use
-        ``GraphContext.atomic_add_edge_id``).
+        The edge row is the sole adjacency record. Prefer ``Node.connect()``
+        as the canonical entry-point for creating edges between nodes.
 
         Args:
             **kwargs: Edge attributes including 'left' and 'right' nodes

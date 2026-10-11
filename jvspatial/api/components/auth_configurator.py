@@ -95,8 +95,9 @@ class AuthConfigurator:
         self._default_role = self._auth_config.default_role
 
         # Create and cache the auth service singleton for consumer apps
+        prime_ctx = GraphContext(database=get_prime_database())
         self._auth_service = AuthenticationService(
-            GraphContext(database=get_prime_database()),
+            prime_ctx,
             jwt_secret=self._jwt_secret,
             jwt_algorithm=self._jwt_algorithm,
             jwt_expire_minutes=self._jwt_expire_minutes,
@@ -113,6 +114,10 @@ class AuthConfigurator:
             default_role=self._default_role,
             registration_open=self.config.auth.registration_open,
         )
+        from jvspatial.api.auth.api_key_service import APIKeyService
+
+        self._prime_graph_context = prime_ctx
+        self._api_key_service = APIKeyService(prime_ctx)
 
         # Register authentication endpoints
         self._register_auth_endpoints()
@@ -194,10 +199,10 @@ class AuthConfigurator:
                     status_code=422,
                     detail="email and password are required",
                 )
-            if len(password) < 6:
+            if len(password) < 12:
                 raise HTTPException(
                     status_code=422,
-                    detail="password must be at least 6 characters",
+                    detail="password must be at least 12 characters",
                 )
             try:
                 auth_service = get_auth_service()
@@ -221,8 +226,8 @@ class AuthConfigurator:
                 return user
             except RegistrationDisabledError:
                 raise
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Registration unavailable")
             except Exception as e:
                 self._logger.error(f"Registration error: {e}")
                 raise HTTPException(status_code=500, detail="Internal server error")
@@ -262,8 +267,8 @@ class AuthConfigurator:
                 auth_service = get_auth_service()
                 token_response = await auth_service.login_user(login_data)
                 return token_response
-            except ValueError as e:
-                raise HTTPException(status_code=401, detail=str(e))
+            except ValueError:
+                raise HTTPException(status_code=401, detail="Invalid email or password")
             except Exception as e:
                 self._logger.error(f"Login error: {e}")
                 raise HTTPException(status_code=500, detail="Internal server error")

@@ -672,7 +672,21 @@ edge = await ctx.create_edge(Friendship, source=user1, target=user2)
 
 ### Batch Operations
 
-For bulk operations, consider batching:
+`GraphContext.save_batch()` routes **node** entities through `save()` so
+any legacy top-level `edges` key is stripped before write. Non-node entities
+still use the adapter bulk path when available.
+
+`get_batch()` chunks id lists at 500 per round trip.
+
+**Node adjacency** always lives in the edge collection (indexed on `source` /
+`target`). Node saves never merge or lock an edge list. Reclaim legacy
+`edges` arrays with `jvspatial migrate strip-node-edges`.
+
+**Fast deserialize (opt-in):** set `JVSPATIAL_FAST_DESERIALIZE=true` to
+hydrate trusted DB rows via `model_construct` instead of full Pydantic
+validation. Migrations still run before the fast path. Default is off.
+
+For bulk creates, consider batching:
 
 ```python
 async def create_users_batch(ctx: GraphContext, user_data_list):
@@ -681,6 +695,9 @@ async def create_users_batch(ctx: GraphContext, user_data_list):
         user = await ctx.create_node(User, **user_data)
         users.append(user)
     return users
+
+# Or save many existing nodes:
+await ctx.save_batch(nodes)
 ```
 
 ### Caching

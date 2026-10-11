@@ -17,6 +17,11 @@ _DEFAULT_ROLE_MAPPING: Dict[str, List[str]] = {"admin": ["*"], "user": []}
 class DatabaseConfig(BaseModel):
     """Database configuration group."""
 
+    # Aliased fields below are settable only by their alias unless the model
+    # opts in here, so callers passing them by field name -- including
+    # ``server_config_overrides_from_env`` -- were silently ignored.
+    model_config = ConfigDict(populate_by_name=True)
+
     db_type: Optional[str] = None
     db_path: Optional[str] = None
     db_path_resolve: Optional[str] = Field(
@@ -43,6 +48,23 @@ class DatabaseConfig(BaseModel):
     )
     dynamodb_secret_access_key: Optional[str] = Field(
         default=None, validation_alias="AWS_SECRET_ACCESS_KEY"
+    )
+
+    # PostgreSQL Configuration (only used if db_type is "postgres"/"postgresql").
+    # Unset values fall through to PostgresDB's own env defaults.
+    postgres_dsn: Optional[str] = Field(
+        default=None, validation_alias="JVSPATIAL_POSTGRES_DSN"
+    )
+    postgres_min_pool_size: Optional[int] = Field(
+        default=None, validation_alias="JVSPATIAL_POSTGRES_MIN_POOL_SIZE"
+    )
+    postgres_max_pool_size: Optional[int] = Field(
+        default=None, validation_alias="JVSPATIAL_POSTGRES_MAX_POOL_SIZE"
+    )
+    postgres_pooler_mode: Optional[str] = Field(
+        default=None,
+        validation_alias="JVSPATIAL_POSTGRES_POOLER_MODE",
+        description="'session' (default) or 'transaction' for PgBouncer / RDS Proxy.",
     )
 
 
@@ -224,7 +246,7 @@ class AuthConfig(BaseModel):
     )
     bootstrap_admin_password: Optional[str] = Field(
         default=None,
-        description="Admin password for bootstrap. Min 6 chars. Typically from ADMIN_PASSWORD env.",
+        description="Admin password for bootstrap. Min 12 chars. Typically from ADMIN_PASSWORD env.",
     )
     bootstrap_admin_name: Optional[str] = Field(
         default=None,
@@ -318,6 +340,13 @@ class RateLimitConfig(BaseModel):
 
     rate_limit_enabled: bool = Field(
         default=False, description="Enable rate limiting middleware"
+    )
+    auth_entrypoint_rate_limit_enabled: bool = Field(
+        default=True,
+        description=(
+            "Limit auth entry points even when the global limiter is disabled; "
+            "set false only when a trusted host limiter covers them or in tests"
+        ),
     )
     rate_limit_default_requests: int = Field(
         default=60, description="Default requests per window"

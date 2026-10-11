@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from jvspatial.db._atomic import atomic_write_bytes, cleanup_orphan_tmp_files
 from jvspatial.db._path_locks import PathLockManager
-from jvspatial.db.database import Database, finalize_find_results
+from jvspatial.db.database import Database, InsertIfAbsentResult, finalize_find_results
 from jvspatial.db.query import QueryEngine
 from jvspatial.runtime.serverless import is_serverless_mode
 
@@ -135,6 +135,7 @@ class JsonDB(Database):
 
     def _get_collection_dir(self, collection: str) -> Path:
         """Get the directory path for a collection."""
+        self._validate_path_component(collection, "collection")
         if (
             is_serverless_mode()
             and not self._warned_non_tmp_serverless
@@ -153,8 +154,22 @@ class JsonDB(Database):
         # First-touch orphan sweep (cheap, idempotent, serverless-skipped).
         self._maybe_sweep_orphan_tmp_files()
         collection_dir = self.base_path / collection
+        if not collection_dir.resolve().is_relative_to(self.base_path):
+            raise ValueError("Collection path escapes database root")
         collection_dir.mkdir(parents=True, exist_ok=True)
         return collection_dir
+
+    @staticmethod
+    def _validate_path_component(value: str, label: str) -> None:
+        if (
+            not isinstance(value, str)
+            or value in ("", ".", "..")
+            or "/" in value
+            or "\\" in value
+            or "\x00" in value
+            or Path(value).is_absolute()
+        ):
+            raise ValueError(f"Invalid {label}")
 
     def _get_record_path(self, collection: str, record_id: str) -> Path:
         """Get the file path for a specific record.
@@ -162,8 +177,12 @@ class JsonDB(Database):
         IDs use dot separators (format: "type.ClassName.id") which are
         filesystem-compatible on all platforms including Windows.
         """
+        self._validate_path_component(record_id, "record id")
         collection_dir = self._get_collection_dir(collection)
-        return collection_dir / f"{record_id}.json"
+        record_path = collection_dir / f"{record_id}.json"
+        if not record_path.resolve().is_relative_to(self.base_path):
+            raise ValueError("Record path escapes database root")
+        return record_path
 
     @staticmethod
     def _list_collection_json_files(collection_dir: Path) -> List[Path]:
@@ -250,6 +269,40 @@ class JsonDB(Database):
         """
         await asyncio.to_thread(self._sync_write_record, collection, dict(data))
         return data
+
+    async def insert_if_absent(
+        self,
+        collection: str,
+        data: Dict[str, Any],
+        *,
+        conflict_target: str = "id",
+    ) -> InsertIfAbsentResult:
+        """Insert under path lock only when the record file is absent."""
+        record_id = self._validate_insert_if_absent(data, conflict_target)
+        payload = dict(data)
+        payload["id"] = record_id
+
+        def _sync_insert_if_absent() -> InsertIfAbsentResult:
+            record_path = self._get_record_path(collection, record_id)
+            with self._path_locks.lock(str(record_path)):
+                if record_path.exists():
+                    try:
+                        with open(record_path, "rb") as f:
+                            existing = _loads(f.read())
+                    except (ValueError, OSError):
+                        existing = None
+                    if existing is None:
+                        from jvspatial.db.database import DatabaseError
+
+                        raise DatabaseError(
+                            "insert_if_absent found an unreadable existing "
+                            f"file for id={record_id!r}"
+                        )
+                    return InsertIfAbsentResult(record=existing, created=False)
+                atomic_write_bytes(record_path, _dumps(payload))
+                return InsertIfAbsentResult(record=payload, created=True)
+
+        return await asyncio.to_thread(_sync_insert_if_absent)
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a record by ID."""
@@ -431,6 +484,38 @@ class JsonDB(Database):
                 return None
 
         return current
+
+    async def strip_node_edges(
+        self,
+        collection: str = "node",
+        *,
+        batch_size: int = 5000,
+        dry_run: bool = False,
+    ) -> int:
+        """Remove legacy ``edges`` arrays from node JSON files.
+
+        Idempotent. Returns the number of records that carried (or still carry,
+        under ``dry_run``) an ``edges`` key.
+        """
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+        collection_path = self.base_path / collection
+        if not collection_path.exists():
+            return 0
+        stripped = 0
+        for json_file in sorted(collection_path.glob("*.json")):
+            try:
+                record = await self._async_load_record(json_file)
+            except Exception:
+                continue
+            if not isinstance(record, dict) or "edges" not in record:
+                continue
+            stripped += 1
+            if dry_run:
+                continue
+            record.pop("edges", None)
+            await self.save(collection, record)
+        return stripped
 
     async def create_index(
         self,

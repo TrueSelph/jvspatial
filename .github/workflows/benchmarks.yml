@@ -42,11 +42,25 @@ jobs:
   run-benchmarks:
     name: Run benchmark suite
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: jvspatial
+          POSTGRES_PASSWORD: jvspatial
+          POSTGRES_DB: jvspatial
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jvspatial"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -56,6 +70,8 @@ jobs:
           pip install -e '.[dev,test]'
 
       - name: Run benchmarks (PR or main push)
+        env:
+          JVSPATIAL_POSTGRES_TEST_DSN: postgresql://jvspatial:jvspatial@localhost:5432/jvspatial
         run: |
           mkdir -p .benchmarks/current
           pytest tests/benchmarks \
@@ -65,7 +81,7 @@ jobs:
             --benchmark-warmup=on
 
       - name: Upload current results
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: bench-current
           path: .benchmarks/current/result.json
@@ -74,7 +90,7 @@ jobs:
       # On a push to main, this run becomes the new baseline.
       - name: Publish as baseline (main only)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: bench-baseline
           path: .benchmarks/current/result.json
@@ -86,10 +102,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: run-benchmarks
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download current results
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: bench-current
           path: .benchmarks/current
@@ -97,7 +113,7 @@ jobs:
       - name: Download baseline (best-effort)
         id: baseline
         continue-on-error: true
-        uses: dawidd6/action-download-artifact@v6
+        uses: dawidd6/action-download-artifact@v25
         with:
           workflow: benchmarks.yml
           branch: main
@@ -179,7 +195,7 @@ jobs:
 
       - name: Comment on PR
         if: steps.have_baseline.outputs.present == 'true'
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           issue-number: ${{ github.event.pull_request.number }}
           body-path: comment.md

@@ -16,6 +16,24 @@ Rate limiting controls how many requests a client can make within a specific tim
 
 ## Configuration
 
+### Authentication entry points
+
+When authentication is enabled, register, login, forgot-password, and reset-password have a 5-request/60-second per-IP cap by default. This cap is independent of `rate_limit_enabled`: turning off the global limiter does not turn off auth protection. The routes use the configured API prefix (normally `/api`).
+
+An application with its own trusted auth limiter, or a test server that needs to make repeated auth requests, can opt out explicitly:
+
+```python
+from jvspatial.api import Server
+from jvspatial.api.config_groups import RateLimitConfig
+
+server = Server(
+    auth={"auth_enabled": True},
+    rate_limit=RateLimitConfig(auth_entrypoint_rate_limit_enabled=False),
+)
+```
+
+Keep the default in production unless the replacement limiter provides equivalent protection. In-memory counters are local to each worker; use a shared backend when the cap must apply across workers or hosts. See [security operational notes](security-operational-notes.md#in-memory-rate-limiting-and-auth-rate-helpers).
+
 ### Enable Rate Limiting
 
 ```python

@@ -82,6 +82,30 @@ assert isinstance(MyStatsdRecorder(), MetricsRecorder)
 All four carry the same standard labels as the log line:
 `backend`, `op`, `collection`, `success`.
 
+### Per-request operation counter
+
+`jvspatial.observability.db_op_counter` is a `ContextVar[int]` incremented by
+`ObservableDatabase` on every instrumented call. Use it in tests or middleware
+to assert logical DB operation counts:
+
+```python
+from jvspatial.observability import db_op_counter
+from jvspatial.db import create_database
+
+db = create_database("json", base_path="./data", observe=True)
+tok = db_op_counter.set(0)
+try:
+    await db.get("node", "n.1")
+    assert db_op_counter.get() == 1
+finally:
+    db_op_counter.reset(tok)
+```
+
+Instrumented operations include the core CRUD surface plus adapter-specific
+methods when wrapped: `traverse`, `find_connected_nodes`, and `find_iter`.
+Counts reflect API-level calls (including cache hits on `get`), not individual
+SQL statements.
+
 ### OpenTelemetry adapter
 
 Install the optional extra:
@@ -140,6 +164,10 @@ log forwarder will pick up.
 The cache layer (`CachingDatabase`) is automatically disabled in
 serverless mode because cold starts make a per-process cache useless;
 that's a `CachingDatabase` policy, not an observability one.
+
+See [serverless-mode.md](serverless-mode.md) § Caching in serverless for the
+distinction between `CachingDatabase` (disabled) and `GraphContext` /
+`LayeredCache` entity caches (not auto-disabled).
 
 ## See also
 

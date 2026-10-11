@@ -551,6 +551,19 @@ JVSPATIAL_REDIS_URL=redis://:${REDIS_PASSWORD}@redis.prod:6379/0
 JVSPATIAL_CACHE_SIZE=0
 ```
 
+## Serverless deployments
+
+jvspatial has **two cache layers** with different serverless behavior:
+
+| Layer | What it is | Serverless behavior |
+|-------|------------|---------------------|
+| **`CachingDatabase`** | Read-through wrapper from `create_database(cache_get_size=N)` | **Disabled** at runtime when `is_serverless_mode()` is true |
+| **Entity cache** | `GraphContext` + `jvspatial.cache` (`MemoryCache`, `LayeredCache`, Redis) | **Not** auto-disabled — L1 is cold each invocation |
+
+**Recommendations for Lambda / serverless:**
+- Set `cache_get_size=0` (or omit) so the DB wrapper skips cache overhead.
+- For cross-invocation warmth, configure `JVSPATIAL_CACHE_BACKEND=layered` with Redis — see [serverless-mode.md](serverless-mode.md) § Caching in serverless.
+
 ## Related Documentation
 
 - **[Environment Configuration](environment-configuration.md)**: Complete environment setup guide

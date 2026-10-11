@@ -1,6 +1,8 @@
 """Root node class for jvspatial graph."""
 
 import asyncio
+import threading
+import weakref
 from typing import Any, ClassVar, Optional, Type
 
 from typing_extensions import override
@@ -16,7 +18,18 @@ class Root(Node):
     """
 
     id: str = "n.Root.root"
-    _lock: ClassVar[asyncio.Lock] = asyncio.Lock()
+    _locks: ClassVar[weakref.WeakKeyDictionary] = weakref.WeakKeyDictionary()
+    _locks_guard: ClassVar[threading.Lock] = threading.Lock()
+
+    @classmethod
+    def _loop_lock(cls) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        with cls._locks_guard:
+            lock = cls._locks.get(loop)
+            if lock is None:
+                lock = asyncio.Lock()
+                cls._locks[loop] = lock
+            return lock
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize Root with fixed ID.
@@ -36,7 +49,7 @@ class Root(Node):
         Returns:
             Root instance
         """
-        async with cls._lock:
+        async with cls._loop_lock():
             id = "n.Root.root"
             from ..context import get_default_context
 
@@ -47,22 +60,17 @@ class Root(Node):
                 if not isinstance(context_data, dict):
                     context_data = {}
 
-                # Handle edge_ids from database format (stored as "edges" at top level)
-                edge_ids = node_data.get("edges", [])
-                if not isinstance(edge_ids, list):
-                    edge_ids = []
-
                 # Ensure we have a valid ID
                 node_id = node_data.get("id", id)
                 if node_id != "n.Root.root":
                     node_id = "n.Root.root"
 
-                root = cls(id=node_id, edge_ids=edge_ids, **context_data)
+                root = cls(id=node_id, **context_data)
                 root._graph_context = context
                 return root
 
             # Create new Root node if not found
-            node = cls(id=id, edge_ids=[], _visitor_ref=None)
+            node = cls(id=id, _visitor_ref=None)
             node._graph_context = context
             await node.save()
             existing = await context.database.get("node", id)

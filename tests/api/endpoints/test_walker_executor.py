@@ -157,13 +157,18 @@ class TestWalkerExecutor:
             executor.router.raise_error.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_execute_with_response_schema(self, executor):
+    async def test_execute_with_response_schema(self, executor, monkeypatch):
         """Test execution when response schema is defined."""
         walker = MockDirectExecutionWalker()
         walker_cls = MockDirectExecutionWalker
 
         # Mock response schema
-        walker_cls._jvspatial_endpoint_config = {"response": MagicMock()}
+        monkeypatch.setattr(
+            walker_cls,
+            "_jvspatial_endpoint_config",
+            {"response": MagicMock()},
+            raising=False,
+        )
 
         result = await executor.execute_walker(walker, walker_cls)
 

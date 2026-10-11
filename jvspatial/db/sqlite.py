@@ -12,12 +12,27 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+)
 
-from ._sqlite_translate import translate_query, translate_sort
-from .database import Database, finalize_find_results
+from ._sqlite_translate import (
+    translate_partial_filter_expression,
+    translate_query,
+    translate_sort,
+)
+from .database import Database, InsertIfAbsentResult, finalize_find_results
 from .query import QueryEngine
 
 logger = logging.getLogger(__name__)
@@ -144,11 +159,15 @@ class SQLiteDB(Database):
             and self.db_path_str != ":memory:"
         ):
             logger.debug(
-                "SQLiteDB rebinding to a new event loop; abandoning "
+                "SQLiteDB rebinding to a new event loop; closing "
                 "connection owned by %r and reconnecting on %r",
                 self._owning_loop,
                 current_loop,
             )
+            # The aiosqlite worker thread outlives its owning loop. Dropping
+            # the reference without closing it leaks that thread and can keep
+            # the interpreter alive after the test or server has stopped.
+            await self._connection.close()
             self._connection = None
             self._owning_loop = None
             self._initialized = False
@@ -196,6 +215,10 @@ class SQLiteDB(Database):
                 """
             )
             await self._connection.commit()
+            # Drop legacy global unique indexes on session_id before any
+            # writes — CREATE INDEX IF NOT EXISTS would leave them in place
+            # and Interaction rows sharing a Conversation session_id get wiped.
+            await self._repair_non_partial_unique_indexes(self._connection)
             self._initialized = True
 
         return self._connection
@@ -212,6 +235,116 @@ class SQLiteDB(Database):
         # Convert "context.user_id" to "$.context.user_id" for JSON extraction
         return f"$.{field_path}"
 
+    @staticmethod
+    def _is_non_partial_session_id_unique_index(sql: Optional[str]) -> bool:
+        """True for UNIQUE indexes on context.session_id with no WHERE clause."""
+        if not sql:
+            return False
+        lower = sql.lower()
+        if "unique" not in lower:
+            return False
+        if "where" in lower:
+            return False
+        return "json_extract(data, '$.context.session_id')" in lower
+
+    async def _repair_non_partial_unique_indexes(
+        self, connection: "Connection"
+    ) -> None:
+        """Drop global unique indexes on ``context.session_id`` that lack WHERE.
+
+        Pre-partial-filter SQLite builds created a blanket UNIQUE on
+        ``session_id`` for the whole ``node`` collection. Conversation and
+        Interaction share that field; ``INSERT OR REPLACE`` then deleted
+        Interaction rows whenever Conversation was saved. Dropping here
+        lets the next ``ensure_indexes(Conversation)`` recreate a partial
+        unique index.
+        """
+        cursor = await connection.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"
+        )
+        rows = await cursor.fetchall()
+        dropped = 0
+        for row in rows:
+            name = row[0]
+            sql = row[1]
+            if not self._is_non_partial_session_id_unique_index(sql):
+                continue
+            # Only drop indexes we (or prior jvspatial) named — avoid
+            # touching unrelated user indexes with similar SQL text.
+            if not str(name).startswith("idx_"):
+                continue
+            logger.warning(
+                "Dropping non-partial unique index '%s' on connect "
+                "(session_id uniqueness must be partial so Interaction "
+                "rows are not wiped). It will be recreated with WHERE on "
+                "the next Conversation ensure_indexes.",
+                name,
+            )
+            await connection.execute(f'DROP INDEX IF EXISTS "{name}"')
+            dropped += 1
+            for names in self._created_indexes.values():
+                names.discard(name)
+        if dropped:
+            await connection.commit()
+
+    @staticmethod
+    def _resolve_index_where(**kwargs: Any) -> Optional[str]:
+        """Resolve a CREATE INDEX WHERE clause from kwargs.
+
+        Rejects raw ``where=`` SQL and translates a Mongo-style partial
+        filter under any of the names
+        ``get_indexes()`` / annotations may emit. Returns ``None`` when
+        no partial filter was requested. Raises ``ValueError`` when a
+        partial filter is present but cannot be translated — never
+        silently demote a partial unique index to a global unique.
+        """
+        if kwargs.get("where"):
+            raise ValueError(
+                "Raw index predicates are unsupported; use a partial filter expression"
+            )
+
+        pfe = (
+            kwargs.get("index_partial_filter_expression")
+            or kwargs.get("partial_filter_expression")
+            or kwargs.get("partialFilterExpression")
+        )
+        if not pfe:
+            return None
+        translated = translate_partial_filter_expression(pfe)
+        if translated is None:
+            raise ValueError(
+                "SQLiteDB.create_index: cannot translate "
+                f"index_partial_filter_expression {pfe!r} to a "
+                "SQLite WHERE clause. Use a supported filter shape "
+                "(equality / $gt / $exists on safe field paths "
+                "with scalar values)."
+            )
+        return translated
+
+    @staticmethod
+    def _index_needs_partial_repair(
+        existing_sql: Optional[str], where_sql: Optional[str]
+    ) -> bool:
+        """Return True when an on-disk index must be dropped and rebuilt.
+
+        A global unique index created before partial-filter support will
+        lack a WHERE clause; ``CREATE INDEX IF NOT EXISTS`` would leave
+        it in place and keep wiping colliding rows (Conversation vs
+        Interaction ``session_id``).
+        """
+        if not where_sql:
+            return False
+        if not existing_sql:
+            return False
+        lower = existing_sql.lower()
+        if "where" not in lower:
+            return True
+        # Require each AND-ed predicate from the desired WHERE to appear
+        # (SQLite stores CREATE INDEX SQL as we wrote it).
+        return any(
+            part.strip() not in existing_sql for part in where_sql.split(" AND ")
+        )
+
     async def create_index(
         self,
         collection: str,
@@ -225,11 +358,16 @@ class SQLiteDB(Database):
             collection: Collection name
             field_or_fields: Single field name (str) or list of (field_name, direction) tuples for compound indexes
             unique: Whether the index should enforce uniqueness
-            **kwargs: Additional options (ignored for SQLite)
+            **kwargs: Partial-filter options (``partialFilterExpression``,
+                ``partial_filter_expression``, or
+                ``index_partial_filter_expression``). Raw ``where=`` SQL is
+                rejected. Same Mongo dialect as PostgresDB.create_index.
 
         Note:
             SQLite indexes on nested JSON fields use json_extract() function.
             Direction parameter is ignored for SQLite (always ascending).
+            When a partial filter is required and an older non-partial
+            index of the same name exists, it is dropped and recreated.
         """
         connection = await self._get_connection()
 
@@ -248,9 +386,44 @@ class SQLiteDB(Database):
             field_names = "_".join(field.replace(".", "_") for field, _ in fields)
             index_name = f"idx_{collection}_{field_names}"
 
-        # Check if index already exists
+        safe_segment = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+        if not safe_segment.fullmatch(collection) or any(
+            not all(safe_segment.fullmatch(seg) for seg in field.split("."))
+            for field, _ in fields
+        ):
+            raise ValueError("Unsafe index collection or field path")
+
+        where_sql = self._resolve_index_where(**kwargs)
+
+        # Inspect on-disk definition so a prior global unique index can
+        # be repaired after upgrading to partial-filter support.
+        cursor = await connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
+            (index_name,),
+        )
+        row = await cursor.fetchone()
+        existing_sql = row[0] if row else None
+
+        if self._index_needs_partial_repair(existing_sql, where_sql):
+            logger.info(
+                "Dropping non-partial index '%s' so it can be recreated "
+                "with WHERE %s",
+                index_name,
+                where_sql,
+            )
+            await connection.execute(f"DROP INDEX IF EXISTS {index_name}")
+            await connection.commit()
+            self._created_indexes[collection].discard(index_name)
+            existing_sql = None
+
+        # Check if index already exists (in-process or on disk, correct form)
         if index_name in self._created_indexes[collection]:
-            return  # Index already created
+            return
+        if existing_sql is not None and not self._index_needs_partial_repair(
+            existing_sql, where_sql
+        ):
+            self._created_indexes[collection].add(index_name)
+            return
 
         # Build SQLite index creation statement
         # For nested fields, use json_extract() to extract values from JSON
@@ -261,15 +434,15 @@ class SQLiteDB(Database):
 
         index_columns = ", ".join(index_expressions)
         unique_clause = "UNIQUE" if unique else ""
+        where_clause = f" WHERE {where_sql}" if where_sql else ""
 
         try:
-            # Create index on the records table
-            # Include collection in the index to support efficient filtering
-            # SQLite doesn't support parameterized WHERE clauses in CREATE INDEX,
-            # so we include collection as the first column
+            # Include collection in the index to support efficient filtering.
+            # Partial filters become a SQLite partial index WHERE clause so
+            # uniqueness is scoped the same way as Mongo/Postgres.
             sql = f"""
             CREATE {unique_clause} INDEX IF NOT EXISTS {index_name}
-            ON records (collection, {index_columns})
+            ON records (collection, {index_columns}){where_clause}
             """
 
             await connection.execute(sql)
@@ -280,13 +453,14 @@ class SQLiteDB(Database):
 
             logger.debug(
                 f"Created index '{index_name}' on collection '{collection}' "
-                f"(unique={unique}, fields={[f[0] for f in fields]})"
+                f"(unique={unique}, fields={[f[0] for f in fields]}"
+                f"{', partial' if where_sql else ''})"
             )
 
         except Exception as e:
-            logger.warning(
-                f"Failed to create index '{index_name}' on collection '{collection}': {e}"
-            )
+            raise RuntimeError(
+                f"Failed to create index '{index_name}' on collection '{collection}'"
+            ) from e
 
     async def close(self) -> None:
         """Close the underlying SQLite connection.
@@ -333,6 +507,52 @@ class SQLiteDB(Database):
             )
             await connection.commit()
             return record
+
+    async def insert_if_absent(
+        self,
+        collection: str,
+        data: Dict[str, Any],
+        *,
+        conflict_target: str = "id",
+    ) -> InsertIfAbsentResult:
+        """Insert only when ``id`` is absent. Never ``INSERT OR REPLACE``.
+
+        Uses ``INSERT OR IGNORE`` so primary-key (and other unique) conflicts
+        leave existing rows untouched. On ignore with an existing same-id
+        row, returns that stored record with ``created=False``.
+        """
+        record_id = self._validate_insert_if_absent(data, conflict_target)
+        async with self._lock:
+            connection = await self._get_connection()
+            record = data.copy()
+            record["id"] = record_id
+            payload = json.dumps(record)
+            cursor = await connection.execute(
+                """
+                INSERT OR IGNORE INTO records (collection, id, data)
+                VALUES (?, ?, ?)
+                """,
+                (collection, record_id, payload),
+            )
+            await connection.commit()
+            if cursor.rowcount and cursor.rowcount > 0:
+                return InsertIfAbsentResult(record=record, created=True)
+            # Conflict (or ignore for another unique constraint): load by id.
+            sel = await connection.execute(
+                "SELECT data FROM records WHERE collection = ? AND id = ?",
+                (collection, record_id),
+            )
+            row = await sel.fetchone()
+            await sel.close()
+            if row is None:
+                from jvspatial.db.database import DatabaseError
+
+                raise DatabaseError(
+                    "insert_if_absent ignored a constraint conflict but no "
+                    f"row with id={record_id!r} exists in collection "
+                    f"{collection!r}"
+                )
+            return InsertIfAbsentResult(record=json.loads(row["data"]), created=False)
 
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a record from the database.
@@ -470,6 +690,12 @@ class SQLiteDB(Database):
             serialized.
         """
         connection = await self._get_connection()
+        # An empty sort spec is "no ordering requested", same as None. Without
+        # this the ``sort is None`` guard below fails and an empty list takes
+        # the untranslatable-sort branch: full-collection load, LIMIT applied
+        # only in memory.
+        if not sort:
+            sort = None
         translated = translate_query(query) if query else ("", [])
 
         if translated is not None:
@@ -563,6 +789,201 @@ class SQLiteDB(Database):
         # Untranslatable: legacy fallback.
         rows = await self.find(collection, q)
         return len(rows)
+
+    # ---- single-hop neighbour pushdown -------------------------------------
+
+    def _connected_nodes_sql(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        start_id: str,
+        *,
+        direction: str = "out",
+        edge_entities: Optional[Sequence[str]] = None,
+        node_entities: Optional[Sequence[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        limit: Optional[int] = None,
+        count: bool = False,
+    ) -> Tuple[str, List[Any]]:
+        """Single-hop neighbour SQL over ``records`` (see ``PostgresDB``).
+
+        Join for one edge type in one direction, ``id IN (...)`` semi-join
+        otherwise (one row per neighbour). Positional ``?`` parameters follow
+        the SQL text, so predicates repeated across ``UNION ALL`` branches
+        repeat their parameters.
+
+        Raises:
+            ValueError: ``direction`` not in ``{"out", "in", "both"}``.
+            NotImplementedError: a query or the sort does not translate.
+        """
+        if direction not in ("out", "in", "both"):
+            raise ValueError(
+                f"direction must be 'out', 'in' or 'both', got {direction!r}"
+            )
+
+        def entity_clause(
+            table: str, entities: Optional[Sequence[str]]
+        ) -> Tuple[str, List[Any]]:
+            if entities is None:
+                return "", []
+            if not entities:
+                return " AND 0", []
+            marks = ",".join("?" * len(entities))
+            return (
+                f" AND json_extract({table}.data, '$.entity') IN ({marks})",
+                list(entities),
+            )
+
+        def query_clause(
+            table: str, query: Optional[Dict[str, Any]]
+        ) -> Tuple[str, List[Any]]:
+            if not query:
+                return "", []
+            translated = translate_query(query, table=table)
+            if translated is None:
+                raise NotImplementedError(
+                    f"find_connected_nodes: {table}-side filter does not "
+                    f"translate to SQL: {query!r}"
+                )
+            sql, params = translated
+            return (f" AND ({sql})", list(params)) if sql else ("", [])
+
+        edge_type_sql, edge_type_params = entity_clause("e", edge_entities)
+        edge_q_sql, edge_q_params = query_clause("e", edge_query)
+        edge_pred, edge_params = (
+            edge_type_sql + edge_q_sql,
+            edge_type_params + edge_q_params,
+        )
+        node_type_sql, node_type_params = entity_clause("n", node_entities)
+        node_q_sql, node_q_params = query_clause("n", node_query)
+        node_pred, node_params = (
+            node_type_sql + node_q_sql,
+            node_type_params + node_q_params,
+        )
+
+        ends = {
+            "out": [("source", "target")],
+            "in": [("target", "source")],
+            "both": [("source", "target"), ("target", "source")],
+        }[direction]
+        params: List[Any] = []
+        if (
+            direction != "both"
+            and edge_entities is not None
+            and len(edge_entities) == 1
+        ):
+            near, far = ends[0]
+            inner = (
+                "SELECT n.id AS id, n.data AS data FROM records e "
+                f"JOIN records n ON n.collection = ? "
+                f"AND n.id = json_extract(e.data, '$.{far}') "
+                f"WHERE e.collection = ? AND json_extract(e.data, '$.{near}') = ?"
+                f"{edge_pred}{node_pred}"
+            )
+            params += [node_collection, edge_collection, start_id]
+            params += edge_params + node_params
+        else:
+            far_ids = " UNION ALL ".join(
+                f"SELECT json_extract(e.data, '$.{far}') FROM records e "
+                f"WHERE e.collection = ? AND json_extract(e.data, '$.{near}') = ?"
+                f"{edge_pred}"
+                for near, far in ends
+            )
+            inner = (
+                "SELECT n.id AS id, n.data AS data FROM records n "
+                f"WHERE n.collection = ? AND n.id IN ({far_ids}){node_pred}"
+            )
+            params.append(node_collection)
+            for _ in ends:
+                params += [edge_collection, start_id, *edge_params]
+            params += node_params
+
+        if count:
+            return f"SELECT COUNT(*) FROM ({inner}) sub", params
+        order_sql = ""
+        if sort:
+            sort_sql = translate_sort(sort, table="sub")
+            if sort_sql is None:
+                raise NotImplementedError(
+                    f"find_connected_nodes: sort does not translate: {sort!r}"
+                )
+            order_sql = f" ORDER BY {sort_sql}, sub.id ASC"
+        limit_sql = ""
+        if limit is not None:
+            limit_sql = " LIMIT ?"
+            params.append(int(limit))
+        return (
+            f"SELECT sub.data AS data FROM ({inner}) sub{order_sql}{limit_sql}",
+            params,
+        )
+
+    async def find_connected_nodes(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        start_id: str,
+        *,
+        direction: str = "out",
+        edge_entity: Optional[str] = None,
+        edge_entities: Optional[Sequence[str]] = None,
+        node_entities: Optional[Sequence[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Single-hop neighbours in one query (same contract as ``PostgresDB``)."""
+        if edge_entities is None and edge_entity is not None:
+            edge_entities = [edge_entity]
+        sql, params = self._connected_nodes_sql(
+            node_collection,
+            edge_collection,
+            start_id,
+            direction=direction,
+            edge_entities=edge_entities,
+            node_entities=node_entities,
+            edge_query=edge_query,
+            node_query=node_query,
+            sort=sort,
+            limit=limit,
+        )
+        connection = await self._get_connection()
+        cursor = await connection.execute(sql, tuple(params))
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return [json.loads(row["data"]) for row in rows]
+
+    async def count_connected_nodes(
+        self,
+        node_collection: str,
+        edge_collection: str,
+        start_id: str,
+        *,
+        direction: str = "out",
+        edge_entities: Optional[Sequence[str]] = None,
+        node_entities: Optional[Sequence[str]] = None,
+        edge_query: Optional[Dict[str, Any]] = None,
+        node_query: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Count of the neighbours :meth:`find_connected_nodes` would return."""
+        sql, params = self._connected_nodes_sql(
+            node_collection,
+            edge_collection,
+            start_id,
+            direction=direction,
+            edge_entities=edge_entities,
+            node_entities=node_entities,
+            edge_query=edge_query,
+            node_query=node_query,
+            count=True,
+        )
+        connection = await self._get_connection()
+        cursor = await connection.execute(sql, tuple(params))
+        row = await cursor.fetchone()
+        await cursor.close()
+        return int(row[0]) if row else 0
 
     # Context manager helpers for convenience
     async def __aenter__(self) -> "SQLiteDB":

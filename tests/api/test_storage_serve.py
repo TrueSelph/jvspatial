@@ -90,7 +90,7 @@ async def test_openapi_files_delete_has_security_when_get_is_public(monkeypatch)
     base = Path(tempfile.mkdtemp(prefix=f"jvsp_openapi_{tid}_"))
     root = base / "vault"
     db_path = base / f"db_{tid}"
-    monkeypatch.delenv("JVSPATIAL_FILES_PUBLIC_READ", raising=False)
+    monkeypatch.setenv("JVSPATIAL_FILES_PUBLIC_READ", "true")
     try:
         server = Server(
             title="files-openapi-security",
@@ -121,8 +121,8 @@ async def test_openapi_files_delete_has_security_when_get_is_public(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_get_files_open_by_default_when_auth_enabled(monkeypatch):
-    """Default JVSPATIAL_FILES_PUBLIC_READ: anonymous GET allowed when auth middleware is on."""
+async def test_get_files_private_by_default_when_auth_enabled(monkeypatch):
+    """Anonymous GET is denied when auth is enabled by default."""
     tid = uuid.uuid4().hex[:8]
     base = Path(tempfile.mkdtemp(prefix=f"jvsp_files_open_{tid}_"))
     root = base / "vault"
@@ -153,8 +153,7 @@ async def test_get_files_open_by_default_when_auth_enabled(monkeypatch):
         url = f"{APIRoutes.FILES_ROOT}/smoke/hello.txt"
         with TestClient(app) as client:
             r = client.get(url)
-        assert r.status_code == 200
-        assert r.content == b"open-bytes"
+        assert r.status_code == 401
     finally:
         shutil.rmtree(base, ignore_errors=True)
 
@@ -241,7 +240,7 @@ async def test_delete_files_requires_auth_when_get_is_public(monkeypatch):
     base = Path(tempfile.mkdtemp(prefix=f"jvsp_files_del_auth_{tid}_"))
     root = base / "vault"
     db_path = base / f"db_{tid}"
-    monkeypatch.delenv("JVSPATIAL_FILES_PUBLIC_READ", raising=False)
+    monkeypatch.setenv("JVSPATIAL_FILES_PUBLIC_READ", "true")
     try:
         server = Server(
             title="files-delete-auth-test",

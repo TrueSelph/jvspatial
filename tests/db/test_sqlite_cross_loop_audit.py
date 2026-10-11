@@ -9,6 +9,7 @@ transparently rebinds to the current loop instead.
 
 import asyncio
 import tempfile
+from unittest.mock import patch
 
 import pytest
 
@@ -35,6 +36,8 @@ def test_cross_loop_reuse_auto_rebinds():
             await db.save("widgets", {"id": "w1", "qty": 1})
 
         asyncio.run(first())
+        old_connection = db._connection
+        assert old_connection is not None
 
         async def second() -> None:
             # Auto-rebind on a new loop — no error.
@@ -43,7 +46,9 @@ def test_cross_loop_reuse_auto_rebinds():
             assert got is not None
             await db.close()
 
-        asyncio.run(second())
+        with patch.object(old_connection, "close", wraps=old_connection.close) as close:
+            asyncio.run(second())
+            close.assert_awaited_once()
 
 
 def test_owning_loop_tracked():

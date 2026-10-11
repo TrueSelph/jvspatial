@@ -45,7 +45,11 @@ def make_graph_expand_handler(
         cursor: int = Query(  # noqa: B008
             default=0,
             ge=0,
-            description="Offset into the node's edge-id list",
+            description="Offset into the node's id-sorted incident edges",
+        ),
+        after: str = Query(  # noqa: B008
+            default="",
+            description="Keyset cursor: pagination.next_after from the previous page (overrides cursor)",
         ),
         detail_level: str = Query(  # noqa: B008
             default="full",
@@ -60,13 +64,12 @@ def make_graph_expand_handler(
                 direction=direction,
                 limit=limit,
                 cursor=cursor,
+                after=after or None,
                 detail_level=detail_level,
             )
         except Exception as e:
             logger.exception("graph expand failed")
-            raise HTTPException(
-                status_code=500, detail=f"Graph expand failed: {e}"
-            ) from e
+            raise HTTPException(status_code=500, detail="Internal server error") from e
         tag = weak_etag_for_payload(payload)
         return JSONResponse(
             content=payload,
@@ -106,9 +109,7 @@ def make_graph_subgraph_handler(
             )
         except Exception as e:
             logger.exception("graph subgraph failed")
-            raise HTTPException(
-                status_code=500, detail=f"Graph subgraph failed: {e}"
-            ) from e
+            raise HTTPException(status_code=500, detail="Internal server error") from e
         tag = weak_etag_for_payload(payload)
         return JSONResponse(
             content=payload,

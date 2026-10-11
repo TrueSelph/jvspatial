@@ -7,6 +7,472 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-03
+
+### Fixed
+
+- PostgreSQL compound, base, vector, and tenant-policy names now fit its 63-byte identifier limit. Long names keep deterministic digests and their suffix, so indexes are created instead of silently skipped at startup.
+- Concurrent first use of a PostgreSQL collection now serializes schema bootstrap across database instances and workers, avoiding races while creating the shared table and base indexes.
+
+## [0.1.0] - 2026-09-27
+
+### Security
+
+- OAuth RS256 signing keys can be encrypted at rest with `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY`. Existing plaintext keys rewrap on first load; encrypted keys fail closed when the key is missing or wrong. Production OAuth hosts must configure and retain the key.
+
+- In-memory `$regex` queries now have a per-candidate execution timeout, preventing short catastrophic-backtracking patterns from monopolizing the server. Raw FastAPI route auth detection now requires an enforcing security dependency; dependency names no longer bypass framework auth.
+- Webhook idempotency now atomically reserves a key before invoking the handler and persists the response for replay. In-flight or uncertain outcomes return 409; persistence failures return 503 and require reconciliation before retry.
+- JWT validation now rejects user lookup failures and uses current database roles and permissions. Logout invalidates the access token and its bound refresh token; token revocation failures are surfaced. Public registration never grants admin access. Auth entry points have per-IP rate limits, generic account-state errors, and a 12-character password minimum.
+- Signed GET webhooks require HMAC. Webhook routes default to POST, API-key scopes match path segments, expired cached keys are rejected, and idempotency lookup errors fail closed. Webhook handlers finish within the request; durable asynchronous work must use an external queue.
+- JsonDB record paths and local storage version IDs are confined to their roots. SQL index field paths are validated and raw `where=` predicates are rejected. Graph deletion, walker errors, DynamoDB bulk writes, and deferred operations now report failures instead of success.
+- **BREAKING:** Direct file reads require authentication by default when auth is enabled. Set `JVSPATIAL_FILES_PUBLIC_READ=true` only when intentional.
+- **BREAKING:** `JVSPATIAL_ENVIRONMENT=production` unpublishes `/docs`, `/redoc`, and `/openapi.json` by default. Set `JVSPATIAL_DOCS_DISABLED=false` for an explicit override.
+- **BREAKING:** Deferred invoke requires a secret even on loopback. Set `JVSPATIAL_DEFERRED_INVOKE_ALLOW_LOOPBACK=true` only for Lambda Web Adapter self-invoke.
+- **BREAKING:** The in-process scheduler requires a running server event loop and runs coroutine jobs on that loop. Jobs started outside an event loop must use a configured external scheduler.
+- Hosts with their own trusted auth limiter or test suites can explicitly set `rate_limit.auth_entrypoint_rate_limit_enabled=False`; the 5/60s cap remains on by default. Declared private helper methods can be replaced on entity instances, while undeclared underscore attributes remain rejected.
+- Authenticated mounted ASGI apps and raw FastAPI routes without jvspatial endpoint metadata remain reachable. Metadata lookup errors still deny access, and `/status`, `/logs`, and `/graph` retain enforced admin roles.
+
+### Changed
+
+- `AGENTS.md` is now the canonical agent guide. Its former `CLAUDE.md` content has been consolidated there; `CLAUDE.md` is removed.
+- The deprecated `generate_id_async` alias remains available in 0.1.0; its removal target is 0.2.0.
+
+### Fixed
+
+- PostgreSQL `$exists` treats JSON `null` like the in-memory query engine, fixing queries for absent or null nested values.
+- File-backed SQLite closes the old `aiosqlite` connection when rebinding across event loops, preventing a leaked worker thread from keeping the process alive.
+- Graph transactions isolate their request identity map and invalidate touched parent cache entries after commit or rollback. Index setup is cached per database instance so a second store receives its own indexes.
+- Tests restore mocked walker metadata, bind their own graph context, and enter the test client's lifespan before traversing Root, removing order-dependent suite failures.
+
+## [0.0.22] - 2026-09-26
+
+### Added
+
+- **`graph_transaction`.** Opens the backend transaction, binds a
+  `GraphContext` to that handle, and makes it the task-local default so
+  `Node.create` / `Node.connect` participate. Success commits; any
+  exception rolls back. Stores without begin/commit/rollback raise
+  `TransactionUnavailable`. `async_transaction_context` is now an alias —
+  the old helper opened a transaction but kept writing through the pool.
+
+## [0.0.21] - 2026-09-19
+
+### Added
+
+- **`PostgresTransaction.find_one_and_update`.** Public compare-and-set on the
+  held asyncpg connection (`SELECT … FOR UPDATE` + upsert) so CAS and
+  `insert_if_absent` share one transaction handle. Enables atomic work-kernel
+  transition + outbox units without private `_connection` access.
+
+## [0.0.20] - 2026-09-18
+
+### Added
+
+- **`Database.insert_if_absent` / `Object.create_if_absent`.** Atomic
+  insert-if-absent on primary key `id` across SQLite (`INSERT OR IGNORE`),
+  Postgres (`ON CONFLICT DO NOTHING RETURNING`), MongoDB (`insert_one` +
+  `DuplicateKeyError`), JsonDB (path lock), and DynamoDB
+  (`attribute_not_exists(id)`). Returns `InsertIfAbsentResult(record, created)`
+  / `(entity, created)` without calling through upsert `save()`. Wrappers
+  (`CachingDatabase`, `ObservableDatabase`) forward correctly.
+  `DeferredSaveMixin.flush()` runs only when `created=True`.
+
+## [0.0.19] - 2026-09-14
+
+### Removed
+
+- **Persist-mode node adjacency.** The edge collection is the only source of
+  truth on every backend (including JsonDB and DynamoDB). Deleted:
+  `Database.edge_ids_mode`, `resolve_edge_ids_mode`, `JVSPATIAL_NODE_EDGE_IDS`,
+  `GraphContext.persists_edge_ids`, `atomic_add_edge_id` /
+  `atomic_remove_edge_id`, `PostgresDB.save_with_edge_merge`,
+  `Node.edge_ids`, and `Node.export(include_edges=…)`. `connect()` /
+  `disconnect()` / `save()` never rewrite or row-lock a node for adjacency.
+  Legacy `edges` arrays are still ignored on read, dropped on the next
+  `save()`, and reclaimable with `jvspatial migrate strip-node-edges`
+  (`strip_node_edges()` on Postgres / MongoDB / JsonDB).
+
+## [0.0.18] - 2026-09-13
+
+### Added
+
+- **Hub-node scale recorder** (`tests/benchmarks/test_hub_node_bench.py`,
+  `tests/benchmarks/hub_bench_report.py`). Seeds a Postgres hub with 1k / 10k /
+  100k edges and records p50/p95 latency, DB round trips and on-disk sizes
+  for `connect()`, `save()`, neighbour listings, the `len(nodes())` count
+  pattern and 32-way concurrent `connect()`. Opt-in via `-m bench`
+  (`bench_slow` for 100k). Baseline and per-change results:
+  `docs/bench/2026-09-hub-node-baseline.md`.
+- **Node adjacency mode API** (`jvspatial/db/database.py`,
+  `jvspatial/core/context.py`): `Database.edge_ids_mode` capability flag,
+  `resolve_edge_ids_mode(db)`, `GraphContext.persists_edge_ids()`,
+  `Node.edges(limit=...)`, `strip_node_edges()` on `PostgresDB` / `MongoDB`,
+  and the `jvspatial migrate strip-node-edges` CLI (dry run by default,
+  `--apply` to write).
+- **Neighbour counts and pages in the database** (`jvspatial/core/entities/node.py`):
+  `Node.count_nodes(...)` (one `COUNT` round trip — use it instead of
+  `len(await n.nodes(...))`), `Node.nodes_page(sort=..., cursor=..., limit=...)`
+  (keyset-paginated neighbours, cursor encoding shared with
+  `GraphContext.find_page` via `jvspatial.core.pager`), and
+  `nodes_bulk(limit_per_source=...)` (one windowed query on Postgres).
+  `count_neighbors` now delegates to `count_nodes`.
+- **`$text` full-text search** (`jvspatial/db/_postgres_translate.py`,
+  `jvspatial/db/query.py`): `{"$text": {"$search": "...", "$fields": [...]}}`
+  becomes `to_tsvector('simple', …) @@ plainto_tsquery('simple', …)` on
+  Postgres, backed by a GIN index declared with `@fulltext_index([...])` or
+  `attribute(fulltext=True)`; other backends evaluate the same semantics in
+  memory. Previously `$text` fell back to a full scan and raised in memory.
+- **`jvspatial.db.escape_regex()`** for building literal `$regex` patterns
+  from user input (`$regex` is never index-backed).
+- **`find_edges_between(limit=...)`** pushes the limit to the database.
+- **`JVSPATIAL_POSTGRES_COMMAND_TIMEOUT`** sets `PostgresDB`'s per-statement
+  timeout (default 60 s); the postgres guide gains a pool-sizing rule of thumb
+  and transaction-pooler notes for tenant scoping.
+- **`gin_index="off"` / `JVSPATIAL_PG_GIN_INDEX=off`** skips the
+  whole-document `GIN (data jsonb_path_ops)` on new Postgres collections.
+- **`expand_node` keyset paging** (`jvspatial/core/graph_expansion.py`):
+  `after=` / `pagination.next_after` (and the `after` query parameter on the
+  graph expand endpoint) page incident edges by edge id in O(page). The
+  integer `cursor` offset keeps working.
+
+### Changed
+
+- **Postgres, MongoDB and SQLite no longer persist node adjacency on node
+  rows** (`edge_ids_mode="derive"`). The indexed edge collection is the only
+  source of truth: `connect()`, `disconnect()` and `save()` never rewrite or
+  row-lock a node, so their cost no longer grows with the node's degree and
+  concurrent connects to one hub no longer serialise. `Node.edges()`,
+  `connection_count()`, cascade delete, `expand_node` and `subgraph_bfs` read
+  the edge collection; `Node.edge_ids` stays an empty in-memory list. Legacy
+  `edges` arrays on existing rows are ignored on read and dropped on the next
+  save — run `jvspatial migrate strip-node-edges --dsn … --apply` (safe
+  online) to reclaim the space at once. JsonDB and DynamoDB keep `"persist"`.
+  Opt out with `JVSPATIAL_NODE_EDGE_IDS=persist` or
+  `db.edge_ids_mode = "persist"`.
+- **`Node.nodes()` pushes every filter shape to the database.** The list
+  form (`edge=[E], node=["Leaf"]`), strings, subclass-inclusive node classes,
+  `{Name: criteria}` dicts and property kwargs all become one
+  `find_connected_nodes` round trip on Postgres, MongoDB and SQLite, with
+  `limit` pushed down; `direction="both"` included. Previously only the class
+  form took the join and everything else loaded every incident edge and
+  hydrated every neighbour before slicing in Python. Backends without the
+  pushdown keep the Python path, now filtering in the database `find`.
+- **Postgres per-class indexes are `entity`-leading** (`PostgresDB.create_index`,
+  `GraphContext.ensure_indexes`). Indexes declared with
+  `attribute(indexed=True)` / `@compound_index` become `(entity, <fields>)`
+  (`<col>_entity_<fields>_idx`, shared by classes declaring the same fields),
+  or `WHERE entity = '<Class>'` with `index_partial_by_entity=True` /
+  `partial_by_entity=True`; the unscoped pre-0.0.18 index of the same fields
+  is dropped once its replacement exists. Descending keys are now
+  `DESC NULLS LAST` so sorted + limited finds walk the index, and `entity` /
+  `id` / `tenant_id` are indexed as the real columns the translator compares
+  (the edge `(source, target, entity)` unique index previously indexed
+  `data->entity`, which no query used). Indexes built by the old rules are
+  rebuilt in place on the next `ensure_indexes`.
+- **`expand_node` / `subgraph_bfs` source incident edges from the edge
+  collection** in every mode (one query per node instead of one `get` per
+  edge id); `total_edge_count` is a count of incident edges, and neighbours
+  are fetched with a single `find_many`.
+
+### Fixed
+
+- **List-form edge filters were dropped by `Node.nodes()`**
+  (`jvspatial/core/entities/node.py`). `nodes(edge=[E])`, `edge=["E"]` and
+  `edge=[{"E": {...}}]` returned neighbours reached through *any* edge type,
+  and `direction="both"` capped at 10 000 edges. Edge types and criteria are
+  now always applied.
+- **Several Postgres paths ignored `PostgresDB.tenant(...)`**
+  (`jvspatial/db/postgres.py`). `traverse`, `find_one_and_update`,
+  `find_one_and_delete` and `bulk_save_detailed` took a raw pool connection
+  without the `app.tenant_id` GUC, so under `enable_rls` they saw nothing
+  (atomic ops returned `None`, `traverse` returned no hops) and the COPY path
+  failed the policy's `WITH CHECK` before falling back to per-record saves.
+  They now run on the tenant-scoped connection like every other operation.
+- **`observe=True` / caching wrappers turned `bulk_save_detailed` into one
+  round trip per record** (`jvspatial/db/_observable.py`,
+  `jvspatial/db/_cache.py`). Both wrappers subclass `Database`, whose default
+  `bulk_save_detailed` is a serial `save` loop; it shadowed `__getattr__`
+  forwarding, so a wrapped Postgres `COPY` (or Mongo `bulk_write`) never ran.
+  Both now forward to the backend (the cache also refreshes saved ids).
+- **`ObservableDatabase` advertised graph pushdowns its backend lacks**
+  (`jvspatial/db/_observable.py`). `find_connected_nodes` / `traverse` were
+  plain methods, so `getattr(db, "find_connected_nodes", None)` looked
+  callable over JsonDB and the call then raised. They now exist on the
+  wrapper only when the wrapped adapter implements them.
+- **`$pull` was ignored by `QueryEngine.apply_update`** (`jvspatial/db/query.py`).
+  Backends that apply updates in Python — Postgres `find_one_and_update`,
+  and the JsonDB / SQLite / DynamoDB defaults — silently skipped it, so on
+  Postgres in persist mode `disconnect()`, edge deletion and cascade delete
+  left stale edge ids on node rows (and `connection_count()` over-reported).
+
+- **`JVSPATIAL_WEBHOOK_API_KEY_REQUIRE_HTTPS` was allowlist-rejected**
+  (`jvspatial/env_adapter.py`). The key was never in `ALLOWED_ENV_KEYS`, so
+  startup warned that it was ignored and
+  `server_config_overrides_from_env()` never mapped it onto
+  `WebhookConfig.webhook_api_key_require_https`. Local HTTP callback tunnels
+  (ngrok → plain `http://127.0.0.1`) could not disable the query-param HTTPS
+  gate via env alone. Also maps `JVSPATIAL_WEBHOOK_HTTPS_REQUIRED` into
+  `WebhookConfig.webhook_https_required` for the same ServerConfig path.
+
+### Changed
+
+- **`uvicorn` is capped below 1.0** (`pyproject.toml`). It was floor-only
+  (`>=0.23.0`), and jvspatial is the package that actually drives it —
+  `api/server_run.py` calls `uvicorn.run` with a config dict, so a major
+  release is free to rename or drop the kwargs passed there. In practice the
+  open spec let a resolver move an existing environment from 0.44 to 0.52
+  between two installs of the same commit, silently. The cap keeps resolution
+  inside a range that has been tested without pinning consumers to an exact
+  version.
+
+## [0.0.17] - 2026-08-05
+
+### Fixed
+
+- **`DatabaseConfig` ignored values passed by field name** (`jvspatial/api/config_groups.py`).
+  Its aliased fields (`dynamodb_*`, `postgres_*`) carry a `validation_alias`, and a
+  pydantic v2 model accepts an aliased field *only* by its alias unless it opts into
+  `populate_by_name` — which `AuthConfig` does and `DatabaseConfig` did not. So every
+  such value passed by field name was silently discarded: both
+  `server_config_overrides_from_env()`, which keys its database group by field name,
+  and embedding hosts constructing a `DatabaseConfig` directly. Nothing raised,
+  because the adapters then read the same settings from env themselves — the
+  configuration object was simply never the source of truth it appeared to be.
+  DynamoDB was affected the whole time; Postgres inherited it in 0.0.16. Coverage:
+  `tests/api/test_database_config_population.py`.
+
+## [0.0.16] - 2026-08-04
+
+### Added
+
+- **Postgres is selectable from `Server`** (`jvspatial/api/components/database_configurator.py`).
+  `initialize_graph_context()` now builds a `PostgresDB` prime database for
+  `db_type="postgres"` (alias `"postgresql"`) instead of raising
+  `ValueError: Unsupported database type: postgres`. The backend and
+  `create_database("postgres", ...)` already worked; only the `Server` path
+  was missing, so every API-layer deployment — and anything built on it — was
+  locked out of a documented backend.
+
+- **`ServerConfig.database` carries Postgres settings** (`jvspatial/api/config_groups.py`,
+  `jvspatial/env_adapter.py`) — `postgres_dsn`, `postgres_min_pool_size`,
+  `postgres_max_pool_size`, `postgres_pooler_mode`, populated from the
+  already-allowlisted `JVSPATIAL_POSTGRES_*` env keys. Connection settings now
+  flow through the config object like every other backend's rather than being
+  readable only by the driver. Unset values still defer to `PostgresDB`'s own
+  defaults. Coverage: `tests/test_env_adapter_postgres.py`,
+  `tests/api/components/test_database_configurator.py`.
+
+- **`resolve_sort_value(record, field)`** (`jvspatial/db/database.py`) — the
+  dotted-path resolution `finalize_find_results` uses, exported so adapters and
+  cursor logic resolve a sort field the same way. Added to the module's
+  `__all__`.
+
+- **Deferred-task exception hierarchy** (`jvspatial/exceptions.py`) —
+  `DeferredTaskError` → `TaskDispatchError` → `TaskSchedulerNotConfiguredError`,
+  replacing the bare `RuntimeError`s raised by strict dispatch. A strict caller
+  can now tell "retrying may succeed" (`TaskDispatchError`) from "this
+  deployment will never dispatch" (`TaskSchedulerNotConfiguredError`).
+  `DeferredTaskError` also derives from `RuntimeError`, so handlers written
+  against the previous behavior keep working.
+
+### Fixed
+
+- **`PostgresDB` pool is event-loop aware** (`jvspatial/db/postgres.py`). The
+  `asyncpg` pool and its lock bind to the loop that created them, but
+  `_ensure_pool()` memoized both for the lifetime of the instance. A host that
+  bootstrapped in one `asyncio.run()` and then served from a second loop hit
+  `cannot perform operation: another operation is in progress` /
+  `ConnectionDoesNotExistError` on its first query. The pool and lock are now
+  rebuilt when the running loop changes. Coverage:
+  `tests/db/test_postgres_unit.py::TestPoolLoopAffinity`.
+
+- **Partial-index repair log is INFO, not WARNING** (`jvspatial/db/sqlite.py`).
+  Dropping a non-partial index so it can be recreated with `WHERE` is expected
+  one-shot migration noise; log at info. Also satisfy ruff SIM110 in
+  `_index_needs_partial_repair` and mypy narrowing for `$eq` string literals in
+  `_sqlite_translate.py`.
+
+- **SQLite connect-time repair of global ``session_id`` unique indexes**
+  (`jvspatial/db/sqlite.py`). Opening a SQLite DB now drops UNIQUE indexes on
+  ``json_extract(data, '$.context.session_id')`` that lack a ``WHERE`` clause,
+  so a process that never re-ran ``ensure_indexes(Conversation)`` after the
+  partial-filter fix still stops wiping Interaction rows. Partial unique
+  ``create_index`` failures now raise instead of logging a warning.
+  Coverage: `tests/db/test_sqlite_partial_index.py`.
+
+- **SQLite partial unique indexes** (`jvspatial/db/sqlite.py`, `_sqlite_translate.py`).
+  `SQLiteDB.create_index` ignored Mongo-style `partialFilterExpression` /
+  `partial_filter_expression` kwargs and created **global** unique indexes on
+  shared `node` collections. That made `INSERT OR REPLACE` wipe `Interaction`
+  rows when they shared `context.session_id` with a `Conversation` (orchestrator
+  history empty on SQLite, fine on JsonDB). SQLite now translates the same
+  small dialect as Postgres into a `WHERE` clause, raises if a unique partial
+  filter cannot be translated, and drops/recreates a pre-existing non-partial
+  index of the same name so a restart self-heals. Coverage in
+  `tests/db/test_sqlite_partial_index.py` and translator unit tests.
+
+- **`SQLiteDB.find` treated `sort=[]` as an untranslatable sort**
+  (`jvspatial/db/sqlite.py`). An empty list failed the `sort is None` guard, so
+  it took the fallback branch: the whole collection was loaded and `limit`
+  applied in memory instead of being pushed into SQL. Results were correct, the
+  work was not. A falsy `sort` is now normalized to `None`.
+- **`ObjectPager` re-sorted each page with a key that disagreed with the
+  database slice** (`jvspatial/core/pager.py`; `paginate_by_field` inherited
+  it). The in-Python safety-net sort used
+  `item.get("context", {}).get(order_by, 0)`, so a record missing `order_by`
+  was ordered as `0` — among the real values — while the DB-side
+  `sort` + `limit` that produced the slice had placed it in the trailing
+  missing-value run. Records could therefore appear on two pages or on none.
+  A blanket `contextlib.suppress(KeyError, TypeError)` also left a page
+  silently unsorted on mixed-type keys. The re-sort now routes through
+  `finalize_find_results`, making it a genuine no-op whenever the backend
+  honored the sort.
+- **`GraphContext.find_page` broke on dotted sort fields and could not reach
+  records missing the sort value** (`jvspatial/core/context.py`). Two defects:
+  the cursor payload was minted with a flat `last.get(primary_field)`, so a
+  `sort=[("context.started_at", -1)]` page always encoded `sort: None` and the
+  next page's keyset filter compared against `None` — raising
+  `TypeError: '>' not supported between instances of 'int' and 'NoneType'` from
+  `QueryEngine` on JsonDB. And with records missing the sort field now sorting
+  last, the keyset filter `{field: {"$lt": value}}` could never match them, so
+  iteration silently stopped at the last record that had a value. The cursor now
+  uses `resolve_sort_value`, the filter carries a `{field: None}` branch to reach
+  the trailing run, and a cursor minted inside that run walks it by `id`.
+- **Postgres applied `LIMIT` in SQL even when the sort could not be pushed
+  down** (`jvspatial/db/postgres.py`, both `PostgresDB.find` and
+  `PostgresTransaction.find`). `translate_sort` returns `None` for a field path
+  it cannot safely interpolate (e.g. `context.my-field`), leaving the ordering
+  to `finalize_find_results` — but the `LIMIT` was still pushed, so the database
+  returned an arbitrary N rows and the in-memory sort ordered that arbitrary
+  subset. `find(sort=..., limit=10)` returned "the top 10 of an arbitrary 10"
+  instead of the true top 10. The `LIMIT` is now withheld whenever the sort
+  falls back to memory, matching `SQLiteDB.find` and `DynamoDB.find`. Vector
+  (`$near`) queries additionally no longer have their distance ordering
+  overwritten by an in-memory re-sort on the user's `sort`.
+
+- **In-memory `find` sort ignored dotted field paths** (`jvspatial/db/database.py`).
+  `_find_sort_key` resolved `sort` fields with a flat `record.get(field)`, so a
+  spec like `sort=[("context.started_at", -1)]` produced `None` for every row and
+  left the result in arbitrary order. The SQLite and Postgres pushdowns
+  (`translate_sort`) and Mongo's native sort already resolved dotted paths, so
+  the same query ordered correctly on those backends and silently did not on
+  JsonDB/DynamoDB — and on SQLite/Postgres whenever the query fell back to the
+  in-memory path. Dotted paths now resolve in memory too; a non-dict segment
+  along the path yields `None` rather than raising.
+- **Descending in-memory sorts placed records missing the sort field first**
+  (`jvspatial/db/database.py`). `finalize_find_results` sorts with
+  `reverse=True`, which flipped `_find_sort_key`'s `None` flag along with the
+  values. Both SQL translators emit `NULLS LAST` for descending and Mongo sorts
+  missing values last, so a "newest N" `sort` + `limit` fetch returned real rows
+  on SQLite/Postgres/Mongo and a window of records missing the field on the
+  in-memory path. Missing values now sort last in both directions everywhere.
+  The comment in `_sqlite_translate.translate_sort` asserting the in-memory path
+  already matched has been corrected.
+
+
+- **Strict deferred scheduling only caught the no-op-scheduler case**
+  (`jvspatial/serverless/`). `dispatch_deferred_task(..., strict=True)` raised
+  when serverless mode resolved a logging no-op, but every *provider* failure
+  still logged and returned a synthetic reference — so a caller with its own
+  failure handling (retry, error signalled upstream, dedup claim released) was
+  told the task was queued when it had been dropped. `strict` now raises on:
+  an unset `AWS_LAMBDA_FUNCTION_NAME`; a Lambda `invoke` that raises **or**
+  answers a non-2xx `StatusCode` / carries a `FunctionError` (an async invoke
+  returns 202 on acceptance, so boto3 not raising was never proof of
+  dispatch); an unconfigured SQS client or queue; a failed SQS `send_message`;
+  a `NoopOrSyncScheduler` with no executor — the scheduler every
+  *non*-serverless caller gets, which silently dropped strict tasks; and an
+  EventBridge scheduling failure for a task deferred beyond Lambda's 900s
+  timeout, where the fallback immediate invoke cannot honor `run_at`.
+- **Non-strict dispatch failed differently per transport**
+  (`jvspatial/serverless/tasks/aws_sqs.py`). SQS `send_message` errors
+  propagated while the Lambda transport swallowed them, so identical
+  application code had opposite failure semantics depending on
+  `JVSPATIAL_AWS_DEFERRED_TRANSPORT`. `strict` is now the single switch on
+  every transport: `False` is fire-and-forget, `True` raises.
+- **The one-time no-op diagnostic never fired for strict callers**
+  (`jvspatial/serverless/factory.py`). The strict raise preceded
+  `_note_noop_in_serverless`, so a deployment whose callers are all strict
+  never got the startup error explaining *why* nothing dispatches. The
+  diagnostic is now emitted first.
+
+### Changed
+
+
+- **`TaskScheduler.schedule` takes a `strict` argument**
+  (`jvspatial/serverless/tasks/base.py`). `TaskScheduler` is a public/stable
+  extension point and `config.task_scheduler` is duck-typed, so
+  `dispatch_deferred_task` introspects `schedule()` and omits `strict` for
+  third-party implementations that predate it — those keep serving non-strict
+  dispatches unchanged. A `strict=True` dispatch through such a scheduler
+  raises `TaskSchedulerNotConfiguredError` (it cannot honor the guarantee)
+  rather than `TypeError`.
+
+### Documentation
+
+
+- **`find` sort contract moved to SPEC §4.1** (beside the `Database` method
+  table it governs, rather than under §4.2 capability flags) and extended: the
+  `limit`-must-not-outlive-the-sort-pushdown rule, plus a **Known divergences**
+  table covering MongoDB's ascending sorts (native `cursor.sort()` places
+  missing values first — documented, not normalized), array-index path segments,
+  and heterogeneous value types.
+- **Corrected stale NULL-ordering docstrings** in
+  `jvspatial/db/_sqlite_translate.py` (module docstring and `translate_sort`)
+  and `jvspatial/db/_postgres_translate.py` (`translate_sort`). All three still
+  claimed "NULLs sort last for ascending, first for descending, mirroring
+  `finalize_find_results`" — the opposite of what the code emits and of the
+  contract.
+- **`Database.find`** now documents the ordering contract adapter authors must
+  satisfy; **`Database.find_iter`** no longer claims a composite
+  `(sort_value, id)` cursor — the default implementation tracks `id` only, so a
+  non-`id` sort drops records that sort late but carry a lower `id`.
+
+## [0.0.15] - 2026-07-31
+
+### Fixed
+
+- **Deferred-invoke LWA self-invoke 401** (`jvspatial/api/deferred_invoke_route.py`).
+  Fail-closed when `JVSPATIAL_DEFERRED_INVOKE_SECRET` is unset rejected
+  Lambda Web Adapter pass-through from `127.0.0.1`, so serverless WhatsApp
+  (and other deferred tasks) never ran after scheduling. Loopback peers are
+  now always authorized; non-loopback callers still require the secret (or
+  get 401 when it is unset). Coverage in
+  `tests/api/test_deferred_invoke_fail_closed_audit.py`.
+
+## [0.0.11] - 2026-07-02
+
+### Fixed
+
+- **Single-hop `find_connected_nodes` fast path dropped valid neighbors** (`jvspatial/core/entities/node.py`). Two regressions introduced with the 0.0.10 fast path, both invisible to the existing suite because `JsonDB` exposes no `find_connected_nodes` (so tests fell back to the slow edge scan):
+  - _Limit-before-filter:_ `limit` was pushed into the DB scan **before** the Python node-type filter, so `node(node=T)` / `nodes(node=T, limit=n)` could return nothing when a non-matching neighbor sorted first, even though matching neighbors existed. `limit` is now applied to the DB scan only when there is no node filter; otherwise it is applied after filtering.
+  - _Subtype resolution under an entity-name collision:_ rows were deserialized with the base `Node` class, so when two `Node` subclasses persisted in one database shared an entity name (e.g. an app `User` and an embedded-agent `User`), `find_subclass_by_name` returned the first global match and `isinstance`-based filtering silently dropped the valid neighbor. The fast path now hydrates using the caller's requested concrete type as the resolution hint.
+- Regression coverage: `tests/core/test_connected_nodes_fast_path.py` installs a `find_connected_nodes` shim so the fast path is exercised (the stock `JsonDB` never did).
+
+## [0.0.10] - 2026-07-02
+
+### Added
+
+- **`Node.neighborhood(depth)`** — multi-hop neighbor fetch; uses backend `traverse` (Postgres CTE) when available, Python BFS fallback otherwise (`jvspatial/core/entities/node.py`).
+- **Walker performance knobs** (opt-in, defaults preserve prior behavior): `frontier_batch_size`, `prefetch_neighbors`, `prefetch_depth`, `speculative_prefetch` (`jvspatial/core/entities/walker.py`).
+- **Postgres `save_with_edge_merge`** — single-statement edge-list union on node save (`jvspatial/db/postgres.py`).
+- **Postgres benchmarks** — `tests/benchmarks/test_postgres_benchmarks.py` (skipped when DSN unreachable); CI Postgres service in `.github/workflows/benchmarks.yml`.
+- **`JVSPATIAL_FAST_DESERIALIZE`** — opt-in `model_construct` hydration path in `GraphContext._deserialize_entity`.
+
+### Documentation
+
+- Performance features documented in `docs/md/{benchmarks,node-operations,optimization,graph-traversal,graph-context,observability,caching,environment-configuration,infinite-walk-protection}.md`, `jvspatial/db/README.md`, and `SPEC.md` §6.6–6.7.
+
+### Fixed
+
+- **`save_batch` on nodes** now routes through `GraphContext.save()` so edge-merge semantics apply (`jvspatial/core/context.py`).
+- **Postgres `atomic_add_edge_id` / `atomic_remove_edge_id`** use native `find_one_and_update` fast path (alongside existing Mongo path).
+
+### Changed
+
+- **`ObservableDatabase`** instruments `traverse`, `find_connected_nodes`, and `find_iter` for `db_op_counter` (`jvspatial/db/_observable.py`).
+- **`GraphContext.get_batch`** chunks large id lists (500 per round trip).
+
 ## [0.0.9] - 2026-06-14
 
 ### Security
@@ -121,7 +587,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `jvspatial.utils.stability.emit_experimental_once(name, message)` — public hook for opt-in surfaces that need to emit the experimental warning without going through the `@experimental` decorator (replaces private `_emit_once` calls). (Audit §7.7.)
 - `tests/db/test_sqlite_cross_loop_audit.py`, `tests/utils/test_wave4_polish_audit.py` — 10 new regression cases pinning Wave 4 audit fixes.
 - `jvspatial.core.entities.TraversalSkipped` and `TraversalPaused` exception classes. `Walker.skip()` now raises `TraversalSkipped` (caught via `except TraversalSkipped`); previously relied on substring-matching `"Node skipped"` in the message. (Audit §2.9 / SPEC §6.5.)
-- `PathSanitizer` rejects Windows-reserved filenames (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`) regardless of host OS. ``CON.txt`` is rejected; ``CONFIG.json`` passes. (Audit §4.18 / SPEC §15.1.)
+- `PathSanitizer` rejects Windows-reserved filenames (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`) regardless of host OS. `CON.txt` is rejected; `CONFIG.json` passes. (Audit §4.18 / SPEC §15.1.)
 - `tests/storage/test_windows_reserved_audit.py`, `tests/core/test_wave5_walker_audit.py`, `tests/api/test_deferred_invoke_fail_closed_audit.py`, `tests/db/test_sqlite_id_coercion_audit.py` — 23 new regression cases pinning Wave 5 audit fixes.
 
 ### Fixed
@@ -169,7 +635,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
-- `jvspatial.core.utils.generate_id_async` — deprecated alias for `generate_id`. ID generation is pure computation (SPEC §3.2); the async signature was a vestige. Scheduled for removal in 0.1.0. (Audit §3.11.)
+- `jvspatial.core.utils.generate_id_async` — deprecated alias for `generate_id`. ID generation is pure computation (SPEC §3.2); the async signature was a vestige. Removal target updated to 0.2.0 in the 0.1.0 release. (Audit §3.11.)
 
 ### Removed
 
@@ -213,7 +679,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **BREAKING (limited):** `JsonDBTransaction(db).save/get/delete/find()` now raises `NotImplementedError` by default instead of silently no-op'ing. Pass `best_effort=True` to opt into the buffered-commit semantics, or check `Database.supports_transactions` and fall back to non-transactional writes. Audited downstream consumers (`jvagent`, `integral`) — neither uses this surface, so no coordinated change required.
+- **BREAKING (limited):** `JsonDBTransaction(db).save/get/delete/find()` now raises `NotImplementedError` by default instead of silently no-op'ing. Pass `best_effort=True` to opt into the buffered-commit semantics, or check `Database.supports_transactions` and fall back to non-transactional writes. Audited known adopters — none use this surface, so no coordinated change required.
 - **`QueryEngine` optimization cache** is now bounded by an LRU (default 1024 entries, configurable via `QueryEngine(cache_size=...)`). Was unbounded.
 - **MongoDB retries** now go through the shared retry helper (`utils/retry.py`); behavior preserved (one retry on connection-error with reset).
 - CI coverage gate raised from 55 → 60% to reflect the new tested code.
