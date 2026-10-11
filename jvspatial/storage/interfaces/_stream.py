@@ -4,16 +4,26 @@ import asyncio
 from typing import Any, AsyncIterator, Callable
 
 
-async def _io_call(fn: Callable[..., Any], *args: Any) -> Any:
-    """Finish an in-flight worker call before allowing resource cleanup."""
-    task = asyncio.create_task(asyncio.to_thread(fn, *args))
+async def _await_worker(task: asyncio.Task) -> Any:
+    """Drain a worker despite repeated cancellation before releasing ownership."""
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
-        try:
-            await task
-        finally:
-            raise
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not task.cancelled():
+            task.exception()  # Retrieve any worker failure; cancellation wins.
+        raise
+
+
+async def _io_call(fn: Callable[..., Any], *args: Any) -> Any:
+    """Finish an in-flight worker call before allowing resource cleanup."""
+    return await _await_worker(asyncio.create_task(asyncio.to_thread(fn, *args)))
 
 
 async def stream_reader(
@@ -28,9 +38,11 @@ async def stream_reader(
         raise ValueError("chunk_size must be a positive integer")
     opening = asyncio.create_task(asyncio.to_thread(opener))
     try:
-        reader = await asyncio.shield(opening)
+        reader = await _await_worker(opening)
     except asyncio.CancelledError:
-        reader = await opening
+        if opening.cancelled() or opening.exception() is not None:
+            raise
+        reader = opening.result()
         await _io_call(reader.close)
         raise
     try:

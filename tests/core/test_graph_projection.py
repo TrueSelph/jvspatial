@@ -531,6 +531,61 @@ async def test_projection_bypasses_stale_record_cache(tmp_path):
     await db.close()
 
 
+@pytest.mark.parametrize("observe,cache", [(False, True), (True, False), (True, True)])
+async def test_projection_after_native_batch_and_wrapped_queries(
+    tmp_path, observe, cache
+):
+    from examples.core.graph_projection_example import (
+        DEMO_SEMANTICS,
+        PublicDemoAccess,
+        demo_scope,
+        seed_demo,
+    )
+    from jvspatial import create_database
+
+    db = create_database(
+        "sqlite",
+        db_path=str(tmp_path / "integration.db"),
+        observe=observe,
+        cache_get_size=100 if cache else 0,
+    )
+    try:
+        context = GraphContext(db)
+        objects, _ = await seed_demo(context)
+        request = dependency_request(
+            objects["harbor"].id, view="ontology", execution_mode="native"
+        )
+        before = await context.project_graph(
+            request,
+            scope=demo_scope(),
+            access=PublicDemoAccess(),
+            semantics=DEMO_SEMANTICS,
+        )
+        supplier = objects["coastal"]
+        supplier.availability = "unavailable"
+        assert await context.save_batch([supplier]) == [supplier]
+        assert supplier.id in await db.find_ids(
+            "node", {"context.availability": "unavailable"}, limit=2
+        )
+        assert (await db.count_incident_edges("edge", [supplier.id]))[supplier.id] > 0
+        after = await context.project_graph(
+            request,
+            scope=demo_scope(),
+            access=PublicDemoAccess(),
+            semantics=DEMO_SEMANTICS,
+        )
+        old = {node["id"]: node for node in before.to_dict()["nodes"]}
+        new = {node["id"]: node for node in after.to_dict()["nodes"]}
+        assert old[supplier.id]["context"]["availability"] == "delayed"
+        assert new[supplier.id]["context"]["availability"] == "unavailable"
+        assert objects["confidential"].id not in new
+        assert "private_contact" not in after.render_text()
+        assert_closed(after.to_dict())
+        assert after.to_dict()["meta"]["execution_mode"] == "native"
+    finally:
+        await db.close()
+
+
 async def test_null_nested_fields_and_denied_filter_fields(projection_ctx):
     await projection_ctx.database.save(
         "node",

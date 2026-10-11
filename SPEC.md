@@ -307,16 +307,16 @@ No built-in migration framework. Adapters do not enforce schemas. Adding optiona
   consistent type. Live pagination can skip/revisit records after sort-key
   updates and does not imply a snapshot. PostgreSQL releases each page's
   connection before yielding. Sources: `jvspatial/db/database.py:284`,
-  `jvspatial/db/database.py:574`,
-  `jvspatial/db/postgres.py:2035`.
+  `jvspatial/db/database.py:595`,
+  `jvspatial/db/postgres.py:2036`.
 - PostgreSQL preserves numeric JSONB sort values, normalizes JSON null to SQL
   NULL, and uses physical top-level ID/entity/tenant columns. SQL index creation
   retains equality/uniqueness indexes and adds nullable, direction-matching
   sort companions with an ID tiebreaker. Companion indexes increase storage
   and write work. Sources: `jvspatial/db/_postgres_translate.py:647`,
   `jvspatial/db/_sqlite_translate.py:285`,
-  `jvspatial/db/sqlite.py:352`,
-  `jvspatial/db/postgres.py:1587`.
+  `jvspatial/db/sqlite.py:354`,
+  `jvspatial/db/postgres.py:1588`.
 - SQL residual scans extract only safe conjunctions; OR/NOT are kept intact and
   regex flags stay attached. The full predicate runs before a result counts
   toward a limit. Candidates stream in batches (up to 128 prefetched records);
@@ -325,8 +325,8 @@ No built-in migration framework. Adapters do not enforce schemas. Adding optiona
   with `DatabaseError`. It does not bound native indexed scans/server work.
   Filtered fallback counts keep counters instead of result lists. Sources:
   `jvspatial/db/database.py:207`,
-  `jvspatial/db/sqlite.py:807`,
-  `jvspatial/db/postgres.py:1054`.
+  `jvspatial/db/sqlite.py:809`,
+  `jvspatial/db/postgres.py:1055`.
 - JSON streams candidates with at most 32 concurrent record reads. ID-ordered
   iteration scans once; its path list is O(N), and custom sorting retains
   matches. Filesystem metadata/read work in these async paths is offloaded.
@@ -336,7 +336,7 @@ No built-in migration framework. Adapters do not enforce schemas. Adding optiona
   offset natively; the default fetches a prefix. ObjectPager hydrates only page
   IDs, and `count_total=False` uses lookahead with None totals and no page clamp.
   Separate projection/hydration can observe concurrent deletes. Sources:
-  `jvspatial/db/database.py:532`,
+  `jvspatial/db/database.py:553`,
   `jvspatial/core/pager.py:95`.
 - `save_batch` performs the same preparation as context `save`, groups by
   collection in chunks of 500, and invokes native detailed bulk writes. It
@@ -345,9 +345,9 @@ No built-in migration framework. Adapters do not enforce schemas. Adding optiona
   collections. Entity `save()` overrides are not invoked by context operations.
   Transaction handles lacking bulk support keep their own per-record saves.
   PostgreSQL bulk writes also populate configured physical vector columns.
-  Sources: `jvspatial/core/context.py:1789`,
-  `jvspatial/db/postgres.py:1483`,
-  `jvspatial/db/_cache.py:323`.
+  Sources: `jvspatial/core/context.py:1815`,
+  `jvspatial/db/postgres.py:1484`,
+  `jvspatial/db/_cache.py:336`.
 - DynamoDB always checks remaining predicates across query/scan pages.
   `scan_page(page_size=1..1000, cursor=)` is explicitly unordered, with a cursor
   bound to collection/query and native LastEvaluatedKey. Empty matched pages may
@@ -358,8 +358,8 @@ No built-in migration framework. Adapters do not enforce schemas. Adding optiona
   `jvspatial/db/dynamodb.py:756`.
 - Mongo `driver="pymongo"` is opt-in (PyMongo >=4.13); Motor remains default.
   Native cursors close in finally and both drivers retain topology-gated
-  transactions. Sources: `jvspatial/db/mongodb.py:110`,
-  `jvspatial/db/mongodb.py:680`.
+  transactions. Sources: `jvspatial/db/mongodb.py:111`,
+  `jvspatial/db/mongodb.py:681`.
 - Graph BFS batches node frontiers, bounds each incident-edge priority tier to
   cap+1 documents, and groups degrees on SQL/Mongo. `priority_node_prefixes=[]`
   chooses ID order, a list of up to 32 nonempty prefixes chooses generic tiers,
@@ -369,15 +369,16 @@ No built-in migration framework. Adapters do not enforce schemas. Adding optiona
   `jvspatial/core/graph_expansion.py:269`,
   `jvspatial/core/graph_expansion.py:117`.
 - Local/S3 streaming reads one chunk per advance, waiting for an in-flight
-  worker read before cancellation closes the handle. Chunk size must be a
-  positive integer. Sources: `jvspatial/storage/interfaces/_stream.py:19`,
+  worker operation before cancellation closes the handle, including repeated
+  cancellation during opening, reading, or closing. Chunk size must be a
+  positive integer. Sources: `jvspatial/storage/interfaces/_stream.py:29`,
   `jvspatial/storage/interfaces/local.py:592`,
   `jvspatial/storage/interfaces/s3.py:489`.
 - Monitoring retains bounded samples and lifetime aggregates, and execution
   metadata is context-local. Sources:
-  `jvspatial/core/context.py:91`,
-  `jvspatial/db/_observable.py:115`,
-  `jvspatial/db/_observable.py:501`.
+  `jvspatial/core/context.py:98`,
+  `jvspatial/db/_observable.py:118`,
+  `jvspatial/db/_observable.py:524`.
 
 
 ## 5. Query Interface

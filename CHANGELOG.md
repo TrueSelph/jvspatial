@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Repeated cancellation during file/S3 stream opening, reading, or closing waits for the worker before releasing the reader.
+
 - Source-tree example imports work under both the `pytest` console entry point
   and `python -m pytest`, including graph projection tests and benchmarks in CI.
 - PostgreSQL benchmark fixtures create and clean their isolated schemas before

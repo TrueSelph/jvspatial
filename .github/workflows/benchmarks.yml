@@ -21,6 +21,7 @@ on:
   push:
     branches:
       - main
+      - dev
     paths:
       - 'jvspatial/**'
       - 'tests/benchmarks/**'
@@ -69,7 +70,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e '.[dev,test,postgres]'
 
-      - name: Run benchmarks (PR or main push)
+      - name: Run benchmarks (PR or main/dev push)
         env:
           JVSPATIAL_POSTGRES_TEST_DSN: postgresql://jvspatial:jvspatial@localhost:5432/jvspatial
         run: |

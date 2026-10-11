@@ -5,10 +5,39 @@ on:
   push:
     branches:
       - main
+      - dev
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: jvspatial
+          POSTGRES_PASSWORD: jvspatial  # pragma: allowlist secret
+          POSTGRES_DB: jvspatial
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jvspatial"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mongodb:
+        image: mongo:8.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1})'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      JVSPATIAL_POSTGRES_TEST_DSN: postgresql://jvspatial:jvspatial@localhost:5432/jvspatial  # pragma: allowlist secret
+      JVSPATIAL_PROJECTION_TEST_DSN: postgresql://jvspatial:jvspatial@localhost:5432/jvspatial  # pragma: allowlist secret
+      JVSPATIAL_MONGODB_TEST_URI: mongodb://localhost:27017
+      JVSPATIAL_PROJECTION_MONGO_URI: mongodb://localhost:27017
     strategy:
       fail-fast: false
       matrix:
@@ -27,9 +56,8 @@ jobs:
         python -m pip install --upgrade pip
 
     - name: Install jvspatial package with test, lambda, and postgres dependencies
-      # postgres/pgvector pull in asyncpg so the Postgres *unit* tests run in CI
-      # (translator pushdown, pool auto-tuning, vector encoding). Live-DB
-      # integration tests still skip without JVSPATIAL_POSTGRES_TEST_DSN.
+      # Exercise translators and live isolated PostgreSQL/MongoDB integration
+      # tests, including projections, on every supported matrix Python version.
       run: pip install -e '.[test,lambda,postgres,pgvector]'
 
     # Coverage on every matrix Python version spikes memory (~1.6k tests); the runner often OOM-kills

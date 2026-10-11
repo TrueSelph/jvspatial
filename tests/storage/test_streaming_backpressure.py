@@ -75,6 +75,54 @@ async def test_cancellation_waits_for_read_then_closes():
     assert body.closed
 
 
+@pytest.mark.parametrize("phase", ["open", "read", "close"])
+async def test_repeated_cancellation_drains_worker_before_cleanup(phase):
+    import asyncio
+    import threading
+
+    from jvspatial.storage.interfaces._stream import stream_reader
+
+    entered, release = threading.Event(), threading.Event()
+
+    def block():
+        entered.set()
+        assert release.wait(3)
+
+    class BlockingBody(TrackingBody):
+        def read(self, size=-1):
+            if phase == "read":
+                block()
+                assert not self.closed
+            return b"" if phase == "close" else super().read(size)
+
+        def close(self):
+            if phase == "close":
+                block()
+            super().close()
+
+    body = BlockingBody()
+
+    def open_reader():
+        if phase == "open":
+            block()
+        return body
+
+    task = asyncio.create_task(anext(stream_reader(open_reader, 64)))
+    try:
+        assert await asyncio.to_thread(entered.wait, 3)
+        task.cancel()
+        await asyncio.sleep(0.01)
+        task.cancel()
+        await asyncio.sleep(0.01)
+        assert not body.closed
+        assert not task.done()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert body.closed
+
+
 @pytest.mark.parametrize("size", [0, -1, True, 1.5])
 async def test_invalid_chunk_size_never_opens_reader(size):
     from jvspatial.storage.interfaces._stream import stream_reader
