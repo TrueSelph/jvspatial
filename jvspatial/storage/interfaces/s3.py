@@ -508,26 +508,19 @@ class S3FileInterface(FileStorageInterface):
         try:
             s3_key = self._sanitize_key(file_path)
 
-            # Get object from S3
-            response = await asyncio.to_thread(
-                self.s3_client.get_object, Bucket=self.bucket_name, Key=s3_key
+            from ._stream import stream_reader
+
+            reader = stream_reader(
+                lambda: self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)[
+                    "Body"
+                ],
+                chunk_size,
             )
-
-            # Stream content in chunks
-            body = response["Body"]
-
-            def _read_chunks():
-                """Synchronous chunk reader."""
-                while True:
-                    chunk = body.read(chunk_size)
-                    if not chunk:
-                        break
+            try:
+                async for chunk in reader:
                     yield chunk
-                body.close()
-
-            # Yield chunks asynchronously
-            for chunk in await asyncio.to_thread(list, _read_chunks()):
-                yield chunk
+            finally:
+                await reader.aclose()
 
             logger.debug(f"S3 streaming completed: {s3_key}")
 

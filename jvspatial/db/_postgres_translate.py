@@ -159,7 +159,7 @@ def _translate_field_clause(
         if not _is_scalar(condition):
             return None
         if condition is None:
-            return f"{extract_jsonb} IS NULL"
+            return f"{extract_text} IS NULL"
         # Use JSONB equality so type-aware comparison works for booleans
         # and numbers stored in JSON form.
         ph = pb.add(condition)
@@ -281,7 +281,11 @@ def _eq_clause(
         return f"{extract_jsonb} = to_jsonb({placeholder}::boolean)"
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return f"({extract_text})::numeric = {placeholder}::numeric"
-    # String / other scalar — text compare.
+    # Preserve the text equality index and constrain the typed sort companion
+    # too. The second clause is equivalent for JSON strings, but lets a fixed
+    # prefix participate in a JSONB sort index without a temporary sort.
+    if not extract_jsonb.startswith("to_jsonb("):
+        return f"({extract_text} = {placeholder} AND NULLIF({extract_jsonb}, 'null'::jsonb) = to_jsonb({placeholder}::text))"
     return f"{extract_text} = {placeholder}"
 
 
@@ -297,9 +301,9 @@ def _comparator_clause(
     sql_op = _COMPARATORS[op]
     if operand is None:
         if op == "$eq":
-            return f"{extract_jsonb} IS NULL"
+            return f"{extract_text} IS NULL"
         if op == "$ne":
-            return f"{extract_jsonb} IS NOT NULL"
+            return f"{extract_text} IS NOT NULL"
         return None
 
     ph = pb.add(operand)
@@ -667,7 +671,11 @@ def translate_sort(
         if not _safe_field_path(field):
             return None
         path = _path_literal(field)
-        col = f"({prefix}data #>> '{path}')"
+        col = (
+            f"{prefix}{field}"
+            if field in _TOP_LEVEL_TEXT_COLUMNS
+            else f"NULLIF(({prefix}data #> '{path}'), 'null'::jsonb)"
+        )
         if direction == 1:
             parts.append(f"{col} ASC NULLS LAST")
         else:

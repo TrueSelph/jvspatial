@@ -97,6 +97,8 @@ def _json_extract(field: str, table: str = "") -> str:
     ``table`` optionally qualifies the column (``e.data``) for joins.
     """
     prefix = f"{table}." if table else ""
+    if field == "id":
+        return f"{prefix}id"
     return f"json_extract({prefix}data, '$.{field}')"
 
 
@@ -229,7 +231,7 @@ def _translate_logical(
         if translated is None:
             return None
         sub_sql, sub_params = translated
-        parts.append(f"({sub_sql})")
+        parts.append(f"({sub_sql or '1'})")
         params.extend(sub_params)
     joiner = " AND " if op == "$and" else " OR "
     return joiner.join(parts), params
@@ -302,7 +304,9 @@ def translate_sort(
         if not _safe_field_path(field):
             return None
         column = _json_extract(field, alias)
-        if direction == 1:
+        if field == "id":
+            parts.append(f"{column} {'ASC' if direction == 1 else 'DESC'}")
+        elif direction == 1:
             # ascending: NULLs last
             parts.append(f"({column} IS NULL), {column} ASC")
         else:

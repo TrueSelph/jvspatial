@@ -8,9 +8,20 @@ Designed to integrate seamlessly with UI frameworks requiring paginated data.
 import base64
 import json
 from math import ceil
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Generic,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+)
 
-from jvspatial.db.database import finalize_find_results, resolve_sort_value
+from jvspatial.db.database import finalize_find_results
 
 if TYPE_CHECKING:
     from .entities import Object
@@ -18,7 +29,7 @@ if TYPE_CHECKING:
 T = TypeVar("T", bound="Object")
 
 
-class ObjectPager:
+class ObjectPager(Generic[T]):
     """Efficient pagination for objects with database-level optimization.
 
     Provides a clean interface for paginating object results with filtering,
@@ -48,6 +59,8 @@ class ObjectPager:
         filters: Optional[Dict[str, Any]] = None,
         order_by: Optional[str] = None,
         order_direction: str = "asc",
+        *,
+        count_total: bool = True,
     ) -> None:
         """Initialize the ObjectPager.
 
@@ -57,6 +70,8 @@ class ObjectPager:
             filters: Optional database-level filters
             order_by: Optional field name to sort by
             order_direction: Sort direction - "asc" (default) or "desc"
+            count_total: Compute exact totals (default). False uses lookahead;
+                total_items/total_pages stay None and pages are not clamped.
         """
         self.object_class = object_class
         self.page_size = max(1, page_size)  # Ensure at least 1 item per page
@@ -64,10 +79,11 @@ class ObjectPager:
         self.filters = filters or {}
         self.order_by = order_by
         self.order_direction = order_direction
+        self.count_total = count_total
 
         # Pagination state (set after get_page() call)
-        self.total_items = 0
-        self.total_pages = 1
+        self.total_items: Optional[int] = 0 if count_total else None
+        self.total_pages: Optional[int] = 1 if count_total else None
         self.has_previous = False
         self.has_next = False
         # Result caching removed (audit §8.2). The previous ``_cache``
@@ -90,8 +106,9 @@ class ObjectPager:
         matching set and sorting in Python.
 
         For backwards-compatible page-number access (``page`` ≥ 1) the method
-        falls back to the former offset approach, but still avoids the
-        ``find+len`` count call by using ``db.count``.
+        requests an offset ID projection and hydrates only the chosen page.
+        Native SQL/Mongo projections avoid transferring discarded payloads.
+        ``count_total=False`` skips the separate count query.
 
         Args:
             page: Page number to retrieve (1-based).  Ignored when ``after_id``
@@ -132,8 +149,7 @@ class ObjectPager:
                     "combined with ``order_by``; the cursor only tracks id. "
                     "Use offset pagination if you need a custom sort key."
                 )
-            keyset_filter = dict(db_filter)
-            keyset_filter["id"] = {"$gt": after_id}
+            keyset_filter = {"$and": [db_filter, {"id": {"$gt": after_id}}]}
             sort: Optional[List[Any]] = [("id", 1)]
             raw_items = await db.find(
                 collection, keyset_filter, limit=self.page_size + 1, sort=sort
@@ -153,11 +169,14 @@ class ObjectPager:
         self.current_page = max(1, page)
         self.is_cached = False
 
-        self.total_items = await db.count(collection, db_filter)
-        self.total_pages = max(1, ceil(self.total_items / self.page_size))
-        self.current_page = max(1, min(self.current_page, self.total_pages))
+        if self.count_total:
+            self.total_items = await db.count(collection, db_filter)
+            self.total_pages = max(1, ceil(self.total_items / self.page_size))
+            self.current_page = max(1, min(self.current_page, self.total_pages))
+            self.has_next = self.current_page < self.total_pages
+        else:
+            self.total_items = self.total_pages = None
         self.has_previous = self.current_page > 1
-        self.has_next = self.current_page < self.total_pages
 
         # Fetch only the required slice using DB-level sort + limit.
         page_sort: Optional[List[Any]] = None
@@ -173,30 +192,20 @@ class ObjectPager:
 
         offset = (self.current_page - 1) * self.page_size
 
-        # Most backends support limit; we emulate skip via the id-range approach
-        # when offset > 0 to avoid fetching the full collection.
-        if offset > 0 and page_sort == [("id", 1)]:
-            # Get the id at the target offset using a minimal projection.
-            skip_rows = await db.find(
-                collection,
-                db_filter,
-                limit=offset,
-                sort=page_sort,
-            )
-            if skip_rows:
-                pivot_id = skip_rows[-1].get("id", "")
-                slice_filter = dict(db_filter)
-                slice_filter["id"] = {"$gt": pivot_id}
-                page_items_raw = await db.find(
-                    collection, slice_filter, limit=self.page_size, sort=page_sort
-                )
-            else:
-                page_items_raw = []
-        else:
-            all_items_raw = await db.find(
-                collection, db_filter, limit=offset + self.page_size, sort=page_sort
-            )
-            page_items_raw = all_items_raw[offset : offset + self.page_size]
+        # Offset is evaluated in the backend's ID projection. Only the page
+        # payloads are then hydrated, not a discarded prefix of full records.
+        ids = await db.find_ids(
+            collection,
+            db_filter,
+            limit=self.page_size + (not self.count_total),
+            sort=page_sort,
+            offset=offset,
+        )
+        if not self.count_total:
+            self.has_next = len(ids) > self.page_size
+            ids = ids[: self.page_size]
+        page_records = await db.find_many(collection, ids)
+        page_items_raw = [page_records[rid] for rid in ids if rid in page_records]
 
         # Safety net for a backend that ignored the requested sort. Route it
         # through the same helper the adapters use so it is a no-op when the
@@ -252,7 +261,11 @@ class ObjectPager:
         Returns:
             True if there is a next page
         """
-        return self.current_page < self.total_pages
+        return (
+            self.has_next
+            if self.total_pages is None
+            else self.current_page < self.total_pages
+        )
 
     def has_previous_page(self) -> bool:
         """Check if there is a previous page available.
@@ -282,7 +295,11 @@ class ObjectPager:
             - object_type: Name of the object class being paginated
         """
         start_index = (self.current_page - 1) * self.page_size
-        end_index = min(start_index + self.page_size - 1, self.total_items - 1)
+        end_index = (
+            min(start_index + self.page_size - 1, self.total_items - 1)
+            if self.total_items is not None
+            else None
+        )
 
         return {
             "total_items": self.total_items,
@@ -294,7 +311,11 @@ class ObjectPager:
             "previous_page": self.current_page - 1 if self.has_previous else None,
             "next_page": self.current_page + 1 if self.has_next else None,
             "start_index": start_index,
-            "end_index": end_index if self.total_items > 0 else None,
+            "end_index": (
+                end_index
+                if self.total_items is not None and self.total_items > 0
+                else None
+            ),
             "object_type": self.object_class.__name__,
         }
 
@@ -370,10 +391,9 @@ def keyset_sort_fields(
     sort: Optional[List[Tuple[str, int]]],
 ) -> List[Tuple[str, int]]:
     """Normalise a keyset sort: default ``[("id", 1)]``, ``id`` appended as tiebreaker."""
-    fields: List[Tuple[str, int]] = list(sort) if sort else [("id", 1)]
-    if not any(field == "id" for field, _ in fields):
-        fields.append(("id", fields[0][1]))
-    return fields
+    from jvspatial.db.database import _keyset_sort_fields
+
+    return _keyset_sort_fields(sort)
 
 
 def encode_keyset_cursor(
@@ -385,10 +405,9 @@ def encode_keyset_cursor(
     walk the adapters use; a flat ``.get`` would mint a ``None`` sort value
     for every cursor and stall pagination.
     """
-    payload = {
-        "id": record.get("id"),
-        "sort": resolve_sort_value(record, sort_fields[0][0]),
-    }
+    from jvspatial.db.database import _keyset_payload
+
+    payload = _keyset_payload(record, sort_fields)
     return base64.urlsafe_b64encode(
         json.dumps(payload, separators=(",", ":")).encode()
     ).decode()
@@ -412,6 +431,8 @@ def decode_keyset_cursor(
 def keyset_filter(
     sort_fields: List[Tuple[str, int]],
     cursor_payload: Optional[Dict[str, Any]],
+    *,
+    nulls_first: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Mongo-style filter selecting records strictly after the cursor.
 
@@ -419,34 +440,6 @@ def keyset_filter(
     with no value for the primary sort field come after every valued record
     in both directions. ``None`` when there is no (usable) cursor.
     """
-    if not cursor_payload or "id" not in cursor_payload or "sort" not in cursor_payload:
-        return None
-    primary_field, primary_dir = sort_fields[0]
-    id_dir = sort_fields[-1][1]
-    sort_op = "$lt" if primary_dir < 0 else "$gt"
-    id_op = "$lt" if id_dir < 0 else "$gt"
-    cursor_sort = cursor_payload["sort"]
-    if cursor_sort is None:
-        # The cursor sits in the trailing run of records that have no value
-        # for the sort field; everything still ahead is also missing it —
-        # walk that run by id alone.
-        return {
-            "$and": [
-                {primary_field: None},
-                {"id": {id_op: cursor_payload["id"]}},
-            ]
-        }
-    return {
-        "$or": [
-            {primary_field: {sort_op: cursor_sort}},
-            # ``{field: None}`` matches both an explicit null and a missing
-            # key. Without this branch the nulls-last tail is unreachable.
-            {primary_field: None},
-            {
-                "$and": [
-                    {primary_field: cursor_sort},
-                    {"id": {id_op: cursor_payload["id"]}},
-                ]
-            },
-        ]
-    }
+    from jvspatial.db.database import _keyset_condition
+
+    return _keyset_condition(sort_fields, cursor_payload, nulls_first=nulls_first)

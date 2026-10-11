@@ -8,8 +8,6 @@ caller can drop to in-Python ``QueryEngine``.
 
 from __future__ import annotations
 
-import pytest
-
 from jvspatial.db._postgres_translate import (
     ParamBuilder,
     translate_query,
@@ -31,7 +29,8 @@ class TestParamBuilder:
 class TestEqualityAndComparators:
     def test_plain_equality_string(self) -> None:
         sql, params = translate_query({"context.name": "alpha"})
-        assert sql == "(data #>> '{context,name}') = $1"
+        assert "(data #>> '{context,name}') = $1" in sql
+        assert "NULLIF" in sql and "to_jsonb($1::text)" in sql
         assert params == ["alpha"]
 
     def test_plain_equality_number(self) -> None:
@@ -207,19 +206,20 @@ class TestSort:
     def test_simple_ascending(self) -> None:
         assert (
             translate_sort([("context.score", 1)])
-            == "(data #>> '{context,score}') ASC NULLS LAST"
+            == "NULLIF((data #> '{context,score}'), 'null'::jsonb) ASC NULLS LAST"
         )
 
     def test_simple_descending(self) -> None:
         assert (
             translate_sort([("context.score", -1)])
-            == "(data #>> '{context,score}') DESC NULLS LAST"
+            == "NULLIF((data #> '{context,score}'), 'null'::jsonb) DESC NULLS LAST"
         )
 
     def test_compound(self) -> None:
         out = translate_sort([("a", 1), ("b", -1)])
         assert (
-            out == "(data #>> '{a}') ASC NULLS LAST, (data #>> '{b}') DESC NULLS LAST"
+            out
+            == "NULLIF((data #> '{a}'), 'null'::jsonb) ASC NULLS LAST, NULLIF((data #> '{b}'), 'null'::jsonb) DESC NULLS LAST"
         )
 
     def test_invalid_direction(self) -> None:

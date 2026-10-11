@@ -18,7 +18,7 @@ import pytest
 
 from jvspatial.db.jsondb import JsonDB
 
-from .conftest import run_async
+from .conftest import benchmark_async, run_async
 
 pytestmark = pytest.mark.benchmark
 
@@ -75,52 +75,28 @@ def test_bench_jsondb_batched_saves_500(benchmark, temp_dir):
 # ---- Counts ----------------------------------------------------------
 
 
-def test_bench_jsondb_count_empty_query(benchmark, temp_dir):
-    """Empty count() should not parse any JSON files (A2 pushdown).
-
-    Times a fresh count() against a pre-populated 1000-record
-    collection. Regression guard: if someone removes the dirent
-    fast path, this will jump by ~10x.
-    """
-
-    async def setup_then_count():
+def _query_bench(benchmark, temp_dir, size, operation):
+    async def setup():
         db = JsonDB(base_path=temp_dir)
-        await _seed(db, 1000)
-        for _ in range(5):  # several counts to amortize setup
-            await db.count("node")
+        await _seed(db, size)
+        return db
 
-    benchmark(run_async, setup_then_count)
+    benchmark_async(benchmark, setup, operation)
+
+
+def test_bench_jsondb_count_empty_query(benchmark, temp_dir):
+    _query_bench(benchmark, temp_dir, 1000, lambda db: db.count("node"))
 
 
 def test_bench_jsondb_count_filtered(benchmark, temp_dir):
-    """Filtered count() walks every file but skips result-list build.
-
-    Regression guard for the streaming-match path.
-    """
-
-    async def setup_then_count():
-        db = JsonDB(base_path=temp_dir)
-        await _seed(db, 500)
-        for _ in range(5):
-            await db.count("node", {"category": "even"})
-
-    benchmark(run_async, setup_then_count)
-
-
-# ---- Find ------------------------------------------------------------
+    _query_bench(
+        benchmark, temp_dir, 500, lambda db: db.count("node", {"category": "even"})
+    )
 
 
 def test_bench_jsondb_find_filtered(benchmark, temp_dir):
-    """find() with a simple equality filter on a 500-node collection.
+    async def find(db):
+        rows = await db.find("node", {"category": "odd"})
+        assert len(rows) == 250
 
-    Exercises the parallel-read codepath plus QueryEngine.match.
-    """
-
-    async def setup_then_find():
-        db = JsonDB(base_path=temp_dir)
-        await _seed(db, 500)
-        for _ in range(3):
-            results = await db.find("node", {"category": "odd"})
-            assert len(results) == 250
-
-    benchmark(run_async, setup_then_find)
+    _query_bench(benchmark, temp_dir, 500, find)

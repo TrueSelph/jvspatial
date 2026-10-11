@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import re
@@ -32,7 +33,12 @@ from ._sqlite_translate import (
     translate_query,
     translate_sort,
 )
-from .database import Database, InsertIfAbsentResult, finalize_find_results
+from .database import (
+    BulkSaveResult,
+    Database,
+    InsertIfAbsentResult,
+    finalize_find_results,
+)
 from .query import QueryEngine
 
 logger = logging.getLogger(__name__)
@@ -84,6 +90,7 @@ class SQLiteDB(Database):
         timeout: float = 5.0,
         journal_mode: str = "WAL",
         synchronous: str = "NORMAL",
+        fallback_scan_limit: Optional[int] = None,
     ) -> None:
         if aiosqlite is None:  # pragma: no cover - exercised when dependency missing
             raise ImportError(
@@ -105,19 +112,14 @@ class SQLiteDB(Database):
             # This handles both absolute and relative paths correctly
             self.db_path = path_obj.resolve()
 
-            # Create parent directory if it doesn't exist (only for file paths)
-            parent = self.db_path.parent
-            if parent != self.db_path and str(parent) != ".":
-                try:
-                    parent.mkdir(parents=True, exist_ok=True)
-                except OSError as e:
-                    raise OSError(
-                        f"Failed to create directory for SQLite database at {parent}: {e}"
-                    ) from e
+            # Directory creation happens asynchronously on first connection.
 
             # Store as string for aiosqlite
             self.db_path_str = str(self.db_path)
 
+        from .database import _validate_scan_limit
+
+        self.fallback_scan_limit = _validate_scan_limit(fallback_scan_limit)
         self.timeout = timeout
         self.journal_mode = journal_mode
         self.synchronous = synchronous
@@ -181,7 +183,9 @@ class SQLiteDB(Database):
                 try:
                     parent = self.db_path.parent
                     if parent != self.db_path and str(parent) != ".":
-                        parent.mkdir(parents=True, exist_ok=True)
+                        await asyncio.to_thread(
+                            parent.mkdir, parents=True, exist_ok=True
+                        )
                 except OSError as e:
                     raise OSError(
                         f"Failed to create directory for SQLite database at {self.db_path.parent}: {e}"
@@ -394,6 +398,29 @@ class SQLiteDB(Database):
             raise ValueError("Unsafe index collection or field path")
 
         where_sql = self._resolve_index_where(**kwargs)
+        # Keep the equality/uniqueness index and add an order-matching companion.
+        # NULL discriminators cannot lead the equality index without harming lookups.
+        from .database import _keyset_sort_fields
+
+        ordering = translate_sort(_keyset_sort_fields(fields))
+        if ordering is None:
+            raise ValueError("Unsafe sort index fields")
+        signature = hashlib.sha256(ordering.encode()).hexdigest()[:8]
+        companion = f"{index_name}__sort_{signature}"
+        companion_where = f" WHERE {where_sql}" if where_sql else ""
+        cursor = await connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (companion,)
+        )
+        companion_row = await cursor.fetchone()
+        await cursor.close()
+        if self._index_needs_partial_repair(
+            companion_row[0] if companion_row else None, where_sql
+        ):
+            await connection.execute(f"DROP INDEX IF EXISTS {companion}")
+        await connection.execute(
+            f"CREATE INDEX IF NOT EXISTS {companion} ON records (collection, {ordering}){companion_where}"
+        )
+        await connection.commit()
 
         # Inspect on-disk definition so a prior global unique index can
         # be repaired after upgrading to partial-filter support.
@@ -428,9 +455,14 @@ class SQLiteDB(Database):
         # Build SQLite index creation statement
         # For nested fields, use json_extract() to extract values from JSON
         index_expressions = []
-        for field_path, _direction in fields:
+        for field_path, direction in fields:
             json_path = self._json_path(field_path)
-            index_expressions.append(f"json_extract(data, '{json_path}')")
+            expression = (
+                "id" if field_path == "id" else f"json_extract(data, '{json_path}')"
+            )
+            index_expressions.append(
+                f"{expression} {'DESC' if direction == -1 else 'ASC'}"
+            )
 
         index_columns = ", ".join(index_expressions)
         unique_clause = "UNIQUE" if unique else ""
@@ -637,7 +669,10 @@ class SQLiteDB(Database):
                 raise ValueError(
                     "bulk_save requires every record to have an 'id' field"
                 )
-        params = [(collection, str(r["id"]), json.dumps(dict(r))) for r in records]
+        params = [
+            (collection, str(r["id"]), json.dumps({**r, "id": str(r["id"])}))
+            for r in records
+        ]
         async with self._lock:
             connection = await self._get_connection()
             try:
@@ -656,6 +691,13 @@ class SQLiteDB(Database):
                     await connection.rollback()
                 raise
         return len(records)
+
+    async def bulk_save_detailed(
+        self, collection: str, records: List[Dict[str, Any]]
+    ) -> BulkSaveResult:
+        """Reuse the atomic executemany transaction; errors roll back and raise."""
+        saved = await self.bulk_save(collection, records)
+        return BulkSaveResult(len(records), saved, [])
 
     async def find(
         self,
@@ -689,6 +731,8 @@ class SQLiteDB(Database):
             mode allows concurrent reads. Only write operations are
             serialized.
         """
+        if limit == 0:
+            return []
         connection = await self._get_connection()
         # An empty sort spec is "no ordering requested", same as None. Without
         # this the ``sort is None`` guard below fails and an empty list takes
@@ -736,19 +780,134 @@ class SQLiteDB(Database):
                 [json.loads(row["data"]) for row in rows], sort=sort, limit=limit
             )
 
-        # Fallback: untranslatable query (e.g. $regex). Original behavior.
-        cursor = await connection.execute(
-            "SELECT data FROM records WHERE collection = ?", (collection,)
-        )
-        rows = await cursor.fetchall()
-        await cursor.close()
+        # Residual evaluation streams candidates after safe conjunct pushdown.
+        from .database import _query_execution
 
-        results: List[Dict[str, Any]] = []
-        for row in rows:
-            record = json.loads(row["data"])
-            if not query or QueryEngine.match(record, query):
-                results.append(record)
+        results = []
+        candidates = self._fallback_records(collection, query, sort=sort)
+        try:
+            async for record in candidates:
+                if QueryEngine.match(record, query):
+                    results.append(record)
+                    if (
+                        limit is not None
+                        and len(results) >= limit
+                        and (not sort or translate_sort(sort) is not None)
+                    ):
+                        break
+        finally:
+            await candidates.aclose()
+        plan = _query_execution.get()
+        if plan is not None:
+            plan["returned_rows"] = (
+                min(len(results), limit) if limit is not None else len(results)
+            )
         return finalize_find_results(results, sort=sort, limit=limit)
+
+    async def _fallback_records(self, collection, query, *, sort=None):
+        from .database import DatabaseError, _pushdown_conjuncts, _query_execution
+
+        pushed = _pushdown_conjuncts(query, translate_query)
+        where, params = translate_query(pushed) or ("", [])
+        sql = "SELECT data FROM records WHERE collection = ?"
+        values = [collection]
+        if where:
+            sql += f" AND ({where})"
+            values.extend(params)
+        ordering = translate_sort(sort)
+        if ordering:
+            sql += f" ORDER BY {ordering}"
+        plan = {
+            "execution_mode": "residual_scan",
+            "partial_pushdown": bool(pushed),
+            "scanned_rows": 0,
+        }
+        _query_execution.set(plan)
+        connection = await self._get_connection()
+        cursor = await connection.execute(sql, tuple(values))
+        try:
+            while True:
+                rows = await cursor.fetchmany(128)
+                if not rows:
+                    break
+                for row in rows:
+                    if (
+                        self.fallback_scan_limit is not None
+                        and plan["scanned_rows"] >= self.fallback_scan_limit
+                    ):
+                        raise DatabaseError(
+                            "SQLite fallback scan exceeded fallback_scan_limit"
+                        )
+                    plan["scanned_rows"] += 1
+                    from .database import _record_decoded_bytes
+
+                    _record_decoded_bytes(row["data"])
+                    yield json.loads(row["data"])
+        finally:
+            await cursor.close()
+
+    async def count_incident_edges(
+        self, collection: str, node_ids: List[str]
+    ) -> Dict[str, int]:
+        """Count incident edges per requested node, counting self-loops once."""
+        counts = dict.fromkeys(node_ids, 0)
+        connection = await self._get_connection()
+        ids = list(counts)
+        # Stay below SQLite's host-parameter limit even for large BFS results.
+        for offset in range(0, len(ids), 400):
+            chunk = ids[offset : offset + 400]
+            placeholders = ",".join("?" for _ in chunk)
+            source = "json_extract(data, '$.source')"
+            target = "json_extract(data, '$.target')"
+            sql = f"""SELECT nid, COUNT(*) FROM (
+                SELECT {source} AS nid FROM records WHERE collection=? AND {source} IN ({placeholders})
+                UNION ALL
+                SELECT {target} AS nid FROM records WHERE collection=? AND {target} IN ({placeholders})
+                    AND {target} IS NOT {source}
+            ) GROUP BY nid"""
+            cursor = await connection.execute(
+                sql, [collection, *chunk, collection, *chunk]
+            )
+            try:
+                counts.update({row[0]: row[1] for row in await cursor.fetchall()})
+            finally:
+                await cursor.close()
+        return counts
+
+    async def find_ids(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        offset: int = 0,
+    ) -> List[str]:
+        """Project IDs and apply offset within SQLite when predicates translate."""
+        from .database import _keyset_sort_fields
+
+        if offset < 0 or (limit is not None and limit < 0):
+            raise ValueError("offset and limit must be nonnegative")
+        translated = translate_query(query)
+        ordering = translate_sort(_keyset_sort_fields(sort))
+        if translated is None or ordering is None:
+            return await super().find_ids(
+                collection, query, limit=limit, sort=sort, offset=offset
+            )
+        where, values = translated
+        sql = "SELECT id FROM records WHERE collection = ?"
+        params: List[Any] = [collection]
+        if where:
+            sql += f" AND ({where})"
+            params.extend(values)
+        sql += f" ORDER BY {ordering} LIMIT ? OFFSET ?"
+        params.extend([-1 if limit is None else limit, offset])
+        connection = await self._get_connection()
+        cursor = await connection.execute(sql, tuple(params))
+        try:
+            return [row[0] for row in await cursor.fetchall()]
+        finally:
+            await cursor.close()
 
     async def count(
         self,
@@ -760,8 +919,8 @@ class SQLiteDB(Database):
         * Empty query: ``SELECT COUNT(*) … WHERE collection = ?``.
         * Translatable filtered query: ``SELECT COUNT(*) … WHERE
           collection = ? AND <translated WHERE>``.
-        * Untranslatable filtered query (e.g. ``$regex``): falls back to
-          ``find()`` and ``len()``.
+        * Untranslatable filtered query: streams match counters after safe
+          partial pushdown, with an optional ``fallback_scan_limit``.
         """
         q = query or {}
         connection = await self._get_connection()
@@ -786,9 +945,14 @@ class SQLiteDB(Database):
             await cursor.close()
             return row[0] if row else 0
 
-        # Untranslatable: legacy fallback.
-        rows = await self.find(collection, q)
-        return len(rows)
+        total = 0
+        candidates = self._fallback_records(collection, q)
+        try:
+            async for record in candidates:
+                total += bool(QueryEngine.match(record, q))
+        finally:
+            await candidates.aclose()
+        return total
 
     # ---- single-hop neighbour pushdown -------------------------------------
 

@@ -394,6 +394,16 @@ class TestBoundaryConditions:
 
             mock_context.database.find.side_effect = mock_find
 
+            async def find_ids(collection, query, *, limit=None, sort=None, offset=0):
+                records = await mock_find(collection, query, sort=sort)
+                return [r["id"] for r in records[offset:]][:limit]
+
+            async def find_many(collection, ids):
+                return {r["id"]: r for r in exported if r["id"] in ids}
+
+            mock_context.database.find_ids.side_effect = find_ids
+            mock_context.database.find_many.side_effect = find_many
+
             page1 = await pager.get_page(1)
             assert len(page1) == 20
             assert pager.current_page == 1

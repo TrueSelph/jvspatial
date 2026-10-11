@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added opt-in SQL residual scan limits, ID-only paging, optional pager/graph exact counts, and generic BFS priority prefixes.
+- Added native DynamoDB scan pages with query-bound continuation and an opt-in PyMongo Async driver (`driver="pymongo"`; PyMongo >=4.13).
+
+### Fixed
+
+- Composite and descending iterators now retain every sort key and ID, including null/missing runs. PostgreSQL sort values retain numeric types and iteration releases its connection before consumer yields.
+- DynamoDB always evaluates residual predicates, including across pages and limits. Exhausted unprocessed batch reads raise instead of appearing absent; batch writes report accurate failed IDs.
+- Cache wrappers forward native iterators and invalidate unsuccessful or uncertain bulk writes.
+- Local/S3 file streams yield incremental chunks with backpressure and close readers on cancellation or early close.
+- SQLite ID filters/sorts use the physical primary key. SQL annotated indexes gain companion indexes matching nullable compound sort expressions and directions.
+
+### Changed
+
+- `find_one` requests one match. JSON scans read in bounded batches, count incrementally and iterate once in ID order. SQL residual scans preserve safe conjunct pushdown and count without retaining full results.
+- `GraphContext.save_batch` uses bounded per-collection native detailed writes with normal context-save preparation and input-order results. Backend exceptions now propagate after cache invalidation; confirmed partial successes remain reportable. Override entity `save()` hooks explicitly when needed; context operations do not invoke them.
+- Graph expansion bounds transferred incident documents and batches frontier node reads/degrees. Context monitoring retains at most 1000 samples per category; percentiles cover that window, while operation counts, means, byte totals and cache counters remain lifetime totals. Iterator logs add active duration separate from consumer time.
+- Query benchmarks exclude seeding/connection setup, require executed PostgreSQL coverage in CI, and skip incompatible baseline methodologies.
+
 ## [0.1.1] - 2026-10-03
 
 ### Fixed

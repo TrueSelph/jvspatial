@@ -1,5 +1,24 @@
 # jvspatial — Security Code Review
 
+## I/O and query hardening — 2026-10-10
+
+Residual SQL pushdown retains the complete predicate for verification and never
+extracts pieces of OR/NOT expressions. Scan-budget exhaustion raises; it does
+not silently return a partial result. In-memory regex continues through
+QueryEngine's bounded matcher. Native PostgreSQL reads and grouped counts use
+the tenant-scoped connection accessor. SQL index paths remain validated and
+raw predicates remain rejected. Tests: `test_bounded_query_execution.py`,
+`test_cursor_pagination.py`, PostgreSQL integration/RLS and query parity tests.
+
+Local streaming offloads the existing confined-path resolver and retains it;
+JSON reads/writes retain existing confinement, path locks and atomic durability.
+Stream cancellation waits for the active worker read before closing its handle.
+Cache writes promote only confirmed outcomes; ambiguous partial outcomes are
+invalidated. Tests: streaming backpressure/cancellation, I/O audit regressions,
+transaction identity/cache, atomic writes and storage-path security regressions.
+No authentication, secret-comparison or walker-protection defaults are changed.
+
+
 **Date:** 2026-05-02
 **Reviewer:** Claude Code (primary) + Explore agent (parallel scan)
 **Branch:** `dev`

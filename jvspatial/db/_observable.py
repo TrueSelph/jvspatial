@@ -37,7 +37,7 @@ import logging
 import time
 from typing import (
     Any,
-    AsyncIterator,
+    AsyncGenerator,
     Awaitable,
     Callable,
     Dict,
@@ -47,7 +47,13 @@ from typing import (
     Union,
 )
 
-from jvspatial.db.database import BulkSaveResult, Database, InsertIfAbsentResult
+from jvspatial.db.database import (
+    BulkSaveResult,
+    Database,
+    InsertIfAbsentResult,
+    _io_metrics,
+    _query_execution,
+)
 from jvspatial.observability import db_op_counter
 from jvspatial.observability.metrics import (
     MetricsRecorder,
@@ -119,6 +125,8 @@ class ObservableDatabase(Database):
         ``coro_factory`` is a thunk so we measure the underlying call
         only, not the time spent constructing the coroutine.
         """
+        token = _query_execution.set(None)
+        io_token = _io_metrics.set({})
         start = time.monotonic()
         success = True
         result: Any = None
@@ -139,14 +147,22 @@ class ObservableDatabase(Database):
                     result_count = result_count_extractor(result)
                 except Exception:
                     result_count = None
-            self._emit(
-                op=op,
-                collection=collection,
-                duration_ms=duration_ms,
-                duration_s=duration_s,
-                success=success,
-                result_count=result_count,
-            )
+            try:
+                self._emit(
+                    op=op,
+                    collection=collection,
+                    duration_ms=duration_ms,
+                    duration_s=duration_s,
+                    success=success,
+                    result_count=result_count,
+                    query_plan={
+                        **(_query_execution.get() or {}),
+                        **(_io_metrics.get() or {}),
+                    },
+                )
+            finally:
+                _query_execution.reset(token)
+                _io_metrics.reset(io_token)
 
     def _emit(
         self,
@@ -157,6 +173,8 @@ class ObservableDatabase(Database):
         duration_s: float,
         success: bool,
         result_count: Optional[int],
+        query_plan: Optional[Dict[str, Any]] = None,
+        active_duration_s: Optional[float] = None,
     ) -> None:
         # Build the structured payload once; reuse for log + metrics.
         labels: Dict[str, Any] = {
@@ -168,6 +186,11 @@ class ObservableDatabase(Database):
         log_extra = {**labels, "duration_ms": round(duration_ms, 3)}
         if result_count is not None:
             log_extra["result_count"] = result_count
+
+        if query_plan:
+            log_extra.update(query_plan)
+        if active_duration_s is not None:
+            log_extra["active_duration_ms"] = round(active_duration_s * 1000, 3)
 
         # Structured log. WARNING when slow, INFO otherwise. extra=
         # supplies the structured fields to any handler that
@@ -186,6 +209,29 @@ class ObservableDatabase(Database):
                 duration_s,
                 **labels,
             )
+            if active_duration_s is not None:
+                self.metrics.record_duration(
+                    "jvspatial.db.iterator.active_seconds", active_duration_s, **labels
+                )
+            if query_plan:
+                for field in (
+                    "pool_wait_ms",
+                    "driver_attempts",
+                    "retry_count",
+                    "decoded_bytes",
+                ):
+                    if field in query_plan:
+                        self.metrics.record_value(
+                            f"jvspatial.db.query.{field}",
+                            float(query_plan[field]),
+                            **labels,
+                        )
+            if query_plan and "scanned_rows" in query_plan:
+                self.metrics.record_value(
+                    "jvspatial.db.query.scanned_rows",
+                    float(query_plan["scanned_rows"]),
+                    **labels,
+                )
             self.metrics.increment_counter(
                 "jvspatial.db.op.count",
                 **labels,
@@ -260,6 +306,36 @@ class ObservableDatabase(Database):
             collection,
             lambda: self.inner.find(collection, query, limit=limit, sort=sort),
             result_count_extractor=lambda r: len(r) if isinstance(r, list) else 0,
+        )
+
+    async def count_incident_edges(
+        self, collection: str, node_ids: List[str]
+    ) -> Dict[str, int]:
+        """Count incident edges per requested node, counting self-loops once."""
+        return await self._instrument(
+            "count_incident_edges",
+            collection,
+            lambda: self.inner.count_incident_edges(collection, node_ids),
+            result_count_extractor=lambda r: len(r),
+        )
+
+    async def find_ids(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        offset: int = 0,
+    ) -> List[str]:
+        """Instrument native ID projection without falling back to full rows."""
+        return await self._instrument(
+            "find_ids",
+            collection,
+            lambda: self.inner.find_ids(
+                collection, query, limit=limit, sort=sort, offset=offset
+            ),
+            result_count_extractor=len,
         )
 
     async def count(
@@ -411,6 +487,11 @@ class ObservableDatabase(Database):
         )
 
     @property
+    def scan_page(self):
+        """Instrument native unordered pages when the backend provides them."""
+        return self._optional_op("scan_page", lambda result: len(result[0]))
+
+    @property
     def traverse(self) -> Callable[..., Awaitable[Any]]:
         """Instrumented multi-hop graph walk (backend permitting)."""
         return self._optional_op(
@@ -425,39 +506,50 @@ class ObservableDatabase(Database):
         sort: Optional[List[Tuple[str, int]]] = None,
         batch_size: int = 100,
         cursor: Optional[bytes] = None,
-    ) -> AsyncIterator[Dict[str, Any]]:
+    ) -> AsyncGenerator[Dict[str, Any], None]:
         """Instrumented streaming find when the backend supports it."""
         inner = getattr(self.inner, "find_iter", None)
         if not callable(inner):
             raise AttributeError("find_iter")
 
         start = time.monotonic()
+        active_duration = 0.0
         success = True
         result_count = 0
+        iterator = inner(
+            collection, query, sort=sort, batch_size=batch_size, cursor=cursor
+        )
         try:
-            async for row in inner(
-                collection,
-                query,
-                sort=sort,
-                batch_size=batch_size,
-                cursor=cursor,
-            ):
+            while True:
+                tick = time.monotonic()
+                try:
+                    row = await iterator.__anext__()
+                except StopAsyncIteration:
+                    break
+                finally:
+                    active_duration += time.monotonic() - tick
                 result_count += 1
                 yield row
         except BaseException:
             success = False
             raise
         finally:
-            db_op_counter.set(db_op_counter.get() + 1)
-            duration_s = time.monotonic() - start
-            self._emit(
-                op="find_iter",
-                collection=collection,
-                duration_ms=duration_s * 1000.0,
-                duration_s=duration_s,
-                success=success,
-                result_count=result_count,
-            )
+            try:
+                close = getattr(iterator, "aclose", None)
+                if callable(close):
+                    await close()
+            finally:
+                db_op_counter.set(db_op_counter.get() + 1)
+                duration_s = time.monotonic() - start
+                self._emit(
+                    op="find_iter",
+                    collection=collection,
+                    duration_ms=duration_s * 1000.0,
+                    duration_s=duration_s,
+                    active_duration_s=active_duration,
+                    success=success,
+                    result_count=result_count,
+                )
 
     def __getattr__(self, name: str) -> Any:
         """Forward unknown attribute access to the wrapped database."""

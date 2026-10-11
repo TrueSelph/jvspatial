@@ -8,6 +8,7 @@ import base64
 import json
 import logging
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
@@ -41,7 +42,10 @@ def decode_cursor(cursor: Optional[bytes]) -> Optional[Dict[str, Any]]:
         return None
     try:
         raw = base64.urlsafe_b64decode(cursor)
-        return json.loads(raw.decode("utf-8"))  # type: ignore[no-any-return]
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("cursor payload must be an object")
+        return payload
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         raise ValueError(f"invalid cursor: {exc}") from exc
 
@@ -175,6 +179,156 @@ def finalize_find_results(
     if limit is not None:
         out = out[:limit]
     return out
+
+
+# Context-local execution metadata; wrappers read the result of their own call.
+_query_execution: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
+    "jvspatial_query_execution", default=None
+)
+
+_io_metrics: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
+    "jvspatial_io_metrics", default=None
+)
+
+
+def _record_io_metric(name: str, value: float = 1) -> None:
+    """Accumulate only inside an observed call; no shared adapter state."""
+    metrics = _io_metrics.get()
+    if metrics is not None:
+        metrics[name] = metrics.get(name, 0) + value
+
+
+def _record_decoded_bytes(value: Any) -> None:
+    if _io_metrics.get() is not None:
+        raw = value.encode() if isinstance(value, str) else json.dumps(value).encode()
+        _record_io_metric("decoded_bytes", len(raw))
+
+
+def _pushdown_conjuncts(query: Dict[str, Any], translator: Any) -> Dict[str, Any]:
+    """Extract safe AND predicates, never pieces of an OR/NOT expression.
+
+    The original predicate must still be evaluated on every candidate.
+    """
+    if translator(query) is not None:
+        return query
+    supported = []
+    for key, value in query.items():
+        if key == "$and" and isinstance(value, list):
+            for child in value:
+                if isinstance(child, dict):
+                    part = _pushdown_conjuncts(child, translator)
+                    if part:
+                        supported.append(part)
+        elif (
+            not key.startswith("$")
+            and isinstance(value, dict)
+            and any(k.startswith("$") for k in value)
+        ):
+            if translator({key: value}) is not None:
+                supported.append({key: value})
+                continue
+            for op, operand in value.items():
+                if op == "$options":
+                    continue
+                clause = {op: operand}
+                if op == "$regex" and "$options" in value:
+                    clause["$options"] = value["$options"]
+                part = {key: clause}
+                if translator(part) is not None:
+                    supported.append(part)
+        elif translator({key: value}) is not None:
+            supported.append({key: value})
+    return {"$and": supported} if supported else {}
+
+
+def _validate_scan_limit(value: Optional[int]) -> Optional[int]:
+    if value is not None and (
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+    ):
+        raise ValueError("fallback_scan_limit must be a nonnegative integer or None")
+    return value
+
+
+def _keyset_sort_fields(
+    sort: Optional[List[Tuple[str, int]]],
+) -> List[Tuple[str, int]]:
+    """Validate a deterministic order, retaining the existing ID tiebreaker."""
+    fields = list(sort) if sort else [("id", 1)]
+    seen = set()
+    for name, direction in fields:
+        if not isinstance(name, str) or not name or direction not in (1, -1):
+            raise ValueError("sort fields require a name and direction 1 or -1")
+        if name in seen:
+            raise ValueError("sort fields must be unique")
+        seen.add(name)
+    if "id" not in seen:
+        fields.append(("id", fields[0][1]))
+    return fields
+
+
+def _keyset_payload(
+    record: Dict[str, Any], fields: List[Tuple[str, int]]
+) -> Dict[str, Any]:
+    """Capture every ordering value; the legacy primary value remains readable."""
+    if record.get("id") is None:
+        raise ValueError("keyset iteration requires a record id")
+    values = [resolve_sort_value(record, name) for name, _ in fields]
+    return {
+        "id": record["id"],
+        "sort": values[0],
+        "values": values,
+        "fields": [list(item) for item in fields],
+    }
+
+
+def _keyset_condition(
+    fields: List[Tuple[str, int]],
+    payload: Optional[Dict[str, Any]],
+    *,
+    nulls_first: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Lexicographic continuation, including null runs and mixed directions.
+
+    SQL and in-memory sorts place nulls last. Mongo's native ascending
+    sort places them first, selected explicitly by its adapter.
+    """
+    if payload is None:
+        return None
+    if "id" not in payload:
+        raise ValueError("cursor requires an id")
+    if "fields" in payload and payload["fields"] != [list(f) for f in fields]:
+        raise ValueError("cursor sort does not match requested sort")
+    values = payload.get("values")
+    if values is None:
+        if len(fields) == 1 and fields[0][0] == "id":
+            values = [payload["id"]]
+        elif len(fields) == 2 and fields[-1][0] == "id" and "sort" in payload:
+            values = [payload["sort"], payload["id"]]
+        else:
+            raise ValueError("composite sort cursor requires all sort values")
+    if not isinstance(values, list) or len(values) != len(fields):
+        raise ValueError("cursor values do not match requested sort")
+    branches: List[Dict[str, Any]] = []
+    prefix: List[Dict[str, Any]] = []
+    after: Optional[Dict[str, Any]]
+    for (name, direction), value in zip(fields, values):
+        missing_first = nulls_first and direction == 1
+        if value is None:
+            after = {name: {"$ne": None}} if missing_first else None
+        else:
+            comparison: Dict[str, Any] = {
+                name: {"$lt" if direction < 0 else "$gt": value}
+            }
+            after = (
+                comparison
+                if missing_first or name == "id"
+                else {"$or": [comparison, {name: None}]}
+            )
+        if after is not None:
+            branches.append({"$and": [*prefix, after]} if prefix else after)
+        prefix.append({name: value})
+    # ID is non-null and unique, so a nonempty branch always exists.
+    return {"$or": branches}
 
 
 class Database(ABC):
@@ -346,6 +500,60 @@ class Database(ABC):
         """
         pass
 
+    async def count_incident_edges(
+        self, collection: str, node_ids: List[str]
+    ) -> Dict[str, int]:
+        """Count each edge once per endpoint, including self-loops once."""
+        counts = dict.fromkeys(node_ids, 0)
+        if not counts:
+            return counts
+        query = {
+            "$or": [
+                {"source": {"$in": list(counts)}},
+                {"target": {"$in": list(counts)}},
+            ]
+        }
+        iterator = self.find_iter(collection, query)
+        try:
+            async for edge in iterator:
+                for nid in {
+                    value
+                    for value in (edge.get("source"), edge.get("target"))
+                    if isinstance(value, str)
+                }:
+                    if nid in counts:
+                        counts[nid] += 1
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if callable(close):
+                await close()
+        return counts
+
+    async def find_ids(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        offset: int = 0,
+    ) -> List[str]:
+        """Return only IDs for raw paging/export; adapters may project natively.
+
+        Offset paging still examines a prefix in the store, but native
+        implementations do not transfer discarded full documents. This
+        fallback preserves correctness for third-party adapters.
+        """
+        if offset < 0 or (limit is not None and limit < 0):
+            raise ValueError("offset and limit must be nonnegative")
+        rows = await self.find(
+            collection,
+            query,
+            sort=_keyset_sort_fields(sort),
+            limit=None if limit is None else offset + limit,
+        )
+        return [str(r["id"]) for r in rows[offset:]]
+
     async def count(
         self, collection: str, query: Optional[Dict[str, Any]] = None
     ) -> int:
@@ -372,92 +580,44 @@ class Database(ABC):
         batch_size: int = 100,
         cursor: Optional[bytes] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
-        """Page through ``query`` results in constant memory.
+        """Iterate in deterministic composite order with an ID tiebreaker.
 
-        Yields one record at a time. Callers iterate with::
+        ``batch_size`` is a positive integer. The generic pager retains one
+        page; an adapter fallback may still need to sort all matches. Cursors
+        track every sort field and direction. Mongo uses native BSON null
+        ordering; SQL and in-memory sorts place missing/null last.
 
-            async for record in db.find_iter("user", {"context.active": True}):
-                ...
-
-        The default implementation provides keyset pagination over
-        the ``id`` field (always-unique, lexically sortable per
-        SPEC §1.1). Adapters with native cursors (Mongo motor cursor,
-        DynamoDB ``LastEvaluatedKey``, asyncpg ``server-side cursor``)
-        override this for fewer round trips.
-
-        Args:
-            collection: Collection name.
-            query: Mongo-style query (same operator surface as ``find``).
-            sort: Optional ``[(field, direction)]``, defaulting to ``id``
-                ascending. **The default implementation's cursor tracks
-                ``id`` only**, so a non-``id`` sort is not safely pageable
-                here: each batch asks for ``id > last_id``, which drops
-                records that sort after the batch but carry a lower ``id``.
-                Use ``sort=None`` (or an ``id`` sort) with this default, or
-                an adapter override with a native cursor. A composite
-                ``(sort_value, id)`` cursor is not yet implemented — for a
-                custom sort key with correct paging use
-                :meth:`jvspatial.core.context.GraphContext.find_page`.
-            batch_size: Records per round trip. Default 100.
-            cursor: Opaque bytes from a prior call's last record. Pass
-                back to resume; pass ``None`` (default) to start fresh.
-
-        Yields:
-            One record dict per iteration. The caller's last-seen
-            record's ``id`` can be encoded into a fresh cursor via
-            :func:`encode_cursor` if you want to checkpoint progress;
-            otherwise ``find_iter`` manages cursor advancement internally.
-
-        Notes:
-            * Keyset pagination is consistent under concurrent inserts
-              — a new row appearing earlier in the sort order won't
-              be skipped, but a row updated to a later sort value
-              between batches may be visited twice. For exactly-once
-              semantics across long iterations, snapshot the query at
-              a transaction.
-            * The default implementation issues N/batch_size round
-              trips; expect linear behavior, not constant. Adapter
-              overrides amortize the cost.
+        This is live pagination, not a repeatable-read snapshot. Inserts before
+        the cursor are not visited; sort-key updates can skip or revisit rows.
+        Use an explicit transaction/snapshot if exactly-once reads are needed.
+        An id-only cursor remains valid for an id-only sort. Custom-sort
+        checkpoints require all sort values, as GraphContext.find_page emits.
         """
-        last_id: Optional[str] = None
-        if cursor is not None:
-            decoded = decode_cursor(cursor)
-            if decoded is not None:
-                last_id = decoded.get("id")
-
+        if (
+            isinstance(batch_size, bool)
+            or not isinstance(batch_size, int)
+            or batch_size < 1
+        ):
+            raise ValueError("batch_size must be a positive integer")
+        fields = _keyset_sort_fields(sort)
+        payload = decode_cursor(cursor)
         while True:
-            page_query = dict(query)
-            if last_id is not None:
-                # Compose an id > last_id constraint into the user query.
-                existing_id_clause = page_query.pop("id", None)
-                # Merge: keep any user-provided id clause + add the
-                # keyset filter.
-                if existing_id_clause is None:
-                    page_query["id"] = {"$gt": last_id}
-                elif isinstance(existing_id_clause, dict):
-                    merged = dict(existing_id_clause)
-                    existing_gt = merged.get("$gt")
-                    if existing_gt is None or last_id > existing_gt:
-                        merged["$gt"] = last_id
-                    page_query["id"] = merged
-                else:
-                    # Caller pinned id to a literal — single-row query,
-                    # not pageable. Yield once if it hasn't been seen.
-                    if str(existing_id_clause) <= last_id:
-                        return
-                    page_query["id"] = existing_id_clause
-
+            after = _keyset_condition(
+                fields, payload, nulls_first=getattr(self, "_keyset_nulls_first", False)
+            )
+            page_query = (
+                ({"$and": [query, after]} if query else after)
+                if after is not None
+                else dict(query)
+            )
             results = await self.find(
-                collection,
-                page_query,
-                sort=sort or [("id", 1)],
-                limit=batch_size,
+                collection, page_query, sort=fields, limit=batch_size
             )
             if not results:
                 return
             for rec in results:
+                payload = _keyset_payload(rec, fields)
                 yield rec
-                last_id = rec.get("id") or last_id
             if len(results) < batch_size:
                 return
 
@@ -473,7 +633,7 @@ class Database(ABC):
         Returns:
             First matching record or None if not found
         """
-        results = await self.find(collection, query)
+        results = await self.find(collection, query, limit=1)
         return results[0] if results else None
 
     async def find_many(

@@ -17,7 +17,18 @@ import asyncio
 import json
 import logging
 from functools import partial
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 
 try:
     import aioboto3
@@ -36,7 +47,12 @@ except ImportError:
     ClientError = Exception  # type: ignore[assignment, misc]
     Config = None  # type: ignore[assignment, misc]
 
-from jvspatial.db.database import Database, InsertIfAbsentResult, finalize_find_results
+from jvspatial.db.database import (
+    BulkSaveResult,
+    Database,
+    InsertIfAbsentResult,
+    finalize_find_results,
+)
 from jvspatial.db.query import QueryEngine
 from jvspatial.exceptions import DatabaseError
 from jvspatial.utils.retry import retry_async
@@ -450,7 +466,7 @@ class DynamoDB(Database):
             # Cache table existence
             self._tables_created[full_table_name] = True
         except ClientError as e:
-            if e.response["Error"]["Code"] == "ResourceNotFoundException":
+            if cast(Any, e).response["Error"]["Code"] == "ResourceNotFoundException":
                 # Table doesn't exist, create it
                 try:
                     await client.create_table(
@@ -475,7 +491,7 @@ class DynamoDB(Database):
                     self._tables_created[full_table_name] = True
                 except ClientError as create_error:
                     if (
-                        create_error.response["Error"]["Code"]
+                        cast(Any, create_error).response["Error"]["Code"]
                         != "ResourceInUseException"
                     ):
                         raise DatabaseError(
@@ -495,14 +511,24 @@ class DynamoDB(Database):
         exponential backoff with full jitter; non-throttle ``ClientError``s
         propagate immediately and are wrapped as ``DatabaseError``.
         """
+        from .database import _record_io_metric
+
+        async def attempt():
+            _record_io_metric("driver_attempts")
+            return await coro_factory()
+
+        def retrying(*args: Any) -> None:
+            _record_io_metric("retry_count")
+
         try:
             return await retry_async(
-                coro_factory,
+                attempt,
                 retry_on=_is_dynamodb_throttle_error,
                 max_attempts=4,
                 base_delay=0.1,
                 max_delay=2.0,
                 jitter=True,
+                on_retry=retrying,
             )
         except ClientError as e:
             raise DatabaseError(f"DynamoDB {op_name} error: {e}") from e
@@ -655,6 +681,78 @@ class DynamoDB(Database):
 
         await self._run_with_throttle_retry("delete", _delete_op)
 
+    async def scan_page(self, collection, query, *, page_size=100, cursor=None):
+        """One unordered native scan page; empty matches may have continuation.
+
+        The cursor is scoped to collection and predicate, not a graph keyset.
+        ``page_size`` bounds evaluated items, before residual filtering.
+        """
+        import hashlib
+
+        from .database import _query_execution, decode_cursor, encode_cursor
+
+        if (
+            isinstance(page_size, bool)
+            or not isinstance(page_size, int)
+            or not 1 <= page_size <= 1000
+        ):
+            raise ValueError("page_size must be an integer between 1 and 1000")
+        fingerprint = hashlib.sha256(
+            json.dumps(query, sort_keys=True, default=str).encode()
+        ).hexdigest()
+        payload = decode_cursor(cursor)
+        if payload is not None and (
+            payload.get("kind") != "dynamodb-scan-v1"
+            or payload.get("collection") != collection
+            or payload.get("query") != fingerprint
+        ):
+            raise ValueError("scan cursor does not match collection and query")
+        table = await self._ensure_table_exists(collection)
+        client = await self._get_client()
+        expression, names, values = self._build_filter_expression(query, collection)
+        names = {"#coll": "collection", **names}
+        values = {":collection_val": {"S": collection}, **values}
+        params = {
+            "TableName": table,
+            "Limit": page_size,
+            "FilterExpression": "#coll = :collection_val"
+            + (f" AND {expression}" if expression else ""),
+            "ExpressionAttributeNames": names,
+            "ExpressionAttributeValues": values,
+            "ReturnConsumedCapacity": "TOTAL",
+        }
+        if payload:
+            params["ExclusiveStartKey"] = payload["key"]
+        response = await self._run_with_throttle_retry(
+            "scan_page", lambda: client.scan(**params)
+        )
+        rows = [json.loads(item["data"]["S"]) for item in response.get("Items", [])]
+        rows = [record for record in rows if QueryEngine.match(record, query)]
+        key = response.get("LastEvaluatedKey")
+        next_cursor = (
+            encode_cursor(
+                {
+                    "kind": "dynamodb-scan-v1",
+                    "collection": collection,
+                    "query": fingerprint,
+                    "key": key,
+                }
+            )
+            if key
+            else None
+        )
+        _query_execution.set(
+            {
+                "execution_mode": "native_scan",
+                "scanned_rows": response.get("ScannedCount", 0),
+                "returned_rows": len(rows),
+                "consumed_capacity": response.get("ConsumedCapacity", {}).get(
+                    "CapacityUnits", 0
+                ),
+            }
+        )
+        return rows, next_cursor
+
     async def batch_get(self, collection: str, ids: List[str]) -> List[Dict[str, Any]]:
         """Retrieve multiple records by IDs using batch_get_item.
 
@@ -680,6 +778,7 @@ class DynamoDB(Database):
         batch_size = 100
 
         # Split into batches
+        ids = list(dict.fromkeys(ids))
         batches = [ids[i : i + batch_size] for i in range(0, len(ids), batch_size)]
 
         async def process_batch(batch_ids: List[str]) -> List[Dict[str, Any]]:
@@ -712,143 +811,115 @@ class DynamoDB(Database):
                     data = json.loads(item["data"]["S"])
                     batch_results.append(data)
 
-                # Handle unprocessed keys (should be rare with proper retry config)
                 unprocessed = response.get("UnprocessedKeys", {})
-                if unprocessed:
-                    logger.debug(
-                        f"Unprocessed keys in batch_get for collection '{collection}': {len(unprocessed.get(table_name, {}).get('Keys', []))}"
-                    )
-                    # Retry unprocessed keys once (also throttle-aware).
+                for attempt in range(3):
+                    if not unprocessed.get(table_name, {}).get("Keys"):
+                        break
+                    await asyncio.sleep(0.1 * (2**attempt))
                     retry_items = {table_name: unprocessed[table_name]}
-                    retry_response = await self._run_with_throttle_retry(
-                        "batch_get_item_retry",
-                        lambda: client.batch_get_item(RequestItems=retry_items),
+
+                    async def retry_batch(
+                        request: Dict[str, Any] = retry_items,
+                    ) -> Any:
+                        return await client.batch_get_item(RequestItems=request)
+
+                    response = await self._run_with_throttle_retry(
+                        "batch_get_item_retry", retry_batch
                     )
-                    retry_items_list = retry_response.get("Responses", {}).get(
-                        table_name, []
+                    batch_results.extend(
+                        json.loads(item["data"]["S"])
+                        for item in response.get("Responses", {}).get(table_name, [])
                     )
-                    for item in retry_items_list:
-                        data = json.loads(item["data"]["S"])
-                        batch_results.append(data)
+                    unprocessed = response.get("UnprocessedKeys", {})
+                if unprocessed.get(table_name, {}).get("Keys"):
+                    raise DatabaseError(
+                        "DynamoDB batch_get exhausted retries with unprocessed keys"
+                    )
 
             except ClientError as e:
                 raise DatabaseError(f"DynamoDB batch_get error: {e}") from e
 
             return batch_results
 
-        # Process all batches in parallel for better performance
-        if len(batches) > 1:
+        results: List[Dict[str, Any]] = []
+        for offset in range(0, len(batches), 8):
             batch_results = await asyncio.gather(
-                *[process_batch(batch) for batch in batches]
+                *(process_batch(batch) for batch in batches[offset : offset + 8])
             )
-            # Flatten results
-            results = [item for batch_result in batch_results for item in batch_result]
-        else:
-            # Single batch, no need for parallelization
-            results = await process_batch(batches[0] if batches else [])
+            results.extend(
+                item for batch_result in batch_results for item in batch_result
+            )
 
         return results
 
     async def batch_write(self, collection: str, items: List[Dict[str, Any]]) -> None:
-        """Write multiple records using batch_write_item.
-
-        This method efficiently writes multiple records in batches, handling
-        DynamoDB's 25-item limit and unprocessed items automatically.
-        Batches are processed in parallel for better performance.
-
-        Args:
-            collection: Collection name
-            items: List of record dictionaries to write
-
-        Raises:
-            DatabaseError: If batch write fails after retries
-        """
-        if not items:
-            return
-
-        table_name = await self._ensure_table_exists(collection)
-        client = await self._get_client()
-
-        # Ensure all items have IDs
+        """Native writes, raising if any record remains unprocessed."""
         import uuid
 
         for item in items:
             if "id" not in item:
                 item["id"] = str(uuid.uuid4())
+        result = await self.bulk_save_detailed(collection, items)
+        if result.failed_ids:
+            raise DatabaseError(
+                f"DynamoDB batch write left {len(result.failed_ids)} items unprocessed"
+            )
 
-        # DynamoDB batch_write_item has a limit of 25 items per request
-        batch_size = 25
+    async def bulk_save_detailed(
+        self, collection: str, records: List[Dict[str, Any]]
+    ) -> BulkSaveResult:
+        """Execute BatchWriteItem with bounded concurrency and per-ID outcomes."""
+        if not records:
+            return BulkSaveResult(0, 0, [])
+        for index, record in enumerate(records):
+            if "id" not in record:
+                raise ValueError(
+                    f"bulk_save: record at index {index} has no 'id' field"
+                )
+        table = await self._ensure_table_exists(collection)
+        client = await self._get_client()
+        # Dynamo rejects repeated keys in a single wire batch. Retain the
+        # final submitted value for each ID and account for original inputs.
+        unique = list({str(r["id"]): r for r in records}.values())
 
-        # Split into batches
-        batches = [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
-
-        async def process_batch(batch_items: List[Dict[str, Any]]) -> None:
-            """Process a single batch of items."""
-            # Prepare write requests for this batch
-            write_requests = []
-            for item_data in batch_items:
-                # Prepare item for DynamoDB
-                dynamodb_item = {
+        async def write(chunk: List[Dict[str, Any]]) -> List[str]:
+            requests = []
+            for record in chunk:
+                item = {
                     "collection": {"S": collection},
-                    "id": {"S": item_data["id"]},
-                    "data": {
-                        "S": json.dumps(item_data, default=str)
-                    },  # Serialize data as JSON string
+                    "id": {"S": str(record["id"])},
+                    "data": {"S": json.dumps(record, default=str)},
                 }
-
-                # Extract indexed fields and add as top-level attributes for GSI support
-                indexed_attrs = self._extract_indexed_fields(item_data, collection)
-                dynamodb_item.update(indexed_attrs)
-
-                write_requests.append({"PutRequest": {"Item": dynamodb_item}})
-
-            request_items = {table_name: write_requests}
-
-            try:
-                # Throttle-retry wraps the wire call (audit §5.1 / SPEC §4.3).
+                item.update(self._extract_indexed_fields(record, collection))
+                requests.append({"PutRequest": {"Item": item}})
+            pending = {table: requests}
+            for attempt in range(4):
                 response = await self._run_with_throttle_retry(
                     "batch_write_item",
-                    lambda: client.batch_write_item(RequestItems=request_items),
+                    partial(client.batch_write_item, RequestItems=pending),
                 )
+                pending = response.get("UnprocessedItems", {})
+                if not pending or not pending.get(table):
+                    return []
+                if attempt < 3:
+                    await asyncio.sleep(0.1 * (2**attempt))
+            return [item["PutRequest"]["Item"]["id"]["S"] for item in pending[table]]
 
-                # Handle unprocessed items with retry logic
-                unprocessed = response.get("UnprocessedItems", {})
-                max_retries = 3
-                retry_count = 0
-
-                while unprocessed and retry_count < max_retries:
-                    retry_count += 1
-                    logger.debug(
-                        f"Retrying {len(unprocessed.get(table_name, []))} unprocessed items (attempt {retry_count}/{max_retries})"
-                    )
-
-                    # Wait before retry (exponential backoff)
-                    await asyncio.sleep(0.1 * (2 ** (retry_count - 1)))
-
-                    # ``partial`` snapshots kwargs at construction time, so
-                    # the closure does not refer to the loop variable
-                    # ``unprocessed`` (flake8-bugbear B023). The retry
-                    # helper awaits the resulting coroutine inline.
-                    retry_response = await self._run_with_throttle_retry(
-                        "batch_write_item_retry",
-                        partial(client.batch_write_item, RequestItems=unprocessed),
-                    )
-                    unprocessed = retry_response.get("UnprocessedItems", {})
-
-                if unprocessed:
-                    raise DatabaseError(
-                        f"DynamoDB batch write left {len(unprocessed.get(table_name, []))} items unprocessed"
-                    )
-
-            except ClientError as e:
-                raise DatabaseError(f"DynamoDB batch_write error: {e}") from e
-
-        # Process all batches in parallel for better performance
-        if len(batches) > 1:
-            await asyncio.gather(*[process_batch(batch) for batch in batches])
-        else:
-            # Single batch, no need for parallelization
-            await process_batch(batches[0] if batches else [])
+        failed: List[str] = []
+        # At most eight wire requests scheduled at once, not one per batch
+        # in the complete caller-supplied collection.
+        chunks = [unique[i : i + 25] for i in range(0, len(unique), 25)]
+        try:
+            for offset in range(0, len(chunks), 8):
+                outcomes = await asyncio.gather(
+                    *(write(c) for c in chunks[offset : offset + 8])
+                )
+                failed.extend(rid for outcome in outcomes for rid in outcome)
+        except ClientError as exc:
+            raise DatabaseError(f"DynamoDB bulk_save error: {exc}") from exc
+        failed_set = set(failed)
+        saved = sum(str(r["id"]) not in failed_set for r in records)
+        return BulkSaveResult(len(records), saved, failed)
 
     async def find_many(
         self, collection: str, ids: List[str]
@@ -969,10 +1040,10 @@ class DynamoDB(Database):
                 # Convert value to DynamoDB format
                 if isinstance(value, str):
                     value_attr = {"S": value}
-                elif isinstance(value, (int, float)):
-                    value_attr = {"N": str(value)}
                 elif isinstance(value, bool):
                     value_attr = {"BOOL": value}  # type: ignore[dict-item]
+                elif isinstance(value, (int, float)):
+                    value_attr = {"N": str(value)}
                 else:
                     value_attr = {"S": str(value)}
 
@@ -1170,6 +1241,8 @@ class DynamoDB(Database):
             - Falls back to scan() for complex queries or unindexed fields
             - All queries are transparent - same API, better performance
         """
+        if limit == 0:
+            return []
         table_name = await self._ensure_table_exists(collection)
 
         try:
@@ -1233,10 +1306,8 @@ class DynamoDB(Database):
                         # Deserialize data from JSON string
                         data = json.loads(item["data"]["S"])
                         # Only apply client-side filtering if FilterExpression wasn't used
-                        if (
-                            not filter_expr
-                            and remaining_query
-                            and not QueryEngine.match(data, remaining_query)
+                        if remaining_query and not QueryEngine.match(
+                            data, remaining_query
                         ):
                             continue
                         results.append(data)
@@ -1257,10 +1328,8 @@ class DynamoDB(Database):
 
                         for item in response.get("Items", []):
                             data = json.loads(item["data"]["S"])
-                            if (
-                                not filter_expr
-                                and remaining_query
-                                and not QueryEngine.match(data, remaining_query)
+                            if remaining_query and not QueryEngine.match(
+                                data, remaining_query
                             ):
                                 continue
                             results.append(data)
@@ -1320,7 +1389,7 @@ class DynamoDB(Database):
                 data = json.loads(item["data"]["S"])
 
                 # Only apply client-side filtering if FilterExpression wasn't used or query is complex
-                if not filter_expr and query and not QueryEngine.match(data, query):
+                if query and not QueryEngine.match(data, query):
                     continue
                 results.append(data)
                 if fetch_limit and len(results) >= fetch_limit:
@@ -1340,7 +1409,7 @@ class DynamoDB(Database):
 
                 for item in response.get("Items", []):
                     data = json.loads(item["data"]["S"])
-                    if not filter_expr and query and not QueryEngine.match(data, query):
+                    if query and not QueryEngine.match(data, query):
                         continue
                     results.append(data)
                     if fetch_limit and len(results) >= fetch_limit:
@@ -1396,7 +1465,10 @@ class DynamoDB(Database):
                     # GSI not found in table description
                     raise DatabaseError(f"GSI '{index_name}' not found in table")
             except ClientError as e:
-                if e.response["Error"]["Code"] == "ResourceNotFoundException":
+                if (
+                    cast(Any, e).response["Error"]["Code"]
+                    == "ResourceNotFoundException"
+                ):
                     raise DatabaseError(f"Table '{table_name}' not found") from e
                 raise DatabaseError(f"Error checking GSI status: {e}") from e
 
@@ -1456,7 +1528,10 @@ class DynamoDB(Database):
                 ]
 
             except ClientError as e:
-                if e.response["Error"]["Code"] != "ResourceNotFoundException":
+                if (
+                    cast(Any, e).response["Error"]["Code"]
+                    != "ResourceNotFoundException"
+                ):
                     raise
                 new_attr_defs = attribute_definitions
 

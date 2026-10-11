@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections import deque
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 from jvspatial.core.graph_payload import (
     DetailLevel,
@@ -31,8 +30,7 @@ async def _node_degrees(
     """Degree per node record — count incident edges in the edge collection."""
     ids = list(records)
     db = context.database
-    counts = await asyncio.gather(*(db.count("edge", _incident_query(n)) for n in ids))
-    return dict(zip(ids, counts))
+    return await db.count_incident_edges("edge", ids)
 
 
 def _edge_matches_direction(
@@ -84,6 +82,38 @@ def _bfs_spine_edge_sort_key(
     return (3, eid)
 
 
+async def _bounded_incident_edges(db, node_id, cap, priorities):
+    """Preserve priority ordering with bounded result sets for each tier."""
+    incident = _incident_query(node_id)
+    candidates = {}
+    for prefix in priorities:
+        # Lexicographic prefix interval, avoiding an unindexable regex.
+        upper = prefix[:-1] + chr(ord(prefix[-1]) + 1)
+        interval = {"$gte": prefix, "$lt": upper}
+        matches = {
+            "$or": [
+                {"source": node_id, "target": interval},
+                {"target": node_id, "source": interval},
+            ]
+        }
+        rows = await db.find("edge", matches, sort=[("id", 1)], limit=cap + 1)
+        candidates.update({str(row["id"]): row for row in rows})
+    rows = await db.find("edge", incident, sort=[("id", 1)], limit=cap + 1)
+    candidates.update({str(row["id"]): row for row in rows})
+
+    def key(item):
+        eid, doc = item
+        other = _other_endpoint(doc, node_id) or ""
+        rank = next(
+            (i for i, prefix in enumerate(priorities) if other.startswith(prefix)),
+            len(priorities),
+        )
+        return rank, eid
+
+    ordered = sorted(candidates.items(), key=key)
+    return ordered[:cap], len(ordered) > cap
+
+
 async def expand_node(
     context: GraphContext,
     node_id: str,
@@ -93,6 +123,7 @@ async def expand_node(
     cursor: int = 0,
     after: Optional[str] = None,
     detail_level: DetailLevel = "full",
+    include_counts: bool = True,
 ) -> Dict[str, Any]:
     """Load the center node and a page of incident edges plus neighbor summaries.
 
@@ -134,7 +165,7 @@ async def expand_node(
         }
 
     incident = _incident_query(node_id)
-    total = await db.count("edge", incident)
+    total = await db.count("edge", incident) if include_counts else None
     page: List[Dict[str, Any]] = []
     if limit:
         if after:
@@ -148,12 +179,16 @@ async def expand_node(
             page = rows[:limit]
         else:
             rows = await db.find(
-                "edge", incident, sort=[("id", 1)], limit=cursor + limit
+                "edge", incident, sort=[("id", 1)], limit=cursor + limit + 1
             )
-            page = rows[cursor:]
-            has_more = cursor + len(page) < total
+            page = rows[cursor : cursor + limit]
+            has_more = len(rows) > cursor + limit
     else:
-        has_more = cursor < total
+        has_more = (
+            cursor < total
+            if total is not None
+            else bool(await db.find("edge", incident, limit=1))
+        )
 
     edge_docs = [d for d in page if _edge_matches_direction(d, node_id, direction)]
 
@@ -167,7 +202,7 @@ async def expand_node(
     neighbor_records = (
         await db.find_many("node", neighbor_ids_unique) if neighbor_ids_unique else {}
     )
-    degrees = await _node_degrees(context, neighbor_records)
+    degrees = await _node_degrees(context, neighbor_records) if include_counts else {}
 
     nodes_out: List[Dict[str, Any]] = [
         node_record_to_payload(
@@ -182,7 +217,9 @@ async def expand_node(
                 node_record_to_payload(
                     neighbor_records[nid],
                     detail_level=detail_level,
-                    degree=degrees.get(nid, 0),
+                    degree=(
+                        degrees.get(nid) if not include_counts else degrees.get(nid, 0)
+                    ),
                 )
             )
         else:
@@ -197,6 +234,10 @@ async def expand_node(
             if detail_level == "full":
                 miss_payload["context"] = {}
             nodes_out.append(miss_payload)
+
+    if not include_counts:
+        for payload in nodes_out:
+            payload["degree"] = None
 
     edges_out = [
         edge_record_to_payload(
@@ -233,12 +274,16 @@ async def subgraph_bfs(
     max_nodes: int = 100,
     max_edges_per_node: int = 200,
     detail_level: DetailLevel = "full",
+    include_counts: bool = True,
+    priority_node_prefixes: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Breadth-first load of a bounded subgraph from ``root_id``.
 
     Stops when ``max_depth`` or ``max_nodes`` would be exceeded. Each node
     follows at most ``max_edges_per_node`` incident edges (sorted by edge id).
-    Incident edges come from one edge-collection query per expanded node.
+    Incident-edge queries each return at most cap+1 rows. Explicit priority
+    prefixes preserve tier ordering; native SQL/Mongo group exact degrees.
+    Node records are fetched per frontier. Counts can be omitted.
 
     Args:
         context: Active graph context
@@ -247,6 +292,9 @@ async def subgraph_bfs(
         max_nodes: Maximum distinct nodes in the result
         max_edges_per_node: Cap on edges followed per node when expanding
         detail_level: ``summary`` or ``full``
+        include_counts: False omits exact degree scans (degree values are None).
+        priority_node_prefixes: Ordered prefixes, or [] for plain ID order.
+            None retains the legacy priority policy.
 
     Returns:
         Dict with ``root_id``, ``nodes``, ``edges``, ``meta``
@@ -261,51 +309,60 @@ async def subgraph_bfs(
     nodes_by_id: Dict[str, Dict[str, Any]] = {}
     truncated = False
 
+    # Legacy priorities remain the default for API compatibility. An empty
+    # explicit policy uses ID ordering; applications can supply any prefixes.
+    priorities = (
+        priority_node_prefixes
+        if priority_node_prefixes is not None
+        else ["n.App.", "n.Agents.", "n.Root."]
+    )
+    if len(priorities) > 32:
+        raise ValueError("at most 32 priority_node_prefixes are allowed")
+    if any(
+        not isinstance(prefix, str) or not prefix or ord(prefix[-1]) == 0x10FFFF
+        for prefix in priorities
+    ):
+        raise ValueError("priority_node_prefixes must contain nonempty strings")
     q: deque[tuple[str, int]] = deque([(root_id, 0)])
-
+    scheduled = {root_id}
     while q:
-        if len(seen) >= max_nodes:
+        depth = q[0][1]
+        frontier: List[str] = []
+        while q and q[0][1] == depth and len(seen) + len(frontier) < max_nodes:
+            vid, _ = q.popleft()
+            frontier.append(vid)
+        if not frontier:
             truncated = True
             break
-        vid, d = q.popleft()
-        if vid in seen:
-            continue
-        seen.add(vid)
-
-        raw = await db.get("node", vid)
-        if raw:
-            nodes_by_id[vid] = raw
-
-        if d >= max_depth:
-            continue
-
-        eid_docs: List[Tuple[str, Optional[Dict[str, Any]]]] = [
-            (str(doc.get("id")), doc)
-            for doc in await db.find("edge", _incident_query(vid))
-        ]
-        eid_docs.sort(key=lambda t: _bfs_spine_edge_sort_key(t[0], t[1], vid))
-        selected = eid_docs[:max_edges_per_node]
-        if len(eid_docs) > len(selected):
-            truncated = True
-
-        for eid, edoc in selected:
-            if not edoc:
+        nodes_by_id.update(await db.find_many("node", frontier))
+        for vid in frontier:
+            seen.add(vid)
+            if depth >= max_depth:
                 continue
-            edges_by_id[eid] = edoc
-            other = _other_endpoint(edoc, vid)
-            if not other:
-                continue
-            if other not in seen:
-                q.append((other, d + 1))
+            selected, capped = await _bounded_incident_edges(
+                db, vid, max_edges_per_node, priorities
+            )
+            truncated |= capped
+            for eid, edoc in selected:
+                edges_by_id[eid] = edoc
+                other = _other_endpoint(edoc, vid)
+                if other and other not in scheduled:
+                    if len(scheduled) >= max_nodes:
+                        truncated = True
+                        continue
+                    scheduled.add(other)
+                    q.append((other, depth + 1))
 
-    degrees = await _node_degrees(context, nodes_by_id)
+    degrees = await _node_degrees(context, nodes_by_id) if include_counts else {}
     node_payloads: List[Dict[str, Any]] = []
     for nid in sorted(seen):
         rec = nodes_by_id.get(nid)
         if rec:
             node_payloads.append(
                 node_record_to_payload(
-                    rec, detail_level=detail_level, degree=degrees.get(nid, 0)
+                    rec,
+                    detail_level=detail_level,
+                    degree=degrees.get(nid, 0) if include_counts else None,
                 )
             )
         else:
@@ -320,6 +377,10 @@ async def subgraph_bfs(
             if detail_level == "full":
                 miss["context"] = {}
             node_payloads.append(miss)
+
+    if not include_counts:
+        for payload in node_payloads:
+            payload["degree"] = None
 
     edge_payloads = [
         edge_record_to_payload(doc, detail_level=detail_level)

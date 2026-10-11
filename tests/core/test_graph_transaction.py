@@ -188,3 +188,23 @@ async def test_index_setup_is_scoped_to_database_instance(monkeypatch) -> None:
         await GraphContext(cast(Database, database)).ensure_indexes(IndexedRecord)
     assert first.created > 0
     assert second.created == first.created
+
+
+async def test_save_batch_stays_on_transaction_handle():
+    db = _FakeDB()
+    async with graph_transaction(db) as ctx:
+        records = [Object(), Object()]
+        assert await ctx.save_batch(records) == records
+        assert len(db.txn.saved) == 2
+    assert db.committed
+
+
+async def test_save_batch_preserves_mixed_collection_input_order(tmp_path):
+    from jvspatial.db.jsondb import JsonDB
+
+    db = JsonDB(str(tmp_path))
+    ctx = GraphContext(database=db)
+    parent = Folder(name="parent")
+    child = Note(title="child")
+    records = [parent, Object(), child]
+    assert await ctx.save_batch(records) == records

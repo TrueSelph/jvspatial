@@ -43,6 +43,25 @@ def mock_context():
     """Mock GraphContext for testing."""
     context = MagicMock()
     context.database = AsyncMock()
+    projected = {}
+
+    async def find_ids(collection, query, *, limit=None, sort=None, offset=0):
+        rows = await context.database.find(
+            collection,
+            query,
+            limit=None if limit is None else offset + limit,
+            sort=sort,
+        )
+        rows = finalize_find_results(rows, sort=sort)
+        projected.clear()
+        projected.update({str(row["id"]): row for row in rows})
+        return [str(row["id"]) for row in rows[offset:]][:limit]
+
+    async def find_many(collection, ids):
+        return {rid: projected[rid] for rid in ids if rid in projected}
+
+    context.database.find_ids.side_effect = find_ids
+    context.database.find_many.side_effect = find_many
     context._get_collection_name = MagicMock(return_value="test_collection")
     context._deserialize_entity = AsyncMock()
     return context
@@ -732,3 +751,24 @@ class TestPaginationWithNodes:
             )
             ny_results = await pager_filtered.get_page(1)
             assert len(ny_results) <= 3  # Should filter results
+
+
+async def test_numbered_page_can_skip_exact_count(mock_context, sample_data):
+    with patch("jvspatial.core.context.get_default_context", return_value=mock_context):
+        mock_context.database.find.side_effect = partial(
+            mock_find_respecting_limit, sample_data
+        )
+        mock_context.database.count.side_effect = AssertionError(
+            "count must be skipped"
+        )
+
+        async def deserialize(cls, data):
+            return PaginationTestObject(id=data["id"], **data["context"])
+
+        mock_context._deserialize_entity.side_effect = deserialize
+        pager = ObjectPager(PaginationTestObject, page_size=2, count_total=False)
+        assert [obj.id for obj in await pager.get_page(2)] == ["3", "4"]
+        assert pager.has_next_page()
+        assert pager.to_dict()["total_items"] is None
+        assert [obj.id for obj in await pager.next_page()] == ["5"]
+        assert not pager.has_next_page()

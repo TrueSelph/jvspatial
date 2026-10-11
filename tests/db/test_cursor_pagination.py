@@ -19,12 +19,10 @@ import uuid
 from typing import AsyncIterator, Iterator
 
 import pytest
+import pytest_asyncio
 
 from jvspatial.db.database import decode_cursor, encode_cursor
 from jvspatial.db.jsondb import JsonDB
-
-pytestmark = pytest.mark.asyncio
-
 
 # ---- cursor encoding ------------------------------------------------------
 
@@ -166,7 +164,7 @@ _PG_DSN = os.getenv(
 )
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(loop_scope="function")
 async def pg_db_paged() -> AsyncIterator:
     """Per-test PostgresDB seeded with 200 records in a throwaway schema."""
     try:
@@ -214,26 +212,27 @@ async def pg_db_paged() -> AsyncIterator:
             pass
 
 
-# NOTE: the Postgres ``find_iter`` implementation is verified by a
-# standalone smoke script (see ``tests/db/test_postgres_integration.py``
-# for the live-DB pattern). The full async-generator test sequence here
-# trips a pytest-asyncio + asyncpg.pool + bulk_save interaction that
-# manifests as "another operation is in progress" during pool teardown.
-# Production usage outside of pytest is unaffected; we keep the test
-# class for documentation but skip it until the upstream interaction
-# is resolved.
-pytestmark_pg = pytest.mark.skip(
-    reason=(
-        "pytest-asyncio + asyncpg pool teardown interaction. "
-        "PG find_iter is exercised via the standalone smoke + "
-        "production usage; this test class is preserved for "
-        "structure but skipped."
-    )
-)
-
-
-@pytestmark_pg
 class TestPostgresFindIter:
+    @pytest.mark.parametrize(
+        "sort",
+        [[("id", -1)], [("context.k", -1)], [("context.bucket", 1), ("context.k", -1)]],
+    )
+    async def test_composite_sort_and_released_connection(self, pg_db_paged, sort):
+        from jvspatial.db.database import finalize_find_results
+
+        fields = (
+            sort if any(k == "id" for k, _ in sort) else [*sort, ("id", sort[0][1])]
+        )
+        expected = finalize_find_results(
+            await pg_db_paged.find("node", {}), sort=fields
+        )
+        iterator = pg_db_paged.find_iter("node", {}, sort=sort, batch_size=7)
+        first = await anext(iterator)
+        pool = await pg_db_paged._ensure_pool()
+        assert pool.get_idle_size() == pool.get_size()
+        rows = [first, *[r async for r in iterator]]
+        assert [r["id"] for r in rows] == [r["id"] for r in expected]
+
     async def test_pages_all_records(self, pg_db_paged) -> None:
         ids = [r["id"] async for r in pg_db_paged.find_iter("node", {}, batch_size=37)]
         assert len(ids) == 200
@@ -270,3 +269,87 @@ class TestPostgresFindIter:
         assert len(page2) == 150
         assert page1 + page2 == sorted(page1 + page2)
         assert set(page1).isdisjoint(set(page2))
+
+
+@pytest.mark.parametrize("direction", [1, -1])
+async def test_postgres_null_numeric_keyset_complete(pg_db_paged, direction):
+    from jvspatial.db.database import (
+        _keyset_payload,
+        _keyset_sort_fields,
+        finalize_find_results,
+    )
+
+    records = [
+        {"id": "numeric2", "context": {"rank": 2}},
+        {"id": "numeric100", "context": {"rank": 100}},
+        {"id": "null", "context": {"rank": None}},
+        {"id": "missing", "context": {}},
+    ]
+    await pg_db_paged.bulk_save("nullable", records)
+    fields = _keyset_sort_fields([("context.rank", direction)])
+    expected = finalize_find_results(records, sort=fields)
+    iterator = pg_db_paged.find_iter("nullable", {}, sort=fields, batch_size=1)
+    first = await anext(iterator)
+    await iterator.aclose()
+    cursor = encode_cursor(_keyset_payload(first, fields))
+    resumed = [
+        r
+        async for r in pg_db_paged.find_iter(
+            "nullable", {}, sort=fields, batch_size=1, cursor=cursor
+        )
+    ]
+    assert [r["id"] for r in [first, *resumed]] == [r["id"] for r in expected]
+
+
+async def test_postgres_residual_scan_budget_and_early_release(
+    pg_db_paged, monkeypatch
+):
+    import jvspatial.db.postgres as module
+    from jvspatial.db.database import DatabaseError, _query_execution
+
+    native = module.translate_query
+
+    def translate(query):
+        return None if "$regex" in repr(query) else native(query)
+
+    monkeypatch.setattr(module, "translate_query", translate)
+    await pg_db_paged.bulk_save(
+        "residual",
+        [
+            {
+                "id": f"{i:03}",
+                "context": {"group": i % 2, "label": "match" if i % 5 == 0 else "miss"},
+            }
+            for i in range(100)
+        ],
+    )
+    query = {"context.group": 1, "context.label": {"$regex": "^match$"}}
+    assert [
+        r["id"]
+        for r in await pg_db_paged.find("residual", query, sort=[("id", 1)], limit=1)
+    ] == ["005"]
+    assert _query_execution.get()["scanned_rows"] == 3
+    pool = await pg_db_paged._ensure_pool()
+    assert pool.get_idle_size() == pool.get_size()
+    assert await pg_db_paged.count("residual", query) == 10
+    pg_db_paged.fallback_scan_limit = 2
+    with pytest.raises(DatabaseError, match="fallback_scan_limit"):
+        await pg_db_paged.find("residual", query)
+    assert pool.get_idle_size() == pool.get_size()
+
+
+async def test_postgres_bulk_preserves_physical_vectors(pg_db_paged):
+    await pg_db_paged.enable_vector_column("vectors", "embedding", dim=2)
+    result = await pg_db_paged.bulk_save_detailed(
+        "vectors",
+        [
+            {"id": "near", "embedding": [1, 0]},
+            {"id": "far", "embedding": [0, 1]},
+            {"id": "near", "embedding": [1, 0]},
+        ],
+    )
+    assert result.all_saved
+    ranked = await pg_db_paged.find(
+        "vectors", {"embedding": {"$near": [1, 0], "$limit": 2}}
+    )
+    assert [row["id"] for row in ranked] == ["near", "far"]

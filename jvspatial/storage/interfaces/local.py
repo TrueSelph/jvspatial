@@ -609,7 +609,7 @@ class LocalFileInterface(FileStorageInterface):
         logger.debug(f"Streaming file: {file_path} (chunk_size={chunk_size})")
 
         try:
-            full_path = self._get_full_path(file_path)
+            full_path = await asyncio.to_thread(self._get_full_path, file_path)
 
             # Check if file exists
             if not await asyncio.to_thread(full_path.exists):
@@ -617,19 +617,17 @@ class LocalFileInterface(FileStorageInterface):
                     f"File not found: {file_path}", file_path=file_path
                 )
 
-            # Stream file in chunks
-            def _read_chunks():
-                """Synchronous chunk reader for to_thread."""
-                with open(full_path, "rb") as f:
-                    while True:
-                        chunk = f.read(chunk_size)
-                        if not chunk:
-                            break
-                        yield chunk
+            from ._stream import stream_reader
 
-            # Yield chunks asynchronously
-            for chunk in await asyncio.to_thread(list, _read_chunks()):
-                yield chunk
+            # stream_reader owns this handle and closes it after in-flight reads.
+            reader = stream_reader(
+                lambda: open(full_path, "rb"), chunk_size  # noqa: SIM115
+            )
+            try:
+                async for chunk in reader:
+                    yield chunk
+            finally:
+                await reader.aclose()
 
             logger.debug(f"File streaming completed: {file_path}")
 
