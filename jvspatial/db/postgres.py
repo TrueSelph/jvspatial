@@ -314,6 +314,7 @@ class PostgresDB(Database):
     # lands, transactional context is offered only via ``UPDATE … RETURNING``
     # at the operation level (atomic single-row update).
     supports_transactions: bool = True
+    supports_native_graph_paging: bool = True
 
     def __init__(
         self,

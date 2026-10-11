@@ -214,6 +214,27 @@ class Database(ABC):
 
     # Capability flags. Override in subclasses.
     supports_transactions: bool = False
+    supports_native_graph_paging: bool = False
+
+    async def graph_node_batch(self, ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Fetch raw projection nodes; wrappers bypass stale record caches."""
+        return await self.find_many("node", ids)
+
+    async def graph_edge_page(
+        self, node_id: str, *, after: Optional[str] = None, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Page incident edges deterministically by ID, without exact counts.
+
+        Native-capable adapters must push this fixed query, sort, and limit to
+        storage. Other adapters provide a disclosed scan-based compatibility
+        implementation. This capability bounds returned rows, not physical scan
+        work. Custom adapters may override the method and capability together.
+        """
+        if limit < 1 or limit > 500:
+            raise ValueError("graph edge page limit must be between 1 and 500")
+        incident: Dict[str, Any] = {"$or": [{"source": node_id}, {"target": node_id}]}
+        query = {"$and": [incident, {"id": {"$gt": after}}]} if after else incident
+        return await self.find("edge", query, sort=[("id", 1)], limit=limit)
 
     @abstractmethod
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:

@@ -98,6 +98,15 @@ File-backed SQLite closes its prior connection when rebinding to another event l
 
 ## Common gotchas
 
+Graph projection is an opt-in read-only extraction/rendering operation for
+language-model context. Preserve explicit host scope, field allowlists, access
+before frontier expansion, closed edge endpoints, resource/detail completeness,
+and immutable payloads. `native` paging limits transferred rows, not physical DB
+scan work. Captures use best-effort reads and new expansions require current
+scope/access again; never present request fingerprints as atomic graph revisions
+or captures as permission caches. Raw projection reads bypass record caches.
+See [graph-projection.md](docs/md/graph-projection.md) and SPEC §6.9.
+
 | Symptom | Cause | Fix |
 |---|---|---|
 | `TypeError: object NoneType can't be used in 'await' expression` | Forgot `await` on async DB call | Add `await` |

@@ -94,6 +94,7 @@ class MongoDB(Database):
     # for a runtime probe that honors the deployment topology
     # (audit §5.9 / SPEC §4.2).
     supports_transactions: bool = True
+    supports_native_graph_paging: bool = True
 
     def __init__(
         self,

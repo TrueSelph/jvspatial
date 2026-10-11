@@ -46,6 +46,13 @@ def end_request_identity_map(
 
 if TYPE_CHECKING:
     from .entities import Object
+    from .graph_projection import (
+        GraphProjection,
+        ProjectionAccess,
+        ProjectionRequest,
+        ProjectionScope,
+        ProjectionSemantics,
+    )
 
 T = TypeVar("T", bound="Object")
 
@@ -961,6 +968,25 @@ class GraphContext:
 
         return await export_graph(
             self, format=format, output_file=output_file, **kwargs
+        )
+
+    async def project_graph(
+        self,
+        request: "ProjectionRequest",
+        *,
+        scope: "ProjectionScope",
+        access: Optional["ProjectionAccess"] = None,
+        semantics: Optional["ProjectionSemantics"] = None,
+    ) -> "GraphProjection":
+        """Capture scoped relationship context for language-model inference.
+
+        See ``ProjectionRequest`` for view, field, traversal, and budget controls.
+        The application supplies explicit scope and optional current access rules.
+        """
+        from .graph_projection import project_graph
+
+        return await project_graph(
+            self, request, scope=scope, access=access, semantics=semantics
         )
 
     async def expand_node(

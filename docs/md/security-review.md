@@ -6,6 +6,29 @@
 **Scope:** Full codebase — `jvspatial/` package, authentication, storage, API middleware, database backends, webhooks, scheduler, serverless
 **Prior reviews:** 2026-05-01 (13 findings, all remediated) → 2026-05-02 reassessment (7 findings, all remediated)
 
+## 2026-10-10 graph projection boundary review
+
+The new read-only projection API requires explicit trusted host scope and field
+allowlists. Batch access decisions apply before node expansion and edge exposure;
+missing grants deny access, and request predicates cannot probe fields denied by
+the scope or per-record policy. Closed edge endpoints prevent inaccessible nodes
+from becoming hidden path bridges. Fresh projection-node batches bypass stale
+record caches, and later expansion requires current authorization again.
+
+Candidate, queue, depth, nested-value, canonical-byte, and cooperative time limits
+protect extraction; native paging limits transferred records without claiming
+bounded physical database scans or raw-record size. Text encodes data as JSON,
+and Mermaid uses generated IDs and escaped labels. Hosts must keep stored content
+in a model data context. Candidate diagnostics remain host-only because they can
+reveal inaccessible cardinalities. Stop status and timing can still reflect work
+on denied candidates; hosts control their exposure. Captures are best-effort data representations,
+not permission caches, atomic revisions, or model-generated conclusions.
+
+Regression evidence is in `tests/core/test_graph_projection.py`, including the
+dummy graph's private supplier/region, denied predicate fields, scope crossings,
+cache freshness, policy failures, revocation between captures, byte/work limits,
+and renderer escaping. No auth or secret-comparison defaults are changed.
+
 ## 2026-09-27 combined gap and security review
 
 The consumer release pass found two cross-backend consistency defects: PostgreSQL `$exists: false` excluded explicit JSON `null`, and a graph transaction left pre-commit entities in the parent cache. The query translator now matches in-memory null semantics; the transaction isolates its identity map and evicts touched parent entries after its outcome. Index setup is cached per database instance so a second store cannot silently miss a unique index. PostgreSQL integration and transaction cache regressions cover these paths in `tests/db/test_postgres_integration.py` and `tests/core/test_graph_transaction.py`.

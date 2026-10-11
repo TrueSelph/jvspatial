@@ -78,6 +78,8 @@ class SQLiteDB(Database):
         service; SQLite does not.)
     """
 
+    supports_native_graph_paging: bool = True
+
     def __init__(
         self,
         db_path: Optional[Union[str, Path]] = None,

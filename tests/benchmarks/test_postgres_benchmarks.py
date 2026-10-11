@@ -36,12 +36,25 @@ pytestmark = [
 async def _with_pg(coro):
     import uuid
 
+    import asyncpg
+
     schema = f"bench_{uuid.uuid4().hex[:12]}"
-    db = PostgresDB(dsn=_DSN, schema_name=schema)
+    admin = await asyncpg.connect(_DSN)
+    db = None
+    created = False
     try:
+        await admin.execute(f'CREATE SCHEMA "{schema}"')
+        created = True
+        db = PostgresDB(dsn=_DSN, schema_name=schema)
         return await coro(db)
     finally:
-        await db.close()
+        try:
+            if db is not None:
+                await db.close()
+            if created:
+                await admin.execute(f'DROP SCHEMA "{schema}" CASCADE')
+        finally:
+            await admin.close()
 
 
 def test_bench_postgres_traverse_depth(benchmark):

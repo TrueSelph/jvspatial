@@ -1,0 +1,421 @@
+{
+  "python": "3.12.9",
+  "platform": "macOS-15.4.1-arm64-arm-64bit",
+  "notes": "Warm local measurements; physical SQL scan rows unknown; no model inference performed.",
+  "results": [
+    {
+      "backend": "json",
+      "local_degree": 20,
+      "unrelated_edges": 0,
+      "capture": {
+        "samples": 7,
+        "p50_ms": 11.559,
+        "p95_ms": 12.397
+      },
+      "work": {
+        "candidate_records": 42,
+        "database_operations": 3,
+        "elapsed_ms": 12.281,
+        "payload_bytes": 11818,
+        "physical_scan_rows": null
+      },
+      "json_file_reads_per_capture": 44,
+      "returned_nodes": 21,
+      "returned_edges": 20,
+      "renderers": {
+        "text": {
+          "samples": 7,
+          "p50_ms": 0.169,
+          "p95_ms": 0.19,
+          "bytes": 12028
+        },
+        "mermaid": {
+          "samples": 7,
+          "p50_ms": 0.069,
+          "p95_ms": 0.08,
+          "bytes": 789
+        }
+      },
+      "ordinary_crud": {
+        "get": {
+          "samples": 70,
+          "p50_ms": 0.475,
+          "p95_ms": 2.115
+        },
+        "save": {
+          "samples": 70,
+          "p50_ms": 1.092,
+          "p95_ms": 2.576
+        }
+      }
+    },
+    {
+      "backend": "json",
+      "local_degree": 20,
+      "unrelated_edges": 1000,
+      "capture": {
+        "samples": 7,
+        "p50_ms": 211.858,
+        "p95_ms": 228.282
+      },
+      "work": {
+        "candidate_records": 42,
+        "database_operations": 3,
+        "elapsed_ms": 212.815,
+        "payload_bytes": 11818,
+        "physical_scan_rows": null
+      },
+      "json_file_reads_per_capture": 1044,
+      "returned_nodes": 21,
+      "returned_edges": 20,
+      "renderers": {
+        "text": {
+          "samples": 7,
+          "p50_ms": 0.17,
+          "p95_ms": 0.187,
+          "bytes": 12028
+        },
+        "mermaid": {
+          "samples": 7,
+          "p50_ms": 0.068,
+          "p95_ms": 0.08,
+          "bytes": 789
+        }
+      },
+      "ordinary_crud": {
+        "get": {
+          "samples": 70,
+          "p50_ms": 0.38,
+          "p95_ms": 5.573
+        },
+        "save": {
+          "samples": 70,
+          "p50_ms": 1.225,
+          "p95_ms": 3.835
+        }
+      }
+    },
+    {
+      "backend": "json",
+      "local_degree": 200,
+      "unrelated_edges": 1000,
+      "capture": {
+        "samples": 7,
+        "p50_ms": 1063.38,
+        "p95_ms": 1148.997
+      },
+      "work": {
+        "candidate_records": 402,
+        "database_operations": 11,
+        "elapsed_ms": 953.528,
+        "payload_bytes": 110818,
+        "physical_scan_rows": null
+      },
+      "json_file_reads_per_capture": 6216,
+      "returned_nodes": 201,
+      "returned_edges": 200,
+      "renderers": {
+        "text": {
+          "samples": 7,
+          "p50_ms": 1.625,
+          "p95_ms": 1.959,
+          "bytes": 112828
+        },
+        "mermaid": {
+          "samples": 7,
+          "p50_ms": 0.722,
+          "p95_ms": 0.746,
+          "bytes": 8011
+        }
+      },
+      "ordinary_crud": {
+        "get": {
+          "samples": 70,
+          "p50_ms": 0.281,
+          "p95_ms": 0.4
+        },
+        "save": {
+          "samples": 70,
+          "p50_ms": 0.458,
+          "p95_ms": 0.908
+        }
+      }
+    },
+    {
+      "backend": "sqlite",
+      "local_degree": 20,
+      "unrelated_edges": 0,
+      "capture": {
+        "samples": 7,
+        "p50_ms": 0.931,
+        "p95_ms": 1.304
+      },
+      "work": {
+        "candidate_records": 42,
+        "database_operations": 3,
+        "elapsed_ms": 1.251,
+        "payload_bytes": 11811,
+        "physical_scan_rows": null
+      },
+      "json_file_reads_per_capture": null,
+      "returned_nodes": 21,
+      "returned_edges": 20,
+      "renderers": {
+        "text": {
+          "samples": 7,
+          "p50_ms": 0.165,
+          "p95_ms": 0.182,
+          "bytes": 12021
+        },
+        "mermaid": {
+          "samples": 7,
+          "p50_ms": 0.066,
+          "p95_ms": 0.074,
+          "bytes": 789
+        }
+      },
+      "ordinary_crud": {
+        "get": {
+          "samples": 70,
+          "p50_ms": 0.126,
+          "p95_ms": 0.171
+        },
+        "save": {
+          "samples": 70,
+          "p50_ms": 0.124,
+          "p95_ms": 0.25
+        }
+      }
+    },
+    {
+      "backend": "sqlite",
+      "local_degree": 20,
+      "unrelated_edges": 1000,
+      "capture": {
+        "samples": 7,
+        "p50_ms": 2.072,
+        "p95_ms": 2.714
+      },
+      "work": {
+        "candidate_records": 42,
+        "database_operations": 3,
+        "elapsed_ms": 1.674,
+        "payload_bytes": 11811,
+        "physical_scan_rows": null
+      },
+      "json_file_reads_per_capture": null,
+      "returned_nodes": 21,
+      "returned_edges": 20,
+      "renderers": {
+        "text": {
+          "samples": 7,
+          "p50_ms": 0.17,
+          "p95_ms": 0.181,
+          "bytes": 12021
+        },
+        "mermaid": {
+          "samples": 7,
+          "p50_ms": 0.071,
+          "p95_ms": 0.077,
+          "bytes": 789
+        }
+      },
+      "ordinary_crud": {
+        "get": {
+          "samples": 70,
+          "p50_ms": 0.077,
+          "p95_ms": 0.15
+        },
+        "save": {
+          "samples": 70,
+          "p50_ms": 0.149,
+          "p95_ms": 0.229
+        }
+      }
+    },
+    {
+      "backend": "sqlite",
+      "local_degree": 200,
+      "unrelated_edges": 1000,
+      "capture": {
+        "samples": 7,
+        "p50_ms": 13.097,
+        "p95_ms": 33.341
+      },
+      "work": {
+        "candidate_records": 402,
+        "database_operations": 11,
+        "elapsed_ms": 13.938,
+        "payload_bytes": 110811,
+        "physical_scan_rows": null
+      },
+      "json_file_reads_per_capture": null,
+      "returned_nodes": 201,
+      "returned_edges": 200,
+      "renderers": {
+        "text": {
+          "samples": 7,
+          "p50_ms": 1.698,
+          "p95_ms": 18.674,
+          "bytes": 112821
+        },
+        "mermaid": {
+          "samples": 7,
+          "p50_ms": 0.689,
+          "p95_ms": 0.71,
+          "bytes": 8011
+        }
+      },
+      "ordinary_crud": {
+        "get": {
+          "samples": 70,
+          "p50_ms": 0.125,
+          "p95_ms": 0.279
+        },
+        "save": {
+          "samples": 70,
+          "p50_ms": 0.193,
+          "p95_ms": 0.494
+        }
+      }
+    },
+    {
+      "backend": "postgres",
+      "local_degree": 20,
+      "unrelated_edges": 0,
+      "capture": {
+        "samples": 7,
+        "p50_ms": 6.856,
+        "p95_ms": 9.318
+      },
+      "work": {
+        "candidate_records": 42,
+        "database_operations": 3,
+        "elapsed_ms": 6.466,
+        "payload_bytes": 11811,
+        "physical_scan_rows": null
+      },
+      "json_file_reads_per_capture": null,
+      "returned_nodes": 21,
+      "returned_edges": 20,
+      "renderers": {
+        "text": {
+          "samples": 7,
+          "p50_ms": 0.172,
+          "p95_ms": 0.192,
+          "bytes": 12021
+        },
+        "mermaid": {
+          "samples": 7,
+          "p50_ms": 0.07,
+          "p95_ms": 0.079,
+          "bytes": 789
+        }
+      },
+      "ordinary_crud": {
+        "get": {
+          "samples": 70,
+          "p50_ms": 1.215,
+          "p95_ms": 1.927
+        },
+        "save": {
+          "samples": 70,
+          "p50_ms": 1.753,
+          "p95_ms": 3.286
+        }
+      }
+    },
+    {
+      "backend": "postgres",
+      "local_degree": 20,
+      "unrelated_edges": 1000,
+      "capture": {
+        "samples": 7,
+        "p50_ms": 5.105,
+        "p95_ms": 6.887
+      },
+      "work": {
+        "candidate_records": 42,
+        "database_operations": 3,
+        "elapsed_ms": 4.21,
+        "payload_bytes": 11811,
+        "physical_scan_rows": null
+      },
+      "json_file_reads_per_capture": null,
+      "returned_nodes": 21,
+      "returned_edges": 20,
+      "renderers": {
+        "text": {
+          "samples": 7,
+          "p50_ms": 0.175,
+          "p95_ms": 0.284,
+          "bytes": 12021
+        },
+        "mermaid": {
+          "samples": 7,
+          "p50_ms": 0.07,
+          "p95_ms": 0.078,
+          "bytes": 789
+        }
+      },
+      "ordinary_crud": {
+        "get": {
+          "samples": 70,
+          "p50_ms": 1.076,
+          "p95_ms": 2.053
+        },
+        "save": {
+          "samples": 70,
+          "p50_ms": 1.192,
+          "p95_ms": 1.894
+        }
+      }
+    },
+    {
+      "backend": "postgres",
+      "local_degree": 200,
+      "unrelated_edges": 1000,
+      "capture": {
+        "samples": 7,
+        "p50_ms": 38.886,
+        "p95_ms": 134.61
+      },
+      "work": {
+        "candidate_records": 402,
+        "database_operations": 11,
+        "elapsed_ms": 53.0,
+        "payload_bytes": 110811,
+        "physical_scan_rows": null
+      },
+      "json_file_reads_per_capture": null,
+      "returned_nodes": 201,
+      "returned_edges": 200,
+      "renderers": {
+        "text": {
+          "samples": 7,
+          "p50_ms": 2.337,
+          "p95_ms": 3.418,
+          "bytes": 112821
+        },
+        "mermaid": {
+          "samples": 7,
+          "p50_ms": 0.751,
+          "p95_ms": 0.988,
+          "bytes": 8011
+        }
+      },
+      "ordinary_crud": {
+        "get": {
+          "samples": 70,
+          "p50_ms": 1.581,
+          "p95_ms": 3.306
+        },
+        "save": {
+          "samples": 70,
+          "p50_ms": 1.59,
+          "p95_ms": 2.853
+        }
+      }
+    }
+  ]
+}

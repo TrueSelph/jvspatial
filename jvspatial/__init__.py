@@ -65,6 +65,13 @@ from .core.context import GraphContext, TransactionUnavailable, graph_transactio
 
 # Unified entity system
 from .core.entities import Edge, Node, Object, Root, Walker
+from .core.graph_projection import (
+    GraphProjection,
+    ProjectionAccess,
+    ProjectionRequest,
+    ProjectionScope,
+    ProjectionSemantics,
+)
 
 # Mixins
 from .core.mixins import (
@@ -129,6 +136,11 @@ __all__ = [
     "Walker",
     "Root",
     "GraphContext",
+    "GraphProjection",
+    "ProjectionRequest",
+    "ProjectionScope",
+    "ProjectionAccess",
+    "ProjectionSemantics",
     "graph_transaction",
     "TransactionUnavailable",
     # Mixins

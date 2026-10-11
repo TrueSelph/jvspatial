@@ -397,6 +397,54 @@ When the backend exposes `find_connected_nodes` (Postgres, MongoDB, SQLite) the 
 
 ---
 
+### 6.9 Read-only graph projection for language-model context
+
+`GraphContext.project_graph(request, *, scope, access=None, semantics=None)`
+captures a graph representation without executing Walker hooks or invoking a
+model (`jvspatial/core/context.py:973`). Public configuration and result types are
+`ProjectionRequest`, `ProjectionScope`, `ProjectionAccess`,
+`ProjectionSemantics`, and `GraphProjection`
+(`jvspatial/core/graph_projection.py:79`, `:131`, `:164`, `:180`, `:200`).
+
+- A trusted explicit scope supplies node membership/query restrictions and
+  attribute allowlists. Requests may narrow fields and filter exact stored
+  discriminators or permitted record attributes. Optional batch access decisions
+  deny omitted IDs/fields; rejected intermediate nodes do not expand the frontier.
+  Every emitted edge has both endpoints in the result
+  (`jvspatial/core/graph_projection.py:353`).
+- Extraction follows directed or bidirectional edges with deterministic BFS and
+  edge-ID keyset pages. It bounds emitted nodes/edges, candidate records,
+  per-node incident candidates, frontier, depth, nested detail, and canonical
+  UTF-8 bytes. Candidate limits do not bound physical database scans or the
+  largest raw record. Cooperative deadlines yield valid partial captures;
+  backend/policy errors fail the operation and cancellation propagates
+  (`jvspatial/core/graph_projection.py:733`).
+- `Database.graph_edge_page` provides incident paging and
+  `graph_node_batch` fetches raw node records with compatibility defaults
+  (`jvspatial/db/database.py:219`, `:223`).
+  `supports_native_graph_paging` is true on SQLite, PostgreSQL, and MongoDB.
+  JSON and DynamoDB use disclosed compatibility scans; native-only requests
+  reject unsupported stores before reads. Wrappers forward adapter paging and
+  bypass stale record caches for projection nodes (`jvspatial/db/_cache.py`,
+  `jvspatial/db/_observable.py`).
+- Relationship, hierarchy, and ontology views share canonical facts and one
+  bounded discovery path per node. Hierarchy references preserve shared children
+  and cycles. Ontology descriptions are application declarations covering only
+  represented types; unknown descriptions remain null. Renderers perform no
+  I/O, encode text values as data, and escape Mermaid labels
+  (`jvspatial/core/graph_projection.py:200`).
+- `meta.complete` describes the permitted traversal within the requested radius,
+  not an induced subgraph or global ontology. `detail_complete` and
+  `truncated_fields` distinguish clipped attributes. Results label best-effort
+  reads, capture/read-finish times, and explicit resource stop reasons. Request
+  fingerprints are not graph revisions. Captures are immutable serialized
+  results; `expansion_requests()` produces new live queries requiring current
+  scope/access. Host-only statistics are excluded from automatic model rendering
+  (`jvspatial/core/graph_projection.py:200`).
+
+See [graph-projection.md](docs/md/graph-projection.md) for defaults, backend limits,
+the runnable dummy supply-chain case, and configuration/evaluation guidance.
+
 ## 7. GraphContext and Dependency Injection
 
 `jvspatial/core/context.py` — `GraphContext` binds a `Database` + optional `Cache` + `PerformanceMonitor` to a scope.

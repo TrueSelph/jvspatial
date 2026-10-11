@@ -90,6 +90,9 @@ class CachingDatabase(Database):
         # Inherit the wrapped backend's transaction capability flag so
         # callers see the right answer.
         self.supports_transactions = getattr(inner, "supports_transactions", False)
+        self.supports_native_graph_paging = getattr(
+            inner, "supports_native_graph_paging", False
+        )
 
     # ----- helpers ----------------------------------------------------
 
@@ -210,6 +213,16 @@ class CachingDatabase(Database):
         """Pass through; ``find`` results are intentionally never cached."""
         # find() is intentionally NOT cached. See module docstring.
         return await self.inner.find(collection, query, limit=limit, sort=sort)
+
+    async def graph_edge_page(
+        self, node_id: str, *, after: Optional[str] = None, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Forward adapter-specific projection paging without caching."""
+        return await self.inner.graph_edge_page(node_id, after=after, limit=limit)
+
+    async def graph_node_batch(self, ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Read current projection records directly from the wrapped store."""
+        return await self.inner.graph_node_batch(ids)
 
     async def find_many(
         self, collection: str, ids: List[str]
