@@ -1,5 +1,25 @@
 # jvspatial — Security Code Review
 
+## 2026-10-11 rich graph context review
+
+Detail profiles are host declarations, never grants. Effective fields intersect
+scope, request, profile and current record policy before extraction. Same-record
+provenance copies only already selected, authorized, untruncated auxiliary values;
+unavailable bindings expose a generic unresolved status, not hidden paths.
+Relation selectors likewise inspect only captured authorized facts, require an
+exact edge discriminator, and preserve regex timeouts. Missing or clipped inputs
+cannot resolve a declaration, including predicates on absence. Only definitions
+referenced by emitted edges reach the payload; overlapping rules remain ambiguous.
+
+Configuration and selectors are detached and revalidated before the first await.
+Field/type/rule counts, declaration bytes, detail caps and the final canonical
+byte cap bound new metadata. Byte pruning removes dangling endpoints, paths and
+relation definitions. Format 1 golden captures remain unchanged. The rich
+regressions in `tests/core/test_graph_projection_context.py` cover revocation,
+field denial, schema separation, policy failures, cancellation, wrappers and
+four live backends. Model trials, prompt policy, source verification and physical
+scan limits remain host responsibilities; no auth or secret defaults change.
+
 ## I/O and query hardening — 2026-10-10
 
 Residual SQL pushdown retains the complete predicate for verification and never

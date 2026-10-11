@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from .graph_projection import (
         GraphProjection,
         ProjectionAccess,
+        ProjectionContextConfig,
         ProjectionRequest,
         ProjectionScope,
         ProjectionSemantics,
@@ -1006,6 +1007,7 @@ class GraphContext:
         scope: "ProjectionScope",
         access: Optional["ProjectionAccess"] = None,
         semantics: Optional["ProjectionSemantics"] = None,
+        context_config: Optional["ProjectionContextConfig"] = None,
     ) -> "GraphProjection":
         """Capture scoped relationship context for language-model inference.
 
@@ -1015,7 +1017,12 @@ class GraphContext:
         from .graph_projection import project_graph
 
         return await project_graph(
-            self, request, scope=scope, access=access, semantics=semantics
+            self,
+            request,
+            scope=scope,
+            access=access,
+            semantics=semantics,
+            context_config=context_config,
         )
 
     async def expand_node(

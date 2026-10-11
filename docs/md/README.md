@@ -33,7 +33,7 @@ The documents below answer *how* to use each subsystem. Every link resolves; ent
 | [Context Management Guide](context-management-guide.md) | When and how to scope `GraphContext` / `ServerContext`. |
 | [Graph Traversal](graph-traversal.md) | Walker pattern, queue semantics, visit hooks. |
 | [Graph Visualization](graph-visualization.md) | DOT / Mermaid export. |
-| [Graph Context for Inference](graph-projection.md) | Bounded relationship, hierarchy, and ontology captures for language models; scope, access, evidence, and rendering. |
+| [Graph Context for Inference](graph-projection.md) | Bounded relationship, hierarchy, and ontology captures for language models; scope, access, per-type detail profiles, recorded evidence, declared relationships, and rendering. |
 | [Node Operations](node-operations.md) | Connect / disconnect / neighbor queries. |
 | [Walker Events](walker-reporting-events.md) | Walker event bus and reporting. |
 | [Walker Queue Operations](walker-queue-operations.md) | Queue manipulation patterns. |

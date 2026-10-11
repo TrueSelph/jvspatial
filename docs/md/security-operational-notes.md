@@ -28,3 +28,16 @@ If the database or cache path used for token blacklist checks raises an error, v
 In-process counters (for example `MemoryRateLimitBackend` and in-memory auth attempt tracking) **do not synchronize across workers or hosts**. For multiple uvicorn workers, Kubernetes replicas, or autoscaling groups, use a **shared backend** (for example Redis-backed rate limiting) so limits apply globally.
 
 Auth entry points keep their 5/60s per-IP cap when global rate limiting is off. Set `rate_limit.auth_entrypoint_rate_limit_enabled=False` only in tests or when the host application supplies an equivalent trusted limiter. This is an explicit server configuration choice; disabling the global limiter does not turn it off (`jvspatial/api/server_configurator.py:95`, `jvspatial/api/server_configurator.py:173`).
+
+## Rich graph context hosts
+
+Choose rich profiles and relationship definitions in trusted host code, and apply
+current partition and per-record field permissions on every capture or expansion.
+A profile is a selection, not an access grant. Bind evidence only to same-record
+fields that may be selected and disclosed together; opaque source references are
+copied, never fetched or verified. Relationship rules should include recorded
+schema identifiers where a field key has multiple meanings. A rule evaluated on
+missing, denied or clipped detail remains unresolved; overlapping matches remain
+ambiguous. Keep stored content in the model's data context and treat application
+declarations as declarations. Traversal completeness and recorded verification
+states do not certify that a decision has sufficient or reliable evidence.

@@ -1,0 +1,380 @@
+{
+  "baseline_dev": "621b779",
+  "runs": [
+    {
+      "methodology": "paired-warm-capture-v1",
+      "backend": "sqlite",
+      "rounds": 15,
+      "physical_scans": "not_measured",
+      "model_tokens": "not_measured",
+      "measurements": [
+        {
+          "topology": "sparse",
+          "candidate_budget": 100,
+          "equivalent_fields": {
+            "median_ms": 8.77912505529821,
+            "p95_ms": 10.080082807689905,
+            "render_median_ms": 0.4532081075012684,
+            "rendered_bytes": 25422,
+            "canonical_bytes": 24992,
+            "database_operations": 30,
+            "candidate_records": 100,
+            "nodes": 43,
+            "edges": 42,
+            "clipped_fields": 0
+          },
+          "rich": {
+            "median_ms": 9.283791994675994,
+            "p95_ms": 12.02133297920227,
+            "render_median_ms": 1.069582998752594,
+            "rendered_bytes": 54767,
+            "canonical_bytes": 54343,
+            "database_operations": 30,
+            "candidate_records": 100,
+            "nodes": 43,
+            "edges": 42,
+            "clipped_fields": 0
+          },
+          "median_overhead_pct": 5.748487875488428
+        },
+        {
+          "topology": "sparse",
+          "candidate_budget": 1000,
+          "equivalent_fields": {
+            "median_ms": 171.09083314426243,
+            "p95_ms": 264.91583278402686,
+            "render_median_ms": 4.264374962076545,
+            "rendered_bytes": 279816,
+            "canonical_bytes": 275536,
+            "database_operations": 287,
+            "candidate_records": 1000,
+            "nodes": 428,
+            "edges": 427,
+            "clipped_fields": 0
+          },
+          "rich": {
+            "median_ms": 180.83291593939066,
+            "p95_ms": 235.56950013153255,
+            "render_median_ms": 8.749667089432478,
+            "rendered_bytes": 570192,
+            "canonical_bytes": 565918,
+            "database_operations": 287,
+            "candidate_records": 1000,
+            "nodes": 428,
+            "edges": 427,
+            "clipped_fields": 0
+          },
+          "median_overhead_pct": 5.694099804233099
+        },
+        {
+          "topology": "hub",
+          "candidate_budget": 100,
+          "equivalent_fields": {
+            "median_ms": 2.9139581602066755,
+            "p95_ms": 3.380542155355215,
+            "render_median_ms": 0.5372499581426382,
+            "rendered_bytes": 26656,
+            "canonical_bytes": 26156,
+            "database_operations": 3,
+            "candidate_records": 100,
+            "nodes": 50,
+            "edges": 49,
+            "clipped_fields": 0
+          },
+          "rich": {
+            "median_ms": 3.2936669886112213,
+            "p95_ms": 5.78712485730648,
+            "render_median_ms": 1.0342919267714024,
+            "rendered_bytes": 60747,
+            "canonical_bytes": 60253,
+            "database_operations": 3,
+            "candidate_records": 100,
+            "nodes": 50,
+            "edges": 49,
+            "clipped_fields": 0
+          },
+          "median_overhead_pct": 13.030689101507708
+        },
+        {
+          "topology": "hub",
+          "candidate_budget": 1000,
+          "equivalent_fields": {
+            "median_ms": 25.26000002399087,
+            "p95_ms": 40.71966698393226,
+            "render_median_ms": 4.58141602575779,
+            "rendered_bytes": 263356,
+            "canonical_bytes": 258356,
+            "database_operations": 21,
+            "candidate_records": 1000,
+            "nodes": 500,
+            "edges": 499,
+            "clipped_fields": 0
+          },
+          "rich": {
+            "median_ms": 28.860167134553194,
+            "p95_ms": 31.52774996124208,
+            "render_median_ms": 9.534916142001748,
+            "rendered_bytes": 602548,
+            "canonical_bytes": 597554,
+            "database_operations": 21,
+            "candidate_records": 1000,
+            "nodes": 500,
+            "edges": 499,
+            "clipped_fields": 0
+          },
+          "median_overhead_pct": 14.252443021152184
+        }
+      ]
+    },
+    {
+      "methodology": "paired-warm-capture-v1",
+      "backend": "sqlite",
+      "rounds": 15,
+      "physical_scans": "not_measured",
+      "model_tokens": "not_measured",
+      "measurements": [
+        {
+          "topology": "sparse",
+          "candidate_budget": 100,
+          "equivalent_fields": {
+            "median_ms": 10.668624890968204,
+            "p95_ms": 12.814083835110068,
+            "render_median_ms": 0.4227920435369015,
+            "rendered_bytes": 25422,
+            "canonical_bytes": 24992,
+            "database_operations": 30,
+            "candidate_records": 100,
+            "nodes": 43,
+            "edges": 42,
+            "clipped_fields": 0
+          },
+          "rich": {
+            "median_ms": 12.289500096812844,
+            "p95_ms": 14.73283302038908,
+            "render_median_ms": 0.9331249166280031,
+            "rendered_bytes": 54767,
+            "canonical_bytes": 54343,
+            "database_operations": 30,
+            "candidate_records": 100,
+            "nodes": 43,
+            "edges": 42,
+            "clipped_fields": 0
+          },
+          "median_overhead_pct": 15.192915885690518
+        },
+        {
+          "topology": "sparse",
+          "candidate_budget": 1000,
+          "equivalent_fields": {
+            "median_ms": 167.47366706840694,
+            "p95_ms": 227.76162484660745,
+            "render_median_ms": 4.30162507109344,
+            "rendered_bytes": 279816,
+            "canonical_bytes": 275536,
+            "database_operations": 287,
+            "candidate_records": 1000,
+            "nodes": 428,
+            "edges": 427,
+            "clipped_fields": 0
+          },
+          "rich": {
+            "median_ms": 183.50916588678956,
+            "p95_ms": 227.5762080680579,
+            "render_median_ms": 9.397041983902454,
+            "rendered_bytes": 570192,
+            "canonical_bytes": 565918,
+            "database_operations": 287,
+            "candidate_records": 1000,
+            "nodes": 428,
+            "edges": 427,
+            "clipped_fields": 0
+          },
+          "median_overhead_pct": 9.574937420957475
+        },
+        {
+          "topology": "hub",
+          "candidate_budget": 100,
+          "equivalent_fields": {
+            "median_ms": 2.8994579333812,
+            "p95_ms": 3.106874879449606,
+            "render_median_ms": 0.43337512761354446,
+            "rendered_bytes": 26656,
+            "canonical_bytes": 26156,
+            "database_operations": 3,
+            "candidate_records": 100,
+            "nodes": 50,
+            "edges": 49,
+            "clipped_fields": 0
+          },
+          "rich": {
+            "median_ms": 3.432000055909157,
+            "p95_ms": 3.608166938647628,
+            "render_median_ms": 0.9207080584019423,
+            "rendered_bytes": 60747,
+            "canonical_bytes": 60253,
+            "database_operations": 3,
+            "candidate_records": 100,
+            "nodes": 50,
+            "edges": 49,
+            "clipped_fields": 0
+          },
+          "median_overhead_pct": 18.366954608889042
+        },
+        {
+          "topology": "hub",
+          "candidate_budget": 1000,
+          "equivalent_fields": {
+            "median_ms": 26.815167162567377,
+            "p95_ms": 44.82229193672538,
+            "render_median_ms": 4.830916877835989,
+            "rendered_bytes": 263356,
+            "canonical_bytes": 258356,
+            "database_operations": 21,
+            "candidate_records": 1000,
+            "nodes": 500,
+            "edges": 499,
+            "clipped_fields": 0
+          },
+          "rich": {
+            "median_ms": 30.29029117897153,
+            "p95_ms": 36.97316697798669,
+            "render_median_ms": 10.29820810072124,
+            "rendered_bytes": 602548,
+            "canonical_bytes": 597554,
+            "database_operations": 21,
+            "candidate_records": 1000,
+            "nodes": 500,
+            "edges": 499,
+            "clipped_fields": 0
+          },
+          "median_overhead_pct": 12.959546346797524
+        }
+      ]
+    },
+    {
+      "methodology": "paired-warm-capture-v1",
+      "backend": "sqlite",
+      "rounds": 15,
+      "physical_scans": "not_measured",
+      "model_tokens": "not_measured",
+      "measurements": [
+        {
+          "topology": "sparse",
+          "candidate_budget": 100,
+          "equivalent_fields": {
+            "median_ms": 8.286625146865845,
+            "p95_ms": 10.507458122447133,
+            "render_median_ms": 0.4330419469624758,
+            "rendered_bytes": 25422,
+            "canonical_bytes": 24992,
+            "database_operations": 30,
+            "candidate_records": 100,
+            "nodes": 43,
+            "edges": 42,
+            "clipped_fields": 0
+          },
+          "rich": {
+            "median_ms": 8.875750005245209,
+            "p95_ms": 15.920999925583601,
+            "render_median_ms": 0.8259171154350042,
+            "rendered_bytes": 54767,
+            "canonical_bytes": 54343,
+            "database_operations": 30,
+            "candidate_records": 100,
+            "nodes": 43,
+            "edges": 42,
+            "clipped_fields": 0
+          },
+          "median_overhead_pct": 7.109346059923838
+        },
+        {
+          "topology": "sparse",
+          "candidate_budget": 1000,
+          "equivalent_fields": {
+            "median_ms": 174.40304113551974,
+            "p95_ms": 367.34995781444013,
+            "render_median_ms": 4.38687507994473,
+            "rendered_bytes": 279816,
+            "canonical_bytes": 275536,
+            "database_operations": 287,
+            "candidate_records": 1000,
+            "nodes": 428,
+            "edges": 427,
+            "clipped_fields": 0
+          },
+          "rich": {
+            "median_ms": 184.9754999857396,
+            "p95_ms": 240.9823751077056,
+            "render_median_ms": 8.52491706609726,
+            "rendered_bytes": 570192,
+            "canonical_bytes": 565918,
+            "database_operations": 287,
+            "candidate_records": 1000,
+            "nodes": 428,
+            "edges": 427,
+            "clipped_fields": 0
+          },
+          "median_overhead_pct": 6.062083998870471
+        },
+        {
+          "topology": "hub",
+          "candidate_budget": 100,
+          "equivalent_fields": {
+            "median_ms": 2.466790843755007,
+            "p95_ms": 2.7122918982058764,
+            "render_median_ms": 0.4307918716222048,
+            "rendered_bytes": 26656,
+            "canonical_bytes": 26156,
+            "database_operations": 3,
+            "candidate_records": 100,
+            "nodes": 50,
+            "edges": 49,
+            "clipped_fields": 0
+          },
+          "rich": {
+            "median_ms": 3.1177501659840345,
+            "p95_ms": 3.400541143491864,
+            "render_median_ms": 0.9307500440627337,
+            "rendered_bytes": 60747,
+            "canonical_bytes": 60253,
+            "database_operations": 3,
+            "candidate_records": 100,
+            "nodes": 50,
+            "edges": 49,
+            "clipped_fields": 0
+          },
+          "median_overhead_pct": 26.388914320685664
+        },
+        {
+          "topology": "hub",
+          "candidate_budget": 1000,
+          "equivalent_fields": {
+            "median_ms": 28.757874853909016,
+            "p95_ms": 52.41291713900864,
+            "render_median_ms": 5.752208875492215,
+            "rendered_bytes": 263356,
+            "canonical_bytes": 258356,
+            "database_operations": 21,
+            "candidate_records": 1000,
+            "nodes": 500,
+            "edges": 499,
+            "clipped_fields": 0
+          },
+          "rich": {
+            "median_ms": 33.152207965031266,
+            "p95_ms": 35.4928330052644,
+            "render_median_ms": 10.270625120028853,
+            "rendered_bytes": 602548,
+            "canonical_bytes": 597554,
+            "database_operations": 21,
+            "candidate_records": 1000,
+            "nodes": 500,
+            "edges": 499,
+            "clipped_fields": 0
+          },
+          "median_overhead_pct": 15.280451470929668
+        }
+      ]
+    }
+  ]
+}

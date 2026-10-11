@@ -486,26 +486,29 @@ When the backend exposes `find_connected_nodes` (Postgres, MongoDB, SQLite) the 
 
 ### 6.9 Read-only graph projection for language-model context
 
-`GraphContext.project_graph(request, *, scope, access=None, semantics=None)`
+`GraphContext.project_graph(request, *, scope, access=None, semantics=None, context_config=None)`
 captures a graph representation without executing Walker hooks or invoking a
 model (`jvspatial/core/context.py:1002`). Public configuration and result types are
 `ProjectionRequest`, `ProjectionScope`, `ProjectionAccess`,
 `ProjectionSemantics`, and `GraphProjection`
-(`jvspatial/core/graph_projection.py:79`, `:131`, `:164`, `:180`, `:200`).
+(`jvspatial/core/graph_projection.py:84`, `:136`, `:169`, `:185`, `:221`).
+Rich configuration types `ProjectionEvidence`, `ProjectionField`,
+`ProjectionContextConfig`, and `ProjectionRelation` are also public
+(`jvspatial/core/graph_context_config.py:23`, `:46`, `:68`, `:102`).
 
 - A trusted explicit scope supplies node membership/query restrictions and
   attribute allowlists. Requests may narrow fields and filter exact stored
   discriminators or permitted record attributes. Optional batch access decisions
   deny omitted IDs/fields; rejected intermediate nodes do not expand the frontier.
   Every emitted edge has both endpoints in the result
-  (`jvspatial/core/graph_projection.py:353`).
+  (`jvspatial/core/graph_projection.py:703`).
 - Extraction follows directed or bidirectional edges with deterministic BFS and
   edge-ID keyset pages. It bounds emitted nodes/edges, candidate records,
   per-node incident candidates, frontier, depth, nested detail, and canonical
   UTF-8 bytes. Candidate limits do not bound physical database scans or the
   largest raw record. Cooperative deadlines yield valid partial captures;
   backend/policy errors fail the operation and cancellation propagates
-  (`jvspatial/core/graph_projection.py:733`).
+  (`jvspatial/core/graph_projection.py:1049`).
 - `Database.graph_edge_page` provides incident paging and
   `graph_node_batch` fetches raw node records with compatibility defaults
   (`jvspatial/db/database.py:377`, `:373`).
@@ -519,7 +522,7 @@ model (`jvspatial/core/context.py:1002`). Public configuration and result types 
   and cycles. Ontology descriptions are application declarations covering only
   represented types; unknown descriptions remain null. Renderers perform no
   I/O, encode text values as data, and escape Mermaid labels
-  (`jvspatial/core/graph_projection.py:200`).
+  (`jvspatial/core/graph_projection.py:221`).
 - `meta.complete` describes the permitted traversal within the requested radius,
   not an induced subgraph or global ontology. `detail_complete` and
   `truncated_fields` distinguish clipped attributes. Results label best-effort
@@ -527,10 +530,39 @@ model (`jvspatial/core/context.py:1002`). Public configuration and result types 
   fingerprints are not graph revisions. Captures are immutable serialized
   results; `expansion_requests()` produces new live queries requiring current
   scope/access. Host-only statistics are excluded from automatic model rendering
-  (`jvspatial/core/graph_projection.py:200`).
+  (`jvspatial/core/graph_projection.py:221`).
+
+- Empty rich configuration and no relation rules preserve format 1. A profile
+  identity/revision, per-type mapping or rule opts into format 2. Profile fields
+  intersect request, scope and per-record grants; configured empty types select
+  no detail, unconfigured types retain legacy defaults. Input declarations are
+  detached/revalidated before the first await. Unsupported payload versions fail
+  rendering (`jvspatial/core/graph_projection.py:1049`, `:703`, `:231`).
+- Rich field states distinguish present/null/missing/truncated for selected,
+  authorized exact paths only. Hints are descriptive; caps can only tighten
+  request caps. Same-record evidence uses already captured, selected, authorized,
+  untruncated auxiliary values and adds no DB operations. Missing bindings expose
+  generic unresolved status, not hidden paths. Recorded timestamps, verification,
+  revision and confidence are copied without certification or coercion
+  (`jvspatial/core/graph_projection.py:502`).
+- Relation rules match exact stored edge types and bounded predicates over
+  captured authorized edge/source/target fields or permitted intrinsic identity.
+  Missing/denied/omitted/clipped inputs never match, including absence predicates.
+  Matching one rule resolves; several are ambiguous; no match is unresolved.
+  Definitions are application declarations, not inferred conclusions. Only
+  referenced definitions are published, with no selector predicates; final byte
+  pruning preserves endpoint/path/definition closure
+  (`jvspatial/core/graph_projection.py:573`, `:605`, `:628`, `:928`).
+- Format 2 adds profile identity, per-record fields/evidence, edge relations,
+  referenced relation definitions and authorized-field coverage. Coverage reports
+  the requested radius and selected field states; decision sufficiency is always
+  `not_assessed`. Canonical bytes include all metadata. Counts and lengths of
+  declaration models are bounded before capture; default topology/work/time
+  limits remain unchanged (`jvspatial/core/graph_projection.py:628`, `:928`,
+  `jvspatial/core/graph_context_config.py:68`, `:102`).
 
 See [graph-projection.md](docs/md/graph-projection.md) for defaults, backend limits,
-the runnable dummy supply-chain case, and configuration/evaluation guidance.
+the runnable dummy supply-chain and rich operational cases, and evaluation guidance.
 
 ## 7. GraphContext and Dependency Injection
 

@@ -96,6 +96,16 @@ Composite keyset continuation includes every sort value and direction plus ID. N
 
 File-backed SQLite closes its prior connection when rebinding to another event loop; dropping it without `close()` leaks the `aiosqlite` worker thread and can keep the process alive.
 
+### 12. Rich graph context
+
+`ProjectionContextConfig` declarations do not grant access. Intersect profile,
+request, scope and current per-record field grants. Relationship selectors and
+same-record evidence use only selected, authorized, untruncated captured values.
+Emit referenced relationship definitions only; denied intermediaries cannot
+bridge a capture. Preserve format 1 defaults and opt-in format 2. Recorded
+provenance and traversal completeness do not certify truth or decision
+sufficiency. Model execution and application policy stay downstream.
+
 ---
 
 ## Common gotchas

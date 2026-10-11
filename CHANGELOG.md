@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional rich graph-context format 2 via `ProjectionContextConfig`,
+  `ProjectionField`, `ProjectionEvidence`, and `ProjectionRelation`: per-type
+  detail profiles, recorded same-record provenance, qualified relationship rules,
+  explicit missing/null/truncated states, and authorized coverage metadata.
+  Legacy format 1 defaults are preserved; enrichment adds no database operations
+  versus equivalent selected fields. Includes a rooted operational example and
+  paired capture/rendering performance probes.
+
 - Read-only `GraphContext.project_graph` context for language-model inference,
   with relationship, hierarchy, and ontology views; application-declared type
   meanings; deterministic evidence paths; and payload-based text/Mermaid rendering.

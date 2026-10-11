@@ -49,3 +49,33 @@ def test_warm_projection_capture(benchmark, view):
     finally:
         loop.run_until_complete(db.close())
         loop.close()
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("view", ["relationships", "hierarchy", "ontology"])
+def test_warm_rich_projection_capture(benchmark, view):
+    from examples.core.rich_graph_context_example import (
+        capture_demo,
+    )
+    from examples.core.rich_graph_context_example import seed_demo as seed_rich
+
+    loop = asyncio.new_event_loop()
+    db = SQLiteDB(db_path=":memory:")
+    context = GraphContext(db)
+    try:
+        records = loop.run_until_complete(seed_rich(context))
+
+        def capture():
+            return loop.run_until_complete(
+                capture_demo(context, records, view=view, execution_mode="native")
+            )
+
+        capture()
+        result = benchmark(capture)
+        assert len(result.to_dict()["nodes"]) == 6
+        assert len(result.to_dict()["edges"]) == 7
+        assert result.to_dict()["meta"]["complete"]
+        assert result.to_dict()["format_version"] == 2
+    finally:
+        loop.run_until_complete(db.close())
+        loop.close()

@@ -33,7 +33,9 @@ are the canonical import path:
 - **Cache.** `create_cache`.
 - **Graph context for inference.** `GraphContext.project_graph`,
   `ProjectionRequest`, `ProjectionScope`, `ProjectionAccess`,
-  `ProjectionSemantics`, and `GraphProjection` are stable. The versioned canonical
+  `ProjectionSemantics`, `ProjectionContextConfig`, `ProjectionField`,
+  `ProjectionEvidence`, `ProjectionRelation`, and `GraphProjection` are stable.
+  Existing calls retain format 1; nonempty rich declarations opt into format 2. The versioned canonical
   payload and its completeness/access contracts are public. Database extension
   points `graph_edge_page`, `graph_node_batch`, and
   `supports_native_graph_paging` have compatibility defaults. Captures are

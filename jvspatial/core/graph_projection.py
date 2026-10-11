@@ -11,7 +11,7 @@ import hashlib
 import json
 import math
 import time
-from collections import deque
+from collections import ChainMap, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import (
@@ -30,6 +30,11 @@ from typing import (
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from jvspatial.db.query import QueryEngine
+
+from .graph_context_config import (
+    ProjectionContextConfig,
+    ProjectionRelation,
+)
 
 
 def _json(value: Any) -> str:
@@ -184,6 +189,22 @@ class ProjectionSemantics(BaseModel):
     node_types: Dict[str, str] = Field(default_factory=dict)
     edge_types: Dict[str, str] = Field(default_factory=dict)
     label_fields: Dict[str, str] = Field(default_factory=dict)
+    relation_rules: Tuple[ProjectionRelation, ...] = ()
+
+    @field_validator("relation_rules")
+    @classmethod
+    def validate_rules(
+        cls, value: Tuple[ProjectionRelation, ...]
+    ) -> Tuple[ProjectionRelation, ...]:
+        """Bound rules and reject ambiguous duplicate declaration identifiers."""
+        if len(value) > 64 or len({rule.id for rule in value}) != len(value):
+            raise ValueError("relation rules require at most 64 unique IDs")
+        if (
+            len(_json([rule.model_dump(mode="json") for rule in value]).encode())
+            > 65536
+        ):
+            raise ValueError("relation rules exceed 65536 bytes")
+        return value
 
     @field_validator("node_types", "edge_types", "label_fields")
     @classmethod
@@ -206,7 +227,10 @@ class GraphProjection:
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a detached JSON representation of the captured graph."""
-        return json.loads(self._payload)
+        data = json.loads(self._payload)
+        if data.get("format_version") not in (1, 2):
+            raise ValueError("unsupported graph projection format version")
+        return data
 
     @property
     def statistics(self) -> Dict[str, Any]:
@@ -243,7 +267,15 @@ class GraphProjection:
         ]
         for section in ("nodes", "edges"):
             lines.extend(f"{section[:-1]} {_json(row)}" for row in data[section])
-        for section in ("paths", "hierarchy", "ontology", "expansion_points"):
+        for section in (
+            "paths",
+            "hierarchy",
+            "ontology",
+            "expansion_points",
+            "profile",
+            "coverage",
+            "relation_definitions",
+        ):
             if section in data:
                 lines.append(f"{section} {_json(data[section])}")
         return "\n".join(lines)
@@ -358,12 +390,22 @@ class _Capture:
         scope: ProjectionScope,
         access: Optional[ProjectionAccess],
         semantics: ProjectionSemantics,
+        context_config: ProjectionContextConfig,
     ):
         self.db = context.database
         self.request = request
         self.scope = scope
         self.access = access
         self.semantics = semantics
+        self.context_config = context_config
+        self.rich = bool(
+            context_config.profile_id
+            or context_config.revision
+            or context_config.node_fields
+            or context_config.edge_fields
+            or semantics.relation_rules
+        )
+        self._validate_context()
         self.started = time.monotonic()
         self.captured_at = datetime.now(timezone.utc).isoformat()
         self.nodes: Dict[str, Dict[str, Any]] = {}
@@ -374,9 +416,54 @@ class _Capture:
         self.candidates = 0
         self.calls = 0
         self.body_bytes = 0
+        self._serialized: Dict[int, str] = {}
         self.native = bool(getattr(self.db, "supports_native_graph_paging", False))
         self.node_fields = self._fields("node")
         self.edge_fields = self._fields("edge")
+        self._rules = [
+            (
+                rule,
+                tuple(
+                    self._compile_selector(selector)
+                    for selector in (
+                        rule.edge_filter,
+                        rule.source_filter,
+                        rule.target_filter,
+                    )
+                ),
+            )
+            for rule in semantics.relation_rules
+        ]
+        self._details = {}
+        for kind in ("node", "edge"):
+            for entity, declarations in getattr(
+                context_config, f"{kind}_fields"
+            ).items():
+                prepared = {}
+                for declaration in declarations:
+                    limits = {
+                        name: min(getattr(declaration, name), getattr(request, name))
+                        for name in ("max_string", "max_items", "max_value_depth")
+                        if getattr(declaration, name) is not None
+                    }
+                    prepared[declaration.path] = (
+                        declaration.priority,
+                        request.model_copy(update=limits) if limits else request,
+                        declaration.model_dump(
+                            include={"label", "description", "data_type", "unit"},
+                            exclude_none=True,
+                        ),
+                        (
+                            tuple(
+                                declaration.evidence.model_dump(
+                                    exclude_none=True
+                                ).items()
+                            )
+                            if declaration.evidence
+                            else ()
+                        ),
+                    )
+                self._details[kind, entity] = prepared
         for kind in ("node", "edge"):
             allowed = getattr(scope, f"{kind}_fields")
             for field in _query_fields(getattr(request, f"{kind}_filter")):
@@ -387,6 +474,202 @@ class _Capture:
                         "filter fields must be in the scope field allowlist"
                     )
 
+    def _validate_context(self) -> None:
+        for kind in ("node", "edge"):
+            allowed = set(getattr(self.scope, f"{kind}_fields"))
+            for declarations in getattr(self.context_config, f"{kind}_fields").values():
+                for declaration in declarations:
+                    paths = {declaration.path}
+                    if declaration.evidence:
+                        paths.update(
+                            declaration.evidence.model_dump(exclude_none=True).values()
+                        )
+                    if not paths.issubset(allowed):
+                        raise ValueError("context configuration paths exceed scope")
+        for rule in self.semantics.relation_rules:
+            for kind, selector in (
+                ("edge", rule.edge_filter),
+                ("node", rule.source_filter),
+                ("node", rule.target_filter),
+            ):
+                allowed = set(getattr(self.scope, f"{kind}_fields"))
+                if any(
+                    field not in ("id", "entity") and field[8:] not in allowed
+                    for field in _query_fields(selector)
+                ):
+                    raise ValueError("relation selector paths exceed scope")
+
+    def _detail(
+        self, kind: str, row: Dict[str, Any], fields: Tuple[str, ...]
+    ) -> Tuple[Dict[str, Any], List[str], Dict[str, Any]]:
+        if not self.rich:
+            values, truncated = _selected(row, fields, self.request)
+            return values, truncated, {}
+        declarations = self._details.get((kind, row["entity"]), {})
+        values, truncated, metadata = {}, [], {}
+        ordered = sorted(
+            fields,
+            key=lambda path: (
+                declarations[path][0] if path in declarations else 0,
+                path,
+            ),
+        )
+        for path in ordered:
+            declaration = declarations.get(path)
+            request = declaration[1] if declaration else self.request
+            value = row.get("context") or {}
+            found = True
+            for part in path.split("."):
+                if not isinstance(value, dict) or part not in value:
+                    found = False
+                    break
+                value = value[part]
+            clipped = False
+            if found:
+                if (
+                    value is None
+                    or isinstance(value, (bool, int))
+                    or (isinstance(value, float) and math.isfinite(value))
+                    or (
+                        isinstance(value, str)
+                        and len(value) <= request.max_string
+                        and len(_json(value).encode()) <= request.max_bytes // 8
+                    )
+                ):
+                    values[path] = value
+                else:
+                    values[path], clipped = _clip(value, request)
+                if clipped:
+                    truncated.append(path)
+            state = (
+                "missing"
+                if not found
+                else (
+                    "truncated"
+                    if clipped
+                    else "null" if values[path] is None else "present"
+                )
+            )
+            info = {"state": state, "record_id": row["id"], "path": path}
+            if declaration:
+                info.update(declaration[2])
+            metadata[path] = info
+        for path, declaration in declarations.items():
+            if path not in values or not declaration[3]:
+                continue
+            evidence = {"value_class": "recorded", "status": "complete"}
+            for binding, auxiliary in declaration[3]:
+                if auxiliary in values and metadata[auxiliary]["state"] in (
+                    "present",
+                    "null",
+                ):
+                    evidence[binding.removesuffix("_path")] = values[auxiliary]
+                else:
+                    evidence["status"] = "unresolved"
+            metadata[path]["evidence"] = evidence
+        return values, truncated, metadata
+
+    @staticmethod
+    def _compile_selector(selector: Dict[str, Any]) -> Tuple[Any, ...]:
+        fields = tuple(sorted(_query_fields(selector)))
+        aliases = {field: f"v{i}" for i, field in enumerate(fields)}
+
+        def remap(query: Dict[str, Any]) -> Dict[str, Any]:
+            return {
+                key if key in ("$and", "$or") else aliases[key]: (
+                    [remap(branch) for branch in value]
+                    if key in ("$and", "$or")
+                    else value
+                )
+                for key, value in query.items()
+            }
+
+        return fields, aliases, remap(selector)
+
+    @staticmethod
+    def _selector_matches(row: Dict[str, Any], selector: Tuple[Any, ...]) -> bool:
+        fields, aliases, query = selector
+        if not fields:
+            return True
+        values = {}
+        for field in fields:
+            if field in ("id", "entity"):
+                values[aliases[field]] = row[field]
+            else:
+                path = field[8:]
+                if row["fields"].get(path, {}).get("state") not in ("present", "null"):
+                    return False
+                values[aliases[field]] = row["context"][path]
+        return QueryEngine.match(values, query)
+
+    def _relation(
+        self, edge: Dict[str, Any], nodes: Mapping[str, Dict[str, Any]]
+    ) -> None:
+        matches = [
+            rule.id
+            for rule, selectors in self._rules
+            if rule.edge_type == edge["entity"]
+            and self._selector_matches(edge, selectors[0])
+            and self._selector_matches(nodes[edge["source"]], selectors[1])
+            and self._selector_matches(nodes[edge["target"]], selectors[2])
+        ]
+        edge["relation"] = {
+            "status": (
+                "resolved"
+                if len(matches) == 1
+                else "ambiguous" if matches else "unresolved"
+            ),
+            "definition_ids": sorted(matches),
+            "evidence_class": "application_declared",
+        }
+        if edge["entity"] in self.semantics.edge_types:
+            edge["relation"]["type_meaning"] = self.semantics.edge_types[edge["entity"]]
+
+    def _rich_sections(self, data: Dict[str, Any]) -> None:
+        if self.context_config.profile_id or self.context_config.revision:
+            data["profile"] = self.context_config.model_dump(
+                include={"profile_id", "revision"}, exclude_none=True
+            )
+        referenced = {
+            rid
+            for edge in self.edges.values()
+            for rid in edge["relation"]["definition_ids"]
+        }
+        data["relation_definitions"] = {
+            rule.id: {
+                **rule.model_dump(
+                    include={
+                        "id",
+                        "edge_type",
+                        "description",
+                        "direction",
+                        "inverse",
+                        "conditions",
+                    },
+                    exclude_none=True,
+                ),
+                "evidence_class": "application_declared",
+            }
+            for rule in self.semantics.relation_rules
+            if rule.id in referenced
+        }
+        if "ontology" in data:
+            data["ontology"]["relation_definitions"] = data["relation_definitions"]
+        states = [
+            info["state"]
+            for row in list(self.nodes.values()) + list(self.edges.values())
+            for info in row["fields"].values()
+        ]
+        data["coverage"] = {
+            "requested_radius": self.request.max_depth,
+            "selected_detail": "represented_authorized_fields_only",
+            "field_states": {
+                state: states.count(state)
+                for state in ("present", "null", "missing", "truncated")
+            },
+            "decision_sufficiency": "not_assessed",
+        }
+
     def _fields(self, kind: str) -> Tuple[str, ...]:
         allowed = getattr(self.scope, f"{kind}_fields")
         selected = getattr(self.request, f"{kind}_fields")
@@ -395,7 +678,8 @@ class _Capture:
         return tuple(allowed if selected is None else selected)
 
     def _reserve(self, *parts: Any) -> None:
-        size = sum(len(_json(part).encode()) for part in parts)
+        fragments = [_json(part) for part in parts]
+        size = sum(len(fragment.encode()) for fragment in fragments)
         # Reserve overhead for metadata, ontology descriptions and view tables.
         # Final serialization still enforces the exact total-byte cap.
         if self.body_bytes + size > self.request.max_bytes - 2048:
@@ -403,6 +687,10 @@ class _Capture:
             self.points.update(self.nodes)
             raise _Stop()
         self.body_bytes += size
+        if self.rich:
+            for part, fragment in zip(parts, fragments):
+                if isinstance(part, dict) and "id" in part:
+                    self._serialized[id(part)] = fragment
 
     def _check(self) -> None:
         if time.monotonic() - self.started >= self.request.timeout_seconds:
@@ -437,12 +725,15 @@ class _Capture:
             ):
                 raise TypeError("projection field grants must be sequences of names")
             visible = tuple(field for field in permitted if field in grant)
-            if required.issubset(visible):
-                out[row["id"]] = tuple(
-                    field
-                    for field in getattr(self, f"{kind}_fields")
-                    if field in visible
-                )
+            selected = tuple(
+                field for field in getattr(self, f"{kind}_fields") if field in visible
+            )
+            if self.rich:
+                profile = self._details.get((kind, row["entity"]))
+                if profile is not None:
+                    selected = tuple(field for field in selected if field in profile)
+            if required.issubset(selected if self.rich else visible):
+                out[row["id"]] = selected
         return out
 
     def _scoped(self, kind: str, row: Dict[str, Any]) -> bool:
@@ -473,7 +764,7 @@ class _Capture:
         )
 
     def _node(self, row: Dict[str, Any], fields: Tuple[str, ...]) -> Dict[str, Any]:
-        context, truncated = _selected(row, fields, self.request)
+        context, truncated, metadata = self._detail("node", row, fields)
         label_field = self.semantics.label_fields.get(row["entity"])
         label = context.get(label_field) if label_field else None
         return {
@@ -482,6 +773,7 @@ class _Capture:
             "label": label if isinstance(label, str) else row["entity"],
             "context": context,
             "truncated_fields": truncated,
+            **({"fields": metadata} if self.rich else {}),
         }
 
     async def extract(self) -> None:
@@ -582,7 +874,9 @@ class _Capture:
                         self.reasons.add("max_edges")
                         self.points.add(current)
                         raise _Stop()
-                    context, truncated = _selected(row, grants[row["id"]], self.request)
+                    context, truncated, metadata = self._detail(
+                        "edge", row, grants[row["id"]]
+                    )
                     edge_payload = {
                         "id": row["id"],
                         "entity": row["entity"],
@@ -592,6 +886,7 @@ class _Capture:
                         "traversed_from": current,
                         "context": context,
                         "truncated_fields": truncated,
+                        **({"fields": metadata} if self.rich else {}),
                     }
                     if nid not in self.nodes:
                         if len(self.nodes) >= self.request.max_nodes:
@@ -608,11 +903,17 @@ class _Capture:
                             "nodes": parent["nodes"] + [nid],
                             "edges": parent["edges"] + [row["id"]],
                         }
+                        if self.rich:
+                            self._relation(
+                                edge_payload, ChainMap({nid: node_payload}, self.nodes)
+                            )
                         self._reserve(node_payload, path, edge_payload)
                         self.nodes[nid] = node_payload
                         self.paths[nid] = path
                         queue.append((nid, depth + 1))
                     else:
+                        if self.rich:
+                            self._relation(edge_payload, self.nodes)
                         self._reserve(edge_payload)
                     self.edges[row["id"]] = edge_payload
                 if limited:
@@ -632,7 +933,7 @@ class _Capture:
         )
         request_json = _json(self.request.model_dump(mode="json"))
         base: Dict[str, Any] = {
-            "format_version": 1,
+            "format_version": 2 if self.rich else 1,
             "meta": {
                 "root_id": self.request.root_id,
                 "root_available": bool(self.nodes),
@@ -700,7 +1001,22 @@ class _Capture:
                         )
                     },
                 }
-            encoded = _json(data)
+            if self.rich:
+                self._rich_sections(data)
+            if self.rich:
+                sections = []
+                for key in sorted(data):
+                    value = (
+                        "["
+                        + ",".join(self._serialized[id(row)] for row in data[key])
+                        + "]"
+                        if key in ("nodes", "edges")
+                        else _json(data[key])
+                    )
+                    sections.append(_json(key) + ":" + value)
+                encoded = "{" + ",".join(sections) + "}"
+            else:
+                encoded = _json(data)
             if len(encoded.encode()) <= self.request.max_bytes:
                 break
             base["meta"]["complete"] = False
@@ -737,6 +1053,7 @@ async def project_graph(
     scope: ProjectionScope,
     access: Optional[ProjectionAccess] = None,
     semantics: Optional[ProjectionSemantics] = None,
+    context_config: Optional[ProjectionContextConfig] = None,
 ) -> GraphProjection:
     """Capture scoped relationships with explicit resource and visibility limits.
 
@@ -760,7 +1077,12 @@ async def project_graph(
     semantics = ProjectionSemantics.model_validate_json(
         (semantics or ProjectionSemantics()).model_dump_json()
     )
-    capture = _Capture(context, request, scope, access, semantics)
+    context_config = ProjectionContextConfig.model_validate_json(
+        (context_config or ProjectionContextConfig()).model_dump_json(
+            exclude_defaults=True
+        )
+    )
+    capture = _Capture(context, request, scope, access, semantics, context_config)
     if request.execution_mode == "native" and not capture.native:
         raise NotImplementedError("backend does not support native graph paging")
 

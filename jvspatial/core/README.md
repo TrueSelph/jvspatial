@@ -24,6 +24,7 @@ core/
 ├── graph.py           # DOT / Mermaid export
 ├── graph_expansion.py # BFS / subgraph utilities
 ├── graph_projection.py # Scoped model context, hierarchy, ontology
+├── graph_context_config.py # Rich detail and relationship declarations
 ├── pager.py           # ObjectPager
 └── utils.py           # generate_id, find_subclass_by_name, datetime helpers
 ```
@@ -36,6 +37,7 @@ core/
 | `NodeQuery` | Typed node-query helper |
 | `GraphContext` | Database + cache + monitor binding (SPEC §7) |
 | `ProjectionRequest`, `ProjectionScope`, `ProjectionAccess`, `ProjectionSemantics`, `GraphProjection` | Read-only relationship context for language-model inference via `GraphContext.project_graph` (SPEC §6.9) |
+| `ProjectionContextConfig`, `ProjectionField`, `ProjectionEvidence`, `ProjectionRelation` | Opt-in rich capture detail, recorded evidence and declared relationship meanings |
 | `get_default_context` / `set_default_context` / `scoped_default_context` | Context lifecycle |
 | `graph_context` / `async_graph_context` | Sync / async context managers |
 | `@on_visit`, `@on_exit`, `@on_emit` | Hook decorators |
