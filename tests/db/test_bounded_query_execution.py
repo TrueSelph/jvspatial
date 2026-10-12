@@ -194,7 +194,7 @@ async def test_observed_fallback_reports_context_local_work(tmp_path, caplog):
     db = create_database("sqlite", db_path=tmp_path / "observe.db", observe=True)
     try:
         await seed(db)
-        with caplog.at_level(logging.INFO, logger="jvspatial.db.observable"):
+        with caplog.at_level(logging.DEBUG, logger="jvspatial.db.observable"):
             await db.find(
                 "object",
                 {"context.group": 1, "context.label": {"$regex": "^match$"}},
