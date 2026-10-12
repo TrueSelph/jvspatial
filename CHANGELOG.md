@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Routine database operation timings now log at DEBUG instead of INFO, reducing
+  noise in application logs. Slow operations and failures remain visible at
+  WARNING; metrics and structured fields are unchanged.
+
 - Restored descending single-field index declarations through GraphContext,
   repaired existing PostgreSQL B-tree key ordering with serialized transactional
   index creation across workers, and retained canonical

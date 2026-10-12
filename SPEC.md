@@ -848,7 +848,7 @@ TTL is per-cache-instance; default `None` (cache until eviction). Invalidation i
 
 ### 14.2 Structured DB logging
 
-`jvspatial/db/_observable.py` — wraps a `Database` to emit `{backend, op, collection, duration_ms, success, result_count}`. Configurable `slow_query_ms` emits warnings. Residual scans add execution mode, partial-pushdown status and examined/decoded work; observed PostgreSQL calls add pool wait, and retry helpers add driver attempts/retry count. Iterator active duration is separate from total consumer-inclusive duration. These are driver/candidate metrics, not physical protocol round trips or server rows scanned.
+`jvspatial/db/_observable.py` — wraps a `Database` to emit `{backend, op, collection, duration_ms, success, result_count}`. Successful routine timings use DEBUG; failed operations and durations at or above the configurable `slow_query_ms` threshold use WARNING. Log filtering does not disable metrics. Residual scans add execution mode, partial-pushdown status and examined/decoded work; observed PostgreSQL calls add pool wait, and retry helpers add driver attempts/retry count. Iterator active duration is separate from total consumer-inclusive duration. These are driver/candidate metrics, not physical protocol round trips or server rows scanned.
 
 ### 14.3 GraphContext PerformanceMonitor
 

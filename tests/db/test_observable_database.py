@@ -51,11 +51,11 @@ class TestStructuredLog:
     async def test_get_emits_log_with_standard_fields(self, jsondb, caplog):
         wrapped = ObservableDatabase(jsondb)
         await jsondb.save("node", {"id": "x", "v": 1})
-        with caplog.at_level(logging.INFO, logger="jvspatial.db.observable"):
+        with caplog.at_level(logging.DEBUG, logger="jvspatial.db.observable"):
             await wrapped.get("node", "x")
         assert any(
             r.name == "jvspatial.db.observable"
-            and r.levelno == logging.INFO
+            and r.levelno == logging.DEBUG
             and getattr(r, "op", None) == "get"
             and getattr(r, "collection", None) == "node"
             and getattr(r, "backend", None) == "JsonDB"
@@ -69,7 +69,7 @@ class TestStructuredLog:
         wrapped = ObservableDatabase(jsondb)
         await jsondb.save("node", {"id": "1", "v": 1})
         await jsondb.save("node", {"id": "2", "v": 2})
-        with caplog.at_level(logging.INFO, logger="jvspatial.db.observable"):
+        with caplog.at_level(logging.DEBUG, logger="jvspatial.db.observable"):
             await wrapped.find("node", {})
         find_records = [r for r in caplog.records if getattr(r, "op", None) == "find"]
         assert find_records, "no find log record emitted"
@@ -80,7 +80,7 @@ class TestStructuredLog:
         await jsondb.save("node", {"id": "a", "k": "x"})
         await jsondb.save("node", {"id": "b", "k": "x"})
         await jsondb.save("node", {"id": "c", "k": "y"})
-        with caplog.at_level(logging.INFO, logger="jvspatial.db.observable"):
+        with caplog.at_level(logging.DEBUG, logger="jvspatial.db.observable"):
             await wrapped.count("node", {"k": "x"})
         rec = [r for r in caplog.records if getattr(r, "op", None) == "count"]
         assert rec
@@ -105,18 +105,25 @@ class TestSlowQuery:
         assert warns, "expected a WARNING-level slow query log"
         assert "SLOW" in warns[-1].message
 
-    async def test_fast_query_stays_info(self, jsondb, caplog):
+    @pytest.mark.parametrize("operation", ["get", "find"])
+    async def test_fast_query_is_silent_at_info_with_metrics_intact(
+        self, jsondb, caplog, operation
+    ):
         # Threshold high enough that nothing in this test triggers it.
-        wrapped = ObservableDatabase(jsondb, slow_query_ms=10_000.0)
+        rec = _CapturingRecorder()
+        wrapped = ObservableDatabase(jsondb, slow_query_ms=10_000.0, metrics=rec)
         await jsondb.save("node", {"id": "x", "v": 1})
         with caplog.at_level(logging.INFO, logger="jvspatial.db.observable"):
-            await wrapped.get("node", "x")
+            argument = "x" if operation == "get" else {}
+            await getattr(wrapped, operation)("node", argument)
         warns = [
             r
             for r in caplog.records
             if r.levelno == logging.WARNING and r.name == "jvspatial.db.observable"
         ]
         assert warns == []
+        assert not [r for r in caplog.records if r.name == "jvspatial.db.observable"]
+        assert rec.durations and rec.counters
 
 
 # ---------------------- metrics ---------------------------------------
@@ -199,7 +206,7 @@ class TestErrorPath:
         # Monkey-patch the inner backend's save to raise.
         jsondb.save = _exploding_save  # type: ignore[assignment]
 
-        with caplog.at_level(logging.INFO, logger="jvspatial.db.observable"):
+        with caplog.at_level(logging.WARNING, logger="jvspatial.db.observable"):
             with pytest.raises(_Bomb):
                 await wrapped.save("node", {"id": "x"})
 
@@ -207,6 +214,8 @@ class TestErrorPath:
         save_recs = [r for r in caplog.records if getattr(r, "op", None) == "save"]
         assert save_recs
         assert getattr(save_recs[-1], "success", None) is False
+        assert save_recs[-1].levelno == logging.WARNING
+        assert "FAILED" in save_recs[-1].message
 
         # Metrics also tagged success=False.
         assert any(d[2].get("success") is False for d in rec.durations)

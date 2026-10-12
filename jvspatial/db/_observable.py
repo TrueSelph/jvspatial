@@ -5,8 +5,8 @@ and emits, for each operation:
 
 1. A structured log line with the standard fields
    ``backend`` / ``op`` / ``collection`` / ``duration_ms`` / ``result_count``
-   / ``success``. INFO level under the threshold; WARNING when the
-   call exceeds ``slow_query_ms``.
+   / ``success``. DEBUG for successful calls under the threshold;
+   WARNING for failures or calls reaching ``slow_query_ms``.
 2. One metrics emission to the configured :class:`MetricsRecorder`:
    a duration histogram and a counter, both labeled with the standard
    dimensions.
@@ -91,7 +91,7 @@ class ObservableDatabase(Database):
         metrics: A :class:`MetricsRecorder`. Defaults to
             :class:`NullMetricsRecorder` (zero overhead).
         slow_query_ms: Threshold above which the per-op log line is
-            elevated from INFO to WARNING. Defaults to 100ms.
+            elevated from DEBUG to WARNING. Defaults to 100ms.
     """
 
     def __init__(
@@ -195,15 +195,17 @@ class ObservableDatabase(Database):
         if active_duration_s is not None:
             log_extra["active_duration_ms"] = round(active_duration_s * 1000, 3)
 
-        # Structured log. WARNING when slow, INFO otherwise. extra=
+        # Structured log. WARNING when slow or failed, DEBUG otherwise. extra=
         # supplies the structured fields to any handler that
         # understands them (json formatters, structlog, etc.).
         slow = duration_ms >= self.slow_query_ms
         msg = "db.%s on '%s' took %.2fms" % (op, collection, duration_ms)
         if slow:
             logger.warning("SLOW %s", msg, extra=log_extra)
+        elif not success:
+            logger.warning("FAILED %s", msg, extra=log_extra)
         else:
-            logger.info(msg, extra=log_extra)
+            logger.debug(msg, extra=log_extra)
 
         # Metrics. Best-effort -- do not surface backend errors here.
         try:
