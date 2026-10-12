@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-12
+
+### Fixed
+
+- Routine database operation timings now log at DEBUG instead of INFO, reducing
+  noise in application logs. Slow operations and failures remain visible at
+  WARNING; metrics and structured fields are unchanged.
+
 ## [0.2.0] - 2026-10-11
 
 ### Added
@@ -39,10 +47,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added native DynamoDB scan pages with query-bound continuation and an opt-in PyMongo Async driver (`driver="pymongo"`; PyMongo >=4.13).
 
 ### Fixed
-
-- Routine database operation timings now log at DEBUG instead of INFO, reducing
-  noise in application logs. Slow operations and failures remain visible at
-  WARNING; metrics and structured fields are unchanged.
 
 - Restored descending single-field index declarations through GraphContext,
   repaired existing PostgreSQL B-tree key ordering with serialized transactional
