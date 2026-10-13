@@ -73,6 +73,7 @@ import json
 import logging
 import re
 import time
+from functools import wraps
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -96,6 +97,7 @@ from .database import (
     finalize_find_results,
 )
 from .query import QueryEngine
+from .transaction import Transaction
 
 # Active tenant id for the current async task. ``None`` means no tenant
 # scope is in effect — operations run without setting the ``app.tenant_id``
@@ -116,6 +118,51 @@ def current_tenant() -> Optional[str]:
 
 
 logger = logging.getLogger(__name__)
+
+
+class _TaskReentrantLock:
+    """Serialize operations on one asyncpg connection, allowing same-task calls."""
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._owner: Optional[asyncio.Task[Any]] = None
+        self._depth = 0
+
+    async def __aenter__(self) -> "_TaskReentrantLock":
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError(
+                "PostgreSQL transaction operations require an asyncio task"
+            )
+        if self._owner is task:
+            self._depth += 1
+            return self
+        await self._lock.acquire()
+        self._owner = task
+        self._depth = 1
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        task = asyncio.current_task()
+        if task is not self._owner:
+            raise RuntimeError("PostgreSQL transaction lock released by non-owner")
+        self._depth -= 1
+        if self._depth == 0:
+            self._owner = None
+            self._lock.release()
+
+
+def _serialized_transaction_operation(method):
+    """Guard one transaction operation against concurrent asyncpg commands."""
+
+    @wraps(method)
+    async def wrapped(self: Any, *args: Any, **kwargs: Any) -> Any:
+        async with self._operation_lock:
+            self._ensure_active()
+            return await method(self, *args, **kwargs)
+
+    return wrapped
+
 
 try:
     import asyncpg
@@ -308,12 +355,8 @@ class PostgresDB(Database):
     full set of configuration knobs.
     """
 
-    # Postgres supports ACID transactions natively. The base
-    # ``begin_transaction`` machinery is wired in a later patch
-    # (C4: PG atomicity) — for now ``supports_transactions`` advertises
-    # the capability so callers can branch on it. Until ``begin_transaction``
-    # lands, transactional context is offered only via ``UPDATE … RETURNING``
-    # at the operation level (atomic single-row update).
+    # PostgreSQL supports full ACID transactions backed by a held pool
+    # connection. See ``begin_transaction`` and ``PostgresTransaction`` below.
     supports_transactions: bool = True
     supports_native_graph_paging: bool = True
 
@@ -637,22 +680,53 @@ class PostgresDB(Database):
 
     # ---- schema bootstrap --------------------------------------------------
 
-    async def _bootstrap_collection(self, collection: str) -> None:
+    async def _bootstrap_collection(
+        self,
+        collection: str,
+        *,
+        connection: Optional[Any] = None,
+        pending: Optional[Set[str]] = None,
+    ) -> None:
         """Create the table + base indexes for ``collection`` if missing.
 
         Idempotent + cached. Safe to call from any code path before a CRUD
         op; the cost on the warm path after first call is one set membership
         check.
         """
-        if collection in self._collections_bootstrapped:
+        if collection in self._collections_bootstrapped or (
+            pending is not None and collection in pending
+        ):
             return
         lock = self._collection_bootstrap_locks.setdefault(collection, asyncio.Lock())
         async with lock:
-            if collection in self._collections_bootstrapped:
+            if collection in self._collections_bootstrapped or (
+                pending is not None and collection in pending
+            ):
                 return
-            await self._create_collection_schema(collection)
+            if connection is None:
+                await self._create_collection_schema(collection)
+                self._collections_bootstrapped.add(collection)
+            else:
+                await self._create_collection_schema_on_connection(
+                    collection, connection
+                )
+                if pending is not None:
+                    pending.add(collection)
 
     async def _create_collection_schema(self, collection: str) -> None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            await self._create_collection_schema_on_connection(collection, conn)
+
+    async def _create_collection_schema_on_connection(
+        self, collection: str, conn: Any
+    ) -> None:
+        """Create a collection using a caller-owned connection.
+
+        Transactions use this path to avoid checking out a second pool
+        connection while already holding one. The DDL remains part of the
+        caller's transaction and is only cached globally after commit.
+        """
         col = _safe_collection(collection)
         schema = _safe_collection(self.schema_name)
         gin_name = _postgres_index_name(col, "data_gin")
@@ -664,21 +738,18 @@ class PostgresDB(Database):
             if self.gin_index == "full"
             else ""
         )
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
-            # An asyncio lock only coordinates callers sharing this instance.
-            # PostgreSQL must also serialize first use across workers and
-            # independently constructed PostgresDB instances. Keep the
-            # advisory lock and DDL in one transaction so the lock survives
-            # until the table and all base indexes have been created.
-            async with conn.transaction():
-                await conn.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
-                    schema,
-                    col,
-                )
-                await conn.execute(
-                    f"""
+        # An asyncio lock only coordinates callers sharing this instance.
+        # PostgreSQL must also serialize first use across workers and
+        # independently constructed PostgresDB instances. Keep the advisory
+        # lock and DDL in a transaction so the lock lasts through creation.
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+                schema,
+                col,
+            )
+            await conn.execute(
+                f"""
                 CREATE TABLE IF NOT EXISTS {schema}.{col} (
                     id         TEXT PRIMARY KEY,
                     entity     TEXT NOT NULL,
@@ -695,8 +766,7 @@ class PostgresDB(Database):
                     ON {schema}.{col} (tenant_id)
                     WHERE tenant_id IS NOT NULL;
                 """
-                )
-        self._collections_bootstrapped.add(collection)
+            )
 
     # ---- payload helpers ---------------------------------------------------
 
@@ -1106,6 +1176,78 @@ class PostgresDB(Database):
         counts.update({row["nid"]: int(row["n"]) for row in rows})
         return counts
 
+    async def _find_ids_with_connection(
+        self,
+        connection: Any,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int],
+        sort: Optional[List[Tuple[str, int]]],
+        offset: int,
+    ) -> Optional[List[str]]:
+        """Shared native ID projection for pooled and transactional reads.
+
+        ``None`` signals that the caller must use its own transaction-safe
+        fallback for an unsupported filter or sort.
+        """
+        from .database import _keyset_sort_fields
+
+        if offset < 0 or (limit is not None and limit < 0):
+            raise ValueError("offset and limit must be nonnegative")
+        if limit == 0:
+            return []
+        translated = translate_query(query)
+        ordering = translate_sort(_keyset_sort_fields(sort))
+        if translated is None or ordering is None:
+            return None
+        where, values = translated
+        params = list(values)
+        col = _safe_collection(collection)
+        schema = _safe_collection(self.schema_name)
+        sql = f"SELECT id FROM {schema}.{col}"
+        if where:
+            sql += f" WHERE {where}"
+        sql += f" ORDER BY {ordering}"
+        if limit is not None:
+            params.append(limit)
+            sql += f" LIMIT ${len(params)}"
+        params.append(offset)
+        sql += f" OFFSET ${len(params)}"
+        rows = await connection.fetch(sql, *params)
+        return [row["id"] for row in rows]
+
+    async def _count_with_connection(
+        self, connection: Any, collection: str, query: Dict[str, Any]
+    ) -> Optional[int]:
+        """Shared native COUNT; ``None`` signals an in-memory fallback."""
+        translated = translate_query(query) if query else ("", [])
+        if translated is None:
+            return None
+        where_sql, params = translated
+        clause = f" WHERE {where_sql}" if where_sql else ""
+        col = _safe_collection(collection)
+        schema = _safe_collection(self.schema_name)
+        row = await connection.fetchrow(
+            f"SELECT COUNT(*) AS n FROM {schema}.{col}{clause}", *params
+        )
+        return int(row["n"]) if row else 0
+
+    async def _find_many_with_connection(
+        self, connection: Any, collection: str, ids: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Shared held-connection implementation for set ID lookups."""
+        if not ids:
+            return {}
+        unique_ids = list(dict.fromkeys(str(value) for value in ids))
+        col = _safe_collection(collection)
+        schema = _safe_collection(self.schema_name)
+        rows = await connection.fetch(
+            f"SELECT id, data FROM {schema}.{col} WHERE id = ANY($1::text[])",
+            unique_ids,
+        )
+        return {row["id"]: self._record_from_row(row) for row in rows}
+
     async def find_ids(
         self,
         collection: str,
@@ -1116,32 +1258,23 @@ class PostgresDB(Database):
         offset: int = 0,
     ) -> List[str]:
         """Project physical IDs, with filtering/sorting/offset in PostgreSQL."""
-        from .database import _keyset_sort_fields
-
-        if offset < 0 or (limit is not None and limit < 0):
-            raise ValueError("offset and limit must be nonnegative")
-        translated = translate_query(query)
-        ordering = translate_sort(_keyset_sort_fields(sort))
-        if translated is None or ordering is None:
-            return await super().find_ids(
-                collection, query, limit=limit, sort=sort, offset=offset
-            )
+        if limit == 0:
+            return []
         await self._bootstrap_collection(collection)
-        col, schema = _safe_collection(collection), _safe_collection(self.schema_name)
-        where, values = translated
-        params = list(values)
-        sql = f"SELECT id FROM {schema}.{col}"
-        if where:
-            sql += f" WHERE {where}"
-        sql += f" ORDER BY {ordering}"
-        if limit is not None:
-            params.append(limit)
-            sql += f" LIMIT ${len(params)}"
-        params.append(offset)
-        sql += f" OFFSET ${len(params)}"
         async with self._acquire_conn() as conn:
-            rows = await conn.fetch(sql, *params)
-        return [row["id"] for row in rows]
+            ids = await self._find_ids_with_connection(
+                conn,
+                collection,
+                query,
+                limit=limit,
+                sort=sort,
+                offset=offset,
+            )
+        if ids is not None:
+            return ids
+        return await super().find_ids(
+            collection, query, limit=limit, sort=sort, offset=offset
+        )
 
     async def count(
         self, collection: str, query: Optional[Dict[str, Any]] = None
@@ -1154,16 +1287,13 @@ class PostgresDB(Database):
         """
         q = query or {}
         await self._bootstrap_collection(collection)
-        col = _safe_collection(collection)
-        schema = _safe_collection(self.schema_name)
 
         if not q:
             async with self._acquire_conn() as conn:
-                row = await conn.fetchrow(f"SELECT COUNT(*) AS n FROM {schema}.{col}")
-            return int(row["n"]) if row else 0
+                result = await self._count_with_connection(conn, collection, q)
+            return result if result is not None else 0
 
-        translated = translate_query(q)
-        if translated is None:
+        if translate_query(q) is None:
             total = 0
             candidates = self._fallback_records(collection, q)
             try:
@@ -1172,13 +1302,9 @@ class PostgresDB(Database):
             finally:
                 await candidates.aclose()
             return total
-        where_sql, params = translated
-        clause = f" WHERE {where_sql}" if where_sql else ""
         async with self._acquire_conn() as conn:
-            row = await conn.fetchrow(
-                f"SELECT COUNT(*) AS n FROM {schema}.{col}{clause}", *params
-            )
-        return int(row["n"]) if row else 0
+            result = await self._count_with_connection(conn, collection, q)
+        return result or 0
 
     async def find_many(
         self, collection: str, ids: List[str]
@@ -1186,19 +1312,9 @@ class PostgresDB(Database):
         """Bulk-fetch by id with a single ``WHERE id = ANY($1)`` round trip."""
         if not ids:
             return {}
-        unique_ids = list(dict.fromkeys(str(i) for i in ids))
         await self._bootstrap_collection(collection)
-        col = _safe_collection(collection)
-        schema = _safe_collection(self.schema_name)
         async with self._acquire_conn() as conn:
-            rows = await conn.fetch(
-                f"SELECT id, data FROM {schema}.{col} WHERE id = ANY($1::text[])",
-                unique_ids,
-            )
-        out: Dict[str, Dict[str, Any]] = {}
-        for row in rows:
-            out[row["id"]] = self._record_from_row(row)
-        return out
+            return await self._find_many_with_connection(conn, collection, ids)
 
     def _connected_nodes_sql(
         self,
@@ -2270,8 +2386,21 @@ class PostgresDB(Database):
         pool = await self._ensure_pool()
         conn = await pool.acquire()
         txn = conn.transaction()
-        await txn.start()
-        return PostgresTransaction(self, conn, txn)
+        try:
+            await txn.start()
+            tenant_id = _active_tenant.get()
+            if tenant_id is not None:
+                await conn.execute(
+                    "SELECT set_config('app.tenant_id', $1, true)", tenant_id
+                )
+            return PostgresTransaction(self, conn, txn)
+        except BaseException:
+            try:
+                if getattr(txn, "is_active", False):
+                    await txn.rollback()
+            finally:
+                await pool.release(conn)
+            raise
 
     async def commit_transaction(self, transaction: "PostgresTransaction") -> None:
         """Commit ``transaction`` and release its connection back to the pool."""
@@ -2319,7 +2448,7 @@ class PostgresDB(Database):
 # ---- transaction handle -----------------------------------------------------
 
 
-class PostgresTransaction:
+class PostgresTransaction(Transaction):
     """Active asyncpg transaction handle.
 
     Holds a pooled connection + the asyncpg ``Transaction`` object for the
@@ -2340,22 +2469,33 @@ class PostgresTransaction:
     """
 
     def __init__(self, db: "PostgresDB", connection: Any, transaction: Any) -> None:
+        import uuid
+
+        super().__init__(str(uuid.uuid4()))
         self._db = db
         self._connection = connection
         self._transaction = transaction
         self.is_active = True
         self.is_committed = False
         self.is_rolled_back = False
-        # Surface a unique id so observability layers can correlate.
-        import uuid
+        self._operation_lock = _TaskReentrantLock()
+        self._bootstrapped_collections: Set[str] = set()
+        self._closing = False
 
-        self.transaction_id = str(uuid.uuid4())
+    def _ensure_active(self) -> None:
+        if self._closing or not self.is_active or self._connection is None:
+            raise DatabaseError("PostgreSQL transaction is no longer active")
 
+    @_serialized_transaction_operation
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Upsert ``data`` into ``collection`` within this transaction."""
         col = _safe_collection(collection)
         schema = _safe_collection(self._db.schema_name)
-        await self._db._bootstrap_collection(collection)
+        await self._db._bootstrap_collection(
+            collection,
+            connection=self._connection,
+            pending=self._bootstrapped_collections,
+        )
         rec_id, entity, tenant, data_json = self._db._split_payload(data)
         await self._connection.execute(
             f"""
@@ -2374,6 +2514,7 @@ class PostgresTransaction:
         )
         return data
 
+    @_serialized_transaction_operation
     async def insert_if_absent(
         self,
         collection: str,
@@ -2385,7 +2526,11 @@ class PostgresTransaction:
         self._db._validate_insert_if_absent(data, conflict_target)
         col = _safe_collection(collection)
         schema = _safe_collection(self._db.schema_name)
-        await self._db._bootstrap_collection(collection)
+        await self._db._bootstrap_collection(
+            collection,
+            connection=self._connection,
+            pending=self._bootstrapped_collections,
+        )
         rec_id, entity, tenant, data_json = self._db._split_payload(data)
         row = await self._connection.fetchrow(
             f"""
@@ -2415,21 +2560,31 @@ class PostgresTransaction:
             record=self._db._record_from_row(existing), created=False
         )
 
+    @_serialized_transaction_operation
     async def get(self, collection: str, id: str) -> Optional[Dict[str, Any]]:
         """Fetch a single record by ``id`` from ``collection`` in this transaction."""
         col = _safe_collection(collection)
         schema = _safe_collection(self._db.schema_name)
-        await self._db._bootstrap_collection(collection)
+        await self._db._bootstrap_collection(
+            collection,
+            connection=self._connection,
+            pending=self._bootstrapped_collections,
+        )
         row = await self._connection.fetchrow(
             f"SELECT data FROM {schema}.{col} WHERE id = $1", str(id)
         )
         return self._db._record_from_row(row) if row is not None else None
 
+    @_serialized_transaction_operation
     async def delete(self, collection: str, id: str) -> bool:
         """Delete record ``id`` from ``collection`` in this transaction."""
         col = _safe_collection(collection)
         schema = _safe_collection(self._db.schema_name)
-        await self._db._bootstrap_collection(collection)
+        await self._db._bootstrap_collection(
+            collection,
+            connection=self._connection,
+            pending=self._bootstrapped_collections,
+        )
         result = await self._connection.execute(
             f"DELETE FROM {schema}.{col} WHERE id = $1", str(id)
         )
@@ -2440,6 +2595,7 @@ class PostgresTransaction:
             n = 0
         return n > 0
 
+    @_serialized_transaction_operation
     async def find(
         self,
         collection: str,
@@ -2449,14 +2605,34 @@ class PostgresTransaction:
         sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Run ``query`` against ``collection`` within this transaction."""
+        if limit == 0:
+            return []
         col = _safe_collection(collection)
         schema = _safe_collection(self._db.schema_name)
-        await self._db._bootstrap_collection(collection)
+        await self._db._bootstrap_collection(
+            collection,
+            connection=self._connection,
+            pending=self._bootstrapped_collections,
+        )
         translated = translate_query(query) if query else ("", [])
         if translated is None:
-            rows = await self._connection.fetch(f"SELECT data FROM {schema}.{col}")
-            records = [self._db._record_from_row(r) for r in rows]
-            records = [r for r in records if QueryEngine.match(r, query)]
+            records = []
+            sort_sql = translate_sort(sort)
+            order_clause = f" ORDER BY {sort_sql}" if sort_sql else ""
+            cursor = self._connection.cursor(
+                f"SELECT data FROM {schema}.{col}{order_clause}"
+            )
+            async for row in cursor:
+                record = self._db._record_from_row(row)
+                if not QueryEngine.match(record, query):
+                    continue
+                records.append(record)
+                if (
+                    limit is not None
+                    and len(records) >= limit
+                    and (not sort or sort_sql)
+                ):
+                    break
             return finalize_find_results(records, sort=sort, limit=limit)
         where_sql, params = translated
         sort_sql = translate_sort(sort)
@@ -2480,6 +2656,91 @@ class PostgresTransaction:
             records = finalize_find_results(records, sort=sort, limit=limit)
         return records
 
+    @_serialized_transaction_operation
+    async def find_one(
+        self, collection: str, query: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Return one match using this transaction's connection and snapshot."""
+        rows = await self.find(collection, query, limit=1)
+        return rows[0] if rows else None
+
+    @_serialized_transaction_operation
+    async def find_ids(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        offset: int = 0,
+    ) -> List[str]:
+        """Project IDs for paging without leaving the transaction."""
+        if offset < 0 or (limit is not None and limit < 0):
+            raise ValueError("offset and limit must be nonnegative")
+        if limit == 0:
+            return []
+        await self._db._bootstrap_collection(
+            collection,
+            connection=self._connection,
+            pending=self._bootstrapped_collections,
+        )
+        ids = await self._db._find_ids_with_connection(
+            self._connection,
+            collection,
+            query,
+            limit=limit,
+            sort=sort,
+            offset=offset,
+        )
+        if ids is None:
+            return await super().find_ids(
+                collection, query, limit=limit, sort=sort, offset=offset
+            )
+        return ids
+
+    @_serialized_transaction_operation
+    async def count(
+        self, collection: str, query: Optional[Dict[str, Any]] = None
+    ) -> int:
+        """Count rows in the same PostgreSQL transaction snapshot."""
+        q = query or {}
+        await self._db._bootstrap_collection(
+            collection,
+            connection=self._connection,
+            pending=self._bootstrapped_collections,
+        )
+        result = await self._db._count_with_connection(self._connection, collection, q)
+        if result is not None:
+            return result
+
+        # Unsupported operators retain QueryEngine semantics without
+        # materializing the collection in memory.
+        total = 0
+        col = _safe_collection(collection)
+        schema = _safe_collection(self._db.schema_name)
+        cursor = self._connection.cursor(f"SELECT data FROM {schema}.{col}")
+        async for row in cursor:
+            record = self._db._record_from_row(row)
+            total += bool(QueryEngine.match(record, q))
+        return total
+
+    @_serialized_transaction_operation
+    async def find_many(
+        self, collection: str, ids: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fetch a set of IDs in one query on the held connection."""
+        if not ids:
+            return {}
+        await self._db._bootstrap_collection(
+            collection,
+            connection=self._connection,
+            pending=self._bootstrapped_collections,
+        )
+        return await self._db._find_many_with_connection(
+            self._connection, collection, ids
+        )
+
+    @_serialized_transaction_operation
     async def find_one_and_update(
         self,
         collection: str,
@@ -2496,7 +2757,11 @@ class PostgresTransaction:
         """
         from .database import _normalize_id_query
 
-        await self._db._bootstrap_collection(collection)
+        await self._db._bootstrap_collection(
+            collection,
+            connection=self._connection,
+            pending=self._bootstrapped_collections,
+        )
         col = _safe_collection(collection)
         schema = _safe_collection(self._db.schema_name)
 
@@ -2572,23 +2837,34 @@ class PostgresTransaction:
         """Commit the wrapped asyncpg transaction. Idempotent."""
         if not self.is_active or self.is_committed or self.is_rolled_back:
             return
-        try:
-            await self._transaction.commit()
-            self.is_committed = True
-        finally:
-            self.is_active = False
-            await self._release()
+        self._closing = True
+        async with self._operation_lock:
+            if not self.is_active or self.is_committed or self.is_rolled_back:
+                return
+            try:
+                await self._transaction.commit()
+                self.is_committed = True
+                self._db._collections_bootstrapped.update(
+                    self._bootstrapped_collections
+                )
+            finally:
+                self.is_active = False
+                await self._release()
 
     async def rollback(self) -> None:
         """Roll back the wrapped asyncpg transaction. Idempotent."""
         if not self.is_active or self.is_committed or self.is_rolled_back:
             return
-        try:
-            await self._transaction.rollback()
-            self.is_rolled_back = True
-        finally:
-            self.is_active = False
-            await self._release()
+        self._closing = True
+        async with self._operation_lock:
+            if not self.is_active or self.is_committed or self.is_rolled_back:
+                return
+            try:
+                await self._transaction.rollback()
+                self.is_rolled_back = True
+            finally:
+                self.is_active = False
+                await self._release()
 
     async def _release(self) -> None:
         if self._connection is None:

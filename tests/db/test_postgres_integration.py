@@ -374,6 +374,71 @@ class TestPostgresAtomicOps:
 class TestPostgresTransactionAtomicOps:
     """CAS + insert_if_absent must share one public transaction handle."""
 
+    async def test_transaction_query_methods_see_uncommitted_state(
+        self, pg_db: "PostgresDB"
+    ) -> None:
+        await pg_db.save(
+            "o",
+            {"id": "o.QueryPage.a", "entity": "QueryPage", "context": {"n": 1}},
+        )
+        txn = await pg_db.begin_transaction()
+        await txn.save(
+            "o",
+            {"id": "o.QueryPage.b", "entity": "QueryPage", "context": {"n": 2}},
+        )
+        try:
+            assert await txn.find_one("o", {"id": "o.QueryPage.b"}) == {
+                "id": "o.QueryPage.b",
+                "entity": "QueryPage",
+                "context": {"n": 2},
+            }
+            assert await txn.count("o", {"entity": "QueryPage"}) == 2
+            assert await txn.find_ids(
+                "o", {"entity": "QueryPage"}, sort=[("id", 1)], limit=1, offset=1
+            ) == ["o.QueryPage.b"]
+            assert await txn.find_many("o", ["o.QueryPage.b", "missing"]) == {
+                "o.QueryPage.b": {
+                    "id": "o.QueryPage.b",
+                    "entity": "QueryPage",
+                    "context": {"n": 2},
+                }
+            }
+            assert await txn.delete("o", "o.QueryPage.a") is True
+            assert await txn.count("o", {"entity": "QueryPage"}) == 1
+        finally:
+            await pg_db.rollback_transaction(txn)
+
+        assert await pg_db.get("o", "o.QueryPage.b") is None
+        assert await pg_db.get("o", "o.QueryPage.a") is not None
+
+    async def test_transaction_bootstrap_is_connection_local_and_rollback_safe(
+        self, pg_db: "PostgresDB"
+    ) -> None:
+        from jvspatial.db.postgres import PostgresDB
+
+        db = PostgresDB(
+            dsn=pg_db.dsn,
+            schema_name=pg_db.schema_name,
+            min_size=1,
+            max_size=1,
+        )
+        try:
+            txn = await db.begin_transaction()
+            await asyncio.wait_for(
+                txn.save(
+                    "cold_collection",
+                    {"id": "cold.1", "entity": "Cold", "context": {}},
+                ),
+                timeout=5,
+            )
+            await txn.rollback()
+            assert "cold_collection" not in db._collections_bootstrapped
+            assert (
+                await asyncio.wait_for(db.find("cold_collection", {}), timeout=5) == []
+            )
+        finally:
+            await db.close()
+
     async def test_transaction_find_one_and_update_inc(
         self, pg_db: "PostgresDB"
     ) -> None:
@@ -710,6 +775,31 @@ class TestPostgresRLS:
             )
         # Without ``tenant(...)`` the GUC is empty; required-mode rejects all.
         assert await pg_db_rls.find("node", {}) == []
+
+    async def test_transaction_sets_and_enforces_tenant_scope(
+        self, pg_db_rls: "PostgresDB"
+    ) -> None:
+        await pg_db_rls.enable_rls("node")
+        async with pg_db_rls.tenant("acme"):
+            txn = await pg_db_rls.begin_transaction()
+            await txn.save(
+                "node",
+                {
+                    "id": "n.txn.acme",
+                    "entity": "Node",
+                    "tenant_id": "acme",
+                    "context": {"name": "acme"},
+                },
+            )
+            await txn.commit()
+
+        async with pg_db_rls.tenant("beta"):
+            txn = await pg_db_rls.begin_transaction()
+            try:
+                assert await txn.get("node", "n.txn.acme") is None
+                assert await txn.find("node", {}) == []
+            finally:
+                await txn.rollback()
 
 
 # ---- pgvector + hybrid queries --------------------------------------------

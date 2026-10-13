@@ -950,11 +950,11 @@ server = Server(
 
 ## See Also
 
-- [Authentication Examples](../examples/api/authenticated_endpoints_example.py) - Complete working examples
+- [Authentication Examples](../../examples/api/authenticated_endpoints_example.py) - Complete working examples
 - [REST API Integration](rest-api.md) - API endpoint patterns
 - [Server API Documentation](server-api.md) - Server configuration
 - [Security Quickstart](auth-quickstart.md) - Get started quickly
 
 ---
 
-**[← Back to README](../../README.md)** | **[Authentication Examples →](../examples/api/authenticated_endpoints_example.py)**
+**[← Back to README](../../README.md)** | **[Authentication Examples →](../../examples/api/authenticated_endpoints_example.py)**

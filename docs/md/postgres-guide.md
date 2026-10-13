@@ -319,11 +319,19 @@ async with transaction_context(db) as txn:
     else:
         await txn.save("user", user_record)
         await txn.save("audit_log", log_record)
+        # Query methods (find, find_one, count, find_ids, find_many,
+        # find_iter) read from this transaction's held connection.
         # Commits on context exit; rolls back on exception.
 ```
 
 The transaction holds one dedicated connection out of the pool for its
 lifetime, so be careful not to hold transactions across long-running awaits.
+Concurrent handle operations serialize access to that connection, and completed
+handles reject further reads or writes. Tenant scope and new-collection
+bootstrap use the held connection; a rollback does not mark collection DDL as
+committed. Graph transactions also isolate identity/process caches. See the
+[shared transaction contract](transactions.md) for other backends and fallback
+performance limits.
 
 ## Bulk writes
 

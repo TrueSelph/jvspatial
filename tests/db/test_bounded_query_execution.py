@@ -188,27 +188,36 @@ def test_partial_regex_retains_flags():
     assert pushed == {"$and": [{"context.label": {"$regex": "alpha", "$options": "i"}}]}
 
 
-async def test_observed_fallback_reports_context_local_work(tmp_path, caplog):
-    import logging
+async def test_observed_fallback_reports_context_local_work(tmp_path):
+    class Recorder:
+        def __init__(self):
+            self.values = []
 
-    db = create_database("sqlite", db_path=tmp_path / "observe.db", observe=True)
+        def record_duration(self, *_args, **_kwargs):
+            pass
+
+        def increment_counter(self, *_args, **_kwargs):
+            pass
+
+        def record_value(self, name, value, /, **labels):
+            self.values.append((name, value, labels))
+
+    recorder = Recorder()
+    db = create_database(
+        "sqlite", db_path=tmp_path / "observe.db", observe=True, metrics=recorder
+    )
     try:
         await seed(db)
-        with caplog.at_level(logging.DEBUG, logger="jvspatial.db.observable"):
-            await db.find(
-                "object",
-                {"context.group": 1, "context.label": {"$regex": "^match$"}},
-                limit=1,
-                sort=[("id", 1)],
-            )
-        record = next(r for r in caplog.records if getattr(r, "op", None) == "find")
-        assert record.execution_mode == "residual_scan"
-        assert record.scanned_rows == 3
-        assert record.decoded_bytes > 0
-        assert (
-            _query_execution.get() is None
-            or _query_execution.get() is not record.__dict__
+        await db.find(
+            "object",
+            {"context.group": 1, "context.label": {"$regex": "^match$"}},
+            limit=1,
+            sort=[("id", 1)],
         )
+        observed = {name: value for name, value, _labels in recorder.values}
+        assert observed["jvspatial.db.query.scanned_rows"] == 3
+        assert observed["jvspatial.db.query.decoded_bytes"] > 0
+        assert _query_execution.get() is None
     finally:
         await db.close()
 

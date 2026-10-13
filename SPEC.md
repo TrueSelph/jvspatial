@@ -274,7 +274,7 @@ cases are documented rather than normalized:
 
 Adapters declare capabilities as class attributes:
 
-- `supports_transactions: bool` — `True` for MongoDB (replica set); `False` for SQLite (best-effort), JSON, DynamoDB.
+- `supports_transactions: bool` — the adapter-level flag is `True` for PostgreSQL and MongoDB and `False` for SQLite, JSON and DynamoDB. MongoDB also requires a successful `await db.is_transactional()` topology probe; its static flag alone is not deployment qualification. Unsupported backends do not offer multi-write atomicity.
 
 Node adjacency always lives in the edge collection (indexed on `source` /
 `target` by `Edge.get_indexes`). There is no `edge_ids_mode` toggle and no
@@ -292,8 +292,32 @@ Callers branching on capabilities should test the flag, not the adapter class.
 | SQLite | `jvspatial/db/sqlite.py` | No (single-conn fsync) | `aiosqlite`; Mongo→SQL via `SQLiteTranslator` |
 | MongoDB | `jvspatial/db/mongodb.py` | Yes | Motor default; opt-in PyMongo Async; native bulk/cursor/compound ops |
 | DynamoDB | `jvspatial/db/dynamodb.py` | No | `aioboto3`; throttle-retry; `BatchGetItem` chunks of 100 |
+| PostgreSQL | `jvspatial/db/postgres.py` | Yes | Held-connection ACID transactions, RLS tenant scope and native query paging |
 
 For a file-backed SQLite database reused on a different event loop, the adapter closes the old `aiosqlite` connection and its worker thread before opening a connection on the new loop. An in-memory SQLite database retains its existing connection so its contents are not lost (`jvspatial/db/sqlite.py`).
+
+### 4.3.1 Transaction read and cache contract
+
+`Transaction` supplies `find_one`, `count`, `find_ids`, `find_many`, `find_iter`
+and `count_incident_edges` alongside CRUD. All fallback reads route through the
+transaction handle, not its outer database. PostgreSQL overrides native reads
+on its held connection, serializes concurrent operations, rejects completed
+handles and keeps tenant scope and collection bootstrap on that connection.
+MongoDB inherited reads retain the native session; fallback count/projection/
+bulk work may be less efficient than native aggregation. JSON, SQLite and
+DynamoDB remain unsupported for native graph transactions. If an adapter cannot
+open a handle, `graph_transaction` raises `TransactionUnavailable` without
+binding an ordinary context. `transaction_context` rolls back on cancellation;
+MongoDB completion awaits native session cleanup for both driver shapes.
+
+`graph_transaction` uses a separate request identity map. It does not read outer
+process-cache entities or write transaction-local entities into the shared
+cache. Reads from an explicit different context do not reuse a request identity
+entry bound to the transaction. Touched parent cache keys are invalidated after
+both commit and rollback. Collection DDL cache entries are promoted only after
+commit; rollback permits subsequent bootstrap.
+Sources: `jvspatial/db/transaction.py`, `jvspatial/db/postgres.py`,
+`jvspatial/core/context.py`. See [Transactions](docs/md/transactions.md).
 
 ### 4.4 Atomic IO (JSON)
 
@@ -841,14 +865,26 @@ TTL is per-cache-instance; default `None` (cache until eviction). Invalidation i
 
 ### 14.1 MetricsRecorder protocol
 
-`MetricsRecorder` defines `record_db_op`, `record_hook`, `record_cache_event`. Implementations may push to Prometheus, StatsD, or any sink. The library provides:
+`MetricsRecorder` defines `record_duration`, `increment_counter` and `record_value`. Implementations may push to Prometheus, StatsD, or any sink. The library provides:
 
-- `NullRecorder` — default; no-op.
+- `NullMetricsRecorder` — default; no-op.
 - OpenTelemetry adapter (`observability/otel.py`) — optional, requires `[otel]` extra.
 
 ### 14.2 Structured DB logging
 
-`jvspatial/db/_observable.py` — wraps a `Database` to emit `{backend, op, collection, duration_ms, success, result_count}`. Successful routine timings use DEBUG; failed operations and durations at or above the configurable `slow_query_ms` threshold use WARNING. Log filtering does not disable metrics. Residual scans add execution mode, partial-pushdown status and examined/decoded work; observed PostgreSQL calls add pool wait, and retry helpers add driver attempts/retry count. Iterator active duration is separate from total consumer-inclusive duration. These are driver/candidate metrics, not physical protocol round trips or server rows scanned.
+`create_database(observe=True)` wraps any backend and records metrics for each
+wrapped operation. Successful operations produce no log record at any logger
+level, including calls reaching `slow_query_ms`; those calls increment a slow
+metric. Failures emit ERROR with the existing `{backend, op, collection,
+duration_ms, success, result_count}` field schema where applicable. Log filtering
+does not disable metrics. Successful calls skip logging payload construction
+and message formatting. Residual scans add execution mode, partial-pushdown
+status and examined/decoded work; observed PostgreSQL calls add pool wait, and
+retry helpers add driver attempts/retry count. Iterator active duration is
+separate from total consumer-inclusive duration. These are driver/candidate
+metrics, not physical protocol round trips or server rows scanned.
+Source: `jvspatial/db/_observable.py`.
+
 
 ### 14.3 GraphContext PerformanceMonitor
 

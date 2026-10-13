@@ -8,7 +8,7 @@ Metrics protocol, default no-op recorder, OpenTelemetry adapter.
 
 ## Purpose
 
-`observability/` defines a tiny protocol (`MetricsRecorder`) that any metrics backend can implement. The library wires `ObservableDatabase` (internal, in `jvspatial/db/_observable.py`) to emit a structured log line and one metric per DB operation, with WARNING-level elevation past a configurable slow-query threshold.
+`observability/` defines a tiny protocol (`MetricsRecorder`) that any metrics backend can implement. `ObservableDatabase` (internal, in `jvspatial/db/_observable.py`) records per-operation metrics and logs failures at ERROR. Successful operations, including slow calls, are silent; slow-call counts remain available through metrics.
 
 ## Layout
 
@@ -35,7 +35,7 @@ From `jvspatial.observability.otel` (requires `pip install jvspatial[otel]`):
 
 - **The structured log field set from `ObservableDatabase` is public.** Schema: `backend`, `op`, `collection`, `duration_ms`, `success`, `result_count`. Breaking changes require a deprecation cycle. (See [docs/md/stability.md](../../docs/md/stability.md).)
 - **`NullMetricsRecorder` is zero-overhead.** Calls dispatch to no-op methods; do not add allocations or branching here.
-- **Slow-query threshold elevates the log to WARNING.** Configurable per database via `create_database(..., slow_query_ms=N)`.
+- **Only failures are logged.** The slow-query threshold is configurable per database via `create_database(..., slow_query_ms=N)` and applies to metrics, not successful-operation logging.
 - **Four metric names are emitted per DB op**: `jvspatial.db.op.duration_seconds`, `jvspatial.db.op.count`, `jvspatial.db.op.slow_count`, `jvspatial.db.op.result_count`.
 
 ## Modification patterns

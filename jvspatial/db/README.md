@@ -8,7 +8,7 @@ Database abstraction and backends — JSON, SQLite, MongoDB, DynamoDB, Postgres.
 
 ## Purpose
 
-`db/` defines the `Database` ABC and ships four production backends, all sharing a Mongo-style query DSL. Internal wrappers (`_cache`, `_observable`) add cross-cutting concerns to any backend through factory flags.
+`db/` defines the `Database` ABC and ships five built-in backends, all sharing a Mongo-style query DSL. Internal wrappers (`_cache`, `_observable`) add cross-cutting concerns to any backend through factory flags.
 
 ## Layout
 
@@ -18,7 +18,7 @@ db/
 ├── factory.py             # create_database, register_database_type, switch_database
 ├── manager.py             # DatabaseManager + prime DB convention
 ├── query.py               # QueryEngine + Mongo-style operators
-├── transaction.py         # Transaction context + MongoDBTransaction
+├── transaction.py         # Shared transaction read API + MongoDBTransaction
 ├── jsondb.py              # JSON file-per-record backend
 ├── sqlite.py              # aiosqlite backend + Mongo→SQL translator
 ├── mongodb.py             # motor backend
@@ -27,7 +27,7 @@ db/
 ├── _atomic.py             # internal: crash-safe write helper
 ├── _path_locks.py         # internal: bounded-LRU per-path locks
 ├── _cache.py              # internal: read-through cache wrapper
-├── _observable.py         # internal: structured log + metrics wrapper
+├── _observable.py         # internal: metrics + failure-log wrapper
 └── _sqlite_translate.py   # internal: Mongo → SQL translator
 ```
 
@@ -86,9 +86,10 @@ db/
 - [docs/md/graph-context.md](../../docs/md/graph-context.md)
 - [docs/md/caching.md](../../docs/md/caching.md)
 - [docs/md/observability.md](../../docs/md/observability.md)
+- [docs/md/transactions.md](../../docs/md/transactions.md)
 - [docs/md/optimization.md](../../docs/md/optimization.md)
 - [docs/md/benchmarks.md](../../docs/md/benchmarks.md)
 
 ## Stability
 
-Public surface (above) is stable. Underscore-prefixed modules are internal. The structured log field set from `ObservableDatabase` is part of the public contract — schema changes require a deprecation cycle.
+Public surface (above) is stable. Underscore-prefixed modules are internal. Failure-only ERROR logs from `ObservableDatabase` retain the public structured field schema documented in [observability](../../docs/md/observability.md). Successful and slow operations are measured through metrics, without log records.

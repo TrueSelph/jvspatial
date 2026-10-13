@@ -90,7 +90,7 @@ OAuth hosts in production must set `JVSPATIAL_OAUTH_KEY_ENCRYPTION_KEY` from a s
 
 ### 11. Cross-context persistence
 
-The in-memory matcher and PostgreSQL pushdown treat both missing and JSON `null` as absent for `$exists`; MongoDB retains its native field-presence semantics. `graph_transaction` isolates request identity state and invalidates touched entities in the parent cache after commit or rollback. Index setup must be scoped to the database instance so one store cannot suppress another store's indexes. Preserve these contracts when changing query translation, caches, or transactions.
+The in-memory matcher and PostgreSQL pushdown treat both missing and JSON `null` as absent for `$exists`; MongoDB retains its native field-presence semantics. `graph_transaction` isolates request identity state, never returns outer-context cached entities inside a transaction, and invalidates touched entities in the parent cache after commit or rollback. Native transaction handles retain the shared read contract on their own connection/session; unsupported backends must continue to fail capability checks. Index setup must be scoped to the database instance so one store cannot suppress another store's indexes. Preserve these contracts when changing query translation, caches, or transactions.
 
 Composite keyset continuation includes every sort value and direction plus ID. Never apply LIMIT before residual filtering or unsupported ordering. A configured fallback scan budget raises on exhaustion rather than returning a partial result. Bulk cache entries require confirmed outcomes; ambiguous writes are invalidated. Preserve JSON path locks/atomic durability and streaming handle cleanup on cancellation.
 
@@ -126,7 +126,7 @@ See [graph-projection.md](docs/md/graph-projection.md) and SPEC §6.9.
 | Subclass lookup returns wrong class | Two unrelated classes share `__name__` | Set `__entity_name__: ClassVar[Optional[str]] = "Distinct"` on one |
 | Tests pass locally, fail under serverless mode | Forgot to test both modes | Use `reset_serverless_mode_cache()` between tests |
 | 401 with valid token | Auth state on wrong database | Auth is **always** on prime DB; do not relocate |
-| Slow query never logged | `slow_query_ms` not configured | Set in `create_database(observe=True, slow_query_ms=N)` |
+| Slow query absent from logs | Successful operations are deliberately silent | Set `observe=True` with a metrics recorder; inspect the slow-operation counter |
 | Walker visits the same node forever | Protection disabled | Re-enable `protection_enabled=True` |
 | `JVSPATIAL_FOO` env var ignored | Not in allowlist | Add to `jvspatial/env_adapter.py` allowlist |
 | SQLite query falls back to in-memory filter | Operator not yet pushed down by `SQLiteTranslator` | Check `jvspatial/db/_sqlite_translate.py` for supported operators |

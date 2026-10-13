@@ -273,7 +273,7 @@ server = Server(
 - [Custom Database Guide](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/custom-database-guide.md) - Implementing custom database backends
 - [Graph Visualization](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/graph-visualization.md) - Export graphs in DOT/Mermaid formats
 - [Pagination](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/pagination.md) - ObjectPager usage
-- [Observability](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/observability.md) - Structured DB logging, slow-query threshold, MetricsRecorder, OpenTelemetry adapter
+- [Observability](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/observability.md) - Failure-only DB logging, operation/slow-call metrics, OpenTelemetry adapter
 - [Performance Benchmarks](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/benchmarks.md) - Regression-detection bench suite (pytest-benchmark + CI workflow)
 - [API Stability](https://github.com/TrueSelph/jvspatial/blob/main/docs/md/stability.md) - Public/internal/experimental tiers and deprecation policy
 

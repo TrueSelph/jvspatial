@@ -587,9 +587,22 @@ class GraphContext:
         imap = _request_identity_map.get()
         if imap is not None and entity_id in imap:
             result = imap[entity_id]
+            # Identity-map entries are context-bound. A transaction replaces
+            # the request map, but callers may explicitly use another context
+            # while that map is active; do not return an entity attached to a
+            # different database handle in that case.
+            if getattr(result, "_graph_context", self) is self:
+                if self._perf_monitoring_enabled and self._perf_monitor:
+                    self._perf_monitor.record_cache_hit()
+                return result
+        # A graph transaction owns an isolated identity map. Consulting the
+        # process cache here could return an entity bound to the outer
+        # database context, causing reads to escape the transaction and
+        # writes to bypass its connection (or expose uncommitted state).
+        if self._transaction_cache_keys is not None:
             if self._perf_monitoring_enabled and self._perf_monitor:
-                self._perf_monitor.record_cache_hit()
-            return result
+                self._perf_monitor.record_cache_miss()
+            return None
         result = await self._cache.get(entity_id)
         # Track cache hit/miss
         if self._perf_monitoring_enabled and self._perf_monitor:
@@ -606,6 +619,8 @@ class GraphContext:
         imap = _request_identity_map.get()
         if imap is not None:
             imap[entity_id] = entity
+        if self._transaction_cache_keys is not None:
+            return
         await self._cache.set(entity_id, entity)
 
     async def _evict_from_cache(self, entity_id: str) -> None:
@@ -2275,7 +2290,8 @@ async def graph_transaction(database: Optional[Any] = None):
     back every write in the block.
 
     Requires a backend that exposes ``begin_transaction``,
-    ``commit_transaction``, and ``rollback_transaction`` (Postgres today).
+    ``commit_transaction``, and ``rollback_transaction`` (PostgreSQL and
+    transaction-capable MongoDB deployments).
 
     Usage:
         async with graph_transaction(db) as ctx:
@@ -2293,6 +2309,10 @@ async def graph_transaction(database: Optional[Any] = None):
             "graph_transaction requires a database with begin/commit/rollback"
         )
     txn = await db.begin_transaction()
+    if txn is None:
+        raise TransactionUnavailable(
+            "The configured deployment cannot start a native transaction"
+        )
     ctx = GraphContext(txn)
     parent_ctx = _default_context_var.get() or _module_default_context
     ctx._transaction_cache_keys = set()
