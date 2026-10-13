@@ -1,12 +1,10 @@
 """Observability wrapper for :class:`Database` instances.
 
 Wraps any backend (raw or already wrapped in :class:`CachingDatabase`)
-and emits, for each operation:
+and records, for each operation:
 
-1. A structured log line with the standard fields
-   ``backend`` / ``op`` / ``collection`` / ``duration_ms`` / ``result_count``
-   / ``success``. DEBUG for successful calls under the threshold;
-   WARNING for failures or calls reaching ``slow_query_ms``.
+1. A structured ERROR for failed operations. Successful operations, including
+   calls above ``slow_query_ms``, produce no log record.
 2. One metrics emission to the configured :class:`MetricsRecorder`:
    a duration histogram and a counter, both labeled with the standard
    dimensions.
@@ -63,9 +61,8 @@ from jvspatial.observability.metrics import (
 logger = logging.getLogger("jvspatial.db.observable")
 
 
-# Default slow-query threshold. Anything above 100 ms gets surfaced as
-# a WARNING so it shows up in normal log feeds without operator
-# configuration. Tunable per-instance via ``slow_query_ms``.
+# Default slow-query threshold. Calls above it increment a metric; they do not
+# generate log records. Tunable per-instance via ``slow_query_ms``.
 DEFAULT_SLOW_QUERY_MS = 100.0
 
 
@@ -83,15 +80,16 @@ def _backend_label(inner: Database) -> str:
 
 
 class ObservableDatabase(Database):
-    """Wraps a :class:`Database` with structured logging + metrics.
+    """Wrap a :class:`Database` with per-operation metrics and sparse logs.
 
     Args:
         inner: The wrapped database. May itself be wrapped (e.g. by
             :class:`~jvspatial.db._cache.CachingDatabase`).
         metrics: A :class:`MetricsRecorder`. Defaults to
             :class:`NullMetricsRecorder` (zero overhead).
-        slow_query_ms: Threshold above which the per-op log line is
-            elevated from DEBUG to WARNING. Defaults to 100ms.
+        slow_query_ms: Threshold above which successful calls increment the
+            slow-operation metric. Successful calls are not logged. Failures
+            are logged at ERROR. Defaults to 100ms.
     """
 
     def __init__(
@@ -123,7 +121,7 @@ class ObservableDatabase(Database):
         *,
         result_count_extractor: Optional[Callable[[Any], int]] = None,
     ) -> Any:
-        """Run ``coro_factory()`` while emitting a log line and metric.
+        """Run ``coro_factory()`` while recording metrics and failure logs.
 
         ``coro_factory`` is a thunk so we measure the underlying call
         only, not the time spent constructing the coroutine.
@@ -186,26 +184,24 @@ class ObservableDatabase(Database):
             "collection": collection,
             "success": success,
         }
-        log_extra = {**labels, "duration_ms": round(duration_ms, 3)}
-        if result_count is not None:
-            log_extra["result_count"] = result_count
-
-        if query_plan:
-            log_extra.update(query_plan)
-        if active_duration_s is not None:
-            log_extra["active_duration_ms"] = round(active_duration_s * 1000, 3)
-
-        # Structured log. WARNING when slow or failed, DEBUG otherwise. extra=
-        # supplies the structured fields to any handler that
-        # understands them (json formatters, structlog, etc.).
+        # Build failure-only log data lazily. Successful calls do not allocate
+        # a logging payload or format a message, even when DEBUG is enabled.
         slow = duration_ms >= self.slow_query_ms
-        msg = "db.%s on '%s' took %.2fms" % (op, collection, duration_ms)
-        if slow:
-            logger.warning("SLOW %s", msg, extra=log_extra)
-        elif not success:
-            logger.warning("FAILED %s", msg, extra=log_extra)
-        else:
-            logger.debug(msg, extra=log_extra)
+        if not success and logger.isEnabledFor(logging.ERROR):
+            log_extra = {**labels, "duration_ms": round(duration_ms, 3)}
+            if result_count is not None:
+                log_extra["result_count"] = result_count
+            if query_plan:
+                log_extra.update(query_plan)
+            if active_duration_s is not None:
+                log_extra["active_duration_ms"] = round(active_duration_s * 1000, 3)
+            logger.error(
+                "FAILED db.%s on '%s' took %.2fms",
+                op,
+                collection,
+                duration_ms,
+                extra=log_extra,
+            )
 
         # Metrics. Best-effort -- do not surface backend errors here.
         try:

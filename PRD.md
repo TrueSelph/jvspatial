@@ -14,7 +14,7 @@ jvspatial is an **async-first, serverless-compatible, object-spatial Python libr
 
 It is *not*:
 
-- A graph database engine. jvspatial layers a graph model on top of existing backends (MongoDB, SQLite, JSON files, DynamoDB) and unifies query semantics across them.
+- A graph database engine. jvspatial layers a graph model on top of existing backends (PostgreSQL, MongoDB, SQLite, JSON files, DynamoDB) and unifies query semantics across them.
 - A web framework. It builds on FastAPI; it does not replace it.
 - A workflow engine. Walkers traverse data; they are not a generic task orchestrator.
 - A UI library. Visualization helpers exist (DOT, Mermaid), but rendering is out of scope.

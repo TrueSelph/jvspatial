@@ -181,6 +181,39 @@ async def test_graph_transaction_rollback_does_not_leak_cached_mutation() -> Non
 
 
 @pytest.mark.asyncio
+async def test_graph_transaction_rehydrates_parent_cached_entities_on_its_handle() -> (
+    None
+):
+    """Preloaded graph objects must not retain the outer database binding."""
+    db = _StoreDB()
+    parent = GraphContext(cast(Database, db))
+    async with scoped_default_context_async(parent):
+        identity_token = begin_request_identity_map()
+        try:
+            original = await Folder.create(name="before")
+            preloaded = await Folder.get(original.id)
+            assert preloaded is original
+
+            async with graph_transaction(db) as transaction_context:
+                transactional = await Folder.get(original.id)
+                assert transactional is not preloaded
+                assert await transactional.get_context() is transaction_context
+                transactional.name = "after"
+                await transactional.save()
+                # The parent object and shared process cache remain untouched
+                # until commit, so this reads the committed value.
+                assert preloaded.name == "before"
+                independent = GraphContext(cast(Database, db))
+                assert (
+                    await independent.get_node(Folder, original.id)
+                ).name == "before"
+
+            assert (await Folder.get(original.id)).name == "after"
+        finally:
+            end_request_identity_map(identity_token)
+
+
+@pytest.mark.asyncio
 async def test_index_setup_is_scoped_to_database_instance(monkeypatch) -> None:
     monkeypatch.setenv("JVSPATIAL_AUTO_CREATE_INDEXES", "true")
     first, second = _IndexDB(), _IndexDB()
@@ -208,3 +241,15 @@ async def test_save_batch_preserves_mixed_collection_input_order(tmp_path):
     child = Note(title="child")
     records = [parent, Object(), child]
     assert await ctx.save_batch(records) == records
+
+
+@pytest.mark.asyncio
+async def test_graph_transaction_rejects_unavailable_deployment():
+    """A backend returning None must never bind a non-transactional context."""
+    db = _FakeDB()
+    db.begin_transaction = AsyncMock(return_value=None)
+    with pytest.raises(TransactionUnavailable, match="native transaction"):
+        async with graph_transaction(db):
+            pytest.fail("Unprotected graph writes must not be allowed")
+    assert not db.committed
+    assert not db.rolled_back

@@ -1642,14 +1642,14 @@ async def upload_user_file(file: UploadFile, endpoint):
 ### Related Documentation
 
 - [File Storage Architecture](file-storage-architecture.md) - Technical architecture details
-- [Server Configuration](server-configuration.md) - Complete server setup guide
-- [Walker Guide](walker-guide.md) - Walker development documentation
-- [API Reference](api-reference.md) - Complete API documentation
+- [Server API](server-api.md) - Complete server setup guide
+- [Graph Traversal](graph-traversal.md) - Walker development documentation
+- [API Architecture](api-architecture.md) - Complete API documentation
 
 ### Example Projects
 
-- [`examples/file_storage_demo.py`](../../examples/file_storage_demo.py) - Complete working example
-- [`examples/s3_storage_example.py`](../../examples/s3_storage_example.py) - S3 integration example
+- [`examples/storage/file_storage_demo.py`](../../examples/storage/file_storage_demo.py) - Complete working example
+- [S3 storage interface](../../jvspatial/storage/interfaces/s3.py) - S3 implementation reference
 
 ### External Resources
 

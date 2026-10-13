@@ -9,7 +9,7 @@ This directory holds detailed how-to and reference documentation. For higher-lev
 - [AGENTS.md](../../AGENTS.md) — agent maintenance guide
 - [CHANGELOG.md](../../CHANGELOG.md) — release history
 
-The documents below answer *how* to use each subsystem. Every link resolves; entries marked **NEW** were added since the previous index revision.
+The documents below answer *how* to use each subsystem. Every link resolves; entries marked were added since the previous index revision.
 
 ---
 
@@ -57,11 +57,11 @@ The documents below answer *how* to use each subsystem. Every link resolves; ent
 | Document | What's in it |
 |---|---|
 | [Authentication](authentication.md) | JWT, API key, refresh-token flows. |
-| [API Keys](api-keys.md) | **NEW** Key management endpoints and hashing model. |
+| [API Keys](api-keys.md) | Key management endpoints and hashing model. |
 | [Password Migration Guide](password-migration-guide.md) | bcrypt upgrade path. |
-| [Security Review](security-review.md) | **NEW** Audit findings and resolved fixes. |
-| [Security Operational Notes](security-operational-notes.md) | **NEW** Runtime security guidance. |
-| [Production Deployment](production-deployment.md) | **NEW** Hardening checklist for production. |
+| [Security Review](security-review.md) | Audit findings and resolved fixes. |
+| [Security Operational Notes](security-operational-notes.md) | Runtime security guidance. |
+| [Production Deployment](production-deployment.md) | Hardening checklist for production. |
 
 ## Database and Storage
 
@@ -70,6 +70,9 @@ The documents below answer *how* to use each subsystem. Every link resolves; ent
 | [MongoDB Query Interface](mongodb-query-interface.md) | Mongo-style operators across all backends. |
 | [Custom Database Guide](custom-database-guide.md) | Implementing and registering a new `Database` adapter. |
 | [DynamoDB Guide](dynamodb-guide.md) | DynamoDB-specific setup and limits. |
+| [PostgreSQL Guide](postgres-guide.md) | Connection setup, native transactions, tenant scope, pooling and vector support. |
+| [Transactions](transactions.md) | Shared transaction reads, backend support, commit/rollback and cache isolation. |
+| [Cursor Pagination](cursor-pagination.md) | Deterministic ID/keyset pages, continuation and iterator semantics. |
 | [File Storage Architecture](file-storage-architecture.md) | Storage interface, security layer, version model. |
 | [File Storage Usage](file-storage-usage.md) | Upload, list, download, versioning. |
 | [Caching](caching.md) | Memory / Redis / layered caches; read-through DB wrapper. |
@@ -79,11 +82,11 @@ The documents below answer *how* to use each subsystem. Every link resolves; ent
 
 | Document | What's in it |
 |---|---|
-| [Observability](observability.md) | **NEW** Structured DB op logs, `MetricsRecorder`, slow-query threshold, OTEL adapter. |
+| [Observability](observability.md) | Failure-only DB logs, per-operation/slow-call metrics and OpenTelemetry adapter. |
 | [Logging Service](logging-service.md) | Persistent application logging. |
 | [Custom Log Levels](custom-log-levels.md) | Adding domain levels (`AUDIT`, `SECURITY`, …). |
-| [Benchmarks](benchmarks.md) | **NEW** Regression-detection bench suite. |
-| [Serverless Mode](serverless-mode.md) | **NEW** Detection precedence, mode-dependent defaults, LWA env. |
+| [Benchmarks](benchmarks.md) | Regression-detection bench suite. |
+| [Serverless Mode](serverless-mode.md) | Detection precedence, mode-dependent defaults, LWA env. |
 | [Scheduler](scheduler.md) | In-process scheduler and decorators. |
 | [Webhook Architecture](webhook-architecture.md) | Webhook routing, signature verification. |
 | [Webhooks Quickstart](webhooks-quickstart.md) | Common webhook patterns. |
@@ -97,7 +100,7 @@ The documents below answer *how* to use each subsystem. Every link resolves; ent
 | [Design Decisions](design-decisions.md) | Philosophy and tradeoffs. |
 | [Module Responsibility Matrix](module-responsibility-matrix.md) | Which package owns which concern. |
 | [Import Patterns](import-patterns.md) | Stable vs internal imports. |
-| [Stability](stability.md) | **NEW** Public / internal / experimental tiers + deprecation policy. |
+| [Stability](stability.md) | Public / internal / experimental tiers + deprecation policy. |
 | [Optimization](optimization.md) | Performance tuning: `neighborhood`, walker prefetch, Postgres paths, fast deserialize. |
 
 ## Configuration

@@ -60,7 +60,53 @@ async def test_live_driver_queries_bulk_cursor_and_degrees(driver):
         iterator = db.find_iter("object", {})
         await anext(iterator)
         await iterator.aclose()
-        assert not await db.is_transactional()  # This test service is standalone.
+        topology = await db._client.admin.command("hello")
+        expected = bool(topology.get("setName")) or topology.get("msg") == "isdbgrid"
+        assert await db.is_transactional() is expected
+    finally:
+        if db._client is not None:
+            await db._client.drop_database(db.db_name)
+        await db.close()
+
+
+@pytest.mark.parametrize("driver", ["motor", "pymongo"])
+async def test_live_transaction_read_contract_commit_and_rollback(driver):
+    """Qualify shared reads on real sessions when a replica set is configured."""
+    from jvspatial.db.transaction import transaction_context
+
+    uri = os.getenv("JVSPATIAL_MONGODB_TEST_URI")
+    if not uri:
+        pytest.skip("JVSPATIAL_MONGODB_TEST_URI is not configured")
+    db = MongoDB(
+        uri=uri, db_name=f"transaction_audit_{uuid.uuid4().hex}", driver=driver
+    )
+    try:
+        if not await db.is_transactional():
+            pytest.skip("MongoDB transactions require a replica set or sharded cluster")
+        await db.save("object", {"id": "existing", "rank": 1})
+        async with transaction_context(db) as tx:
+            assert tx is not None
+            await tx.save("object", {"id": "committed", "rank": 2})
+            assert await tx.count("object") == 2
+            assert await tx.find_ids("object", {}, sort=[("rank", 1)]) == [
+                "existing",
+                "committed",
+            ]
+            assert set(await tx.find_many("object", ["existing", "committed"])) == {
+                "existing",
+                "committed",
+            }
+            rows = [r async for r in tx.find_iter("object", {}, batch_size=1)]
+            assert {r["id"] for r in rows} == {"existing", "committed"}
+            assert await db.get("object", "committed") is None
+        assert await db.get("object", "committed") is not None
+        with pytest.raises(RuntimeError, match="abort"):
+            async with transaction_context(db) as tx:
+                assert tx is not None
+                await tx.save("object", {"id": "rolled_back", "rank": 3})
+                assert await tx.find_one("object", {"id": "rolled_back"}) is not None
+                raise RuntimeError("abort")
+        assert await db.get("object", "rolled_back") is None
     finally:
         if db._client is not None:
             await db._client.drop_database(db.db_name)

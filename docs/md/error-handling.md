@@ -258,6 +258,6 @@ The system handles exception chaining properly:
 
 ## See Also
 
-- [Database Configuration Guide](configuration.md)
-- [Walker Patterns](walker-patterns.md)
-- [Advanced Error Handling](advanced-error-handling.md)
+- [Database Configuration Guide](server-api.md)
+- [Graph Traversal](graph-traversal.md)
+- [Error-handling examples](../../examples/error_handling/README.md)

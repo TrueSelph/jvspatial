@@ -115,9 +115,9 @@ async with transaction_context(db) as txn:
             ...
 ```
 
-(Note: `find_iter` is not yet wired through the transaction handle for
-all backends — use it from outside the transaction when consistency
-isn't critical, or fall back to `txn.find` for snapshotted reads.)
+`Transaction.find_iter` pages through the transaction handle, so each read
+uses the same transaction-visible state. Adapters may override it with a
+native cursor implementation.
 
 ## Sort + filter composition
 

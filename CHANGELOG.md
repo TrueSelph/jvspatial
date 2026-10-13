@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-13
+
+### Fixed
+
+- Transaction reads now expose `find_one`, `count`, `find_ids`, `find_many`,
+  `find_iter` and incident-edge counts through the shared transaction contract.
+  PostgreSQL uses its held connection for native reads; MongoDB fallbacks retain
+  their session. Unsupported backends still advertise no native transactions.
+- PostgreSQL transaction operations serialize access to their connection,
+  reject use after completion, retain tenant scope, and bootstrap new collections
+  within the same transaction without acquiring a second connection. Collection
+  bootstrap caches are promoted only after commit.
+- Graph transactions no longer reuse entities bound to an outer context or
+  populate shared process caches with uncommitted data. Parent-cache invalidation
+  remains in place after commit and rollback.
+
+- Graph transaction activation now fails closed when a deployment returns no
+  transaction handle. Shared transaction contexts roll back on cancellation,
+  and MongoDB commit/rollback await asynchronous session cleanup.
+
+### Changed
+
+- Successful database observations produce no log records, including slow calls
+  and DEBUG-enabled runs. Failures emit structured ERROR records; operation and
+  slow-call metrics remain available. Successful calls also skip log-payload
+  construction and message formatting.
+- Updated transaction, paging, observability and backend support documentation;
+  corrected stale specification and roadmap claims and refreshed the docs index.
+
 ## [0.2.1] - 2026-10-12
 
 ### Fixed

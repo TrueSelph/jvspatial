@@ -6,8 +6,10 @@ unless you turn it on.
 
 ## Structured database logging
 
-Wrapping a database with `observe=True` emits a single structured log
-line per operation with this fixed schema:
+Wrapping a database with `observe=True` emits structured logs only when an
+operation fails. Successful operations, including slow calls, stay out of
+application logs; per-operation detail and slow-call counts remain available
+through the metrics recorder. Failures log at ERROR using this schema:
 
 | Field           | Type     | Notes                                            |
 | --------------- | -------- | ------------------------------------------------ |
@@ -18,12 +20,7 @@ line per operation with this fixed schema:
 | `success`       | bool     | False if the call raised                         |
 | `result_count`  | int?     | Where applicable: 0/1 for single-doc ops, list length for `find`, the count for `count` |
 
-Successful operation timings are emitted at **DEBUG** level. Failed
-operations and operations with `duration_ms >= slow_query_ms` use **WARNING**
-(the default slow-query threshold is 100 ms). Routine timings therefore stay
-out of INFO-level application logs; metrics are recorded regardless of the
-logger level.
-The standard fields land in `record.__dict__` via the logging
+Failure records land in `record.__dict__` via the logging
 `extra=` channel, so structured-log handlers (json formatters,
 `structlog`, OpenTelemetry log exporters) pick them up directly.
 
@@ -37,25 +34,13 @@ db = create_database(
     slow_query_ms=50.0,   # tighten or loosen as needed
 )
 
-# Enable DEBUG on jvspatial.db.observable to see routine operation timings.
+# Successful operations do not log; failures remain visible.
 await db.get("node", "abc")
-# 2026-05-08T... DEBUG jvspatial.db.observable
-#   db.get on 'node' took 1.42ms
-#   {backend: JsonDB, op: get, collection: node, success: true,
-#    duration_ms: 1.42, result_count: 1}
+# Failures emit a structured ERROR record.
 ```
 
-The logger name is `jvspatial.db.observable`. Add a handler / level
-filter against that name when you want to direct DB telemetry to a
-specific sink. For example, to opt into routine timing logs:
-
-```python
-import logging
-
-logging.getLogger("jvspatial.db.observable").setLevel(logging.DEBUG)
-```
-
-The application must also configure a handler that accepts DEBUG records.
+The logger name is `jvspatial.db.observable`. Route that logger when you want
+database failure records sent to a specific sink.
 
 ## Metrics
 
@@ -158,19 +143,17 @@ backend  (JsonDB / SQLiteDB / MongoDB / DynamoDB)
                                     +— [if observe]  ObservableDatabase
 ```
 
-That ordering means the structured log line measures the
-**user-visible** latency including cache hits and misses — which is
-what SLO calculations need. The cache hit/miss distinction is
-visible in two places: the `duration_ms` field (a hit is much
-faster) and via `db.cache_stats()` if you reach through to the
-inner cache wrapper.
+That ordering means metrics and slow-query counters measure the
+**user-visible** latency including cache hits and misses. The cache
+hit/miss distinction is visible in `duration_ms` (a hit is much faster)
+and via `db.cache_stats()` if you reach through to the inner cache wrapper.
 
 ## Serverless
 
 The metrics layer itself works fine in serverless — every emission
-is a synchronous in-process call. The structured log lines are
-written through the standard `logging` module, which the runtime's
-log forwarder will pick up.
+is a synchronous in-process call. Slow-query warnings are written
+through the standard `logging` module, which the runtime's log forwarder
+will pick up.
 
 The cache layer (`CachingDatabase`) is automatically disabled in
 serverless mode because cold starts make a per-process cache useless;
