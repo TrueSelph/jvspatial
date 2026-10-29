@@ -16,7 +16,7 @@ from typing import Optional
 import pytest
 from pydantic import Field
 
-from jvspatial.core.context import GraphContext
+from jvspatial.core.context import GraphContext, scoped_default_context_async
 from jvspatial.core.entities import Edge, Node, Object
 from jvspatial.db.factory import create_database
 
@@ -56,7 +56,7 @@ class TestGraphContextCRUD:
     """Test comprehensive CRUD operations for all entity types."""
 
     @pytest.fixture
-    def temp_context(self):
+    async def temp_context(self):
         """Create temporary context for testing."""
         with tempfile.TemporaryDirectory() as tmpdir:
             import uuid
@@ -65,7 +65,8 @@ class TestGraphContextCRUD:
             config = {"db_type": "json", "db_config": {"base_path": unique_path}}
             database = create_database(config["db_type"], **config["db_config"])
             context = GraphContext(database=database)
-            yield context
+            async with scoped_default_context_async(context):
+                yield context
 
     @pytest.mark.asyncio
     async def test_node_create(self, temp_context):

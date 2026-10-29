@@ -484,6 +484,10 @@ When `protection_enabled=True` (default):
 Protection is *advisory* for safety, not for security — untrusted user input should not influence walker construction.
 
 Cascade deletion stops and raises on the first edge or dependent-node failure. The parent is deleted only after all required deletions finish (`jvspatial/core/entities/node.py:1527`).
+With `cascade=False`, deletion reads only incoming and outgoing edges of the
+selected node. It does not expand the reachable graph or delete neighbours;
+unrelated edge metadata and shared nodes remain unchanged. Covered across JSON,
+SQLite, and PostgreSQL by `tests/core/test_node_shallow_delete.py`.
 
 ### 6.4 Trail tracking
 

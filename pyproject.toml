@@ -68,7 +68,7 @@ pgvector = [
     "pgvector>=0.2.5",  # pgvector codec for asyncpg (HNSW/IVFFlat index support)
 ]
 dev = [
-    "pytest>=7.0",
+    "pytest>=7.0,<9.2",  # pytest-benchmark 5.3 still uses the removed _nodeid API.
     "pytest-asyncio>=0.21.0",
     "pytest-benchmark>=4.0.0",
     "httpx>=0.24.0",
@@ -76,7 +76,7 @@ dev = [
     "python-dotenv>=1.0.0",
 ]
 test = [
-    "pytest>=7.0",
+    "pytest>=7.0,<9.2",  # Keep the full suite and benchmark lane compatible.
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.0.0",
     "pytest-benchmark>=4.0.0",

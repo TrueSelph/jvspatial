@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-29
+
+### CI
+
+- Keep the MongoDB integration lane on a compatible runner kernel and cap
+  pytest below 9.2 while pytest-benchmark uses the removed private node ID API.
+  Run shallow-deletion PostgreSQL cases in their own CI database.
+
+### Fixed
+
+- `Node.delete(cascade=False)` now inspects only the node's incoming and
+  outgoing edges. It no longer walks the entire reachable graph before
+  removing those edges and the node; shared neighbours, cycles, and their
+  metadata remain intact. Cascade deletion behavior is unchanged.
+
 ## [0.2.2] - 2026-10-13
 
 ### Fixed
