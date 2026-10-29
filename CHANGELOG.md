@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### CI
+
+- Keep the MongoDB integration lane on a compatible runner kernel and cap
+  pytest below 9.2 while pytest-benchmark uses the removed private node ID API.
+  Run shallow-deletion PostgreSQL cases in their own CI database.
+
 ### Fixed
 
 - `Node.delete(cascade=False)` now inspects only the node's incoming and
