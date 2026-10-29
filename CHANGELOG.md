@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `Node.delete(cascade=False)` now inspects only the node's incoming and
+  outgoing edges. It no longer walks the entire reachable graph before
+  removing those edges and the node; shared neighbours, cycles, and their
+  metadata remain intact. Cascade deletion behavior is unchanged.
+
 ## [0.2.2] - 2026-10-13
 
 ### Fixed
