@@ -9,11 +9,47 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
+from jvspatial.db.graph_bindings import GraphBindingSummary, LiteralBindingFact
 from jvspatial.db.query import QueryEngine
+
+
+def projection_fields(fields: Any) -> List[str]:
+    """Validate and deduplicate literal dotted JSON paths."""
+    if not isinstance(fields, (list, tuple)) or not fields:
+        raise ValueError("projection fields must be a nonempty list or tuple")
+    if any(
+        not isinstance(path, str)
+        or not path
+        or any(not part for part in path.split("."))
+        for path in fields
+    ):
+        raise ValueError("projection paths must contain nonempty segments")
+    return list(dict.fromkeys(fields))
+
+
+def project_record_fields(record: Dict[str, Any], fields: List[str]) -> Dict[str, Any]:
+    """Return flat path/value pairs, preserving explicit null versus missing."""
+    result = {}
+    for path in fields:
+        value = record
+        for part in path.split("."):
+            if isinstance(value, dict) and part in value:
+                value = value[part]
+            elif (
+                isinstance(value, list) and part.isdecimal() and int(part) < len(value)
+            ):
+                value = value[int(part)]
+            else:
+                break
+        else:
+            result[path] = deepcopy(value) if isinstance(value, (dict, list)) else value
+    return result
+
 
 # ---- cursor encoding -------------------------------------------------------
 
@@ -370,6 +406,16 @@ class Database(ABC):
     supports_transactions: bool = False
     supports_native_graph_paging: bool = False
 
+    @property
+    def supports_native_projected_reads(self) -> bool:
+        """Whether projection is performed natively by the current adapter."""
+        return False
+
+    @property
+    def supports_native_graph_binding_summary(self) -> bool:
+        """Whether the current adapter provides native graph fact summaries."""
+        return False
+
     async def graph_node_batch(self, ids: List[str]) -> Dict[str, Dict[str, Any]]:
         """Fetch raw projection nodes; wrappers bypass stale record caches."""
         return await self.find_many("node", ids)
@@ -591,6 +637,48 @@ class Database(ABC):
             query = {}
         results = await self.find(collection, query)
         return len(results)
+
+    async def summarize_graph_bindings(
+        self,
+        query: Dict[str, Any],
+        *,
+        record_entity: str,
+        edge_entity: str,
+        parent_id: str,
+        facts: Tuple[LiteralBindingFact, ...],
+        max_records: int = 100000,
+        max_edges: int = 400000,
+    ) -> Optional[GraphBindingSummary]:
+        """Optional native fact aggregate; None means use the caller's fallback.
+
+        This does not authorize any read. A consuming host must prove its
+        principal, current scope and rooted parent independently. It must never
+        use an incomplete result as an exact count, or silently discard invalid
+        authority facts. Unsupported adapters retain their established executor.
+        """
+        return None
+
+    async def find_projected(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        fields: List[str],
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Read flat dotted-path projections after complete filtering/ordering.
+
+        Missing paths are omitted; explicit nulls remain. Returned maps are
+        projections, not complete persistence records or hydrated entities.
+        Adapters may push projection down only when filtering and ordering
+        semantics are preserved. The portable fallback projects after find().
+        """
+        names = projection_fields(fields)
+        return [
+            project_record_fields(row, names)
+            for row in await self.find(collection, query, limit=limit, sort=sort)
+        ]
 
     async def find_iter(
         self,

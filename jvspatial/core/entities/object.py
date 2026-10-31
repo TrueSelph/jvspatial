@@ -950,9 +950,16 @@ class Object(AttributeMixin, BaseModel):
         # Get compound indexes from class decorators
         compound_indexes = get_compound_indexes(cls)
         for comp_index in compound_indexes:
-            # Map field names to context.field_name
+            # Identity/discriminator live at the record root, not in context.
             mapped_fields = [
-                (f"context.{field_name}", direction)
+                (
+                    (
+                        field_name
+                        if field_name in {"id", "entity"}
+                        else f"context.{field_name}"
+                    ),
+                    direction,
+                )
                 for field_name, direction in comp_index["fields"]
             ]
             entry: Dict[str, Any] = {

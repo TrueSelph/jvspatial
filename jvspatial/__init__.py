@@ -87,7 +87,13 @@ from .core.mixins import (
 )
 
 # Simplified database and cache
-from .db import Database, InsertIfAbsentResult, create_database
+from .db import (
+    Database,
+    GraphBindingSummary,
+    InsertIfAbsentResult,
+    LiteralBindingFact,
+    create_database,
+)
 from .db.work_claim import claim_record, delete_claimed_record, release_claim
 
 # Observability primitives
@@ -165,6 +171,8 @@ __all__ = [
     # Database & Cache
     "Database",
     "InsertIfAbsentResult",
+    "GraphBindingSummary",
+    "LiteralBindingFact",
     "create_database",
     "create_cache",
     # Observability

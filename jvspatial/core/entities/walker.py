@@ -30,6 +30,26 @@ from .walker_components.walker_queue import WalkerQueue
 from .walker_components.walker_trail import WalkerTrail
 
 
+def _class_functions(cls: type):
+    """Match function-member discovery without evaluating class descriptors.
+
+    Resolve the MRO on each call so runtime method replacements remain visible.
+    Unlike inspect.getmembers this does not force Pydantic's lazy signature
+    descriptor while looking for event/exit hook metadata.
+    """
+    members = {}
+    for base in cls.__mro__:
+        for name, value in vars(base).items():
+            if name not in members:
+                members[name] = value
+    for name in sorted(members):
+        value = members[name]
+        if isinstance(value, staticmethod):
+            value = value.__func__
+        if inspect.isfunction(value):
+            yield name, value
+
+
 class WalkerVisitingContext:
     """Context manager for visiting a node with a walker."""
 
@@ -133,12 +153,15 @@ class Walker(AttributeMixin, BaseModel):
         protected=True, transient=True, description="Unique identifier for the walker"
     )
 
+    # Python factories avoid repeated builtin-signature parsing by Pydantic
+    # during private-state initialization, especially on Python 3.14. Each
+    # invocation still allocates fresh mutable state.
     # Reporting system
-    _report: List[Any] = attribute(private=True, default_factory=list)
+    _report: List[Any] = attribute(private=True, default_factory=lambda: [])
 
     # Event system
     _event_handlers: Dict[str, List[Callable]] = attribute(
-        private=True, default_factory=dict
+        private=True, default_factory=lambda: {}
     )
 
     # Walker core attributes
@@ -153,7 +176,9 @@ class Walker(AttributeMixin, BaseModel):
     # Trail tracking. Default factory creates an unbounded trail; Walker
     # ``__init__`` rebuilds with ``max_trail_length`` from kwargs/env so
     # SPEC §6.4 ``max_trail_length`` is actually wired (audit §2.3).
-    _trail_tracker: WalkerTrail = attribute(private=True, default_factory=WalkerTrail)
+    _trail_tracker: WalkerTrail = attribute(
+        private=True, default_factory=lambda: WalkerTrail()
+    )
 
     # Trail-related methods (sync for pure computations, async for I/O)
     def get_trail(self) -> List[str]:
@@ -502,7 +527,7 @@ class Walker(AttributeMixin, BaseModel):
 
     def _register_event_handlers(self):
         """Register all @on_emit methods for event handling."""
-        for _name, method in inspect.getmembers(self.__class__, inspect.isfunction):
+        for _name, method in _class_functions(self.__class__):
             if hasattr(method, "_is_event_handler"):
                 event_types = getattr(method, "_event_types", [])
                 for event_type in event_types:
@@ -1033,7 +1058,7 @@ class Walker(AttributeMixin, BaseModel):
 
     async def _execute_exit_hooks(self) -> None:
         """Execute all @on_exit decorated methods."""
-        for _name, method in inspect.getmembers(self.__class__, inspect.isfunction):
+        for _name, method in _class_functions(self.__class__):
             if hasattr(method, "_on_exit") and method._on_exit:
                 try:
                     if asyncio.iscoroutinefunction(method):

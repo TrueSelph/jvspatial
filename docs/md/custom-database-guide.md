@@ -858,3 +858,62 @@ The architecture is designed for **seamless extension** - your custom database w
 
 For more examples, see `examples/database/custom_database_example.py`.
 
+
+## Optional projected reads
+
+`Database.find_projected(collection, query, fields=[...], limit=..., sort=...)`
+returns dictionaries keyed by the requested literal dotted paths, for example
+`{"id": "...", "context.title": "Example"}`. Missing paths are omitted;
+explicit JSON null remains present as `None`. Nested mutable values in the
+portable fallback are detached from its source record. These maps are partial
+read results and must never be hydrated or cached as complete entities.
+
+Existing adapters inherit a portable implementation through `find()`. A native
+override must preserve the complete query and ordering semantics before applying
+LIMIT and projection. PostgreSQL uses native projection for supported safe
+paths/queries and falls back otherwise. Its `supports_native_projected_reads`
+flag is true; callers should feature-detect the flag with a false default when
+supporting older adapters. Cache and observability wrappers forward the method;
+observability counts a logical `find_projected` operation, not a claim about
+physical SQL statements. Transactions project through their transaction-bound
+`find`, preserving visibility and rollback without acquiring a pool connection.
+
+Compound model indexes treat `id` and `entity` as root identity fields. Other
+model attributes keep their `context.<field>` persistence paths. Deployments
+which explicitly declared an identity compound index under older releases should
+re-run their normal `GraphContext.ensure_indexes(Model)` migration. The corrected
+index is created under its correct field-derived name; removal of a pre-existing
+unused `context.id`/`context.entity` index requires a separate reviewed migration.
+
+## Optional graph binding summaries
+
+`Database.summarize_graph_bindings(query, record_entity=..., edge_entity=...,
+parent_id=..., facts=(LiteralBindingFact(...), ...))` is an optional native
+optimization for one-hop incoming bindings. Its result is a
+`GraphBindingSummary`, or `None` when the adapter cannot execute it. The pure
+request/result types are exported as `jvspatial.LiteralBindingFact` and
+`jvspatial.GraphBindingSummary`.
+
+A literal fact names a canonical dotted path, an immutable tuple of allowed
+strings and an optional legacy path. Present values must match exactly; JSON
+null is not missing, and conflicting representations remain invalid. The
+summary reports matching records, uniquely bound records, malformed facts and
+malformed edges separately. `invalid_facts` and `invalid_edges` count affected
+records, not the number of bad fields or edges. Every incoming edge of the requested type counts,
+including edges from an unexpected parent. Duplicate parents cannot disappear
+behind a source filter.
+
+The host must independently prove its current principal, scope, rooted ancestry
+and permission. This primitive supplies no authorization. Its configured record
+and edge caps produce `complete=False` when exceeded; a partial result must never
+be presented as an exact total. Hosts retain their canonical executor for ordinary
+authority, unsupported adapters/predicates and overflow. Summaries are not cached
+as grants. PostgreSQL performs a supported aggregate in one statement snapshot;
+transaction-bound and other unsupported handles fall back without acquiring a
+separate pooled connection.
+
+For compound filter/sort indexes, declare the ID tie-breaker direction explicitly
+when it differs from the first indexed field. For example, an equality on
+`track_id` followed by newest-first pagination uses `[("track_id", 1),
+("updated_at", -1), ("id", -1)]`. The native typed sort companion then agrees
+with the page order even when many records share a timestamp.
