@@ -236,6 +236,8 @@ When `DeferredSaveMixin` is mixed into an entity *and* `deferred_saves_globally_
 | `bulk_save` | Default impl | Multi-record save; partial-success semantics vary by adapter |
 | `bulk_save_detailed` | Default impl | Structured attempted/saved/failed-ID outcome; built-ins override natively |
 | `find_ids` | Default impl | Raw ID-only ordered projection with offset/limit; native SQL/Mongo, fallback elsewhere |
+| `find_projected` | Default impl | Flat dotted-path projections after full filtering/order/limit, preserving missing versus explicit null. Native PostgreSQL projection is optional. `jvspatial/db/database.py:661`, `jvspatial/db/postgres.py` |
+| `summarize_graph_bindings` | Optional | Immutable `LiteralBindingFact` / `GraphBindingSummary` storage facts; native one-statement PostgreSQL aggregate, unsupported returns `None`. Capped results advertise `complete=False`; host proves current rooted scope and authority. Invalid counts are affected records. `jvspatial/db/database.py:641`, `jvspatial/db/graph_bindings.py`, `jvspatial/db/_graph_binding_postgres.py` |
 | `count_incident_edges` | Default impl | Group degrees, counting a self-loop once; native SQL/Mongo, iterator fallback elsewhere |
 | `find_iter` | Default impl | Composite keyset iteration; every sort key plus ID, positive batch size |
 | `begin_transaction` | Optional | Returns a transaction context manager if `supports_transactions=True` |

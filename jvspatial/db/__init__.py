@@ -22,6 +22,7 @@ from .factory import (
     unregister_database,
     unregister_database_type,
 )
+from .graph_bindings import GraphBindingSummary, LiteralBindingFact
 from .jsondb import JsonDB
 from .manager import DatabaseManager, get_database_manager, set_database_manager
 from .query import escape_regex
@@ -60,6 +61,8 @@ except ImportError:  # pragma: no cover - postgres optional
 
 __all__ = [
     "Database",
+    "GraphBindingSummary",
+    "LiteralBindingFact",
     "DatabaseError",
     "VersionConflictError",
     "InsertIfAbsentResult",

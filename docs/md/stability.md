@@ -25,7 +25,14 @@ are the canonical import path:
   `Database.supports_transactions` capability flag is part of this
   surface, as are the bulk methods `Database.find_many` and
   `Database.bulk_save`, `Database.bulk_save_detailed`, `Database.find_ids`,
-  `Database.count_incident_edges`, and `Database.insert_if_absent` (v1:
+  `Database.count_incident_edges`, `Database.find_projected`, and the optional
+  `Database.summarize_graph_bindings` with `LiteralBindingFact` / `GraphBindingSummary`.
+  Projected reads preserve missing versus null and have a portable default.
+  Binding summaries provide storage facts, never access grants; unsupported
+  adapters return `None`, incomplete results cannot serve as exact totals.
+  `supports_native_projected_reads` and `supports_native_graph_binding_summary`
+  default to false and report optional optimizations, not semantic changes.
+  The atomic insertion primitive is `Database.insert_if_absent` (v1:
   `conflict_target="id"` only). Adapters not overriding the bulk methods
   fall through to the (slower) default serial implementations. Custom
   adapters must implement `insert_if_absent` or callers hit

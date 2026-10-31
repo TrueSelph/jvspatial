@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Optional `Database.summarize_graph_bindings()` and immutable literal-fact/result
+  types support bounded native PostgreSQL binding aggregates. They retain
+  malformed facts, extra parents and incomplete-budget status explicitly;
+  current application authorization remains the host's responsibility.
+
+- `Database.find_projected()` returns flat dotted-path/value maps with native
+  PostgreSQL projection and a portable fallback. Filtering and sorting precede
+  limiting/projection; missing values remain distinct from explicit null.
+  Transactions retain their own connection and wrappers never cache partial
+  maps as complete entities.
+
+### Fixed
+
+- Walker construction discovers declared methods without evaluating unrelated
+  descriptors or repeatedly resolving builtin private-state factories. Runtime
+  method replacement and per-instance event/traversal state remain independent.
+- Compound identity indexes preserve root `id` and `entity` paths instead of
+  indexing nonexistent `context.id` or `context.entity` attributes.
+
 ## [0.2.3] - 2026-10-29
 
 ### CI
