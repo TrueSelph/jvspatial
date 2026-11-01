@@ -241,3 +241,15 @@ async def test_save_batch_preserves_mixed_collection_input_order(tmp_path):
     child = Note(title="child")
     records = [parent, Object(), child]
     assert await ctx.save_batch(records) == records
+
+
+@pytest.mark.asyncio
+async def test_graph_transaction_rejects_unavailable_deployment():
+    """A backend returning None must never bind a non-transactional context."""
+    db = _FakeDB()
+    db.begin_transaction = AsyncMock(return_value=None)
+    with pytest.raises(TransactionUnavailable, match="native transaction"):
+        async with graph_transaction(db):
+            pytest.fail("Unprotected graph writes must not be allowed")
+    assert not db.committed
+    assert not db.rolled_back

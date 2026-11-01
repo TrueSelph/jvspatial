@@ -9,6 +9,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional `Database.summarize_graph_bindings()` and immutable literal-fact/result
+  types support bounded native PostgreSQL binding aggregates. They retain
+  malformed facts, extra parents and incomplete-budget status explicitly;
+  current application authorization remains the host's responsibility.
+
+- `Database.find_projected()` returns flat dotted-path/value maps with native
+  PostgreSQL projection and a portable fallback. Filtering and sorting precede
+  limiting/projection; missing values remain distinct from explicit null.
+  Transactions retain their own connection and wrappers never cache partial
+  maps as complete entities.
+
+### Fixed
+
+- Walker construction discovers declared methods without evaluating unrelated
+  descriptors or repeatedly resolving builtin private-state factories. Runtime
+  method replacement and per-instance event/traversal state remain independent.
+- Compound identity indexes preserve root `id` and `entity` paths instead of
+  indexing nonexistent `context.id` or `context.entity` attributes.
+
+## [0.2.3] - 2026-10-29
+
+### CI
+
+- Keep the MongoDB integration lane on a compatible runner kernel and cap
+  pytest below 9.2 while pytest-benchmark uses the removed private node ID API.
+  Run shallow-deletion PostgreSQL cases in their own CI database.
+
+### Fixed
+
+- `Node.delete(cascade=False)` now inspects only the node's incoming and
+  outgoing edges. It no longer walks the entire reachable graph before
+  removing those edges and the node; shared neighbours, cycles, and their
+  metadata remain intact. Cascade deletion behavior is unchanged.
+
+## [0.2.2] - 2026-10-13
+
+### Fixed
+
+- Transaction reads now expose `find_one`, `count`, `find_ids`, `find_many`,
+  `find_iter` and incident-edge counts through the shared transaction contract.
+  PostgreSQL uses its held connection for native reads; MongoDB fallbacks retain
+  their session. Unsupported backends still advertise no native transactions.
+- PostgreSQL transaction operations serialize access to their connection,
+  reject use after completion, retain tenant scope, and bootstrap new collections
+  within the same transaction without acquiring a second connection. Collection
+  bootstrap caches are promoted only after commit.
+- Graph transactions no longer reuse entities bound to an outer context or
+  populate shared process caches with uncommitted data. Parent-cache invalidation
+  remains in place after commit and rollback.
+
+- Graph transaction activation now fails closed when a deployment returns no
+  transaction handle. Shared transaction contexts roll back on cancellation,
+  and MongoDB commit/rollback await asynchronous session cleanup.
+
+### Changed
+
+- Successful database observations produce no log records, including slow calls
+  and DEBUG-enabled runs. Failures emit structured ERROR records; operation and
+  slow-call metrics remain available. Successful calls also skip log-payload
+  construction and message formatting.
+- Updated transaction, paging, observability and backend support documentation;
+  corrected stale specification and roadmap claims and refreshed the docs index.
+
+## [0.2.1] - 2026-10-12
+
+### Fixed
+
+- Routine database operation timings now log at DEBUG instead of INFO, reducing
+  noise in application logs. Slow operations and failures remain visible at
+  WARNING; metrics and structured fields are unchanged.
+
+## [0.2.0] - 2026-10-11
+
+### Added
+
 - Added a tag-triggered TestPyPI workflow for publishing release candidates independently of stable PyPI releases.
 
 - Optional rich graph-context format 2 via `ProjectionContextConfig`,

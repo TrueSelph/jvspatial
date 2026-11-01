@@ -9,7 +9,8 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # MongoDB 8 refuses the newer runner kernels (SERVER-121912).
+    runs-on: ubuntu-22.04
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -35,6 +36,7 @@ jobs:
           --health-retries 10
     env:
       JVSPATIAL_POSTGRES_TEST_DSN: postgresql://jvspatial:jvspatial@localhost:5432/jvspatial  # pragma: allowlist secret
+      JVSPATIAL_SHALLOW_DELETE_TEST_DSN: postgresql://jvspatial:jvspatial@localhost:5432/jvspatial_shallow_delete  # pragma: allowlist secret
       JVSPATIAL_PROJECTION_TEST_DSN: postgresql://jvspatial:jvspatial@localhost:5432/jvspatial  # pragma: allowlist secret
       JVSPATIAL_MONGODB_TEST_URI: mongodb://localhost:27017
       JVSPATIAL_PROJECTION_MONGO_URI: mongodb://localhost:27017
@@ -53,6 +55,11 @@ jobs:
 
     - name: Install content-detection dependency
       run: sudo apt-get update && sudo apt-get install -y libmagic1
+
+    - name: Create isolated shallow-deletion test database
+      env:
+        PGPASSWORD: jvspatial  # pragma: allowlist secret
+      run: psql -h localhost -U jvspatial -d jvspatial -c 'CREATE DATABASE jvspatial_shallow_delete'
 
     - name: Install dependencies
       run: |

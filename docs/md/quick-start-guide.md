@@ -337,7 +337,7 @@ python walkers/walker_traversal_demo.py
 
 ### **Join the Community**
 
-- 📖 **Documentation**: [docs/](../README.md)
+- 📖 **Documentation**: [docs/](../../README.md)
 - 💬 **Discussions**: GitHub Discussions
 - 🐛 **Issues**: GitHub Issues
 - 📧 **Email**: support@jvspatial.com

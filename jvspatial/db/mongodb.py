@@ -1179,8 +1179,8 @@ class MongoDB(Database):
         Returns a ``MongoDBTransaction`` whose session is bound to a
         ``start_transaction`` call.  If the deployment does not support
         transactions (standalone / DocumentDB without transactions), the
-        returned object will be ``None`` and callers should fall back to
-        non-transactional writes.
+        returned object will be ``None``. Callers requiring atomicity must
+        reject that case rather than perform unprotected writes.
         """
         from jvspatial.db.transaction import MongoDBTransaction
 
@@ -1208,13 +1208,13 @@ class MongoDB(Database):
         """Commit the given transaction and end its session."""
         if txn is not None:
             await txn.commit()
-            txn.session.end_session()
+            await _resolve_driver_result(txn.session.end_session())
 
     async def rollback_transaction(self, txn) -> None:
         """Roll back the given transaction and end its session."""
         if txn is not None:
             await txn.rollback()
-            txn.session.end_session()
+            await _resolve_driver_result(txn.session.end_session())
 
     async def drop_deprecated_indexes(self, deprecated: Dict[str, List[str]]) -> None:
         """Drop indexes that have been removed or renamed in code.

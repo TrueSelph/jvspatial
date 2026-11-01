@@ -708,8 +708,8 @@ server = Server(
 ## See Also
 
 - [Design Decisions](design-decisions.md)
-- [Core Concepts](core-concepts.md)
+- [Entity Reference](entity-reference.md)
 - [API Reference](rest-api.md)
-- [Best Practices](best-practices.md)
+- [Contributing Guide](contributing.md)
 - [Authentication Guide](authentication.md)
 - [API Keys Guide](api-keys.md)

@@ -14,7 +14,7 @@ jvspatial is an **async-first, serverless-compatible, object-spatial Python libr
 
 It is *not*:
 
-- A graph database engine. jvspatial layers a graph model on top of existing backends (MongoDB, SQLite, JSON files, DynamoDB) and unifies query semantics across them.
+- A graph database engine. jvspatial layers a graph model on top of existing backends (PostgreSQL, MongoDB, SQLite, JSON files, DynamoDB) and unifies query semantics across them.
 - A web framework. It builds on FastAPI; it does not replace it.
 - A workflow engine. Walkers traverse data; they are not a generic task orchestrator.
 - A UI library. Visualization helpers exist (DOT, Mermaid), but rendering is out of scope.
@@ -66,6 +66,7 @@ People building higher-level frameworks that ship a graph model to their own use
 | 7 | **FastAPI integration without lock-in** | `@endpoint` exposes functions and walkers as routes. The underlying FastAPI app is accessible for middleware, custom routers, and lifecycle hooks. | `jvspatial/api/server.py` |
 | 8 | **Observable by construction** | Structured DB op logs, `MetricsRecorder` protocol, GraphContext `PerformanceMonitor`, OpenTelemetry adapter. | `jvspatial/observability/`, `jvspatial/db/_observable.py` |
 | 9 | **Relationship context for model inference** | Opt-in read-only graph projections render bounded relationship graphs, hierarchies, and captured ontology views with configurable detail profiles, declared relationship meanings, recorded evidence and supporting paths. Applications own inference, scope, and user access. | `jvspatial/core/graph_projection.py` |
+| 10 | **Bounded primary-read primitives** | Selected-value projections preserve missing versus null; optional one-hop binding aggregates report capped completeness and invalid facts. Hosts retain current scope and access decisions. Portable/unsupported defaults preserve existing adapters. | `jvspatial/db/database.py`, `jvspatial/db/graph_bindings.py` |
 
 ---
 
@@ -167,6 +168,14 @@ maintenance are not part of this release. Backend-side paging limits transferred
 candidates without promising bounded physical scan work.
 
 ---
+
+Database extension contracts also include `Database.find_projected` (flat,
+missing-preserving selected values, with a portable default) and optional
+`Database.summarize_graph_bindings`, using the top-level exported immutable
+`LiteralBindingFact` / `GraphBindingSummary` types. One-hop binding summaries
+report complete or capped primary storage facts; hosts retain rooted scope and
+current authorization. Unsupported adapters return `None`; transaction-bound
+handles do not escape their connection. These are public stable additive APIs.
 
 ## 8. Decision Boundaries
 

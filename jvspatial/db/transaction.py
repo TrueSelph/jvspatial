@@ -97,6 +97,24 @@ class Transaction(ABC):
         """
         pass
 
+    async def find_projected(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        fields: List[str],
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Project through this transaction's find, never a pooled connection."""
+        from jvspatial.db.database import project_record_fields, projection_fields
+
+        names = projection_fields(fields)
+        return [
+            project_record_fields(row, names)
+            for row in await self.find(collection, query, limit=limit, sort=sort)
+        ]
+
     async def find_one(
         self, collection: str, query: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
@@ -131,6 +149,8 @@ class Transaction(ABC):
         """
         if offset < 0 or (limit is not None and limit < 0):
             raise ValueError("offset and limit must be nonnegative")
+        if limit == 0:
+            return []
         from .database import _keyset_sort_fields
 
         rows = await self.find(
@@ -347,8 +367,10 @@ class MongoDBTransaction(Transaction):
         sort: Optional[List[Tuple[str, int]]] = None,
     ) -> List[Dict[str, Any]]:
         """Find records matching query within this MongoDB transaction."""
+        from jvspatial.db.mongodb import _native_query
+
         coll = self._db[collection]
-        cursor = coll.find(query, session=self.session)
+        cursor = coll.find(_native_query(query), session=self.session)
         if sort:
             cursor = cursor.sort(sort)
         if limit is not None:
@@ -375,8 +397,8 @@ async def transaction_context(database, transaction_id: Optional[str] = None):
     """Context manager for database transactions.
 
     Yields a ``Transaction`` when the database supports it, or ``None``
-    when transactions are unavailable (callers should fall back to
-    non-transactional writes).
+    when transactions are unavailable. Callers requiring atomic writes must
+    reject the unavailable case. Cancellation rolls back just like an error.
 
     Args:
         database: Database instance
@@ -397,7 +419,7 @@ async def transaction_context(database, transaction_id: Optional[str] = None):
     try:
         yield transaction
         await database.commit_transaction(transaction)
-    except Exception:
+    except BaseException:
         await database.rollback_transaction(transaction)
         raise
 

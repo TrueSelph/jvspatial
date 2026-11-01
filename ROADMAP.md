@@ -24,7 +24,7 @@ Recent waves have systematically eliminated constant-time-comparison gaps, fail-
 
 - `find_many`, `bulk_save`, native `count()` pushdown landed in 0.0.7. Continue:
 - Native bulk-update equivalents on backends that support them (Mongo `bulk_write`, SQLite `executemany UPDATE`).
-- Continue surfacing slow-query telemetry via the observability layer; tune `slow_query_ms` defaults per backend.
+- Surface slow-query counts and durations through observability metrics; successful operations remain silent in application logs. Tune `slow_query_ms` for workload-specific metrics.
 
 ### 1.3 Observability (active)
 
@@ -53,7 +53,7 @@ No migration framework. Field removals or renames break existing records silentl
 
 ### 2.2 Multi-database transactions are best-effort only
 
-Only MongoDB supports ACID transactions. Cross-backend operations have no built-in coordination.
+PostgreSQL and topology-qualified MongoDB support native ACID transactions. Cross-backend operations have no built-in coordination; JSON, SQLite and DynamoDB do not offer native graph transactions.
 
 - **Decision needed**: document the limit explicitly in handler patterns or build an opt-in saga primitive.
 - **Location**: `jvspatial/db/transaction.py`, `jvspatial/db/database.py:48+`.

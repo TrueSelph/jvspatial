@@ -271,7 +271,7 @@ async def analyze(self, here: City):
 
 ## See Also
 
-- [Core Concepts](core-concepts.md)
 - [Entity Reference](entity-reference.md)
-- [Walker Patterns](walker-patterns.md)
+- [Entity Reference](entity-reference.md)
+- [Graph Traversal](graph-traversal.md)
 - [API Integration](rest-api.md)

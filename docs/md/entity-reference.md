@@ -85,6 +85,9 @@ rather than inspecting node documents for links. See [graph-context.md](graph-co
 - **`neighborhood(depth)`**: Multi-hop neighbor fetch (Postgres `traverse` fast path or BFS fallback)
 - **`nodes_bulk(node_ids)`**: Batch neighbor fetch for many source IDs in two queries
 - **`delete(cascade=True)`**: Deletes the node and cascades deletion of all connected edges and dependent nodes
+- **`delete(cascade=False)`**: Deletes only this node and its incident edges.
+  It does not traverse or delete neighbouring nodes, including shared or cyclic
+  subgraphs. Its graph reads depend on the node's degree, not the reachable graph.
 
 #### Class-Aware Retrieval and Ghost Node Fallback
 

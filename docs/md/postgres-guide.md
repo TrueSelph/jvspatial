@@ -326,6 +326,12 @@ async with transaction_context(db) as txn:
 
 The transaction holds one dedicated connection out of the pool for its
 lifetime, so be careful not to hold transactions across long-running awaits.
+Concurrent handle operations serialize access to that connection, and completed
+handles reject further reads or writes. Tenant scope and new-collection
+bootstrap use the held connection; a rollback does not mark collection DDL as
+committed. Graph transactions also isolate identity/process caches. See the
+[shared transaction contract](transactions.md) for other backends and fallback
+performance limits.
 
 ## Bulk writes
 

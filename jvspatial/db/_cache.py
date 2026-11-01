@@ -214,6 +214,40 @@ class CachingDatabase(Database):
         # find() is intentionally NOT cached. See module docstring.
         return await self.inner.find(collection, query, limit=limit, sort=sort)
 
+    async def summarize_graph_bindings(self, query, **kwargs):
+        """Forward current graph facts without caching a summary as authority."""
+        reader = getattr(self.inner, "summarize_graph_bindings", None)
+        return await reader(query, **kwargs) if callable(reader) else None
+
+    @property
+    def supports_native_graph_binding_summary(self) -> bool:
+        """Expose the current underlying adapter's optional aggregate support."""
+        return bool(getattr(self.inner, "supports_native_graph_binding_summary", False))
+
+    async def find_projected(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        fields: List[str],
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Forward current projections; never cache incomplete entity records."""
+        reader = getattr(self.inner, "find_projected", None)
+        if callable(reader):
+            return await reader(
+                collection, query, fields=fields, limit=limit, sort=sort
+            )
+        return await Database.find_projected(
+            self.inner, collection, query, fields=fields, limit=limit, sort=sort
+        )
+
+    @property
+    def supports_native_projected_reads(self) -> bool:
+        """Expose native projection support without promising a complete entity."""
+        return bool(getattr(self.inner, "supports_native_projected_reads", False))
+
     async def graph_edge_page(
         self, node_id: str, *, after: Optional[str] = None, limit: int = 50
     ) -> List[Dict[str, Any]]:

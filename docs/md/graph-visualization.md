@@ -606,7 +606,7 @@ dot = await generate_graph_dot(
 - [Graph Traversal](graph-traversal.md) - Traversing graphs with Walkers
 - [Node Operations](node-operations.md) - Working with nodes
 - [Entity Reference](entity-reference.md) - Complete entity API
-- [Examples](../examples/core/graph_visualization_example.py) - Complete example
+- [Examples](../../examples/core/graph_visualization_example.py) - Complete example
 
 ---
 

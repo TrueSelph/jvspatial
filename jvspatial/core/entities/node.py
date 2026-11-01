@@ -1360,10 +1360,10 @@ class Node(Object):
         # Get outgoing edges to find nodes reachable FROM this node
         outgoing_edges = await context.find_edges_between(source_id=self.id)
 
-        # Build complete set of all nodes reachable FROM this node (via outgoing edges, recursively)
-        # This includes nodes reachable through multiple hops
+        # Reachability is needed only for cascading. A shallow delete must
+        # inspect incident edges without exploring shared neighbours' graphs.
         reachable_node_ids = set()
-        nodes_to_explore = {self.id}
+        nodes_to_explore = {self.id} if cascade else set()
         explored = set()
 
         while nodes_to_explore:

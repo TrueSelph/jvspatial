@@ -464,7 +464,7 @@ configure_pool(
 
 ## See Also
 
-- [Database Configuration](configuration.md)
+- [Database Configuration](server-api.md)
 - [Caching System](caching.md)
-- [Walker Patterns](walker-patterns.md)
-- [Monitoring Guide](monitoring.md)
+- [Graph Traversal](graph-traversal.md)
+- [Observability](observability.md)

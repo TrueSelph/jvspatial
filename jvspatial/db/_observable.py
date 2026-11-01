@@ -184,22 +184,24 @@ class ObservableDatabase(Database):
             "collection": collection,
             "success": success,
         }
-        log_extra = {**labels, "duration_ms": round(duration_ms, 3)}
-        if result_count is not None:
-            log_extra["result_count"] = result_count
-
-        if query_plan:
-            log_extra.update(query_plan)
-        if active_duration_s is not None:
-            log_extra["active_duration_ms"] = round(active_duration_s * 1000, 3)
-
-        # Successful-operation observation belongs in metrics, not application
-        # logs: even slow-query INFO/WARNING records become noisy on hot paths.
-        # Keep failures actionable with structured error records.
+        # Build failure-only log data lazily. Successful calls do not allocate
+        # a logging payload or format a message, even when DEBUG is enabled.
         slow = duration_ms >= self.slow_query_ms
-        msg = "db.%s on '%s' took %.2fms" % (op, collection, duration_ms)
-        if not success:
-            logger.error("FAILED %s", msg, extra=log_extra)
+        if not success and logger.isEnabledFor(logging.ERROR):
+            log_extra = {**labels, "duration_ms": round(duration_ms, 3)}
+            if result_count is not None:
+                log_extra["result_count"] = result_count
+            if query_plan:
+                log_extra.update(query_plan)
+            if active_duration_s is not None:
+                log_extra["active_duration_ms"] = round(active_duration_s * 1000, 3)
+            logger.error(
+                "FAILED db.%s on '%s' took %.2fms",
+                op,
+                collection,
+                duration_ms,
+                extra=log_extra,
+            )
 
         # Metrics. Best-effort -- do not surface backend errors here.
         try:
@@ -306,6 +308,54 @@ class ObservableDatabase(Database):
             lambda: self.inner.find(collection, query, limit=limit, sort=sort),
             result_count_extractor=lambda r: len(r) if isinstance(r, list) else 0,
         )
+
+    async def summarize_graph_bindings(self, query, **kwargs):
+        """Observe one logical graph fact read, preserving upstream recording."""
+        reader = getattr(self.inner, "summarize_graph_bindings", None)
+        if not callable(reader):
+            return None
+        return await self._instrument(
+            "summarize_graph_bindings",
+            "node",
+            lambda: reader(query, **kwargs),
+            result_count_extractor=lambda result: (
+                result.bound if result is not None else 0
+            ),
+        )
+
+    @property
+    def supports_native_graph_binding_summary(self) -> bool:
+        """Expose the current underlying adapter's optional aggregate support."""
+        return bool(getattr(self.inner, "supports_native_graph_binding_summary", False))
+
+    async def find_projected(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        fields: List[str],
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Instrument a projection read without replacing upstream metrics."""
+        reader = getattr(self.inner, "find_projected", None)
+        return await self._instrument(
+            "find_projected",
+            collection,
+            lambda: (
+                reader(collection, query, fields=fields, limit=limit, sort=sort)
+                if callable(reader)
+                else Database.find_projected(
+                    self.inner, collection, query, fields=fields, limit=limit, sort=sort
+                )
+            ),
+            result_count_extractor=lambda rows: len(rows),
+        )
+
+    @property
+    def supports_native_projected_reads(self) -> bool:
+        """Expose native projection support without promising a complete entity."""
+        return bool(getattr(self.inner, "supports_native_projected_reads", False))
 
     async def graph_edge_page(
         self, node_id: str, *, after: Optional[str] = None, limit: int = 50

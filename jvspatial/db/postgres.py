@@ -96,6 +96,7 @@ from .database import (
     InsertIfAbsentResult,
     finalize_find_results,
 )
+from .graph_bindings import GraphBindingSummary, LiteralBindingFact
 from .query import QueryEngine
 from .transaction import Transaction
 
@@ -359,6 +360,8 @@ class PostgresDB(Database):
     # connection. See ``begin_transaction`` and ``PostgresTransaction`` below.
     supports_transactions: bool = True
     supports_native_graph_paging: bool = True
+    supports_native_projected_reads: bool = True
+    supports_native_graph_binding_summary: bool = True
 
     def __init__(
         self,
@@ -1121,6 +1124,108 @@ class PostgresDB(Database):
         if sort_in_memory:
             records = finalize_find_results(records, sort=sort, limit=limit)
         return records
+
+    async def summarize_graph_bindings(
+        self,
+        query: Dict[str, Any],
+        *,
+        record_entity: str,
+        edge_entity: str,
+        parent_id: str,
+        facts: Tuple[LiteralBindingFact, ...],
+        max_records: int = 100000,
+        max_edges: int = 400000,
+    ) -> Optional[GraphBindingSummary]:
+        """Return storage binding facts; no application policy is supplied."""
+        from ._graph_binding_postgres import summarize
+
+        return await summarize(
+            self,
+            query,
+            record_entity=record_entity,
+            edge_entity=edge_entity,
+            parent_id=parent_id,
+            facts=facts,
+            max_records=max_records,
+            max_edges=max_edges,
+        )
+
+    def _native_projection_sql(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        names: List[str],
+        *,
+        limit: Optional[int],
+        sort: Optional[List[Tuple[str, int]]],
+    ) -> Optional[Tuple[str, List[Any]]]:
+        """SQL for a flat projection, or None when the caller must fall back.
+
+        An empty statement means the limit is zero and no query should run.
+        Pooled and transactional reads share this so both keep one snapshot.
+        """
+        translated = translate_query(query)
+        ordering = translate_sort(sort)
+        if (
+            translated is None
+            or (sort and ordering is None)
+            or any(
+                not _SAFE_IDENT_RE.fullmatch(part)
+                for name in names
+                for part in name.split(".")
+            )
+        ):
+            return None
+        if limit == 0:
+            return "", []
+        col, schema = _safe_collection(collection), _safe_collection(self.schema_name)
+        pieces = []
+        for name in names:
+            path = ",".join(name.split("."))
+            value = f"(data #> '{{{path}}}')"
+            # Identifier validation above makes both literals safe; SQL NULL
+            # denotes missing while JSON null must remain in the projection.
+            pieces.append(
+                f"CASE WHEN {value} IS NOT NULL THEN jsonb_build_object('{name}', {value}) ELSE '{{}}'::jsonb END"
+            )
+        where, params = translated
+        sql = f"SELECT ({' || '.join(pieces)}) AS data FROM {schema}.{col}"
+        if where:
+            sql += " WHERE " + where
+        if ordering:
+            sql += " ORDER BY " + ordering
+        if limit is not None:
+            params = list(params) + [int(limit)]
+            sql += f" LIMIT ${len(params)}"
+        return sql, list(params)
+
+    async def find_projected(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        fields: List[str],
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Project supported JSON paths in SQL without transferring full payloads."""
+        from .database import projection_fields
+
+        names = projection_fields(fields)
+        planned = self._native_projection_sql(
+            collection, query, names, limit=limit, sort=sort
+        )
+        if planned is None:
+            return await super().find_projected(
+                collection, query, fields=names, limit=limit, sort=sort
+            )
+        sql, params = planned
+        if not sql:
+            return []
+        await self._bootstrap_collection(collection)
+        async with self._acquire_conn() as connection:
+            rows = await connection.fetch(sql, *params)
+        return [self._record_from_row(row) for row in rows]
 
     async def _fallback_records(self, collection, query, *, sort=None):
         from .database import DatabaseError, _pushdown_conjuncts, _query_execution
@@ -2655,6 +2760,38 @@ class PostgresTransaction(Transaction):
         if sort_in_memory:
             records = finalize_find_results(records, sort=sort, limit=limit)
         return records
+
+    @_serialized_transaction_operation
+    async def find_projected(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        fields: List[str],
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Project on this transaction's connection, not a pooled read."""
+        from .database import projection_fields
+
+        names = projection_fields(fields)
+        planned = self._db._native_projection_sql(
+            collection, query, names, limit=limit, sort=sort
+        )
+        if planned is None:
+            return await super().find_projected(
+                collection, query, fields=names, limit=limit, sort=sort
+            )
+        sql, params = planned
+        if not sql:
+            return []
+        await self._db._bootstrap_collection(
+            collection,
+            connection=self._connection,
+            pending=self._bootstrapped_collections,
+        )
+        rows = await self._connection.fetch(sql, *params)
+        return [self._db._record_from_row(row) for row in rows]
 
     @_serialized_transaction_operation
     async def find_one(
