@@ -6,11 +6,10 @@ transactions advertise ``Database.supports_transactions = False``; callers
 should detect that flag via :func:`transaction_context` rather than relying
 on best-effort writes.
 
-JsonDB is a development-only backend with no transaction support — the
-former ``JsonDBTransaction(best_effort=True)`` buffered-commit mode was
-removed because it provided weaker-than-ACID guarantees that the audit
-deemed misleading for a dev backend (it could lose writes on a mid-commit
-process crash and was not atomic against external readers).
+JsonDB, SQLite, and DynamoDB do not expose a multi-statement transaction
+handle. SQLite wraps a single bulk write in ``BEGIN``/``COMMIT``; that is
+not a graph transaction. JsonDB's former buffered-commit mode was removed
+because it was not atomic against a crash or an external reader.
 """
 
 import logging
@@ -279,6 +278,65 @@ class MongoDBTransaction(Transaction):
         coll = self._db[collection]
         result = await coll.delete_one({"_id": id}, session=self.session)
         return result.deleted_count > 0
+
+    async def find_one(
+        self, collection: str, query: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Return one match on this session, not a pool read."""
+        from jvspatial.db.mongodb import _native_query
+
+        return await self._db[collection].find_one(
+            _native_query(query), session=self.session
+        )
+
+    async def count(
+        self, collection: str, query: Optional[Dict[str, Any]] = None
+    ) -> int:
+        """Count on this session. Never use an estimate that ignores the snapshot."""
+        from jvspatial.db.mongodb import _native_query
+
+        return await self._db[collection].count_documents(
+            _native_query(query or {}), session=self.session
+        )
+
+    async def find_ids(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+        offset: int = 0,
+    ) -> List[str]:
+        """Project IDs on this session, with sort applied before skip and limit."""
+        from jvspatial.db.database import _keyset_sort_fields
+        from jvspatial.db.mongodb import _native_query
+
+        if offset < 0 or (limit is not None and limit < 0):
+            raise ValueError("offset and limit must be nonnegative")
+        if limit == 0:
+            return []
+        cursor = self._db[collection].find(
+            _native_query(query), {"id": 1}, session=self.session
+        )
+        cursor = cursor.sort(_keyset_sort_fields(sort)).skip(offset)
+        if limit is not None:
+            cursor = cursor.limit(limit)
+        rows = await cursor.to_list(length=None)
+        return [str(row["id"] if "id" in row else row["_id"]) for row in rows]
+
+    async def find_many(
+        self, collection: str, ids: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fetch the ID set in one session-scoped query."""
+        if not ids:
+            return {}
+        unique_ids = list(dict.fromkeys(ids))
+        cursor = self._db[collection].find(
+            {"_id": {"$in": unique_ids}}, session=self.session
+        )
+        docs = await cursor.to_list(length=None)
+        return {str(doc.get("id", doc["_id"])): doc for doc in docs}
 
     async def find(
         self,
