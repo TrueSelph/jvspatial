@@ -181,6 +181,39 @@ async def test_graph_transaction_rollback_does_not_leak_cached_mutation() -> Non
 
 
 @pytest.mark.asyncio
+async def test_graph_transaction_rehydrates_parent_cached_entities_on_its_handle() -> (
+    None
+):
+    """Preloaded graph objects must not retain the outer database binding."""
+    db = _StoreDB()
+    parent = GraphContext(cast(Database, db))
+    async with scoped_default_context_async(parent):
+        identity_token = begin_request_identity_map()
+        try:
+            original = await Folder.create(name="before")
+            preloaded = await Folder.get(original.id)
+            assert preloaded is original
+
+            async with graph_transaction(db) as transaction_context:
+                transactional = await Folder.get(original.id)
+                assert transactional is not preloaded
+                assert await transactional.get_context() is transaction_context
+                transactional.name = "after"
+                await transactional.save()
+                # The parent object and shared process cache remain untouched
+                # until commit, so this reads the committed value.
+                assert preloaded.name == "before"
+                independent = GraphContext(cast(Database, db))
+                assert (
+                    await independent.get_node(Folder, original.id)
+                ).name == "before"
+
+            assert (await Folder.get(original.id)).name == "after"
+        finally:
+            end_request_identity_map(identity_token)
+
+
+@pytest.mark.asyncio
 async def test_index_setup_is_scoped_to_database_instance(monkeypatch) -> None:
     monkeypatch.setenv("JVSPATIAL_AUTO_CREATE_INDEXES", "true")
     first, second = _IndexDB(), _IndexDB()

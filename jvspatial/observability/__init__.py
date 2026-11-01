@@ -7,8 +7,8 @@ Two surfaces live here:
   The default implementation, :class:`NullMetricsRecorder`, has zero
   overhead beyond a method call.
 * :class:`ObservableDatabase` -- a :class:`Database` wrapper (see
-  ``jvspatial.db._observable``) that emits a structured log line and
-  one metric per database operation. Opt-in via
+  ``jvspatial.db._observable``) that records one metric per database
+  operation and emits a structured warning for slow operations. Opt-in via
   ``create_database(..., observe=True)``.
 
 Both surfaces are public. See ``docs/md/observability.md`` for the

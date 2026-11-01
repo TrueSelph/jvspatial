@@ -1,12 +1,10 @@
 """Observability wrapper for :class:`Database` instances.
 
 Wraps any backend (raw or already wrapped in :class:`CachingDatabase`)
-and emits, for each operation:
+and records, for each operation:
 
-1. A structured log line with the standard fields
-   ``backend`` / ``op`` / ``collection`` / ``duration_ms`` / ``result_count``
-   / ``success``. INFO level under the threshold; WARNING when the
-   call exceeds ``slow_query_ms``.
+1. A structured ERROR for failed operations. Successful operations, including
+   calls above ``slow_query_ms``, produce no log record.
 2. One metrics emission to the configured :class:`MetricsRecorder`:
    a duration histogram and a counter, both labeled with the standard
    dimensions.
@@ -63,9 +61,8 @@ from jvspatial.observability.metrics import (
 logger = logging.getLogger("jvspatial.db.observable")
 
 
-# Default slow-query threshold. Anything above 100 ms gets surfaced as
-# a WARNING so it shows up in normal log feeds without operator
-# configuration. Tunable per-instance via ``slow_query_ms``.
+# Default slow-query threshold. Calls above it increment a metric; they do not
+# generate log records. Tunable per-instance via ``slow_query_ms``.
 DEFAULT_SLOW_QUERY_MS = 100.0
 
 
@@ -83,15 +80,16 @@ def _backend_label(inner: Database) -> str:
 
 
 class ObservableDatabase(Database):
-    """Wraps a :class:`Database` with structured logging + metrics.
+    """Wrap a :class:`Database` with per-operation metrics and sparse logs.
 
     Args:
         inner: The wrapped database. May itself be wrapped (e.g. by
             :class:`~jvspatial.db._cache.CachingDatabase`).
         metrics: A :class:`MetricsRecorder`. Defaults to
             :class:`NullMetricsRecorder` (zero overhead).
-        slow_query_ms: Threshold above which the per-op log line is
-            elevated from INFO to WARNING. Defaults to 100ms.
+        slow_query_ms: Threshold above which successful calls increment the
+            slow-operation metric. Successful calls are not logged. Failures
+            are logged at ERROR. Defaults to 100ms.
     """
 
     def __init__(
@@ -123,7 +121,7 @@ class ObservableDatabase(Database):
         *,
         result_count_extractor: Optional[Callable[[Any], int]] = None,
     ) -> Any:
-        """Run ``coro_factory()`` while emitting a log line and metric.
+        """Run ``coro_factory()`` while recording metrics and failure logs.
 
         ``coro_factory`` is a thunk so we measure the underlying call
         only, not the time spent constructing the coroutine.
@@ -195,15 +193,13 @@ class ObservableDatabase(Database):
         if active_duration_s is not None:
             log_extra["active_duration_ms"] = round(active_duration_s * 1000, 3)
 
-        # Structured log. WARNING when slow, INFO otherwise. extra=
-        # supplies the structured fields to any handler that
-        # understands them (json formatters, structlog, etc.).
+        # Successful-operation observation belongs in metrics, not application
+        # logs: even slow-query INFO/WARNING records become noisy on hot paths.
+        # Keep failures actionable with structured error records.
         slow = duration_ms >= self.slow_query_ms
         msg = "db.%s on '%s' took %.2fms" % (op, collection, duration_ms)
-        if slow:
-            logger.warning("SLOW %s", msg, extra=log_extra)
-        else:
-            logger.info(msg, extra=log_extra)
+        if not success:
+            logger.error("FAILED %s", msg, extra=log_extra)
 
         # Metrics. Best-effort -- do not surface backend errors here.
         try:

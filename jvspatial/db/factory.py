@@ -278,12 +278,12 @@ def create_database(
             TTL (LRU eviction only).
         observe: When ``True``, wrap the database in an
             :class:`~jvspatial.db._observable.ObservableDatabase` that
-            emits a structured log line and one metric per operation.
+            records metrics per operation and logs failures only.
             Defaults to ``False`` (no behavior change for existing
             callers).
-        slow_query_ms: Threshold above which the per-op log line is
-            elevated to WARNING. Only meaningful when
-            ``observe=True``. Defaults to 100ms.
+        slow_query_ms: Threshold above which successful operations are
+            counted as slow in metrics. Successful operations are not
+            logged. Only meaningful when ``observe=True``. Defaults to 100ms.
         metrics: Optional :class:`~jvspatial.observability.metrics.MetricsRecorder`
             implementation. Defaults to
             :class:`~jvspatial.observability.metrics.NullMetricsRecorder`
@@ -345,9 +345,8 @@ def create_database(
         db = CachingDatabase(db, max_entries=cache_get_size, ttl_seconds=cache_get_ttl)
 
     # Optional observability layer (off by default). Applied AFTER the
-    # cache so the structured log line measures user-visible latency
-    # including cache hits/misses -- which is what SLO calculations
-    # need.
+    # cache so metrics and slow-query counters measure user-visible
+    # latency including cache hits/misses.
     if observe:
         db = ObservableDatabase(db, metrics=metrics, slow_query_ms=slow_query_ms)
 

@@ -319,6 +319,8 @@ async with transaction_context(db) as txn:
     else:
         await txn.save("user", user_record)
         await txn.save("audit_log", log_record)
+        # Query methods (find, find_one, count, find_ids, find_many,
+        # find_iter) read from this transaction's held connection.
         # Commits on context exit; rolls back on exception.
 ```
 

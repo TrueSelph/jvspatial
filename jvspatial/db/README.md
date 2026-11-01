@@ -27,7 +27,7 @@ db/
 ├── _atomic.py             # internal: crash-safe write helper
 ├── _path_locks.py         # internal: bounded-LRU per-path locks
 ├── _cache.py              # internal: read-through cache wrapper
-├── _observable.py         # internal: structured log + metrics wrapper
+├── _observable.py         # internal: metrics + failure-log wrapper
 └── _sqlite_translate.py   # internal: Mongo → SQL translator
 ```
 
@@ -91,4 +91,4 @@ db/
 
 ## Stability
 
-Public surface (above) is stable. Underscore-prefixed modules are internal. The structured log field set from `ObservableDatabase` is part of the public contract — schema changes require a deprecation cycle.
+Public surface (above) is stable. Underscore-prefixed modules are internal. Slow-query warnings from `ObservableDatabase` use the public structured field schema documented in [observability](../../docs/md/observability.md).
