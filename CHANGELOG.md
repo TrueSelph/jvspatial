@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-01
+
 ### Added
 
 - Optional `Database.summarize_graph_bindings()` and immutable literal-fact/result
@@ -22,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- PostgreSQL graph-transaction reads, counts, id pages, and projections stay on
+  the held connection. Mongo transaction reads stay on the session snapshot.
+  A transaction does not reuse another database handle's identity map.
 - Walker construction discovers declared methods without evaluating unrelated
   descriptors or repeatedly resolving builtin private-state factories. Runtime
   method replacement and per-instance event/traversal state remain independent.

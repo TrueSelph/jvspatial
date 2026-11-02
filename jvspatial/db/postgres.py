@@ -1150,19 +1150,20 @@ class PostgresDB(Database):
             max_edges=max_edges,
         )
 
-    async def find_projected(
+    def _native_projection_sql(
         self,
         collection: str,
         query: Dict[str, Any],
+        names: List[str],
         *,
-        fields: List[str],
-        limit: Optional[int] = None,
-        sort: Optional[List[Tuple[str, int]]] = None,
-    ) -> List[Dict[str, Any]]:
-        """Project supported JSON paths in SQL without transferring full payloads."""
-        from .database import projection_fields
+        limit: Optional[int],
+        sort: Optional[List[Tuple[str, int]]],
+    ) -> Optional[Tuple[str, List[Any]]]:
+        """SQL for a flat projection, or None when the caller must fall back.
 
-        names = projection_fields(fields)
+        An empty statement means the limit is zero and no query should run.
+        Pooled and transactional reads share this so both keep one snapshot.
+        """
         translated = translate_query(query)
         ordering = translate_sort(sort)
         if (
@@ -1174,12 +1175,9 @@ class PostgresDB(Database):
                 for part in name.split(".")
             )
         ):
-            return await super().find_projected(
-                collection, query, fields=names, limit=limit, sort=sort
-            )
+            return None
         if limit == 0:
-            return []
-        await self._bootstrap_collection(collection)
+            return "", []
         col, schema = _safe_collection(collection), _safe_collection(self.schema_name)
         pieces = []
         for name in names:
@@ -1199,6 +1197,32 @@ class PostgresDB(Database):
         if limit is not None:
             params = list(params) + [int(limit)]
             sql += f" LIMIT ${len(params)}"
+        return sql, list(params)
+
+    async def find_projected(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        fields: List[str],
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Project supported JSON paths in SQL without transferring full payloads."""
+        from .database import projection_fields
+
+        names = projection_fields(fields)
+        planned = self._native_projection_sql(
+            collection, query, names, limit=limit, sort=sort
+        )
+        if planned is None:
+            return await super().find_projected(
+                collection, query, fields=names, limit=limit, sort=sort
+            )
+        sql, params = planned
+        if not sql:
+            return []
+        await self._bootstrap_collection(collection)
         async with self._acquire_conn() as connection:
             rows = await connection.fetch(sql, *params)
         return [self._record_from_row(row) for row in rows]
@@ -2736,6 +2760,38 @@ class PostgresTransaction(Transaction):
         if sort_in_memory:
             records = finalize_find_results(records, sort=sort, limit=limit)
         return records
+
+    @_serialized_transaction_operation
+    async def find_projected(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        fields: List[str],
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Project on this transaction's connection, not a pooled read."""
+        from .database import projection_fields
+
+        names = projection_fields(fields)
+        planned = self._db._native_projection_sql(
+            collection, query, names, limit=limit, sort=sort
+        )
+        if planned is None:
+            return await super().find_projected(
+                collection, query, fields=names, limit=limit, sort=sort
+            )
+        sql, params = planned
+        if not sql:
+            return []
+        await self._db._bootstrap_collection(
+            collection,
+            connection=self._connection,
+            pending=self._bootstrapped_collections,
+        )
+        rows = await self._connection.fetch(sql, *params)
+        return [self._db._record_from_row(row) for row in rows]
 
     @_serialized_transaction_operation
     async def find_one(
