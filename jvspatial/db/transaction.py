@@ -98,6 +98,24 @@ class Transaction(ABC):
         """
         pass
 
+    async def find_projected(
+        self,
+        collection: str,
+        query: Dict[str, Any],
+        *,
+        fields: List[str],
+        limit: Optional[int] = None,
+        sort: Optional[List[Tuple[str, int]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Project through this transaction's find, never a pooled connection."""
+        from jvspatial.db.database import project_record_fields, projection_fields
+
+        names = projection_fields(fields)
+        return [
+            project_record_fields(row, names)
+            for row in await self.find(collection, query, limit=limit, sort=sort)
+        ]
+
     async def find_one(
         self, collection: str, query: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
