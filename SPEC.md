@@ -284,6 +284,14 @@ Node adjacency always lives in the edge collection (indexed on `source` /
 with `jvspatial migrate strip-node-edges` (`strip_node_edges()` on
 `PostgresDB` / `MongoDB` / `JsonDB`).
 
+`Database.can_pushdown_numeric_sort(query, sort)` is a pure compiler-coverage
+check. PostgreSQL returns true only when both the complete predicate and order
+translate; the default returns false, and cache/observability wrappers delegate.
+It executes no I/O, proves no record type or authorization, and promises no
+index use. Callers must establish homogeneous number/null values for non-ID
+sort keys and retain their own current audience, cursor and release checks.
+Existing query and ordering behavior is unchanged.
+
 Callers branching on capabilities should test the flag, not the adapter class.
 
 ### 4.3 Built-in adapters

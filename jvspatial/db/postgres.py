@@ -363,6 +363,16 @@ class PostgresDB(Database):
     supports_native_projected_reads: bool = True
     supports_native_graph_binding_summary: bool = True
 
+    def can_pushdown_numeric_sort(
+        self, query: Dict[str, Any], sort: List[Tuple[str, int]]
+    ) -> bool:
+        """Report complete compiler coverage without fetching or granting data."""
+        return (
+            bool(sort)
+            and translate_query(query) is not None
+            and translate_sort(sort) is not None
+        )
+
     def __init__(
         self,
         dsn: Optional[str] = None,

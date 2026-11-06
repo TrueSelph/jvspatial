@@ -248,6 +248,11 @@ class CachingDatabase(Database):
         """Expose native projection support without promising a complete entity."""
         return bool(getattr(self.inner, "supports_native_projected_reads", False))
 
+    def can_pushdown_numeric_sort(self, query, sort) -> bool:
+        """Forward compiler coverage, never a cached data/authorization result."""
+        checker = getattr(self.inner, "can_pushdown_numeric_sort", None)
+        return bool(checker(query, sort)) if callable(checker) else False
+
     async def graph_edge_page(
         self, node_id: str, *, after: Optional[str] = None, limit: int = 50
     ) -> List[Dict[str, Any]]:

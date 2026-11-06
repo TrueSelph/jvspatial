@@ -180,7 +180,9 @@ missing-preserving selected values, with a portable default) and optional
 `LiteralBindingFact` / `GraphBindingSummary` types. One-hop binding summaries
 report complete or capped primary storage facts; hosts retain rooted scope and
 current authorization. Unsupported adapters return `None`; transaction-bound
-handles do not escape their connection. These are public stable additive APIs.
+handles do not escape their connection. These are public stable additive APIs. `Database.can_pushdown_numeric_sort`
+exposes pure compiler coverage for numeric/null ordering; hosts still prove
+current value types and access. It does not change existing query behavior.
 
 ## 8. Decision Boundaries
 
