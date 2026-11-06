@@ -1,5 +1,16 @@
 # jvspatial — Security Code Review
 
+## 2026-11-06 transaction ordering primitives
+
+Record locks retain the held connection's RLS/tenant scope, parameterize IDs and
+never update the locked document. Logical locks bind namespace/key values and
+freeze schema/tenant at transaction opening; collisions add contention only.
+Shared peers coexist while exclusive participants wait through completion.
+Unsupported adapters refuse. These are coordination primitives, not authority:
+hosts must prove writer participation, current access and consistent lock order.
+Regression coverage exercises actual PostgreSQL shared/exclusive ordering,
+missing records, closed handles, bound SQL and unsupported adapters.
+
 ## 2026-10-11 stalled-worktree integration review
 
 Generic `application/octet-stream` results from libmagic remain authoritative:
@@ -321,3 +332,11 @@ All findings were cross-referenced between passes and verified against current c
 ## Conclusion
 
 All 20 issues in the May 2026 review were remediated at that time. See the September 2026 combined review above for later findings and fixes. Deployment readiness still depends on the operator's shared-store and infrastructure choices documented in `ROADMAP.md` §2.
+
+### Numeric ordering compiler coverage
+
+`Database.can_pushdown_numeric_sort` is a pure predicate/compiler check. It
+executes no query, changes no SQL behavior, and certifies neither stored value
+types nor application authority. The default refuses and wrappers delegate
+without caching. Hosts must retain current audience and homogeneous numeric/null
+proofs; unsupported predicates or ordering cannot become a partial native LIMIT.

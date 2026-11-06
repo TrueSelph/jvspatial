@@ -94,6 +94,11 @@ The in-memory matcher and PostgreSQL pushdown treat both missing and JSON `null`
 
 Composite keyset continuation includes every sort value and direction plus ID. Never apply LIMIT before residual filtering or unsupported ordering. A configured fallback scan budget raises on exhaustion rather than returning a partial result. Bulk cache entries require confirmed outcomes; ambiguous writes are invalidated. Preserve JSON path locks/atomic durability and streaming handle cleanup on cancellation.
 
+Transaction record/advisory locks must remain on the held connection until
+completion, with current RLS and the opening schema/tenant scope. Unsupported
+adapters refuse. Shared locks are not permissions; callers still prove current
+access, writer participation and a consistent lock order.
+
 File-backed SQLite closes its prior connection when rebinding to another event loop; dropping it without `close()` leaks the `aiosqlite` worker thread and can keep the process alive.
 
 ### 12. Rich graph context

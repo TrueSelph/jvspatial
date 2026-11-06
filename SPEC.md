@@ -284,6 +284,14 @@ Node adjacency always lives in the edge collection (indexed on `source` /
 with `jvspatial migrate strip-node-edges` (`strip_node_edges()` on
 `PostgresDB` / `MongoDB` / `JsonDB`).
 
+`Database.can_pushdown_numeric_sort(query, sort)` is a pure compiler-coverage
+check. PostgreSQL returns true only when both the complete predicate and order
+translate; the default returns false, and cache/observability wrappers delegate.
+It executes no I/O, proves no record type or authorization, and promises no
+index use. Callers must establish homogeneous number/null values for non-ID
+sort keys and retain their own current audience, cursor and release checks.
+Existing query and ordering behavior is unchanged.
+
 Callers branching on capabilities should test the flag, not the adapter class.
 
 ### 4.3 Built-in adapters
@@ -299,6 +307,18 @@ Callers branching on capabilities should test the flag, not the adapter class.
 For a file-backed SQLite database reused on a different event loop, the adapter closes the old `aiosqlite` connection and its worker thread before opening a connection on the new loop. An in-memory SQLite database retains its existing connection so its contents are not lost (`jvspatial/db/sqlite.py`).
 
 ### 4.3.1 Transaction read and cache contract
+
+`Transaction.lock_record(collection, record_id, shared=False)` locks and returns
+an existing raw record without updating it. A missing record returns `None` and
+does not fence insertion. `Transaction.advisory_lock(namespace, key, shared=False)`
+orders cooperating logical-key users, including keys without records. PostgreSQL
+uses transaction-scoped SHARE/UPDATE row locks and shared/exclusive advisory
+locks on the held connection; commit, rollback and cancellation cleanup release
+them. Logical lock namespaces include the opening schema and tenant. Advisory
+hash collisions only add contention. Neither method grants access or replaces
+application authorization, consistent lock ordering or native RLS. Other adapters
+raise `NotImplementedError` rather than silently substituting local locks.
+Sources: `jvspatial/db/transaction.py`, `jvspatial/db/postgres.py`.
 
 `Transaction` supplies `find_one`, `count`, `find_ids`, `find_many`, `find_iter`
 and `count_incident_edges` alongside CRUD. All fallback reads route through the

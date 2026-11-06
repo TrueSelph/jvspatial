@@ -94,6 +94,7 @@ from .db import (
     LiteralBindingFact,
     create_database,
 )
+from .db.transaction import Transaction
 from .db.work_claim import claim_record, delete_claimed_record, release_claim
 
 # Observability primitives
@@ -170,6 +171,7 @@ __all__ = [
     "Server",
     # Database & Cache
     "Database",
+    "Transaction",
     "InsertIfAbsentResult",
     "GraphBindingSummary",
     "LiteralBindingFact",

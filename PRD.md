@@ -155,6 +155,11 @@ The library distinguishes three tiers; [docs/md/stability.md](docs/md/stability.
 
 The PRD ratifies this tiering. Promotion of a feature from experimental to stable, or demotion of an internal helper to public, is a product decision and must be reflected here as well as in `docs/md/stability.md`.
 
+`Transaction` is a stable top-level export. Its optional `lock_record` and
+`advisory_lock` methods provide shared/exclusive transaction ordering on supported
+adapters; unsupported adapters explicitly refuse. Hosts retain access policy and
+must qualify their writer participation and lock order.
+
 The stable graph projection surface includes `GraphContext.project_graph`,
 `ProjectionRequest`, `ProjectionScope`, `ProjectionAccess`, `ProjectionSemantics`,
 `ProjectionContextConfig`, `ProjectionField`, `ProjectionEvidence`,
@@ -175,7 +180,9 @@ missing-preserving selected values, with a portable default) and optional
 `LiteralBindingFact` / `GraphBindingSummary` types. One-hop binding summaries
 report complete or capped primary storage facts; hosts retain rooted scope and
 current authorization. Unsupported adapters return `None`; transaction-bound
-handles do not escape their connection. These are public stable additive APIs.
+handles do not escape their connection. These are public stable additive APIs. `Database.can_pushdown_numeric_sort`
+exposes pure compiler coverage for numeric/null ordering; hosts still prove
+current value types and access. It does not change existing query behavior.
 
 ## 8. Decision Boundaries
 

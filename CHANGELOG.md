@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-11-06
+
+### Added
+
+- Transaction-scoped record and advisory locks on PostgreSQL. Shared locks
+  admit concurrent peers while exclusive participants and record writes wait;
+  locking existing records no longer requires a no-op write. Other adapters
+  explicitly refuse these optional ordering guarantees.
+
+- Pure `Database.can_pushdown_numeric_sort` compiler coverage allows callers
+  to discover existing numeric ordering support without relying on adapter
+  classes. It does not execute a query or certify data types/access.
+
 ## [0.2.4] - 2026-11-01
 
 ### Added

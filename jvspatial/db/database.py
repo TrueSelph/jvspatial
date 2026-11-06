@@ -416,6 +416,17 @@ class Database(ABC):
         """Whether the current adapter provides native graph fact summaries."""
         return False
 
+    def can_pushdown_numeric_sort(
+        self, query: Dict[str, Any], sort: List[Tuple[str, int]]
+    ) -> bool:
+        """Whether this query/order can remain native for number/null keys.
+
+        This is compiler coverage, not a data-type or permission proof. The
+        caller must establish homogeneous numeric/null values for non-ID
+        keys. Unsupported adapters refuse; no query is executed here.
+        """
+        return False
+
     async def graph_node_batch(self, ids: List[str]) -> Dict[str, Dict[str, Any]]:
         """Fetch raw projection nodes; wrappers bypass stale record caches."""
         return await self.find_many("node", ids)
