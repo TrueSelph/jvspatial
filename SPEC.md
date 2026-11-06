@@ -300,6 +300,18 @@ For a file-backed SQLite database reused on a different event loop, the adapter 
 
 ### 4.3.1 Transaction read and cache contract
 
+`Transaction.lock_record(collection, record_id, shared=False)` locks and returns
+an existing raw record without updating it. A missing record returns `None` and
+does not fence insertion. `Transaction.advisory_lock(namespace, key, shared=False)`
+orders cooperating logical-key users, including keys without records. PostgreSQL
+uses transaction-scoped SHARE/UPDATE row locks and shared/exclusive advisory
+locks on the held connection; commit, rollback and cancellation cleanup release
+them. Logical lock namespaces include the opening schema and tenant. Advisory
+hash collisions only add contention. Neither method grants access or replaces
+application authorization, consistent lock ordering or native RLS. Other adapters
+raise `NotImplementedError` rather than silently substituting local locks.
+Sources: `jvspatial/db/transaction.py`, `jvspatial/db/postgres.py`.
+
 `Transaction` supplies `find_one`, `count`, `find_ids`, `find_many`, `find_iter`
 and `count_incident_edges` alongside CRUD. All fallback reads route through the
 transaction handle, not its outer database. PostgreSQL overrides native reads

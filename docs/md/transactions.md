@@ -96,6 +96,28 @@ connection with transaction-local settings. This supports an application's
 configured RLS policy; it does not create an access policy or replace
 application authorization.
 
+## Shared and exclusive ordering
+
+`Transaction.lock_record(collection, record_id, shared=True)` reads an existing
+record and holds a shared row lock without updating its payload or timestamps.
+Shared peers coexist; `shared=False` and normal record writes wait. A missing
+record returns `None`, and an absent key is not locked against insertion.
+PostgreSQL retains the transaction's tenant scope and RLS for this read.
+
+`Transaction.advisory_lock(namespace, key, shared=True)` holds a cooperating
+logical-key lock, including keys without records. Exclusive participants use
+`shared=False`. The database, schema and opening tenant separate logical scopes;
+hash collisions can add contention. Advisory locks do not fence unrelated SQL:
+every writer to the logical state must acquire the same exclusive key.
+
+Both methods currently support PostgreSQL only. Other adapters raise
+`NotImplementedError`; callers must fail closed if their operation requires this
+ordering. Acquire keys/records in one consistent order and choose the required
+mode before acquisition. Shared-to-exclusive upgrades can deadlock. Keep network
+calls outside the transaction. Commit/rollback release locks; canceled waits
+must leave through normal transaction rollback. Neither method supplies an
+application permission, an atomic graph revision or a portable local-lock fallback.
+
 ## Monitoring and limits
 
 The optional observable wrapper records metrics and failure-only ERROR logs

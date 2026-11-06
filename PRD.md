@@ -155,6 +155,11 @@ The library distinguishes three tiers; [docs/md/stability.md](docs/md/stability.
 
 The PRD ratifies this tiering. Promotion of a feature from experimental to stable, or demotion of an internal helper to public, is a product decision and must be reflected here as well as in `docs/md/stability.md`.
 
+`Transaction` is a stable top-level export. Its optional `lock_record` and
+`advisory_lock` methods provide shared/exclusive transaction ordering on supported
+adapters; unsupported adapters explicitly refuse. Hosts retain access policy and
+must qualify their writer participation and lock order.
+
 The stable graph projection surface includes `GraphContext.project_graph`,
 `ProjectionRequest`, `ProjectionScope`, `ProjectionAccess`, `ProjectionSemantics`,
 `ProjectionContextConfig`, `ProjectionField`, `ProjectionEvidence`,

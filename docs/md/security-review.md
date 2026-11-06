@@ -1,5 +1,16 @@
 # jvspatial — Security Code Review
 
+## 2026-11-06 transaction ordering primitives
+
+Record locks retain the held connection's RLS/tenant scope, parameterize IDs and
+never update the locked document. Logical locks bind namespace/key values and
+freeze schema/tenant at transaction opening; collisions add contention only.
+Shared peers coexist while exclusive participants wait through completion.
+Unsupported adapters refuse. These are coordination primitives, not authority:
+hosts must prove writer participation, current access and consistent lock order.
+Regression coverage exercises actual PostgreSQL shared/exclusive ordering,
+missing records, closed handles, bound SQL and unsupported adapters.
+
 ## 2026-10-11 stalled-worktree integration review
 
 Generic `application/octet-stream` results from libmagic remain authoritative:

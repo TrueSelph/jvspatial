@@ -2586,10 +2586,57 @@ class PostgresTransaction(Transaction):
         self._operation_lock = _TaskReentrantLock()
         self._bootstrapped_collections: Set[str] = set()
         self._closing = False
+        # Freeze the tenant used when the held transaction was opened. Later
+        # ambient tenant changes cannot select a different logical lock scope.
+        self._lock_scope = (db.schema_name, current_tenant())
 
     def _ensure_active(self) -> None:
         if self._closing or not self.is_active or self._connection is None:
             raise DatabaseError("PostgreSQL transaction is no longer active")
+
+    @_serialized_transaction_operation
+    async def lock_record(
+        self, collection: str, record_id: str, *, shared: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """Read and lock one exact ID on the held, tenant-scoped connection."""
+        if not isinstance(record_id, str) or not record_id or type(shared) is not bool:
+            raise ValueError("A record ID and boolean shared mode are required")
+        col = _safe_collection(collection)
+        schema = _safe_collection(self._db.schema_name)
+        await self._db._bootstrap_collection(
+            collection,
+            connection=self._connection,
+            pending=self._bootstrapped_collections,
+        )
+        mode = "SHARE" if shared else "UPDATE"
+        row = await self._connection.fetchrow(
+            f"SELECT data FROM {schema}.{col} WHERE id=$1 FOR {mode}", record_id
+        )
+        return self._db._record_from_row(row) if row is not None else None
+
+    @_serialized_transaction_operation
+    async def advisory_lock(
+        self, namespace: str, key: str, *, shared: bool = False
+    ) -> None:
+        """Order cooperating logical-key users across connections and workers.
+
+        PostgreSQL scopes advisory locks to the database; schema and the opening
+        tenant are included in the bound namespace. Hash collisions can only
+        cause additional contention. Locks disappear on commit or rollback.
+        """
+        if (
+            not isinstance(namespace, str)
+            or not namespace
+            or not isinstance(key, str)
+            or not key
+            or type(shared) is not bool
+        ):
+            raise ValueError("A namespace, key and boolean shared mode are required")
+        function = "pg_advisory_xact_lock_shared" if shared else "pg_advisory_xact_lock"
+        scope = json.dumps([*self._lock_scope, namespace], separators=(",", ":"))
+        await self._connection.execute(
+            f"SELECT {function}(hashtext($1), hashtext($2))", scope, key
+        )
 
     @_serialized_transaction_operation
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:

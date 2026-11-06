@@ -159,3 +159,10 @@ an issue describing the use case rather than importing it. Either:
   and we'll point you at it.
 
 Either way, the result is a more stable foundation for everyone.
+
+## Transaction ordering
+
+The top-level `Transaction` type is stable. Its optional `lock_record` and
+`advisory_lock` methods currently support PostgreSQL and raise
+`NotImplementedError` on other adapters. Shared/exclusive ordering lasts until
+transaction completion and does not establish application authorization.

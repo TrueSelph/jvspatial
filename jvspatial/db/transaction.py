@@ -38,6 +38,27 @@ class Transaction(ABC):
         self.is_committed = False
         self.is_rolled_back = False
 
+    async def lock_record(
+        self, collection: str, record_id: str, *, shared: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """Lock an existing raw record until completion, without modifying it.
+
+        Shared peers may coexist; exclusive locks and record writes wait.
+        Missing records return None and are not protected against insertion.
+        Unsupported adapters refuse rather than claiming portable ordering.
+        """
+        raise NotImplementedError("This transaction does not support record locks")
+
+    async def advisory_lock(
+        self, namespace: str, key: str, *, shared: bool = False
+    ) -> None:
+        """Hold a cooperating logical-key lock until commit or rollback.
+
+        This does not lock records or grant application access. All logical
+        writers must participate; unsupported adapters explicitly refuse.
+        """
+        raise NotImplementedError("This transaction does not support advisory locks")
+
     @abstractmethod
     async def save(self, collection: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Save a record within this transaction.
