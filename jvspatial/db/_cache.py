@@ -214,6 +214,17 @@ class CachingDatabase(Database):
         # find() is intentionally NOT cached. See module docstring.
         return await self.inner.find(collection, query, limit=limit, sort=sort)
 
+    async def create_binary_text_keyset_indexes(self, collection, **kwargs):
+        """Forward optional text index setup to the underlying adapter."""
+        writer = getattr(self.inner, "create_binary_text_keyset_indexes", None)
+        if callable(writer):
+            await writer(collection, **kwargs)
+
+    async def find_binary_text_keyset(self, collection, query, **kwargs):
+        """Read text keysets without caching candidate rows."""
+        reader = getattr(self.inner, "find_binary_text_keyset", None)
+        return await reader(collection, query, **kwargs) if callable(reader) else None
+
     async def summarize_graph_bindings(self, query, **kwargs):
         """Forward current graph facts without caching a summary as authority."""
         reader = getattr(self.inner, "summarize_graph_bindings", None)
