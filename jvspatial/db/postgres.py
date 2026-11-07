@@ -1135,6 +1135,18 @@ class PostgresDB(Database):
             records = finalize_find_results(records, sort=sort, limit=limit)
         return records
 
+    async def create_binary_text_keyset_indexes(self, collection, **kwargs):
+        """Prepare indexes for explicit Python-compatible text keyset reads."""
+        from ._binary_text_keyset import create_indexes
+
+        await create_indexes(self, collection, **kwargs)
+
+    async def find_binary_text_keyset(self, collection, query, **kwargs):
+        """Return a bounded ordered page, or None if ordering is unsupported."""
+        from ._binary_text_keyset import read_page
+
+        return await read_page(self, collection, query, **kwargs)
+
     async def summarize_graph_bindings(
         self,
         query: Dict[str, Any],

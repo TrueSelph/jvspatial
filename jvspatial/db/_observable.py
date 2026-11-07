@@ -309,6 +309,24 @@ class ObservableDatabase(Database):
             result_count_extractor=lambda r: len(r) if isinstance(r, list) else 0,
         )
 
+    async def create_binary_text_keyset_indexes(self, collection, **kwargs):
+        """Forward optional text index setup to the underlying adapter."""
+        writer = getattr(self.inner, "create_binary_text_keyset_indexes", None)
+        if callable(writer):
+            await writer(collection, **kwargs)
+
+    async def find_binary_text_keyset(self, collection, query, **kwargs):
+        """Read text keysets without caching candidate rows."""
+        reader = getattr(self.inner, "find_binary_text_keyset", None)
+        if not callable(reader):
+            return None
+        return await self._instrument(
+            "find_binary_text_keyset",
+            collection,
+            lambda: reader(collection, query, **kwargs),
+            result_count_extractor=lambda rows: len(rows) if rows is not None else 0,
+        )
+
     async def summarize_graph_bindings(self, query, **kwargs):
         """Observe one logical graph fact read, preserving upstream recording."""
         reader = getattr(self.inner, "summarize_graph_bindings", None)

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-07
+
+### Added
+
+- Optional PostgreSQL binary text keyset reads and matching indexes preserve
+  Python text and ID ordering, with missing values last in either direction.
+  Unsupported predicates and out-of-contract text values signal a portable
+  fallback. The caller remains responsible for authorizing returned records.
+
 ## [0.2.5] - 2026-11-06
 
 ### Added

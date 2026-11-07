@@ -360,6 +360,16 @@ No built-in migration framework. Adapters do not enforce schemas. Adding optiona
 ### 4.7 Bounded I/O and query execution
 
 - Composite keysets validate sort fields/directions and append ID when absent.
+- PostgreSQL also supports explicit binary text keysets through
+  `PostgresDB.find_binary_text_keyset` and
+  `PostgresDB.create_binary_text_keyset_indexes` (`db/postgres.py`). A read
+  takes a collection, entity, exact text scope, text field, direction,
+  optional (text or null, ID) cursor, and positive limit. UTF-8 text and IDs
+  follow binary order, with missing or null text last. Unsupported predicates,
+  non-UTF-8 databases, or scoped text outside the index contract (non-string
+  or longer than 1,024 bytes) return `None` for portable fallback. The read
+  uses the current tenant connection and returns storage candidates.
+
   Continuation encodes every field and direction; old ID-only cursors remain
   supported for ID-only sorts. Missing/null are last for SQL/in-memory ordering;
   Mongo retains BSON ascending nulls-first behavior. Scalars should use a
