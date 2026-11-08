@@ -81,33 +81,43 @@ async def summarize(
             )
             valid = f"({missing} OR {valid})"
         constraints.append(valid)
-    limit_records, limit_edges = bind(max_records + 1), bind(max_edges + 1)
+    limit_records = bind(max_records + 1)
+    # A record without any link contributes one row. If both budgets hold,
+    # their sum bounds the joined rows; hitting the extra row proves overflow.
+    joined_budget = max_records + max_edges
+    limit_joined = bind(joined_budget + 1)
     schema = _safe_collection(database.schema_name)
     await database._bootstrap_collection("node")
     await database._bootstrap_collection("edge")
     node_where = f"entity={record_param}" + (f" AND ({where})" if where else "")
     sql = f"""
-    WITH candidates AS MATERIALIZED (
+    WITH candidates AS (
       SELECT id, COALESCE({' AND '.join(constraints)},FALSE) AS facts_valid
       FROM {schema}.node WHERE {node_where} LIMIT {limit_records}
-    ), links AS NOT MATERIALIZED (
-      SELECT (e.data#>>'{{target}}') AS target, e.data->>'source'={parent_param} AS expected,
+    ), bindings AS (
+      SELECT c.id, c.facts_valid, e.id IS NOT NULL AS linked,
+        e.data->>'source'={parent_param} AS expected,
         COALESCE(jsonb_typeof(e.data->'source')='string' AND e.data->>'source'<>''
           AND jsonb_typeof(e.data->'target')='string'
           AND jsonb_typeof(e.data->'entity')='string'
           AND e.data->>'entity'={edge_param}, FALSE) AS valid
-      FROM {schema}.edge e JOIN candidates c ON (e.data#>>'{{target}}')=c.id
-      WHERE e.entity={edge_param} LIMIT {limit_edges}
+      FROM candidates c LEFT JOIN {schema}.edge e
+        ON e.entity={edge_param} AND (e.data#>>'{{target}}')=c.id
+      LIMIT {limit_joined}
     ), parents AS (
-      SELECT target, count(*) AS cardinality, bool_and(expected) AS expected,
-        bool_or(NOT valid) AS invalid_edge FROM links GROUP BY target
+      SELECT id, facts_valid, count(*) AS joined,
+        count(*) FILTER(WHERE linked) AS cardinality,
+        bool_and(expected) FILTER(WHERE linked) AS expected,
+        bool_or(NOT valid) FILTER(WHERE linked) AS invalid_edge
+      FROM bindings GROUP BY id, facts_valid
     )
     SELECT count(*) AS matched,
       count(*) FILTER(WHERE NOT facts_valid) AS invalid_facts,
       count(*) FILTER(WHERE invalid_edge) AS invalid_edges,
       count(*) FILTER(WHERE facts_valid AND NOT invalid_edge AND cardinality=1 AND expected) AS bound,
-      COALESCE(sum(cardinality),0) AS edge_count
-    FROM candidates LEFT JOIN parents ON parents.target=candidates.id
+      COALESCE(sum(cardinality),0) AS edge_count,
+      COALESCE(sum(joined),0) AS joined_count
+    FROM parents
     """
     async with database._acquire_conn() as connection:
         row = await connection.fetchrow(sql, *params)
@@ -116,5 +126,9 @@ async def summarize(
         bound=row["bound"],
         invalid_facts=row["invalid_facts"],
         invalid_edges=row["invalid_edges"],
-        complete=(row["matched"] <= max_records and row["edge_count"] <= max_edges),
+        complete=(
+            row["matched"] <= max_records
+            and row["edge_count"] <= max_edges
+            and row["joined_count"] <= joined_budget
+        ),
     )
