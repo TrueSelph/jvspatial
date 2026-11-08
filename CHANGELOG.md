@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-11-08
+
+### Fixed
+
+- Reduce PostgreSQL graph binding summary latency by aggregating one bounded
+  record-to-edge join. Exact results still require validated record and edge
+  facts within the caller’s limits.
+
 ## [0.2.6] - 2026-11-07
 
 ### Added
