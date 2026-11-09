@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-11-09
+
 ### Added
 
 - Opt-in PostgreSQL binding projections for a configured exact partition.
