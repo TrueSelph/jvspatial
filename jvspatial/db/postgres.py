@@ -173,6 +173,8 @@ except ImportError:  # pragma: no cover - handled at __init__ time
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from asyncpg.pool import Pool
 
+    from ._binding_projection_postgres import BindingProjection
+
 
 # ---- safety: collection / field name validation -----------------------------
 
@@ -453,6 +455,7 @@ class PostgresDB(Database):
 
         self.fallback_scan_limit = _validate_scan_limit(fallback_scan_limit)
         self.schema_name = schema_name
+        self._binding_projection: Optional[BindingProjection] = None
         self.gin_index = (
             (gin_index or env("JVSPATIAL_PG_GIN_INDEX", default="full")).strip().lower()
         )
@@ -1147,6 +1150,57 @@ class PostgresDB(Database):
 
         return await read_page(self, collection, query, **kwargs)
 
+    async def install_graph_binding_projection(
+        self,
+        *,
+        partition_path: str,
+        record_entity: str,
+        edge_entity: str,
+        parent_id: str,
+        facts: Tuple[LiteralBindingFact, ...],
+    ) -> None:
+        """Backfill one exact binding partition under a source write fence.
+
+        Run explicitly during maintenance. The resulting projection is used
+        on this adapter instance for matching requests. Unmatched, invalidated
+        and tenant-filtered reads retain the native query.
+        """
+        from ._binding_projection_postgres import BindingProjection, install
+
+        projection = BindingProjection(
+            partition_path, record_entity, edge_entity, parent_id, facts
+        )
+        await install(self, projection)
+        self._binding_projection = projection
+
+    async def attach_graph_binding_projection(
+        self,
+        *,
+        partition_path: str,
+        record_entity: str,
+        edge_entity: str,
+        parent_id: str,
+        facts: Tuple[LiteralBindingFact, ...],
+    ) -> bool:
+        """Configure a worker to use existing projection facts without running DDL."""
+        from ._binding_projection_postgres import BindingProjection, available
+
+        projection = BindingProjection(
+            partition_path, record_entity, edge_entity, parent_id, facts
+        )
+        if not await available(self):
+            return False
+        self._binding_projection = projection
+        return True
+
+    async def invalidate_graph_binding_projection(self) -> bool:
+        """Unpublish projected facts across workers without source-table DDL."""
+        from ._binding_projection_postgres import invalidate
+
+        changed = await invalidate(self)
+        self._binding_projection = None
+        return changed
+
     async def summarize_graph_bindings(
         self,
         query: Dict[str, Any],
@@ -1160,6 +1214,32 @@ class PostgresDB(Database):
     ) -> Optional[GraphBindingSummary]:
         """Return storage binding facts; no application policy is supplied."""
         from ._graph_binding_postgres import summarize
+
+        projection = self._binding_projection
+        if (
+            projection is not None
+            and record_entity == projection.record_entity
+            and edge_entity == projection.edge_entity
+            and parent_id == projection.parent_id
+            and facts == projection.facts
+            and type(max_records) is int
+            and max_records > 0
+            and type(max_edges) is int
+            and max_edges > 0
+        ):
+            excluded_ids = projection.excluded_ids(query)
+            if excluded_ids is not None:
+                from ._binding_projection_postgres import read
+
+                result = await read(
+                    self,
+                    projection,
+                    max_records=max_records,
+                    max_edges=max_edges,
+                    excluded_ids=excluded_ids,
+                )
+                if result is not None:
+                    return result
 
         return await summarize(
             self,
