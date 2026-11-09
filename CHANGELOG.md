@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in PostgreSQL binding projections for a configured exact partition.
+  An explicit maintenance transaction backfills facts and publishes them
+  with source triggers. Unsupported or invalidated requests use the native
+  summary. Host authorization remains separate.
+
 ## [0.2.7] - 2026-11-08
 
 ### Fixed
