@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-11-10
+
+### Changed
+
+- Reuse compiled endpoint route patterns during request matching.
+
 ## [0.2.8] - 2026-11-09
 
 ### Added
