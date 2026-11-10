@@ -6,6 +6,7 @@ endpoint registry and FastAPI routes.
 
 import logging
 import re
+from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 from fastapi import Request
@@ -67,9 +68,16 @@ def _path_matches(pattern: str, path: str) -> bool:
     """
     if pattern == path:
         return True
+    compiled = _compile_path_pattern(pattern)
+    return path == "/" if compiled is None else bool(compiled.match(path))
+
+
+@lru_cache(maxsize=1024)
+def _compile_path_pattern(pattern: str) -> Optional[re.Pattern[str]]:
+    """Cache route syntax only, leaving method and auth metadata live."""
     segments = [s for s in pattern.split("/") if s]
     if not segments:
-        return path == "/"
+        return None
     regex_parts: List[str] = []
     for seg in segments:
         if seg.startswith("{") and seg.endswith("}"):
@@ -81,8 +89,7 @@ def _path_matches(pattern: str, path: str) -> bool:
                 regex_parts.append(r"[^/]+")
         else:
             regex_parts.append(re.escape(seg))
-    regex = "^/" + "/".join(regex_parts) + "$"
-    return bool(re.match(regex, path))
+    return re.compile("^/" + "/".join(regex_parts) + "$")
 
 
 def _endpoint_info_matches_method(
