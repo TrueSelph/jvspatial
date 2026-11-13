@@ -2088,7 +2088,6 @@ class PostgresDB(Database):
         else:
             scope = ""
         index_name = _postgres_index_name(f"{col}_{scope}{field_names}", suffix)
-        unique_sql = "UNIQUE " if unique and not fulltext else ""
         body = f"ON {schema}.{col} USING {method} ({', '.join(keys)}){where_clause}"
 
         spec = IndexSpec(
@@ -2102,21 +2101,21 @@ class PostgresDB(Database):
             unique=bool(unique and not fulltext),
             required=bool(unique and not fulltext),
         )
-        return dict(
-            col=col,
-            schema=schema,
-            index_name=index_name,
-            body=body,
-            fields=fields,
-            scope=scope,
-            fulltext=fulltext,
-            method=method,
-            want_indoption=want_indoption,
-            where_clause=where_clause,
-            entity_leading=entity_leading,
-            field_names=field_names,
-            spec=spec,
-        )
+        return {
+            "col": col,
+            "schema": schema,
+            "index_name": index_name,
+            "body": body,
+            "fields": fields,
+            "scope": scope,
+            "fulltext": fulltext,
+            "method": method,
+            "want_indoption": want_indoption,
+            "where_clause": where_clause,
+            "entity_leading": entity_leading,
+            "field_names": field_names,
+            "spec": spec,
+        }
 
     def index_spec(
         self, collection, field_or_fields, *, unique=False, keyset=False, **kwargs

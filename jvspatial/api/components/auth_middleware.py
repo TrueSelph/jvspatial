@@ -9,6 +9,8 @@ from typing import Any, Dict, Optional
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+
 from jvspatial.api.auth.config import AuthConfig
 from jvspatial.api.auth.rbac import has_required_permissions, has_required_roles
 from jvspatial.api.components.endpoint_auth_resolver import (
@@ -16,7 +18,6 @@ from jvspatial.api.components.endpoint_auth_resolver import (
     path_requires_admin_only_role,
 )
 from jvspatial.api.components.path_matcher import PathMatcher
-from starlette.middleware.base import BaseHTTPMiddleware
 
 
 class AuthenticationMiddleware(BaseHTTPMiddleware):

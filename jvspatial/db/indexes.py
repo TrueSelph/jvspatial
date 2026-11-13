@@ -19,6 +19,7 @@ class ManagedSchemaError(DatabaseError):
 
 
 def identifier(value: str) -> str:
+    """Validate and quote a PostgreSQL storage identifier."""
     if not isinstance(value, str) or not re.fullmatch(
         r"[A-Za-z_][A-Za-z0-9_]{0,62}", value
     ):
@@ -65,6 +66,7 @@ class IndexSpec:
     justification: str = ""
 
     def __post_init__(self):
+        """Validate index identity, method, and trusted schema expressions."""
         identifier(self.schema)
         identifier(self.table)
         if self.method not in {
@@ -89,6 +91,7 @@ class IndexSpec:
 
     @property
     def fingerprint(self) -> str:
+        """Return a deterministic digest of the physical index definition."""
         physical = {
             k: getattr(self, k)
             for k in ("schema", "table", "method", "keys", "predicate", "unique")
@@ -103,9 +106,11 @@ class IndexSpec:
 
     @property
     def name(self) -> str:
+        """Return the bounded physical name derived from this index fingerprint."""
         return f"ix_{self.table[:20]}_{self.fingerprint[:24]}"
 
     def create_sql(self, *, concurrently: bool = True) -> str:
+        """Compile the index declaration into a PostgreSQL CREATE statement."""
         return (
             f"CREATE {'UNIQUE ' if self.unique else ''}INDEX "
             f"{'CONCURRENTLY ' if concurrently else ''}{identifier(self.name)} ON "
@@ -115,10 +120,12 @@ class IndexSpec:
         )
 
     def to_dict(self) -> dict:
+        """Serialize the physical definition and ownership metadata."""
         return asdict(self)
 
     @classmethod
     def from_dict(cls, value: dict) -> "IndexSpec":
+        """Restore a validated declaration from serialized metadata."""
         payload = dict(value)
         payload["keys"] = tuple(payload["keys"])
         payload["queries"] = tuple(payload.get("queries", ()))
