@@ -9,8 +9,6 @@ from typing import Any, Dict, Optional
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
-
 from jvspatial.api.auth.config import AuthConfig
 from jvspatial.api.auth.rbac import has_required_permissions, has_required_roles
 from jvspatial.api.components.endpoint_auth_resolver import (
@@ -18,6 +16,7 @@ from jvspatial.api.components.endpoint_auth_resolver import (
     path_requires_admin_only_role,
 )
 from jvspatial.api.components.path_matcher import PathMatcher
+from starlette.middleware.base import BaseHTTPMiddleware
 
 
 class AuthenticationMiddleware(BaseHTTPMiddleware):
@@ -291,6 +290,21 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         return user
 
     async def _authenticate_request(self, request: Request) -> Optional[Any]:
+        from jvspatial.observability.tracing import _tracing_active, get_tracer
+
+        if not _tracing_active():
+            return await self._authenticate_request_impl(request)
+        # Never attach headers, tokens, request objects or exception content.
+        with get_tracer("jvspatial.auth").start_as_current_span(
+            "auth.authenticate", record_exception=False, set_status_on_exception=False
+        ) as span:
+            try:
+                return await self._authenticate_request_impl(request)
+            except BaseException as exc:
+                span.set_attribute("error.type", type(exc).__name__)
+                raise
+
+    async def _authenticate_request_impl(self, request: Request) -> Optional[Any]:
         """Authenticate the incoming request using multiple methods.
 
         Attempts authentication in priority order:

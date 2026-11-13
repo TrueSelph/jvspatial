@@ -298,3 +298,10 @@ Update this file in the same commit as any change that alters an invariant or bo
 - **Codex / OpenHands / Claude Code**: Read this file as the canonical guide.
 
 Keep tool-specific notes brief; promote a rule that applies to all agents into the main guide above.
+
+
+## Optional local workspace reference
+
+If present, the neighboring [foundation map](../docs/JVSPATIAL_FOUNDATION.md) describes one developer's downstream integrations. It is optional context outside this repository's Git history, with no requirement to clone consumers or adopt that developer's directory layout, branches, runtime or workflow.
+
+Keep the library application-independent and follow this repository's own contracts and validation rules. Assess affected consumer compatibility when changing public behavior; validate available integrations and report unavailable coverage. Consumer-specific setup and policy remain downstream. A neighboring source checkout does not establish which library artifact a consumer imports.

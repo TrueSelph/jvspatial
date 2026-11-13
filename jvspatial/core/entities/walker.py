@@ -847,6 +847,20 @@ class Walker(AttributeMixin, BaseModel):
         Returns:
             List of all reported items
         """
+        from jvspatial.observability.tracing import _tracing_active, walker_span
+
+        if not _tracing_active():
+            return await self._run_traversal()
+        # Invocation/node identities and reported values are deliberately absent.
+        with walker_span(type(self).__name__) as span:
+            try:
+                return await self._run_traversal()
+            finally:
+                span.set_attribute("walker.step_count", self._protection.step_count)
+                span.set_attribute("walker.paused", self._paused)
+
+    async def _run_traversal(self: "Walker") -> List[Any]:
+        """Execute the existing traversal with its original protection scope."""
         # Initialize protection state once per traversal session.
         # ``start_if_needed`` is idempotent so ``resume()`` does not reset
         # the step / visit / timer counters (audit §2.2 / SPEC §6.3).

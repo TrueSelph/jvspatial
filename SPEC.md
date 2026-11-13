@@ -162,6 +162,15 @@ These are *defaults* — subclasses or callers can override. Disabling protectio
 
 Indexed fields (`@attribute(indexed=True)`) and compound indexes (`@attribute(compound_index=...)`) inform backend index creation (where supported).
 
+PostgreSQL `index_creation="constraints"` / `JVSPATIAL_POSTGRES_INDEX_CREATION=constraints`
+defers performance index DDL while preserving unique-index provisioning/repair
+and fixed collection baseline indexes. Ordinary, sort-companion, whole-data GIN
+and vector indexes are not created in this mode; existing indexes are retained.
+The compatible default is `auto`, also available as an explicit maintenance
+adapter override. This is separate from `JVSPATIAL_AUTO_CREATE_INDEXES`, which
+skips annotation-declared unique indexes as well as performance declarations.
+The policy does not govern host-issued migration SQL (`jvspatial/db/postgres.py`).
+
 Single-field `attribute(index_direction=-1)` declarations reach adapters as
 `[(field, -1)]`; ascending declarations retain the bare field string for name
 compatibility (`jvspatial/core/context.py:1579`). PostgreSQL repairs a canonical
@@ -923,6 +932,23 @@ separate from total consumer-inclusive duration. These are driver/candidate
 metrics, not physical protocol round trips or server rows scanned.
 Source: `jvspatial/db/_observable.py`.
 
+Observed non-streaming operations also create content-free database spans using
+an application-installed OpenTelemetry provider. Attributes include operation,
+backend, collection, success and available result/I/O counts. Exception events,
+SQL text and parameters are not recorded; error type and status remain available.
+Observed PostgreSQL calls using the shared acquisition helper report
+`driver_statements` and `driver_duration_ms` from asyncpg query callbacks in
+addition to pool wait. These measure driver executions, not physical protocol
+round trips; direct transaction-connection operations outside that helper are
+not covered by these two counters. Query logger callbacks are removed before
+connections return to the pool. The authentication request boundary emits `auth.authenticate` without headers, tokens or exception content. No SDK or exporter is configured by the library.
+
+`Walker.run()` traces the traversal class, protection step count and paused state
+with a recording host provider, without automatically including node/walker IDs
+or report values. Database, walker and HTTP helper errors omit exception messages
+and stack events. Source: `jvspatial/core/entities/walker.py`,
+`jvspatial/observability/tracing.py`.
+
 
 ### 14.3 GraphContext PerformanceMonitor
 
@@ -1138,3 +1164,15 @@ When code changes alter behavior described in this document:
 3. If the change affects stability tier, also update [docs/md/stability.md](docs/md/stability.md).
 4. If the change affects a security invariant (§15), also update [docs/md/security-review.md](docs/md/security-review.md).
 5. Add a test that exercises the new behavior.
+
+### Managed PostgreSQL index boundary
+
+`PostgresDB(index_creation="managed")` separates opening connections from
+persistent schema initialization. Model uniqueness is verified and cached; optional
+filter, keyset and vector declarations execute no index DDL. Vector column shape
+is verified; RLS and binding-projection installation require maintenance.
+`IndexSpec` carries canonical compiler definitions, query coverage and stable
+fingerprint names. Hosts own approved catalogs and provisioning. Compatibility
+default remains `auto`. Sources: [indexes](jvspatial/db/indexes.py:1),
+[adapter](jvspatial/db/postgres.py:425),
+[keyset helper](jvspatial/db/_binary_text_keyset.py:27).

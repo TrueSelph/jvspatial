@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- PostgreSQL `index_creation="constraints"` / `JVSPATIAL_POSTGRES_INDEX_CREATION`
+  controls automatic performance-index DDL independently of unique constraints.
+  Existing indexes remain intact and explicit maintenance adapters can provision
+  reviewed indexes using the compatible `auto` mode.
+
+- Walker traversal sessions emit class, step count and pause state with the host
+  provider, without automatic node identities or report contents.
+- Authentication emits a content-free `auth.authenticate` span around the existing authentication boundary.
+- Observed database operations emit content-free OpenTelemetry spans using the
+  host provider. PostgreSQL observations expose driver statement counts and
+  execution time on the shared acquisition path; connection callbacks are
+  removed before pool release.
+
+### Fixed
+
+- Database, traversal and HTTP trace errors record exception type/status without exception messages
+  or stack events that could contain query parameters.
+
 ## [0.2.9] - 2026-11-10
 
 ### Changed
@@ -873,3 +893,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.5] - Previous
 
 See git history for changes before this release.
+
+### Governed storage capability (unreleased)
+
+- Add public `IndexSpec` / `ManagedSchemaError` and opt-in strict managed
+  PostgreSQL mode. Persistent schema/index creation is reserved for host
+  provisioning; uniqueness verification remains mandatory. Existing adapter
+  defaults are preserved.

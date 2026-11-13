@@ -121,6 +121,33 @@ class ObservableDatabase(Database):
         *,
         result_count_extractor: Optional[Callable[[Any], int]] = None,
     ) -> Any:
+        from jvspatial.observability.tracing import _tracing_active, db_span
+
+        if not _tracing_active():
+            return await self._instrument_call(
+                op,
+                collection,
+                coro_factory,
+                result_count_extractor=result_count_extractor,
+            )
+        with db_span(op, collection=collection, backend=self._backend) as span:
+            return await self._instrument_call(
+                op,
+                collection,
+                coro_factory,
+                result_count_extractor=result_count_extractor,
+                span=span,
+            )
+
+    async def _instrument_call(
+        self,
+        op: str,
+        collection: str,
+        coro_factory: Callable[[], Awaitable[Any]],
+        *,
+        result_count_extractor: Optional[Callable[[Any], int]] = None,
+        span: Any = None,
+    ) -> Any:
         """Run ``coro_factory()`` while recording metrics and failure logs.
 
         ``coro_factory`` is a thunk so we measure the underlying call
@@ -148,6 +175,22 @@ class ObservableDatabase(Database):
                     result_count = result_count_extractor(result)
                 except Exception:
                     result_count = None
+            if span is not None:
+                for key, value in (_query_execution.get() or {}).items():
+                    if key in {"execution_mode", "partial_pushdown", "scanned_rows"}:
+                        span.set_attribute(f"db.{key}", value)
+                span.set_attribute("db.success", success)
+                if result_count is not None:
+                    span.set_attribute("db.result_count", result_count)
+                for key, value in (_io_metrics.get() or {}).items():
+                    if key in {
+                        "pool_wait_ms",
+                        "driver_statements",
+                        "driver_duration_ms",
+                        "decoded_bytes",
+                        "decoded_chars",
+                    }:
+                        span.set_attribute(f"db.{key}", value)
             try:
                 self._emit(
                     op=op,
@@ -218,8 +261,11 @@ class ObservableDatabase(Database):
                 for field in (
                     "pool_wait_ms",
                     "driver_attempts",
+                    "driver_statements",
+                    "driver_duration_ms",
                     "retry_count",
                     "decoded_bytes",
+                    "decoded_chars",
                 ):
                     if field in query_plan:
                         self.metrics.record_value(

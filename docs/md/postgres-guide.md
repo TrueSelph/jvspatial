@@ -137,6 +137,26 @@ accelerates containment-shaped predicates (`$all`); see
 
 ### Index policy
 
+- **Managed performance indexes.** Set
+  `JVSPATIAL_POSTGRES_INDEX_CREATION=constraints` (or construct the adapter with
+  `index_creation="constraints"`) to defer ordinary `create_index` declarations,
+  their sort companions, whole-document GIN and vector index creation. Existing
+  indexes are retained. Unique declarations still create/repair their constraints;
+  the collection primary key and fixed entity/tenant baseline remain provisioned.
+  Vector storage columns are still initialized, but their search indexes must be
+  provisioned explicitly. Invalid modes fail at adapter construction.
+  The compatible default is `auto`. Provision reviewed performance indexes with
+  a separate maintenance adapter explicitly configured with
+  `index_creation="auto"`; do not enable it in serving processes just to install
+  one index. This policy governs adapter-created indexes, not arbitrary SQL run
+  by a host's schema migrations.
+  Keep `JVSPATIAL_AUTO_CREATE_INDEXES=true` so annotation-declared uniqueness is
+  still requested. Disabling that graph-level flag skips unique declarations too.
+  On a fresh database, prepare required query indexes before serving populated
+  workloads. On an existing database this setting stops new automatic performance
+  DDL; it does not shrink or remove expensive existing indexes. Index removal
+  requires a separate query/constraint inventory and reviewed migration.
+
 - **Per-class indexes lead with `entity`.** Every typed `find()` filters on
   the `entity` column of a table shared by every class, so an index declared
   with `attribute(indexed=True)` or `@compound_index(...)` is created as
@@ -386,3 +406,25 @@ precedence):
 - [neon-deployment.md](neon-deployment.md) — Neon-specific notes
 - [aurora-serverless-deployment.md](aurora-serverless-deployment.md) — Aurora SLv2
 - [optimization.md](optimization.md) — cross-backend performance guidance
+
+## Managed schema boundary
+
+`PostgresDB(index_creation="managed")` is opt-in; unrelated consumers retain
+`auto` by default. The host must provision relations and a reviewed catalog before
+opening its serving adapter. Connection initialization performs no persistent DDL.
+Nonunique model, pagination and vector-index declarations cannot build indexes.
+Unique declarations call read-only `verify_index_spec`, checking valid/ready state
+and the persisted definition hash before caching verification on that adapter.
+Missing relations, required integrity, vector columns, RLS/projection provisioning
+raise `ManagedSchemaError`. Vector column verification does not build ANN indexes.
+
+`IndexSpec` and `ManagedSchemaError` are public top-level exports. Specifications
+carry logical identity, owner/version, physical keys/expressions (including order,
+collation and operator class), predicates, method, uniqueness, correctness need
+and query references. Expressions are trusted compiler/schema inputs, never raw
+end-user SQL. Physical fingerprints deduplicate equivalent canonical inputs and
+produce bounded names; hosts own approval, budgets and migration execution. The
+adapter does not automatically migrate to a changed definition in managed mode.
+Use distinct DML-only runtime credentials: ownership itself confers DDL authority.
+Temporary staging tables used for bulk DML remain connection-local and bounded;
+they do not create persistent schema or indexes.
