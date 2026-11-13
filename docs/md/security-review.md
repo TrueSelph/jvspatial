@@ -351,3 +351,12 @@ executes no query, changes no SQL behavior, and certifies neither stored value
 types nor application authority. The default refuses and wrappers delegate
 without caching. Hosts must retain current audience and homogeneous numeric/null
 proofs; unsupported predicates or ordering cannot become a partial native LIMIT.
+
+### Managed catalog and authentication tracing follow-up
+
+Managed index verification validates the schema and configurable catalog table
+with the adapter's identifier allowlist before SQL interpolation. Catalog rows
+are trusted host maintenance receipts, not tenant inputs; runtime needs read
+access only. Authentication exceptions now set ERROR span status and exception
+type without status descriptions, exception messages, stack events or credentials.
+Regression tests cover unsafe identifiers and content-free error spans.

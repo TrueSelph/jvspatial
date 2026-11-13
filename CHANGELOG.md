@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add public `IndexSpec` / `ManagedSchemaError` and opt-in strict managed
+  PostgreSQL mode. Persistent schema/index creation is reserved for host
+  provisioning; uniqueness verification remains mandatory. Existing adapter
+  defaults are preserved.
+- Managed PostgreSQL catalogs are host-configurable through `index_catalog_table`
+  or `JVSPATIAL_POSTGRES_INDEX_CATALOG_TABLE`, defaulting to the neutral
+  `jvspatial_index_catalog` relation.
+
 - PostgreSQL `index_creation="constraints"` / `JVSPATIAL_POSTGRES_INDEX_CREATION`
   controls automatic performance-index DDL independently of unique constraints.
   Existing indexes remain intact and explicit maintenance adapters can provision
@@ -23,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removed before pool release.
 
 ### Fixed
+
+- `constraints` mode also skips explicit binary-text keyset performance indexes.
+- Authentication trace exceptions set ERROR status without exception content.
+- Optional tracing tests skip when the OpenTelemetry API is absent.
 
 - Database, traversal and HTTP trace errors record exception type/status without exception messages
   or stack events that could contain query parameters.
@@ -893,10 +905,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.5] - Previous
 
 See git history for changes before this release.
-
-### Governed storage capability (unreleased)
-
-- Add public `IndexSpec` / `ManagedSchemaError` and opt-in strict managed
-  PostgreSQL mode. Persistent schema/index creation is reserved for host
-  provisioning; uniqueness verification remains mandatory. Existing adapter
-  defaults are preserved.

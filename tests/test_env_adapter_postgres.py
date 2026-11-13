@@ -24,6 +24,7 @@ def _clear_postgres_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_postgres_env_maps_into_database_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Expose PostgreSQL connection settings through the database config group."""
     monkeypatch.setenv("JVSPATIAL_DB_TYPE", "postgres")
     monkeypatch.setenv("JVSPATIAL_POSTGRES_DSN", "postgresql://u:p@host:5432/db")
     monkeypatch.setenv("JVSPATIAL_POSTGRES_MIN_POOL_SIZE", "1")
@@ -40,6 +41,7 @@ def test_postgres_env_maps_into_database_group(
 
 
 def test_postgres_keys_absent_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Leave PostgreSQL options unset for other adapter configurations."""
     monkeypatch.setenv("JVSPATIAL_DB_TYPE", "json")
 
     db = server_config_overrides_from_env().get("database", {})
@@ -51,3 +53,10 @@ def test_postgres_keys_absent_when_unset(monkeypatch: pytest.MonkeyPatch) -> Non
         "postgres_pooler_mode",
     ):
         assert key not in db
+
+
+def test_managed_catalog_env_is_recognized_in_strict_mode(monkeypatch):
+    """Recognize the adapter's catalog option under strict environment validation."""
+    monkeypatch.setenv("JVSPATIAL_STRICT_ENV_ALLOWLIST", "true")
+    monkeypatch.setenv("JVSPATIAL_POSTGRES_INDEX_CATALOG_TABLE", "host_catalog")
+    server_config_overrides_from_env()

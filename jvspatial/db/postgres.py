@@ -386,6 +386,7 @@ class PostgresDB(Database):
         schema_name: str = "public",
         gin_index: Optional[str] = None,
         index_creation: Optional[str] = None,
+        index_catalog_table: Optional[str] = None,
         fallback_scan_limit: Optional[int] = None,
     ) -> None:
         """Initialize the Postgres adapter.
@@ -413,17 +414,26 @@ class PostgresDB(Database):
                 The GIN only serves containment-shaped predicates (``$all``);
                 typed ``find()`` equality / range / sort use functional
                 B-trees, so large deployments should turn it off.
-            index_creation: ``"auto"`` (compatible default) or ``"constraints"``.
+            index_creation: ``"auto"`` (compatible default), ``"constraints"``,
+                or ``"managed"``.
                 Also read from ``JVSPATIAL_POSTGRES_INDEX_CREATION``. Constraints
                 mode provisions only unique declarations and fixed collection
                 baseline indexes. It skips ordinary, sort-companion, whole-data
-                GIN and vector indexes, retaining existing indexes. Use a separate
-                explicitly configured adapter to provision performance indexes.
+                GIN, binary-text keyset and vector indexes, retaining existing
+                indexes. Managed mode verifies pre-provisioned storage without
+                persistent schema/index DDL. Use a separate explicitly configured
+                adapter to provision performance indexes.
+            index_catalog_table: Unqualified applied-index catalog table in
+                ``schema_name``. Reads ``JVSPATIAL_POSTGRES_INDEX_CATALOG_TABLE``
+                when omitted; defaults to ``jvspatial_index_catalog``. Managed
+                verification requires ``fingerprint``, ``index_name`` and
+                ``definition_hash`` text columns maintained by the host.
 
         Raises:
             ImportError: ``asyncpg`` is not installed.
             ValueError: ``pooler_mode`` is not ``"session"`` or ``"transaction"``,
-                or ``gin_index`` or ``index_creation`` is invalid.
+                or ``gin_index``, ``index_creation`` or ``index_catalog_table``
+                is invalid.
         """
         if asyncpg is None:  # pragma: no cover
             raise ImportError(
@@ -483,6 +493,14 @@ class PostgresDB(Database):
         )
         if self.index_creation not in ("auto", "constraints", "managed"):
             raise ValueError("index_creation must be auto, constraints or managed")
+        self.index_catalog_table = _safe_collection(
+            index_catalog_table
+            if index_catalog_table is not None
+            else env(
+                "JVSPATIAL_POSTGRES_INDEX_CATALOG_TABLE",
+                default="jvspatial_index_catalog",
+            )
+        )
 
         self._pool: Optional["Pool"] = None
         self._pool_lock = asyncio.Lock()
@@ -2190,20 +2208,21 @@ class PostgresDB(Database):
         """Check a required index against its applied definition, once per adapter."""
         from .indexes import ManagedSchemaError, definition_digest
 
+        schema = _safe_collection(self.schema_name)
+        catalog_table = _safe_collection(self.index_catalog_table)
+        catalog_relation = f'"{schema}"."{catalog_table}"'
         if spec.fingerprint in self._managed_verified_indexes:
             return
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            if not await conn.fetchval(
-                "SELECT to_regclass($1)", f"{self.schema_name}.integral_index_catalog"
-            ):
+            if not await conn.fetchval("SELECT to_regclass($1)", catalog_relation):
                 raise ManagedSchemaError("Managed index catalog is not provisioned")
             row = await conn.fetchrow(
                 f"SELECT c.definition_hash, pg_get_indexdef(i.indexrelid) AS definition, "
-                f'i.indisvalid, i.indisready FROM "{self.schema_name}".integral_index_catalog c '
+                f"i.indisvalid, i.indisready FROM {catalog_relation} c "
                 "JOIN pg_namespace n ON n.nspname=$1 JOIN pg_class r ON r.relnamespace=n.oid AND r.relname=c.index_name "
                 "JOIN pg_index i ON i.indexrelid=r.oid WHERE c.fingerprint=$2",
-                self.schema_name,
+                schema,
                 spec.fingerprint,
             )
             if (

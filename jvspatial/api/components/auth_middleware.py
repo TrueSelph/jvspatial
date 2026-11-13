@@ -291,7 +291,12 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         return user
 
     async def _authenticate_request(self, request: Request) -> Optional[Any]:
-        from jvspatial.observability.tracing import _tracing_active, get_tracer
+        from jvspatial.observability.tracing import (
+            Status,
+            StatusCode,
+            _tracing_active,
+            get_tracer,
+        )
 
         if not _tracing_active():
             return await self._authenticate_request_impl(request)
@@ -303,6 +308,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 return await self._authenticate_request_impl(request)
             except BaseException as exc:
                 span.set_attribute("error.type", type(exc).__name__)
+                span.set_status(Status(StatusCode.ERROR))
                 raise
 
     async def _authenticate_request_impl(self, request: Request) -> Optional[Any]:

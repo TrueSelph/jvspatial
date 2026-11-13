@@ -140,7 +140,8 @@ accelerates containment-shaped predicates (`$all`); see
 - **Managed performance indexes.** Set
   `JVSPATIAL_POSTGRES_INDEX_CREATION=constraints` (or construct the adapter with
   `index_creation="constraints"`) to defer ordinary `create_index` declarations,
-  their sort companions, whole-document GIN and vector index creation. Existing
+  their sort companions, binary-text keyset, whole-document GIN and vector index
+  creation. Existing
   indexes are retained. Unique declarations still create/repair their constraints;
   the collection primary key and fixed entity/tenant baseline remain provisioned.
   Vector storage columns are still initialized, but their search indexes must be
@@ -417,6 +418,38 @@ Unique declarations call read-only `verify_index_spec`, checking valid/ready sta
 and the persisted definition hash before caching verification on that adapter.
 Missing relations, required integrity, vector columns, RLS/projection provisioning
 raise `ManagedSchemaError`. Vector column verification does not build ANN indexes.
+
+Configure the applied-index catalog using the constructor or environment:
+
+```python
+db = PostgresDB(
+    dsn=runtime_dsn,
+    schema_name="public",
+    index_creation="managed",
+    index_catalog_table="host_index_catalog",
+)
+```
+
+`index_catalog_table` overrides `JVSPATIAL_POSTGRES_INDEX_CATALOG_TABLE`; the
+default is `jvspatial_index_catalog`. Supply an unqualified table name in the
+adapter's `schema_name`, not SQL or a schema-qualified path. Both identifiers
+are validated before verification queries. The host must provision at least:
+
+```sql
+CREATE TABLE public.host_index_catalog (
+    fingerprint text PRIMARY KEY,
+    index_name text NOT NULL,
+    definition_hash text NOT NULL
+);
+```
+
+Additional host-owned columns are permitted. `fingerprint` is the approved
+`IndexSpec.fingerprint`, `index_name` is the actual index name in the same schema,
+and `definition_hash` is `jvspatial.db.indexes.definition_digest` applied to
+PostgreSQL's `pg_get_indexdef(index_oid)` result. Record receipts only after the
+host verifies and approves the physical definition. Runtime needs SELECT on this
+table; reserve receipt writes for the maintenance role. The adapter neither
+creates the catalog nor acknowledges a missing, invalid or changed index.
 
 `IndexSpec` and `ManagedSchemaError` are public top-level exports. Specifications
 carry logical identity, owner/version, physical keys/expressions (including order,
