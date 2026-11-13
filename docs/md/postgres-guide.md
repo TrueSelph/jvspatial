@@ -433,7 +433,9 @@ db = PostgresDB(
 `index_catalog_table` overrides `JVSPATIAL_POSTGRES_INDEX_CATALOG_TABLE`; the
 default is `jvspatial_index_catalog`. Supply an unqualified table name in the
 adapter's `schema_name`, not SQL or a schema-qualified path. Both identifiers
-are validated before verification queries. The host must provision at least:
+are validated before verification queries. The catalog name is quoted, so it is
+case-sensitive: a mixed-case name must be created quoted, while a lowercase name
+matches an unquoted `CREATE TABLE`. The host must provision at least:
 
 ```sql
 CREATE TABLE public.host_index_catalog (
