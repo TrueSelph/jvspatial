@@ -1619,6 +1619,10 @@ class GraphContext:
                         **extra,
                     )
             except Exception as e:
+                from jvspatial.db.indexes import ManagedSchemaError
+
+                if isinstance(e, ManagedSchemaError):
+                    raise
                 # Log error but continue with other indexes
                 logger.warning(
                     f"Failed to create index for {entity_class.__name__} "

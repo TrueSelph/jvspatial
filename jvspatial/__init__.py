@@ -90,8 +90,10 @@ from .core.mixins import (
 from .db import (
     Database,
     GraphBindingSummary,
+    IndexSpec,
     InsertIfAbsentResult,
     LiteralBindingFact,
+    ManagedSchemaError,
     create_database,
 )
 from .db.transaction import Transaction
@@ -170,6 +172,8 @@ __all__ = [
     # API
     "Server",
     # Database & Cache
+    "IndexSpec",
+    "ManagedSchemaError",
     "Database",
     "Transaction",
     "InsertIfAbsentResult",

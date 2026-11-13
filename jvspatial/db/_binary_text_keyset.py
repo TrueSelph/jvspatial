@@ -25,6 +25,8 @@ async def create_indexes(database, collection, *, field, scope_field, entity):
     """Create the scoped text and fallback-detection indexes."""
     from .postgres import _pg_string_literal, _safe_collection
 
+    if getattr(database, "index_creation", "auto") != "auto":
+        return  # Only an automatic/provisioning adapter builds performance indexes.
     title, scope, malformed = _expressions(field, scope_field)
     schema, table = _safe_collection(database.schema_name), _safe_collection(collection)
     key = hashlib.sha256(

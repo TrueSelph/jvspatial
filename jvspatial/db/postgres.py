@@ -385,6 +385,8 @@ class PostgresDB(Database):
         command_timeout: Optional[float] = None,
         schema_name: str = "public",
         gin_index: Optional[str] = None,
+        index_creation: Optional[str] = None,
+        index_catalog_table: Optional[str] = None,
         fallback_scan_limit: Optional[int] = None,
     ) -> None:
         """Initialize the Postgres adapter.
@@ -412,11 +414,26 @@ class PostgresDB(Database):
                 The GIN only serves containment-shaped predicates (``$all``);
                 typed ``find()`` equality / range / sort use functional
                 B-trees, so large deployments should turn it off.
+            index_creation: ``"auto"`` (compatible default), ``"constraints"``,
+                or ``"managed"``.
+                Also read from ``JVSPATIAL_POSTGRES_INDEX_CREATION``. Constraints
+                mode provisions only unique declarations and fixed collection
+                baseline indexes. It skips ordinary, sort-companion, whole-data
+                GIN, binary-text keyset and vector indexes, retaining existing
+                indexes. Managed mode verifies pre-provisioned storage without
+                persistent schema/index DDL. Use a separate explicitly configured
+                adapter to provision performance indexes.
+            index_catalog_table: Unqualified applied-index catalog table in
+                ``schema_name``. Reads ``JVSPATIAL_POSTGRES_INDEX_CATALOG_TABLE``
+                when omitted; defaults to ``jvspatial_index_catalog``. Managed
+                verification requires ``fingerprint``, ``index_name`` and
+                ``definition_hash`` text columns maintained by the host.
 
         Raises:
             ImportError: ``asyncpg`` is not installed.
             ValueError: ``pooler_mode`` is not ``"session"`` or ``"transaction"``,
-                or ``gin_index`` is not ``"full"`` or ``"off"``.
+                or ``gin_index``, ``index_creation`` or ``index_catalog_table``
+                is invalid.
         """
         if asyncpg is None:  # pragma: no cover
             raise ImportError(
@@ -464,6 +481,26 @@ class PostgresDB(Database):
                 f"gin_index must be 'full' or 'off', got {self.gin_index!r}"
             )
         self._gin_off_warned = False
+        self._managed_verified_indexes: Set[str] = set()
+        self.index_creation = (
+            (
+                index_creation
+                if index_creation is not None
+                else env("JVSPATIAL_POSTGRES_INDEX_CREATION", default="auto")
+            )
+            .strip()
+            .lower()
+        )
+        if self.index_creation not in ("auto", "constraints", "managed"):
+            raise ValueError("index_creation must be auto, constraints or managed")
+        self.index_catalog_table = _safe_collection(
+            index_catalog_table
+            if index_catalog_table is not None
+            else env(
+                "JVSPATIAL_POSTGRES_INDEX_CATALOG_TABLE",
+                default="jvspatial_index_catalog",
+            )
+        )
 
         self._pool: Optional["Pool"] = None
         self._pool_lock = asyncio.Lock()
@@ -613,17 +650,39 @@ class PostgresDB(Database):
         waiting = time.monotonic()
         async with pool.acquire() as conn:
             _record_io_metric("pool_wait_ms", (time.monotonic() - waiting) * 1000)
-            if tenant_id is None:
-                yield conn
-                return
-            # SET LOCAL requires a transaction; wrap the user's work in
-            # one and commit on success.
-            async with conn.transaction():
-                await conn.execute(
-                    "SELECT set_config('app.tenant_id', $1, true)",
-                    tenant_id,
-                )
-                yield conn
+            # Query logger deliberately never reads query text or parameters.
+            # Asyncpg invokes sync loggers with call_soon; capture the current
+            # mutable observation holder now so late callbacks retain ownership.
+            from .database import _io_metrics
+
+            io_metrics = _io_metrics.get()
+
+            def observe_query(record):
+                if io_metrics is not None:
+                    io_metrics["driver_statements"] = (
+                        io_metrics.get("driver_statements", 0) + 1
+                    )
+                    io_metrics["driver_duration_ms"] = (
+                        io_metrics.get("driver_duration_ms", 0) + record.elapsed * 1000
+                    )
+
+            if io_metrics is not None:
+                conn.add_query_logger(observe_query)
+            try:
+                if tenant_id is None:
+                    yield conn
+                    return
+                # SET LOCAL requires a transaction; wrap the user's work in
+                # one and commit on success.
+                async with conn.transaction():
+                    await conn.execute(
+                        "SELECT set_config('app.tenant_id', $1, true)",
+                        tenant_id,
+                    )
+                    yield conn
+            finally:
+                if io_metrics is not None:
+                    conn.remove_query_logger(observe_query)
 
     # ---- RLS install (C6) --------------------------------------------------
 
@@ -660,6 +719,12 @@ class PostgresDB(Database):
         unset, returning empty string. The policy then compares to NULL
         / empty as appropriate.
         """
+        if self.index_creation == "managed":
+            from .indexes import ManagedSchemaError
+
+            raise ManagedSchemaError(
+                "Tenant policy changes require schema provisioning"
+            )
         await self._bootstrap_collection(collection)
         col = _safe_collection(collection)
         schema = _safe_collection(self.schema_name)
@@ -745,13 +810,21 @@ class PostgresDB(Database):
         """
         col = _safe_collection(collection)
         schema = _safe_collection(self.schema_name)
+        if self.index_creation == "managed":
+            from .indexes import ManagedSchemaError
+
+            if not await conn.fetchval(
+                "SELECT to_regclass($1)", f"{self.schema_name}.{collection}"
+            ):
+                raise ManagedSchemaError("Managed collection is not provisioned")
+            return
         gin_name = _postgres_index_name(col, "data_gin")
         entity_name = _postgres_index_name(col, "entity_idx")
         tenant_name = _postgres_index_name(col, "tenant_idx")
         gin_sql = (
             f"CREATE INDEX IF NOT EXISTS {gin_name} "
             f"ON {schema}.{col} USING GIN (data jsonb_path_ops);"
-            if self.gin_index == "full"
+            if self.gin_index == "full" and self.index_creation == "auto"
             else ""
         )
         # An asyncio lock only coordinates callers sharing this instance.
@@ -844,6 +917,13 @@ class PostgresDB(Database):
         if row is None:
             return None  # type: ignore[return-value]
         data = row["data"]
+        if isinstance(data, str):
+            from .database import _record_io_metric
+
+            # O(1) size evidence for JSON decoding; never stringify a record
+            # or expose its contents merely to measure it. This is characters,
+            # not wire bytes (which can differ for non-ASCII data).
+            _record_io_metric("decoded_chars", len(data))
         # asyncpg returns jsonb as already-decoded Python types when the
         # default codec is in use; if a caller plugged in a non-decoding
         # codec, fall back to json.loads.
@@ -1165,6 +1245,12 @@ class PostgresDB(Database):
         on this adapter instance for matching requests. Unmatched, invalidated
         and tenant-filtered reads retain the native query.
         """
+        if self.index_creation == "managed":
+            from .indexes import ManagedSchemaError
+
+            raise ManagedSchemaError(
+                "Projection installation requires a reviewed maintenance plan"
+            )
         from ._binding_projection_postgres import BindingProjection, install
 
         projection = BindingProjection(
@@ -1908,51 +1994,9 @@ class PostgresDB(Database):
 
     # ---- index management --------------------------------------------------
 
-    async def create_index(
-        self,
-        collection: str,
-        field_or_fields: Union[str, List[Tuple[str, int]]],
-        unique: bool = False,
-        **kwargs: Any,
-    ) -> None:
-        """Create a functional index on JSONB field paths or top-level columns.
+    def _describe_index(self, collection, field_or_fields, *, unique=False, **kwargs):
+        from .indexes import IndexSpec
 
-        Field paths use dot notation (``"context.user.id"``) and index
-        ``(data #>> '{context,user,id}')``; ``entity`` / ``id`` /
-        ``tenant_id`` index the real columns the query translator compares
-        against. A descending key is ``DESC NULLS LAST`` — the order
-        ``find(sort=...)`` emits — so sort + limit can walk the index.
-        ``unique=True`` adds ``CREATE UNIQUE INDEX``.
-
-        Keyword options:
-
-        * ``entity`` — the entity a per-class index serves (passed by
-          ``GraphContext.ensure_indexes``). The real ``entity`` column then
-          leads the key (``entity_leading=True``, default): every typed
-          ``find()`` filters on it, in a table shared by every class. Such an
-          index is named ``<col>_entity_<fields>_idx`` so sibling classes
-          declaring the same fields share it. ``partial_by_entity=True``
-          instead restricts it to ``WHERE entity = '<entity>'``
-          (``<col>_<entity>_<fields>_idx``; smaller, one per class).
-          ``drop_legacy=True`` also drops the unscoped pre-0.0.18
-          ``<col>_<fields>_idx`` / ``_uniq`` index it replaces.
-          Generated names stay within PostgreSQL's 63-byte identifier limit;
-          overlong compound names retain a stable digest and index suffix.
-        * ``fulltext=True`` — a GIN index over ``to_tsvector('simple', ...)``
-          of the fields in order (``<col>_<entity>_<fields>_fts``, scoped to
-          ``entity`` when given), matching
-          ``{"$text": {"$search": ..., "$fields": [<same fields>]}}``.
-        * ``index_partial_filter_expression`` — partial index predicate in
-          the supported Mongo-style dialect. Raw ``where=`` SQL is rejected.
-        * ``method`` — ``btree`` (default), ``hash``, ``gin``, ``gist``, ``brin``.
-
-        An existing index of the same name defined by the pre-0.0.18 rules
-        (JSONB paths for top-level columns, ``DESC`` without ``NULLS LAST``)
-        or a B-tree with different stored key ordering is rebuilt under a
-        temporary name and swapped in. Nullable JSONB sort companions remain
-        separately named by their ordering signature.
-        """
-        await self._bootstrap_collection(collection)
         col = _safe_collection(collection)
         schema = _safe_collection(self.schema_name)
 
@@ -2062,8 +2106,224 @@ class PostgresDB(Database):
         else:
             scope = ""
         index_name = _postgres_index_name(f"{col}_{scope}{field_names}", suffix)
-        unique_sql = "UNIQUE " if unique and not fulltext else ""
         body = f"ON {schema}.{col} USING {method} ({', '.join(keys)}){where_clause}"
+
+        spec = IndexSpec(
+            logical_id=index_name,
+            owner="jvspatial",
+            schema=self.schema_name,
+            table=collection,
+            keys=tuple(keys),
+            method=method,
+            predicate=" AND ".join(where_parts),
+            unique=bool(unique and not fulltext),
+            required=bool(unique and not fulltext),
+        )
+        return {
+            "col": col,
+            "schema": schema,
+            "index_name": index_name,
+            "body": body,
+            "fields": fields,
+            "scope": scope,
+            "fulltext": fulltext,
+            "method": method,
+            "want_indoption": want_indoption,
+            "where_clause": where_clause,
+            "entity_leading": entity_leading,
+            "field_names": field_names,
+            "spec": spec,
+        }
+
+    def index_spec(
+        self, collection, field_or_fields, *, unique=False, keyset=False, **kwargs
+    ):
+        """Compile a physical declaration without connecting or performing DDL.
+
+        ``keyset`` selects the exact JSONB ordering used by native pagination,
+        including its deterministic ID tie-breaker. It is an explicit separate
+        requirement, never an automatically provisioned companion.
+        """
+        from dataclasses import replace
+
+        description = self._describe_index(
+            collection, field_or_fields, unique=unique, **kwargs
+        )
+        spec = description["spec"]
+        if keyset:
+            from ._postgres_translate import translate_sort
+            from .database import _keyset_sort_fields
+
+            if unique or spec.method != "btree":
+                raise ValueError(
+                    "Keyset specifications require nonunique btree declarations"
+                )
+            keys = tuple(
+                translate_sort([field])
+                for field in _keyset_sort_fields(description["fields"])
+            )
+            if description["entity_leading"]:
+                keys = ("entity",) + keys
+            spec = replace(spec, keys=keys)
+        return spec
+
+    def binary_text_keyset_specs(self, collection, *, field, scope_field, entity):
+        """Describe the three bounded Python-compatible text paging indexes."""
+        from ._binary_text_keyset import _expressions
+        from .indexes import IndexSpec
+
+        _safe_collection(collection)
+        if not _SAFE_IDENT_RE.fullmatch(entity):
+            raise ValueError("Invalid entity discriminator")
+        title, scope, malformed = _expressions(field, scope_field)
+        specs = []
+        for direction in ("ASC", "DESC"):
+            specs.append(
+                IndexSpec(
+                    "text-page:" + direction,
+                    "jvspatial.pagination",
+                    collection,
+                    (
+                        scope,
+                        f"{title} {direction} NULLS LAST",
+                        f'id COLLATE "C" {direction}',
+                    ),
+                    schema=self.schema_name,
+                    predicate=f"entity='{entity}' AND NOT {malformed}",
+                )
+            )
+        specs.append(
+            IndexSpec(
+                "text-page:malformed",
+                "jvspatial.pagination",
+                collection,
+                (scope,),
+                schema=self.schema_name,
+                predicate=f"entity='{entity}' AND {malformed}",
+            )
+        )
+        return specs
+
+    async def verify_index_spec(self, spec):
+        """Check a required index against its applied definition, once per adapter."""
+        from .indexes import ManagedSchemaError, definition_digest
+
+        schema = _safe_collection(self.schema_name)
+        catalog_table = _safe_collection(self.index_catalog_table)
+        catalog_relation = f'"{schema}"."{catalog_table}"'
+        if spec.fingerprint in self._managed_verified_indexes:
+            return
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            if not await conn.fetchval("SELECT to_regclass($1)", catalog_relation):
+                raise ManagedSchemaError("Managed index catalog is not provisioned")
+            row = await conn.fetchrow(
+                f"SELECT c.definition_hash, pg_get_indexdef(i.indexrelid) AS definition, "
+                f"i.indisvalid, i.indisready FROM {catalog_relation} c "
+                "JOIN pg_namespace n ON n.nspname=$1 JOIN pg_class r ON r.relnamespace=n.oid AND r.relname=c.index_name "
+                "JOIN pg_index i ON i.indexrelid=r.oid WHERE c.fingerprint=$2",
+                schema,
+                spec.fingerprint,
+            )
+            if (
+                not row
+                or not row["indisvalid"]
+                or not row["indisready"]
+                or definition_digest(row["definition"]) != row["definition_hash"]
+            ):
+                raise ManagedSchemaError("Required managed index is missing or changed")
+        self._managed_verified_indexes.add(spec.fingerprint)
+
+    async def create_index(
+        self,
+        collection: str,
+        field_or_fields: Union[str, List[Tuple[str, int]]],
+        unique: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Create a functional index on JSONB field paths or top-level columns.
+
+        Field paths use dot notation (``"context.user.id"``) and index
+        ``(data #>> '{context,user,id}')``; ``entity`` / ``id`` /
+        ``tenant_id`` index the real columns the query translator compares
+        against. A descending key is ``DESC NULLS LAST`` — the order
+        ``find(sort=...)`` emits — so sort + limit can walk the index.
+        ``unique=True`` adds ``CREATE UNIQUE INDEX``.
+
+        Keyword options:
+
+        * ``entity`` — the entity a per-class index serves (passed by
+          ``GraphContext.ensure_indexes``). The real ``entity`` column then
+          leads the key (``entity_leading=True``, default): every typed
+          ``find()`` filters on it, in a table shared by every class. Such an
+          index is named ``<col>_entity_<fields>_idx`` so sibling classes
+          declaring the same fields share it. ``partial_by_entity=True``
+          instead restricts it to ``WHERE entity = '<entity>'``
+          (``<col>_<entity>_<fields>_idx``; smaller, one per class).
+          ``drop_legacy=True`` also drops the unscoped pre-0.0.18
+          ``<col>_<fields>_idx`` / ``_uniq`` index it replaces.
+          Generated names stay within PostgreSQL's 63-byte identifier limit;
+          overlong compound names retain a stable digest and index suffix.
+        * ``fulltext=True`` — a GIN index over ``to_tsvector('simple', ...)``
+          of the fields in order (``<col>_<entity>_<fields>_fts``, scoped to
+          ``entity`` when given), matching
+          ``{"$text": {"$search": ..., "$fields": [<same fields>]}}``.
+        * ``index_partial_filter_expression`` — partial index predicate in
+          the supported Mongo-style dialect. Raw ``where=`` SQL is rejected.
+        * ``method`` — ``btree`` (default), ``hash``, ``gin``, ``gist``, ``brin``.
+
+        An existing index of the same name defined by the pre-0.0.18 rules
+        (JSONB paths for top-level columns, ``DESC`` without ``NULLS LAST``)
+        or a B-tree with different stored key ordering is rebuilt under a
+        temporary name and swapped in. Nullable JSONB sort companions remain
+        separately named by their ordering signature.
+
+        In ``index_creation="constraints"`` mode non-unique declarations are
+        validated but do not run DDL. Unique indexes retain their enforcement
+        and repair behavior, without additional performance sort companions.
+        """
+        description = self._describe_index(
+            collection, field_or_fields, unique=unique, **kwargs
+        )
+        if self.index_creation == "managed":
+            if unique:
+                await self.verify_index_spec(description["spec"])
+            return
+        (
+            col,
+            schema,
+            index_name,
+            body,
+            fields,
+            scope,
+            fulltext,
+            method,
+            want_indoption,
+        ) = (
+            description[key]
+            for key in (
+                "col",
+                "schema",
+                "index_name",
+                "body",
+                "fields",
+                "scope",
+                "fulltext",
+                "method",
+                "want_indoption",
+            )
+        )
+        unique_sql = "UNIQUE " if unique and not fulltext else ""
+        where_clause = description["where_clause"]
+        entity_leading = description["entity_leading"]
+        field_names = description["field_names"]
+
+        # Managed deployments provision performance indexes deliberately. Keep
+        # unique enforcement live; skipping ensure_indexes at the graph layer
+        # would also skip newly declared uniqueness constraints.
+        if self.index_creation == "constraints" and not (unique and not fulltext):
+            return
+        await self._bootstrap_collection(collection)
 
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
@@ -2075,7 +2335,7 @@ class PostgresDB(Database):
                     schema,
                     f"index:{index_name}",
                 )
-                if not fulltext and method == "btree":
+                if self.index_creation == "auto" and not fulltext and method == "btree":
                     from .database import _keyset_sort_fields
 
                     sort_keys = translate_sort(_keyset_sort_fields(fields))
@@ -2360,6 +2620,18 @@ class PostgresDB(Database):
         async with self._pool_lock:
             pool = await self._ensure_pool()
         async with pool.acquire() as conn:
+            if self.index_creation == "managed":
+                from .indexes import ManagedSchemaError
+
+                actual = await conn.fetchval(
+                    "SELECT format_type(a.atttypid,a.atttypmod) FROM pg_attribute a WHERE a.attrelid=to_regclass($1) AND a.attname=$2 AND NOT a.attisdropped",
+                    f"{self.schema_name}.{collection}",
+                    field_name,
+                )
+                if actual != f"vector({dim})":
+                    raise ManagedSchemaError("Managed vector column is not provisioned")
+                self._vector_columns.setdefault(collection, {})[field_name] = dim
+                return
             # Install extension if not present (no-op when already installed).
             await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
             # Add the column. ``ADD COLUMN IF NOT EXISTS`` is PG 9.6+; we
@@ -2377,10 +2649,11 @@ class PostgresDB(Database):
                 params_clause = f" WITH (m = {m}, ef_construction = {ef_construction})"
             else:
                 params_clause = ""
-            await conn.execute(
-                f"CREATE INDEX IF NOT EXISTS {index_name} ON {schema}.{col} "
-                f"USING {index} ({field_name} {ops}){params_clause}"
-            )
+            if self.index_creation == "auto":
+                await conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {index_name} ON {schema}.{col} "
+                    f"USING {index} ({field_name} {ops}){params_clause}"
+                )
         # Remember the column for save-path extraction. Mapping is
         # collection -> { field_name: dim }.
         self._vector_columns.setdefault(collection, {})[field_name] = dim

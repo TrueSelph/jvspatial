@@ -90,6 +90,16 @@ def is_tracing_available() -> bool:
     return _OTEL_AVAILABLE
 
 
+def _tracing_active() -> bool:
+    """Avoid allocating proxy spans when the host has no recording provider."""
+    if not _OTEL_AVAILABLE:
+        return False
+    return not isinstance(
+        _otel_trace.get_tracer_provider(),
+        (_otel_trace.NoOpTracerProvider, _otel_trace.ProxyTracerProvider),
+    )
+
+
 def get_tracer(name: str = "jvspatial") -> Any:
     """Return an OTel ``Tracer`` for emitting spans.
 
@@ -188,6 +198,8 @@ def db_span(
     with tracer.start_as_current_span(
         span_name,
         kind=SpanKind.CLIENT if _OTEL_AVAILABLE else None,
+        record_exception=False,
+        set_status_on_exception=False,
     ) as span:
         if backend:
             span.set_attribute("db.system", backend)
@@ -196,11 +208,9 @@ def db_span(
             span.set_attribute("db.collection.name", collection)
         try:
             yield span
-        except Exception as exc:
-            span.record_exception(exc)
-            span.set_status(
-                Status(StatusCode.ERROR, str(exc)) if _OTEL_AVAILABLE else None
-            )
+        except BaseException as exc:
+            span.set_attribute("error.type", type(exc).__name__)
+            span.set_status(Status(StatusCode.ERROR) if _OTEL_AVAILABLE else None)
             raise
 
 
@@ -233,6 +243,8 @@ def walker_span(
     with tracer.start_as_current_span(
         span_name,
         kind=SpanKind.INTERNAL if _OTEL_AVAILABLE else None,
+        record_exception=False,
+        set_status_on_exception=False,
     ) as span:
         span.set_attribute("walker.class", walker_class)
         if walker_id:
@@ -241,11 +253,9 @@ def walker_span(
             span.set_attribute("walker.entry_node", entry_node_id)
         try:
             yield span
-        except Exception as exc:
-            span.record_exception(exc)
-            span.set_status(
-                Status(StatusCode.ERROR, str(exc)) if _OTEL_AVAILABLE else None
-            )
+        except BaseException as exc:
+            span.set_attribute("error.type", type(exc).__name__)
+            span.set_status(Status(StatusCode.ERROR) if _OTEL_AVAILABLE else None)
             raise
 
 
@@ -273,16 +283,16 @@ def http_span(
     with tracer.start_as_current_span(
         span_name,
         kind=SpanKind.SERVER if _OTEL_AVAILABLE else None,
+        record_exception=False,
+        set_status_on_exception=False,
     ) as span:
         span.set_attribute("http.method", method)
         span.set_attribute("http.route", path)
         try:
             yield span
-        except Exception as exc:
-            span.record_exception(exc)
-            span.set_status(
-                Status(StatusCode.ERROR, str(exc)) if _OTEL_AVAILABLE else None
-            )
+        except BaseException as exc:
+            span.set_attribute("error.type", type(exc).__name__)
+            span.set_status(Status(StatusCode.ERROR) if _OTEL_AVAILABLE else None)
             raise
 
 

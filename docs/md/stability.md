@@ -37,6 +37,9 @@ are the canonical import path:
   fall through to the (slower) default serial implementations. Custom
   adapters must implement `insert_if_absent` or callers hit
   `NotImplementedError`.
+- **Managed PostgreSQL.** `IndexSpec` and `ManagedSchemaError` are public.
+  `PostgresDB.index_spec` compiles descriptions; managed adapters verify integrity
+  without persistent DDL. Host lifecycle metadata is an integration contract.
 - **Cache.** `create_cache`.
 - **Graph context for inference.** `GraphContext.project_graph`,
   `ProjectionRequest`, `ProjectionScope`, `ProjectionAccess`,

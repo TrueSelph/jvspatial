@@ -167,3 +167,26 @@ distinction between `CachingDatabase` (disabled) and `GraphContext` /
 
 - [`stability.md`](stability.md) — `MetricsRecorder` Protocol is public.
 - [`benchmarks.md`](benchmarks.md) — performance regression suite.
+
+## Database timing spans
+
+Observed non-streaming operations use the application's OpenTelemetry provider.
+No SDK/exporter is created in the library. Database spans include bounded
+operation/backend/collection attributes and numeric result/I/O measurements.
+They exclude SQL text, parameters and exception messages. PostgreSQL's shared
+connection acquisition path additionally emits `jvspatial.db.query.driver_statements`
+and `jvspatial.db.query.driver_duration_ms`. These do not count wire round trips
+and do not cover reads issued directly through held transaction connections.
+Pool wait is separate from driver execution; summed concurrent timings are not
+elapsed request time. Existing successful-operation logging remains silent.
+Driver elapsed time includes client scheduling/network waits; use PostgreSQL
+execution plans to distinguish server execution from a blocked application loop.
+`decoded_chars` counts characters in JSON strings decoded while hydrating rows;
+it is a size measurement, not UTF-8 bytes, and captures no record content.
+
+`Walker.run()` emits a traversal span when the host installs a recording provider.
+It records the class, protection step count and pause state. It does not pass
+walker/node identities or reports into the tracing helper. Traversal and HTTP
+helper errors retain error type/status without exception messages or stack events.
+With no recording provider, traversal, authentication and observed database calls
+skip proxy-span allocation and retain their existing execution/metrics behavior.

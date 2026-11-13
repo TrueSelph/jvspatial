@@ -928,3 +928,43 @@ class TestGraphTransaction:
         assert note_id in nodes
         edges = await pg_db.find("edge", {})
         assert len(edges) == 1
+
+
+async def test_observed_driver_work_is_numeric_and_loggers_are_removed(pg_db):
+    from jvspatial.db._observable import ObservableDatabase
+    from jvspatial.db.database import _io_metrics
+
+    class Recorder:
+        def __init__(self):
+            self.values = []
+
+        def record_value(self, name, value, **labels):
+            self.values.append((name, value))
+
+        def record_duration(self, *args, **kwargs):
+            pass
+
+        def increment_counter(self, *args, **kwargs):
+            pass
+
+    recorder = Recorder()
+    observed = ObservableDatabase(pg_db, metrics=recorder)
+    await observed.save(
+        "node", {"id": "observed-record", "entity": "Record", "context": {}}
+    )
+    recorder.values.clear()
+    assert await observed.find("node", {"id": "observed-record"})
+    numeric = dict(recorder.values)
+    assert numeric["jvspatial.db.query.driver_statements"] >= 1
+    assert numeric["jvspatial.db.query.driver_duration_ms"] >= 0
+    assert numeric["jvspatial.db.query.pool_wait_ms"] >= 0
+    assert numeric["jvspatial.db.query.decoded_chars"] > 0
+    token = _io_metrics.set({})
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            async with pg_db._acquire_conn():
+                raise asyncio.CancelledError
+    finally:
+        _io_metrics.reset(token)
+    async with pg_db._acquire_conn() as connection:
+        assert not connection._con._query_loggers

@@ -11,6 +11,17 @@ hosts must prove writer participation, current access and consistent lock order.
 Regression coverage exercises actual PostgreSQL shared/exclusive ordering,
 missing records, closed handles, bound SQL and unsupported adapters.
 
+## 2026-11-05 content-free performance observations
+
+Authentication timing wraps the existing authentication method without changing
+method order, constant-time comparisons, token validation or RBAC. It records no
+headers, request objects, tokens or exception content. Observed database spans
+also suppress exception messages/events; generic error type/status and numeric
+I/O counters remain. Asyncpg query callbacks never read SQL text/arguments and
+are removed before pool release, including cancellation. The application owns
+SDK/exporter configuration. Authentication and database privacy/cancellation
+regressions exercise these boundaries; no credential policy changes.
+
 ## 2026-10-11 stalled-worktree integration review
 
 Generic `application/octet-stream` results from libmagic remain authoritative:
@@ -340,3 +351,12 @@ executes no query, changes no SQL behavior, and certifies neither stored value
 types nor application authority. The default refuses and wrappers delegate
 without caching. Hosts must retain current audience and homogeneous numeric/null
 proofs; unsupported predicates or ordering cannot become a partial native LIMIT.
+
+### Managed catalog and authentication tracing follow-up
+
+Managed index verification validates the schema and configurable catalog table
+with the adapter's identifier allowlist before SQL interpolation. Catalog rows
+are trusted host maintenance receipts, not tenant inputs; runtime needs read
+access only. Authentication exceptions now set ERROR span status and exception
+type without status descriptions, exception messages, stack events or credentials.
+Regression tests cover unsafe identifiers and content-free error spans.
